@@ -1,11 +1,11 @@
-//! Tool provider abstraction. Phase 0/1 ships web search; later phases add
-//! file IO, embeddings, image generation, etc.
+//! Tool provider abstraction for Covenant.
 //!
-//! Three implementations: `MockSearch` (tests, no I/O), `BraveSearch`
-//! (`api.search.brave.com`, key required), `SerpApiSearch` (`serpapi.com`,
-//! key required). `SearchConfig` parses `[search]` from
-//! `~/.covenant/secrets.toml`; `pick_search()` auto-falls-back to a mock
-//! when nothing is configured.
+//! Three implementations of [`SearchProvider`]: [`MockSearch`] for
+//! tests, [`BraveSearch`] for `api.search.brave.com`, and
+//! [`SerpApiSearch`] for `serpapi.com`. [`SearchConfig`] parses the
+//! `[search]` section of `~/.covenant/secrets.toml`, and
+//! [`pick_search`] returns the configured provider, falling back to
+//! [`MockSearch`] when nothing is configured.
 
 #![deny(unsafe_code)]
 

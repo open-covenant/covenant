@@ -1,12 +1,10 @@
-//! Memory layer v0. Three-tier semantic store (`working`, `episodic`,
-//! `long-term`). SQLite for persistence; an in-memory backend covers tests.
+//! Three-tier memory store for Covenant.
 //!
-//! Vector search and embedding-based retrieval land in Phase 1+ when an
-//! embed model is wired (see `00_spec.md` §11). For now `embedding` is
-//! stored as raw bytes; `recent`/`get_by_id` cover the Phase 0 needs.
-//!
-//! Working-tier GC ("clear on task completion") is also Phase 1+ —
-//! currently records persist until manually deleted.
+//! [`MemoryRecord`] values live in one of three tiers — working,
+//! episodic, or long-term — backed by SQLite for persistence with an
+//! in-memory implementation suitable for tests. The trait covers
+//! recent-record reads, embedded-vector cosine search, and tier-scoped
+//! garbage collection.
 
 #![deny(unsafe_code)]
 

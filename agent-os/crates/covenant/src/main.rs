@@ -1,9 +1,20 @@
-//! covenant — CLI client for covenantd.
+//! Covenant command-line client for the local daemon.
 //!
-//! Phase 0+ commands:
+//! ```text
 //!   covenant ping
 //!   covenant intent <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
+//!   covenant memory search <query>
+//!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>)
+//!   covenant capabilities recent [--limit N]
+//!   covenant capabilities grant <action>
+//!   covenant capabilities revoke <signature-b58>
+//!   covenant receipts recent [--limit N]
+//!   covenant verify [--window N]
+//!   covenant ignore check <text>
+//!   covenant tools list
+//!   covenant tools call <name> [--args <json>]
+//! ```
 
 #![deny(unsafe_code)]
 

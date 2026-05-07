@@ -1,9 +1,13 @@
-//! Phase 0 agent runtime: spawn an agent as a subprocess, feed the `Intent`
-//! as one JSON line on stdin, read the result as one JSON line on stdout,
-//! kill the process if it exceeds `Manifest.resources.cpu_ms_per_task`.
+//! Agent runtime for Covenant.
 //!
-//! No isolation is enforced at this layer beyond the wall-clock timeout —
-//! gVisor lands in Phase 1, Firecracker in Phase 5.
+//! Spawns an agent as a subprocess, feeds the [`Intent`] as one JSON
+//! line on stdin, reads the [`AgentResult`] as one JSON line on
+//! stdout, and kills the process if it exceeds the wall-clock budget
+//! declared in the agent's manifest (`resources.cpu_ms_per_task`).
+//!
+//! The base implementation enforces only the wall-clock timeout;
+//! sandboxing layers (gVisor, Firecracker) plug in via the [`Runner`]
+//! trait without changing the dispatch contract.
 
 #![deny(unsafe_code)]
 

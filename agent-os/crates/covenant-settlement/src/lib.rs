@@ -1,10 +1,13 @@
-//! Settlement primitive — the credits + buyback model from `00_spec.md` §8.
+//! Settlement primitive for Covenant.
 //!
-//! Phase 1 ships the *first burn surface*: receipts accumulate in a local
-//! JSONL log (`$COVENANT_HOME/receipts/working.jsonl` by convention). No
-//! tokens move; no Solana RPC. Phase 5 wires the on-chain settlement
-//! program — the same `SettlementReceipt` shape gets batched and flushed,
-//! at which point `onchain_sig` flips from `None` to `Some`.
+//! Implements the credits-and-buyback settlement model. Receipts
+//! accumulate in a local JSONL log
+//! (`$COVENANT_HOME/receipts/working.jsonl` by convention) until they
+//! are batched and flushed to the on-chain settlement program — at
+//! which point [`SettlementReceipt::onchain_sig`] is populated. Two
+//! storage backends implement [`Settlement`]:
+//! [`JsonlReceiptStore`] for production and [`InMemorySettlement`]
+//! for tests.
 
 #![deny(unsafe_code)]
 

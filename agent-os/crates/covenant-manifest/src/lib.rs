@@ -1,4 +1,4 @@
-//! Parser and validator for `agent.toml`. See `00_spec.md` §5.
+//! Parser and validator for Covenant agent manifests (`agent.toml`).
 
 #![deny(unsafe_code)]
 

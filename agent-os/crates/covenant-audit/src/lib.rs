@@ -1,9 +1,11 @@
 //! Append-only audit log.
 //!
-//! Every intent dispatch produces one `AuditEvent`. Phase 2 will add
-//! capability-grant / capability-revoke variants; Phase 5 adds on-chain
-//! settlement events. Wire format is JSONL — one event per line, easy to
-//! tail or grep.
+//! Every intent dispatch, capability check, capability grant, and
+//! capability revocation produces one [`AuditEvent`]. Wire format is
+//! JSONL — one event per line, easy to tail or grep — and the
+//! [`AuditLog`] trait abstracts over a JSONL-backed implementation
+//! suitable for production and an in-memory implementation suitable
+//! for tests.
 
 #![deny(unsafe_code)]
 

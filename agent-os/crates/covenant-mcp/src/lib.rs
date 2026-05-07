@@ -1,10 +1,11 @@
-//! MCP-aligned tool abstraction for the covenant runtime.
+//! Model Context Protocol (MCP) integration for Covenant.
 //!
-//! Wire types follow the public Model Context Protocol shapes (`name`,
-//! `description`, `inputSchema`, `Content` blocks, `isError`) so the same
-//! `Tool` trait can later back native Rust impls *and* external MCP servers
-//! over stdio/HTTP. Sprint 22 ships the trait + registry + two native tools.
-//! External MCP transport (stdio JSON-RPC 2.0) is the next sprint.
+//! Wire types follow the public MCP shapes (`name`, `description`,
+//! `inputSchema`, `Content` blocks, `isError`) so the same [`Tool`]
+//! trait backs native Rust implementations and external MCP servers
+//! reached over stdio JSON-RPC 2.0. The crate exposes the trait, an
+//! in-process [`ToolRegistry`], a small set of native tools under
+//! [`native`], and the external transport under [`transport`].
 
 #![deny(unsafe_code)]
 

@@ -1,16 +1,16 @@
-//! LLM provider abstraction.
+//! LLM provider abstraction for Covenant.
 //!
-//! Four providers: `Mock` (tests, no I/O), `Ollama` (local at
-//! `http://localhost:11434`, no key), `Anthropic`, and `OpenAI`-compatible
-//! (covers OpenAI itself plus DeepSeek, Together, Groq, etc.). The trait
-//! is small and synchronous-shaped (no streaming yet — that's Phase 1+).
+//! Four implementations of the [`Provider`] trait: [`MockProvider`]
+//! (tests, no I/O), [`OllamaProvider`] (local at
+//! `http://localhost:11434`, no key), [`AnthropicProvider`], and an
+//! OpenAI-compatible provider that also covers downstream-compatible
+//! services such as DeepSeek, Together, and Groq.
 //!
-//! Provider selection is the caller's responsibility; `ProviderConfig`
-//! parses `~/.covenant/secrets.toml` and `pick_provider()` returns the
-//! highest-priority configured backend, falling back to Ollama if reachable
-//! and `MockProvider` otherwise. Live Anthropic / OpenAI calls remain
-//! BLOCKED on operator-supplied keys (see `BLOCKERS.md`); the impls compile
-//! and unit-test against mocks.
+//! Provider selection is the caller's responsibility.
+//! [`ProviderConfig`] parses `~/.covenant/secrets.toml` and
+//! [`pick_provider`] returns the highest-priority configured backend,
+//! falling back to Ollama if reachable and to [`MockProvider`]
+//! otherwise.
 
 #![deny(unsafe_code)]
 

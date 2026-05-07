@@ -1,16 +1,16 @@
-//! Capability-token primitive (spec §4).
+//! Capability-token primitive for Covenant.
 //!
-//! `SignedCapability` = a `Capability` (subject, action, scope, granted_by,
-//! optional expiry) plus an ed25519 signature by `granted_by` over a
-//! deterministic byte encoding of those fields.
+//! A [`SignedCapability`] is a [`Capability`] (subject, action, scope,
+//! granted-by, optional expiry) plus an ed25519 signature by the
+//! granter over a deterministic byte encoding of those fields. The
+//! encoder is hand-rolled and length-prefixed; it lives in one place
+//! ([`canonical_message`]) and can be replaced without disturbing the
+//! wire format.
 //!
-//! v0 encoding is hand-rolled and explicit (length-prefixed concat). RFC 8785
-//! canonical JSON would be tighter but is out of scope for v0; the encoder
-//! lives in one place and can be swapped without touching the wire format.
-//!
-//! Phase 0/1 enforcement is **read-only / audit-only**: the daemon checks
-//! capabilities on dispatch and records the result, but doesn't reject
-//! requests that fail the check. Sprint 12 wires the gate.
+//! Two storage backends implement [`CapabilityStore`]:
+//! [`JsonlCapabilityStore`] for production and
+//! [`InMemoryCapabilityStore`] for tests. Both honour revocation
+//! tombstones written via [`CapabilityStore::revoke`].
 
 #![deny(unsafe_code)]
 

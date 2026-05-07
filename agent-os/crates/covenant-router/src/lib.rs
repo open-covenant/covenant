@@ -1,9 +1,9 @@
-//! Intent router v0 — keyword-overlap matching against registered agent
-//! capability cards. Cosine-similarity over real embeddings is stubbed
-//! and lands when an embed model is wired (Phase 1).
+//! Intent router for Covenant.
 //!
-//! See `00_spec.md` §4 (Capability) and §5 (manifest namespaces). Reserved
-//! capability namespaces drive the keyword tables below.
+//! Routes incoming intents to registered agent capability cards via
+//! keyword-overlap matching. Reserved capability namespaces in agent
+//! manifests drive the keyword tables; new agents are picked up by
+//! placing an `agent.toml` under `$COVENANT_HOME/agents/`.
 
 #![deny(unsafe_code)]
 

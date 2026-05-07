@@ -1,13 +1,14 @@
-//! Identity primitive (spec §6).
+//! Local ed25519 identity for Covenant.
 //!
-//! `LocalIdentity` is an ed25519 keypair plus a `name@host` display string.
-//! Persisted as raw 32-byte seed at `$COVENANT_HOME/identity/local.key`,
-//! permissions `0o600`. The same key signs Solana settlement transactions
-//! in Phase 5 — there is no second keypair system.
+//! [`LocalIdentity`] is an ed25519 keypair plus a `name@host` display
+//! string. The keypair is persisted as the raw 32-byte seed at
+//! `$COVENANT_HOME/identity/local.key` with `0o600` permissions, and
+//! the same key is used to sign on-chain settlement transactions —
+//! there is no second keypair system.
 //!
-//! Verification helpers `verify_with_pubkey` and `verifying_key_from_bytes`
-//! cover the read side without forcing callers to depend on `ed25519-dalek`
-//! directly when they don't need to.
+//! Verification helpers [`verify_with_pubkey`] and
+//! [`verifying_key_from_bytes`] cover the read side without forcing
+//! callers to depend on `ed25519-dalek` directly.
 
 #![deny(unsafe_code)]
 

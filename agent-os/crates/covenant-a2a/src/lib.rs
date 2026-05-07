@@ -1,12 +1,14 @@
-//! Agent-to-agent task envelopes for the covenant runtime.
+//! Agent-to-agent task and result envelopes for Covenant.
 //!
-//! v0 ships the wire types, an async [`Mailbox`] trait, and an in-memory
-//! impl. There is intentionally no transport layer yet — this is the same
-//! shape Sprint 22 took for MCP (types first, transport in a follow-up).
+//! Defines the [`A2ATask`] and [`A2ATaskResult`] wire types, an async
+//! [`Mailbox`] trait, and an in-memory implementation suitable for
+//! tests and for orchestrator agents that fan tasks within a single
+//! daemon process.
 //!
-//! `A2ATask` is a request from one agent to another; `A2ATaskResult` is the
-//! response. Tasks form a tree via `parent`, so an orchestrator can fan a
-//! root intent across child agents and reconstruct the result graph.
+//! [`A2ATask`] is a request from one agent to another; [`A2ATaskResult`]
+//! is the response. Tasks form a tree via [`A2ATask::parent`] so an
+//! orchestrator can fan a root intent across child agents and
+//! reconstruct the result graph.
 
 #![deny(unsafe_code)]
 

@@ -1,4 +1,9 @@
-//! Core data types shared across the covenant workspace. See `00_spec.md` §4.
+//! Core data types shared across the Covenant workspace.
+//!
+//! Defines the wire-level shapes that flow between the daemon, agents,
+//! and the storage primitives — [`Intent`], [`AgentId`], [`Priority`],
+//! [`MemoryRecord`], [`MemoryTier`], [`Capability`], and
+//! [`SettlementReceipt`].
 
 #![deny(unsafe_code)]
 

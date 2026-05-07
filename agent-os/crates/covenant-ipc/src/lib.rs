@@ -95,6 +95,14 @@ pub enum Request {
         result: A2ATaskResult,
     },
     TryRecvA2AResult,
+    RecentA2ATasks {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
+    RecentA2AResults {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -168,6 +176,12 @@ pub enum Response {
     },
     A2AResultOpt {
         result: Option<A2ATaskResult>,
+    },
+    A2ATasks {
+        tasks: Vec<A2ATask>,
+    },
+    A2AResults {
+        results: Vec<A2ATaskResult>,
     },
     Error {
         message: String,

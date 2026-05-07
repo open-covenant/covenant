@@ -92,6 +92,13 @@ pub trait Mailbox: Send + Sync {
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError>;
     async fn recv_result(&self) -> Result<A2ATaskResult, A2AError>;
     async fn try_recv_result(&self) -> Result<Option<A2ATaskResult>, A2AError>;
+
+    /// Read-only snapshot of the most recent queued tasks, oldest first up
+    /// to `limit`. Does not consume from the queue. Operator-facing.
+    async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError>;
+    /// Read-only snapshot of the most recent queued results, oldest first
+    /// up to `limit`. Does not consume from the queue. Operator-facing.
+    async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError>;
 }
 
 /// In-process FIFO mailbox. Useful for tests and for orchestrator agents
@@ -159,6 +166,28 @@ impl Mailbox for InMemoryMailbox {
 
     async fn try_recv_result(&self) -> Result<Option<A2ATaskResult>, A2AError> {
         Ok(self.results.lock().unwrap().pop_front())
+    }
+
+    async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError> {
+        Ok(self
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
+        Ok(self
+            .results
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }
 
@@ -243,6 +272,42 @@ mod tests {
         assert!(got.is_some());
         // After draining, empty again.
         assert!(m.try_recv_task().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn recent_returns_oldest_first_without_consuming() {
+        let m = InMemoryMailbox::new();
+        let t1 = dummy_task();
+        let t2 = dummy_task();
+        let t3 = dummy_task();
+        m.send_task(t1.clone()).await.unwrap();
+        m.send_task(t2.clone()).await.unwrap();
+        m.send_task(t3.clone()).await.unwrap();
+
+        let recent = m.recent_tasks(10).await.unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].id, t1.id, "oldest first");
+        assert_eq!(recent[2].id, t3.id, "newest last");
+
+        // recent_tasks must not drain.
+        assert!(m.try_recv_task().await.unwrap().is_some());
+        assert!(m.try_recv_task().await.unwrap().is_some());
+        assert!(m.try_recv_task().await.unwrap().is_some());
+        assert!(m.try_recv_task().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn recent_respects_limit_and_handles_empty() {
+        let m = InMemoryMailbox::new();
+        assert!(m.recent_tasks(10).await.unwrap().is_empty());
+        assert!(m.recent_results(10).await.unwrap().is_empty());
+
+        for _ in 0..5 {
+            m.send_task(dummy_task()).await.unwrap();
+        }
+        assert_eq!(m.recent_tasks(3).await.unwrap().len(), 3);
+        assert_eq!(m.recent_tasks(0).await.unwrap().len(), 0);
+        assert_eq!(m.recent_tasks(100).await.unwrap().len(), 5);
     }
 
     #[tokio::test]

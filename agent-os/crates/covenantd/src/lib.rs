@@ -137,6 +137,8 @@ impl Server {
             Request::TryRecvA2ATask => self.try_recv_a2a_task().await,
             Request::PostA2AResult { result } => self.post_a2a_result(result).await,
             Request::TryRecvA2AResult => self.try_recv_a2a_result().await,
+            Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
+            Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
         }
     }
 
@@ -197,6 +199,24 @@ impl Server {
     async fn try_recv_a2a_result(&self) -> Response {
         match self.mailbox.try_recv_result().await {
             Ok(result) => Response::A2AResultOpt { result },
+            Err(e) => Response::Error {
+                message: format!("a2a: {e}"),
+            },
+        }
+    }
+
+    async fn recent_a2a_tasks(&self, limit: usize) -> Response {
+        match self.mailbox.recent_tasks(limit).await {
+            Ok(tasks) => Response::A2ATasks { tasks },
+            Err(e) => Response::Error {
+                message: format!("a2a: {e}"),
+            },
+        }
+    }
+
+    async fn recent_a2a_results(&self, limit: usize) -> Response {
+        match self.mailbox.recent_results(limit).await {
+            Ok(results) => Response::A2AResults { results },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
             },
@@ -1202,6 +1222,39 @@ required = {caps:?}
             Response::A2AResultOpt { result: None } => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a2a_recent_returns_queued_tasks_without_consuming() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task();
+        s.respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.respond(Request::SendA2ATask { task: task.clone() }).await;
+        s.respond(Request::SendA2ATask {
+            task: covenant_a2a::A2ATask {
+                id: Uuid::new_v4(),
+                ..task.clone()
+            },
+        })
+        .await;
+
+        let recent = s.respond(Request::RecentA2ATasks { limit: 10 }).await;
+        match recent {
+            Response::A2ATasks { tasks } => {
+                assert_eq!(tasks.len(), 2);
+                assert_eq!(tasks[0].id, task.id, "oldest first");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // recent must not consume — try_recv still finds tasks.
+        let drained = s.respond(Request::TryRecvA2ATask).await;
+        assert!(matches!(drained, Response::A2ATaskOpt { task: Some(_) }));
     }
 
     #[tokio::test]

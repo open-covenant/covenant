@@ -42,8 +42,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/audit/recent", get(audit_recent))
         .route("/a2a/tasks", post(send_a2a_task))
         .route("/a2a/tasks/next", get(try_recv_a2a_task))
+        .route("/a2a/tasks/recent", get(recent_a2a_tasks))
         .route("/a2a/results", post(post_a2a_result))
         .route("/a2a/results/next", get(try_recv_a2a_result))
+        .route("/a2a/results/recent", get(recent_a2a_results))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
@@ -260,6 +262,32 @@ async fn post_a2a_result(
 
 async fn try_recv_a2a_result(State(s): State<HttpState>) -> Result<Json<Response>, ApiError> {
     Ok(Json(s.server.respond(Request::TryRecvA2AResult).await))
+}
+
+async fn recent_a2a_tasks(
+    State(s): State<HttpState>,
+    Query(q): Query<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::RecentA2ATasks {
+                limit: q.limit.unwrap_or(10),
+            })
+            .await,
+    ))
+}
+
+async fn recent_a2a_results(
+    State(s): State<HttpState>,
+    Query(q): Query<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::RecentA2AResults {
+                limit: q.limit.unwrap_or(10),
+            })
+            .await,
+    ))
 }
 
 #[derive(Deserialize)]

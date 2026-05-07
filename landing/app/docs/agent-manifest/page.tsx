@@ -1,0 +1,367 @@
+import Link from "next/link";
+
+export const metadata = {
+  title: "Agent manifest",
+  description:
+    "Schema and validation rules for agent.toml — the file every Covenant agent ships.",
+};
+
+export default function AgentManifestPage() {
+  return (
+    <>
+      <h1>Agent manifest</h1>
+      <p>
+        Every Covenant agent registers itself with the daemon by
+        dropping an <code>agent.toml</code> file under{" "}
+        <code>$COVENANT_HOME/agents/</code>. The manifest declares the
+        agent&apos;s identity, what runtime it expects, where its
+        executable lives, the capabilities it needs, the resource
+        budget it should run under, and an optional settlement hint.
+      </p>
+
+      <h2>Example</h2>
+      <pre>
+        <code>{`[agent]
+id      = "research@local"
+name    = "research"
+version = "0.1.0"
+runtime = "rust-bin"
+entry   = "target/release/research"
+
+[capabilities]
+required = ["tool.web_search"]
+optional = ["memory.write"]
+
+[resources]
+cpu_ms_per_task = 30000
+memory_mb       = 512
+disk_mb         = 100
+network         = "outbound-https-only"
+
+[settlement]
+budget_credits_per_hour = 1000
+priority                = "normal"`}</code>
+      </pre>
+
+      <h2>Schema</h2>
+
+      <h3>
+        <code>[agent]</code>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Required</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>id</code>
+            </td>
+            <td>string</td>
+            <td>yes</td>
+            <td>
+              Stable identifier in the form <code>name@host</code>.
+              Used as the routing key, the audit-log subject, and the
+              memory-record owner.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>name</code>
+            </td>
+            <td>string</td>
+            <td>yes</td>
+            <td>Display name; appears in CLI listings.</td>
+          </tr>
+          <tr>
+            <td>
+              <code>version</code>
+            </td>
+            <td>string</td>
+            <td>yes</td>
+            <td>SemVer recommended.</td>
+          </tr>
+          <tr>
+            <td>
+              <code>runtime</code>
+            </td>
+            <td>enum</td>
+            <td>yes</td>
+            <td>
+              <code>rust-bin</code>, <code>python3</code>, or{" "}
+              <code>node</code>. The runtime determines how the daemon
+              executes <code>entry</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>entry</code>
+            </td>
+            <td>string</td>
+            <td>yes</td>
+            <td>
+              Path to the binary (for <code>rust-bin</code>) or the
+              entry script (for <code>python3</code> /{" "}
+              <code>node</code>). Resolved relative to the manifest&apos;s
+              parent directory unless absolute.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <code>[capabilities]</code>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>required</code>
+            </td>
+            <td>list of action strings</td>
+            <td>
+              <code>[]</code>
+            </td>
+            <td>
+              Every action in this list must be present in the
+              issuer&apos;s active capability set or the dispatch is
+              rejected.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>optional</code>
+            </td>
+            <td>list of action strings</td>
+            <td>
+              <code>[]</code>
+            </td>
+            <td>
+              Recorded for visibility but not enforced.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Action strings live in reserved namespaces:{" "}
+        <code>intent.</code>, <code>memory.</code>,{" "}
+        <code>identity.</code>, <code>tool.</code>,{" "}
+        <code>agent.</code>. The daemon validates that{" "}
+        <code>required</code> and <code>optional</code> actions sit in
+        one of these namespaces.
+      </p>
+
+      <h3>
+        <code>[resources]</code>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>cpu_ms_per_task</code>
+            </td>
+            <td>u64 milliseconds</td>
+            <td>
+              <code>30000</code>
+            </td>
+            <td>
+              Wall-clock budget. The runtime kills the process when
+              the budget elapses.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>memory_mb</code>
+            </td>
+            <td>u64 MiB</td>
+            <td>
+              <code>512</code>
+            </td>
+            <td>Advisory today; enforced by sandboxed runtimes.</td>
+          </tr>
+          <tr>
+            <td>
+              <code>disk_mb</code>
+            </td>
+            <td>u64 MiB</td>
+            <td>
+              <code>100</code>
+            </td>
+            <td>Advisory today.</td>
+          </tr>
+          <tr>
+            <td>
+              <code>network</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>outbound-https-only</code>
+            </td>
+            <td>
+              <code>off</code>, <code>outbound-https-only</code>, or{" "}
+              <code>full</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <code>[settlement]</code>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>budget_credits_per_hour</code>
+            </td>
+            <td>u64</td>
+            <td>
+              <code>0</code>
+            </td>
+            <td>
+              Soft cap; tolerated as <code>0</code> until enforced by
+              the on-chain settlement program.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>priority</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>normal</code>
+            </td>
+            <td>
+              <code>low</code>, <code>normal</code>, <code>high</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Runtime contract</h2>
+      <p>
+        At dispatch, the runtime spawns the agent according to{" "}
+        <code>runtime</code> and <code>entry</code>:
+      </p>
+
+      <pre>
+        <code>{`runtime = "rust-bin"   →   exec entry directly
+runtime = "python3"    →   exec python3 entry
+runtime = "node"       →   exec node    entry`}</code>
+      </pre>
+
+      <p>The agent reads exactly one JSON line from stdin:</p>
+
+      <pre>
+        <code>{`{
+  "id":         "uuid",
+  "text":       "the user's intent",
+  "issuer":     { "display": "user@local", "pubkey": "…" },
+  "issued_at":  1714938000000,
+  "priority":   "normal",
+  "parent":     null
+}`}</code>
+      </pre>
+
+      <p>
+        And writes exactly one JSON line to stdout:
+      </p>
+
+      <pre>
+        <code>{`{
+  "intent_id": "uuid",
+  "status":    "ok" | "error",
+  "text":      "…",
+  "sources":   ["…"]
+}`}</code>
+      </pre>
+
+      <p>
+        Any output on stderr is captured by the daemon&apos;s tracing
+        subsystem and surfaces in the operator&apos;s logs. The agent
+        process must terminate within{" "}
+        <code>resources.cpu_ms_per_task</code>; a longer-running agent
+        is killed and the dispatch returns an error.
+      </p>
+
+      <h2>Validation rules</h2>
+      <p>
+        The manifest parser rejects manifests that:
+      </p>
+      <ul>
+        <li>
+          omit any of <code>agent.id</code>, <code>agent.name</code>,
+          <code>agent.version</code>, <code>agent.entry</code>, or
+          have any of those fields empty;
+        </li>
+        <li>
+          declare a <code>required</code> or <code>optional</code>{" "}
+          capability action outside the reserved namespaces;
+        </li>
+        <li>
+          fail to parse as TOML.
+        </li>
+      </ul>
+
+      <p>
+        Unknown top-level sections are tolerated for forward
+        compatibility; future Covenant releases may attach meaning to
+        them.
+      </p>
+
+      <h2>Where manifests live</h2>
+      <p>
+        The daemon scans <code>$COVENANT_HOME/agents/*.toml</code> on
+        startup. There is no online registration; restart the daemon
+        after dropping a new manifest. Existing manifests can be
+        edited in place — they are re-read on the next daemon start.
+      </p>
+
+      <h2>Related</h2>
+      <ul>
+        <li>
+          <Link href="/docs/concepts">Concepts</Link> — agents in
+          context.
+        </li>
+        <li>
+          <Link href="/docs/capabilities">Capability tokens</Link> —
+          what the <code>required</code> list refers to.
+        </li>
+        <li>
+          <Link href="/docs/security">Security model</Link> — what
+          the resource budget protects.
+        </li>
+      </ul>
+    </>
+  );
+}

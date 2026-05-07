@@ -1,0 +1,201 @@
+import Link from "next/link";
+
+export const metadata = {
+  title: "Local IPC",
+  description:
+    "Length-prefixed JSON IPC protocol on the daemon's Unix socket.",
+};
+
+export default function IpcPage() {
+  return (
+    <>
+      <h1>Local IPC</h1>
+      <p>
+        The daemon&apos;s canonical wire protocol. Clients on the same
+        machine — the CLI, an operator UI, third-party tooling — speak
+        length-prefixed JSON over a Unix socket at{" "}
+        <code>$COVENANT_HOME/sock</code>. The HTTP gateway is a thin
+        adapter on top of the same surface.
+      </p>
+
+      <h2>Frame format</h2>
+      <p>
+        Each frame is a 4-byte big-endian unsigned integer length
+        prefix followed by exactly that many bytes of UTF-8 JSON.
+        Frames over <strong>8 MiB</strong> are rejected at the read
+        boundary.
+      </p>
+
+      <pre>
+        <code>{`+---------+---------+---------+---------+---------- … ----------+
+| len[31..24] | len[23..16] | len[15..8] | len[7..0] | JSON payload |
++-------------+-------------+------------+-----------+--------------+
+        4-byte big-endian length              up to 8 MiB`}</code>
+      </pre>
+
+      <p>
+        The framing applies in both directions: the request frame is
+        followed by exactly one response frame, and a long-lived
+        connection can carry many request/response pairs in sequence.
+        Connections are not pooled by the daemon; clients are expected
+        to reuse a single connection or open one per request as
+        convenient.
+      </p>
+
+      <h2>Request shapes</h2>
+      <p>
+        A request is a JSON object tagged with <code>kind</code>. The
+        full set today:
+      </p>
+
+      <pre>
+        <code>{`{ "kind": "ping" }
+
+{ "kind": "submit_intent",
+  "text": "…" }
+
+{ "kind": "recent_memory",
+  "tier": "working" | "episodic" | "longterm" | null,
+  "limit": 10 }
+
+{ "kind": "search_memory",
+  "query": "…",
+  "tier":  "working" | "episodic" | "longterm" | null,
+  "limit": 10 }
+
+{ "kind": "purge_memory",
+  "tier": "working" | "episodic" | "longterm" | null,
+  "before_ms": 1714938000000 }
+
+{ "kind": "recent_receipts",
+  "limit": 10 }
+
+{ "kind": "recent_capabilities",
+  "limit": 10 }
+
+{ "kind": "grant_capability",
+  "action": "tool.web_search",
+  "scope": null | { ... },
+  "expires_at": null | 1714938000000 }
+
+{ "kind": "revoke_capability",
+  "signature_b58": "…" }
+
+{ "kind": "verify",
+  "window": 100 }
+
+{ "kind": "ignore_check",
+  "text": "…" }
+
+{ "kind": "list_tools" }
+
+{ "kind": "call_tool",
+  "name": "echo",
+  "arguments": { ... } }
+
+{ "kind": "recent_audit",
+  "limit": 20 }
+
+{ "kind": "send_a2a_task",      "task":   { ... } }
+{ "kind": "try_recv_a2a_task" }
+
+{ "kind": "post_a2a_result",    "result": { ... } }
+{ "kind": "try_recv_a2a_result" }`}</code>
+      </pre>
+
+      <h2>Response shapes</h2>
+      <p>
+        Responses are also <code>kind</code>-tagged. One canonical
+        response shape per request, plus a generic{" "}
+        <code>error</code> for any handler-level failure.
+      </p>
+
+      <pre>
+        <code>{`{ "kind": "pong" }
+
+{ "kind": "intent_result",
+  "intent_id": "uuid",
+  "status": "ok" | "ignored",
+  "text": "…",
+  "sources": ["…"],
+  "settlement": null | { ... } }
+
+{ "kind": "memories",        "records":   [ ... ] }
+{ "kind": "memory_purged",   "purged":    42 }
+{ "kind": "receipts",        "receipts":  [ ... ] }
+{ "kind": "capabilities",    "capabilities": [ ... ] }
+{ "kind": "capability_granted",
+  "signature_b58":   "…",
+  "subject_display": "user@local",
+  "action":          "tool.web_search" }
+{ "kind": "capability_revoked",
+  "signature_b58": "…",
+  "removed":       true }
+{ "kind": "verify_report",
+  "window": 100,
+  "checks": [ { "name": "…", "passed": true, "message": "…" } ],
+  "orphans_total": 0 }
+{ "kind": "ignore_report",
+  "ignored":         false,
+  "matched_pattern": null,
+  "rules_loaded":    3 }
+{ "kind": "tool_list",       "tools":    [ ... ] }
+{ "kind": "tool_result",     "content":  [ ... ], "is_error": false }
+{ "kind": "audit_events",    "events":   [ ... ] }
+{ "kind": "a2a_task_queued",   "task_id": "uuid" }
+{ "kind": "a2a_task_opt",      "task":    null | { ... } }
+{ "kind": "a2a_result_posted", "task_id": "uuid" }
+{ "kind": "a2a_result_opt",    "result":  null | { ... } }
+
+{ "kind": "error", "message": "…" }`}</code>
+      </pre>
+
+      <h2>Implementation notes</h2>
+      <ul>
+        <li>
+          <strong>Backpressure.</strong> The daemon reads one frame at
+          a time per connection; long-running operations hold the
+          connection open until they complete, so a slow handler will
+          delay the next request on that connection.
+        </li>
+        <li>
+          <strong>Frame size.</strong> The 8 MiB cap applies in both
+          directions. Returning a memory record set that exceeds it
+          should not happen in normal operation, but a verification
+          window over millions of records can. Use{" "}
+          <code>limit</code> arguments where they exist.
+        </li>
+        <li>
+          <strong>Timeouts.</strong> The daemon does not impose a
+          per-request timeout. Clients should set their own.
+        </li>
+        <li>
+          <strong>Authentication.</strong> Connecting to the Unix
+          socket is the credential. Anything with read access to{" "}
+          <code>$COVENANT_HOME/sock</code> can submit intents.
+        </li>
+      </ul>
+
+      <h2>Reference implementation</h2>
+      <p>
+        The <code>covenant-ipc</code> Rust crate provides{" "}
+        <code>read_frame</code> and <code>write_frame</code> helpers
+        plus the <code>Request</code> and <code>Response</code> enums.
+        See <Link href="/docs/cli">CLI</Link> for an end-to-end
+        example using both.
+      </p>
+
+      <h2>Related</h2>
+      <ul>
+        <li>
+          <Link href="/docs/http-api">HTTP API</Link> — the same
+          surface for clients that prefer JSON over HTTP.
+        </li>
+        <li>
+          <Link href="/docs/security">Security model</Link> — what the
+          socket-as-credential design costs you.
+        </li>
+      </ul>
+    </>
+  );
+}

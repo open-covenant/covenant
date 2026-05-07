@@ -1,28 +1,28 @@
 # Security Policy
 
-Covenant treats anything that can move value, alter execution rights, or affect protocol integrity as in scope for responsible disclosure.
+Covenant treats anything that can move value, alter execution rights on the daemon, or affect identity / capability / settlement integrity as in scope for responsible disclosure.
 
 ## Supported versions
 
-Pre-mainnet: the latest `main` branch is in scope.
+Pre-alpha: the latest `main` branch is in scope.
 
-Post-launch: the latest deployed contract release and the immediately previous release remain in scope during the rollout window.
+Post-launch: the latest released daemon and on-chain settlement program remain in scope, plus the immediately previous release during the rollout window.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for anything that could compromise funds, keys, governance, proofs, or settlement integrity.
+Do not open a public issue for anything that could compromise keys, capability tokens, on-chain funds, audit-log integrity, or the daemon's enforcement boundary.
 
 Preferred channels:
 
-1. **GitHub private advisory:** [github.com/covenant-base/covenant/security/advisories/new](https://github.com/covenant-base/covenant/security/advisories/new)
-2. **Email:** [security@covenantbase.com](mailto:security@covenantbase.com)
+1. **GitHub private advisory:** [github.com/open-covenant/covenant/security/advisories/new](https://github.com/open-covenant/covenant/security/advisories/new)
+2. **Email:** [security@opencovenant.org](mailto:security@opencovenant.org)
 
 Include:
 
-- affected contract, service, route, or package
+- affected crate, binary, RPC route, or program
 - impact and realistic attacker outcome
-- minimal repro or transaction sequence
-- suggested mitigation, if available
+- minimal reproduction (commands, payloads, or transaction sequence)
+- suggested mitigation, if you have one
 
 We aim to acknowledge within 48 hours and share an initial triage decision within 7 days.
 
@@ -30,26 +30,27 @@ We aim to acknowledge within 48 hours and share an initial triage decision withi
 
 ### In scope
 
-- Base contracts in `contracts/`
-- proof generation and verification paths
-- auth/session signing flows
-- services that prepare, sign, relay, or verify protocol actions
-- SDK/client helpers that could cause incorrect settlement or loss of funds
+- daemon enforcement paths (capability checks, audit logging, agent dispatch)
+- identity and key management (`covenant-identity`)
+- capability sign / verify (`covenant-permissions`)
+- IPC and HTTP gateway authentication paths
+- on-chain settlement program (`programs/settlement`)
+- agent runtime isolation boundary
 
 ### Out of scope
 
 - spelling and copy issues
-- read-only UI bugs that do not affect signing or value movement
+- log-level / cosmetic bugs in the operator UI
 - third-party vulnerabilities that should be reported upstream
-- attacks requiring prior compromise of a user wallet or signing device
+- attacks that require prior compromise of the operator's machine or signing key
 
 ## Severity
 
 | Severity | Example |
 |---|---|
-| Critical | direct fund loss, unauthorized upgrade or execution, proof forgery |
-| High | unauthorized state transition, settlement bypass, serious economic abuse |
-| Medium | logic flaw without direct loss of funds |
+| Critical | unauthorized capability bypass, unsigned dispatch, on-chain fund loss, key extraction |
+| High | audit-log forgery, capability replay, settlement bypass |
+| Medium | logic flaw without direct loss of value |
 | Low | defense-in-depth or hardening issue |
 
-Severity is assigned by Covenant maintainers after triage.
+Severity is assigned by maintainers after triage.

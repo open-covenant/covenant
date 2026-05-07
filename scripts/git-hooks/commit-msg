@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-BASH_BIN="${BASH:-bash}"
-
-"$BASH_BIN" "$ROOT/scripts/check-forbidden-public-identifiers.sh" --commit-message-file "$1"

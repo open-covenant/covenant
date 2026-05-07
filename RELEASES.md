@@ -1,24 +1,24 @@
 # Releases
 
-Covenant releases are versioned snapshots of contracts, services, packages, docs, and deployment metadata.
+Covenant releases are versioned snapshots of the daemon, libraries, operator surfaces, on-chain artifacts, and the metadata required to reproduce them.
 
 ## Versioning
 
-- Public packages follow SemVer.
-- Contract deployments are tracked by network manifest, commit SHA, and artifact digest.
-- Breaking protocol changes require a spec update, migration notes, and maintainer approval.
+- Public crates follow [SemVer](https://semver.org/).
+- On-chain program deployments are tracked by network, commit SHA, and IDL digest.
+- Breaking changes to public wire formats, capability shapes, or on-chain interfaces require migration notes and maintainer approval.
 
 ## Release checklist
 
-- `pnpm typecheck`
-- `pnpm test`
-- `pnpm --filter ./contracts test`
-- `pnpm build`
-- `pnpm size`
-- `pnpm guard:public-identifiers`
-- ABI and deployment manifest review for contract changes.
-- Security review notes for auth, signing, x402, proof, governance, or settlement changes.
+- `cargo build  --workspace --exclude covenant-settlement-program`
+- `cargo test   --workspace --exclude covenant-settlement-program`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo fmt --check`
+- `pnpm --dir landing build`
+- `anchor build` for on-chain program changes
+- Live integration coverage exercised against real backends, where applicable
+- Security review notes for changes to identity, capability, audit, or settlement surfaces
 
 ## Publishing
 
-Releases should include a concise summary, upgrade notes, test evidence, and links to deployment manifests or package artifacts. Do not publish generated artifacts that are not reproducible from the tagged source tree.
+Releases include a concise summary, upgrade notes, test evidence, and links to reproducible artifacts. Do not publish generated artifacts that are not reproducible from the tagged source tree.

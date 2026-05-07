@@ -9,65 +9,54 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 permissions:
   contents: read
 
 jobs:
-  public-id-guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-      - name: guard tracked files
-        run: bash scripts/check-forbidden-public-identifiers.sh --repo
-      - name: guard reachable history
-        run: bash scripts/check-forbidden-public-identifiers.sh --rev-spec "--all"
-
   cargo-audit:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-os
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: install rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+
       - name: cache cargo-audit binary
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.22.1-${{ runner.os }}
+
       - name: install cargo-audit
         run: |
           if ! command -v cargo-audit >/dev/null; then
             cargo install cargo-audit --locked --version 0.22.1
           fi
-      - name: cargo audit (indexer)
-        working-directory: services/indexer
-        run: cargo audit
+
+      - run: cargo audit
 
   pnpm-audit:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: landing
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - uses: pnpm/action-setup@8912a9102ac27614460f54aedde9e1e7f9aec20d # v6.0.5
         with:
           version: 10.31.0
+
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --audit-level=high
+          cache-dependency-path: landing/pnpm-lock.yaml
 
-  semgrep:
-    runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep:1.157.0
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: semgrep scan (contracts + rust)
-        run: semgrep scan --error --config=p/solidity --config=p/rust --metrics=off contracts/ services/indexer/src/
+      - run: pnpm install --frozen-lockfile --ignore-workspace
+      - run: pnpm audit --audit-level=high

@@ -25,7 +25,7 @@ set -euo pipefail
 DIR="${1:-$(pwd)}"
 DIR_ABS="$(cd "$DIR" && pwd)"
 HANDOVER_PATH="$DIR_ABS/HANDOVER.md"
-CLAUDE_CMD="${CLAUDE_CMD:-claude --model claude-opus-4-7 --dangerously-skip-permissions}"
+CLAUDE_CMD="${CLAUDE_CMD:-claude --model claude-opus-4-7 --effort max --dangerously-skip-permissions}"
 
 if [ ! -f "$HANDOVER_PATH" ]; then
   echo "handover.sh: no HANDOVER.md at $HANDOVER_PATH" >&2

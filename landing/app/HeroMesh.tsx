@@ -50,12 +50,15 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       mouseY = -9999;
     };
 
-    host.addEventListener("mousemove", onMouseMove);
-    host.addEventListener("mouseleave", onMouseLeave);
-    host.addEventListener("touchstart", onTouch, { passive: true });
-    host.addEventListener("touchmove", onTouch, { passive: true });
-    host.addEventListener("touchend", onTouchEnd, { passive: true });
-    host.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    const onDocOut = (e: MouseEvent) => {
+      if (!e.relatedTarget) onMouseLeave();
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseout", onDocOut);
+    window.addEventListener("touchstart", onTouch, { passive: true });
+    window.addEventListener("touchmove", onTouch, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
 
     let glyphs: Array<{
       char: string;
@@ -184,11 +187,8 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       canvasEl.height = rect.height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const cellSize = Math.max(
-        7,
-        Math.round(Math.min(rect.width, rect.height) / 48),
-      );
-      fontPx = Math.max(7, Math.round(cellSize * 0.95));
+      fontPx = 12;
+      const cellSize = 16;
       const columns = Math.ceil(rect.width / cellSize) + 3;
       const rows = Math.ceil(rect.height / cellSize) + 3;
 
@@ -473,12 +473,12 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", resizeCanvas);
-      host.removeEventListener("mousemove", onMouseMove);
-      host.removeEventListener("mouseleave", onMouseLeave);
-      host.removeEventListener("touchstart", onTouch);
-      host.removeEventListener("touchmove", onTouch);
-      host.removeEventListener("touchend", onTouchEnd);
-      host.removeEventListener("touchcancel", onTouchEnd);
+      window.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseout", onDocOut);
+      window.removeEventListener("touchstart", onTouch);
+      window.removeEventListener("touchmove", onTouch);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
@@ -501,25 +501,9 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
   );
 }
 
-export function HeroMesh({
-  src,
-  width,
-  height,
-}: {
-  src: string;
-  width: number;
-  height: number;
-}) {
+export function HeroMesh({ src }: { src: string }) {
   return (
-    <div
-      className="relative overflow-hidden bg-[#030303]"
-      style={{ width, height }}
-    >
-      <div
-        aria-hidden
-        className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: `url('${src}')` }}
-      />
+    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
       <MeshCanvas backgroundImageSrc={src} />
     </div>
   );

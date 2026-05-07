@@ -37,8 +37,10 @@ function GithubIcon({ className }: { className?: string }) {
 
 export default function Page() {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-black">
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-10 sm:pt-14">
+    <main className="relative h-screen overflow-hidden bg-[#030303]">
+      <HeroMesh src="/hero-bg.png" />
+
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-10 sm:pt-14">
         <Image
           src="/logo.svg"
           alt="covenant"
@@ -49,7 +51,7 @@ export default function Page() {
         />
       </header>
 
-      <nav className="absolute top-8 right-6 z-10 flex items-center gap-4 sm:top-10 sm:right-10">
+      <nav className="absolute top-8 right-6 z-20 flex items-center gap-4 sm:top-10 sm:right-10">
         <a
           href={X_URL}
           target="_blank"
@@ -70,17 +72,24 @@ export default function Page() {
         </a>
       </nav>
 
-      <section className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6 text-center">
-        <HeroMesh src="/hero-bg.png" width={2000} height={2000} />
-
+      <section className="relative z-10 flex h-full flex-col items-center justify-center gap-8 px-6 text-center">
+        <Image
+          src="/hero-bg.png"
+          alt=""
+          width={2000}
+          height={2000}
+          priority
+          sizes="30vh"
+          className="pointer-events-none h-[30vh] w-auto"
+        />
         <p className="text-xs tracking-[0.4em] text-neutral-400">
           {RELEASE_DATE}
         </p>
-
-        <footer className="absolute inset-x-0 bottom-8 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
-          open agent-native operating layer
-        </footer>
       </section>
+
+      <footer className="absolute inset-x-0 bottom-8 z-20 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
+        open agent-native operating layer
+      </footer>
     </main>
   );
 }

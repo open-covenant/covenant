@@ -5,15 +5,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing: check existing issues and the docs/spec for the affected component.
-        **Security-sensitive bugs (fund loss, key exposure, unauthorized state change) must go through the private advisory flow — see [SECURITY.md](../../SECURITY.md).**
+        Before filing: check existing issues and the README for the affected component.
+        **Security-sensitive bugs (key exposure, capability bypass, audit-log forgery, fund movement) must go through the private advisory flow — see [SECURITY.md](../../SECURITY.md).**
 
   - type: input
     id: component
     attributes:
       label: Component
-      description: Which part of the codebase?
-      placeholder: "contracts/CovenantTaskMarket.sol, services/indexer, apps/portal, packages/sdk, etc."
+      description: Which crate, binary, or surface?
+      placeholder: "covenantd, covenant-permissions, landing site, programs/settlement, etc."
     validations:
       required: true
 
@@ -37,7 +37,7 @@ body:
     id: actual
     attributes:
       label: Actual behavior
-      description: Include error messages, transaction signatures, logs.
+      description: Include error messages, logs, and any audit-event output.
     validations:
       required: true
 
@@ -54,7 +54,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, Node version, Rust version, Foundry version, and any Base RPC/provider details.
+      description: OS, Rust version, Node version (for the landing site), and any external services involved (Ollama, Solana RPC, etc.).
       render: shell
     validations:
       required: true

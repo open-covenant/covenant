@@ -1,4 +1,5 @@
 const BASE = process.env.NEXT_PUBLIC_COVENANT_HTTP || "http://127.0.0.1:8421";
+const TOKEN = process.env.NEXT_PUBLIC_COVENANT_TOKEN || "";
 
 export type Memory = {
   id: string;
@@ -117,10 +118,14 @@ export type A2ATaskResult = {
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+  if (TOKEN) {
+    headers["Authorization"] = `Bearer ${TOKEN}`;
+  }
+  const r = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!r.ok) {
     const body = await r.text().catch(() => "");
     throw new Error(`${path} → ${r.status}: ${body}`);

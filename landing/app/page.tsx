@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { HeroMesh } from "./HeroMesh";
 
 const RELEASE_DATE = "13.05.2026";
 const X_URL = "https://x.com/OpenCovenant";
@@ -70,15 +71,7 @@ export default function Page() {
       </nav>
 
       <section className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6 text-center">
-        <Image
-          src="/hero.png"
-          alt=""
-          width={2000}
-          height={2000}
-          priority
-          sizes="25vw"
-          className="h-auto w-[25vw] min-w-[180px] max-w-sm"
-        />
+        <HeroMesh src="/hero.png" />
 
         <div className="flex flex-col items-center gap-4">
           <p className="font-mono text-3xl font-light tracking-tight text-neutral-50 uppercase sm:text-5xl">

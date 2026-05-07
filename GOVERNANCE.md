@@ -1,6 +1,6 @@
 # Governance
 
-Covenant has two governance surfaces: the repository and the Base protocol. The repository governs code, docs, release process, and security response. The protocol governs contract parameters, treasury actions, and execution rights on Base.
+Covenant has two governance surfaces: the repository and the on-chain settlement program. The repository governs code, documentation, release process, and security response. The settlement program governs on-chain parameters and execution rights once it is live.
 
 ## Repository governance
 
@@ -13,46 +13,38 @@ Covenant has two governance surfaces: the repository and the Base protocol. The 
 ### Repository flow
 
 - Direct pushes to `main` are the default maintainer workflow.
-- Pull requests are optional and are mainly for external contributions, risky changes, or cases where a separate review artifact is useful.
-- Anyone pushing to `main` is responsible for running the relevant checks first and leaving the default branch green.
-- Contract, settlement, auth, proof, treasury, and signing-path changes should still get a second pair of eyes when practical, even though the repository does not require formal PR approvals by default.
-- Security fixes may use a quieter path when public discussion would increase risk.
+- Pull requests are optional and used for external contributions, risky changes, or cases where a separate review artifact is useful.
+- Anyone pushing to `main` is responsible for running the full check suite first and leaving the default branch green.
+- Changes touching identity, capability, audit, settlement, or on-chain code should get a second pair of eyes even when not required.
+- Security fixes may follow a quieter path where public discussion would increase risk.
 
-## Base protocol governance
+## On-chain governance
 
 ### Upgrade authority
 
-Covenant contracts are deployed on Base and controlled through a multisig-managed upgrade path until full governance timelocks are active.
+The settlement program is deployed to Solana and controlled through a multisig-managed upgrade authority until full on-chain governance timelocks are active.
 
-Any production upgrade requires:
+Any production deployment requires:
 
-1. A change landed on `main`.
-2. Reproducible contract artifacts and deployment manifests.
-3. Successful CI on the affected contracts, apps, SDK surfaces, and services.
-4. Multisig approval for execution.
-5. Public notice except where delay would materially increase risk.
+1. The change landed on `main`.
+2. A reproducible build manifest and IDL digest.
+3. A green test suite on the affected crates and program.
+4. Multisig approval for execution on the target cluster.
+5. Public notice, except where a delay would materially increase user risk.
 
 ### Protocol parameters
 
-Once governance is fully active, Covenant parameters move onchain:
-
-- fee rates
-- staking minimums and lock durations
-- dispute windows
-- treasury spend limits
-- approved templates and operator policies
-
-The governance contract and the deployment multisig remain distinct controls. Governance should not silently bypass release review, and the release path should not silently override governance-set values.
+Once on-chain governance is active, Covenant parameters move on-chain. The governance program and the deployment multisig remain distinct controls — neither silently overrides the other.
 
 ## Security-sensitive actions
 
 The following actions require heightened review:
 
-- contract upgrades
-- treasury withdrawals or sweep-policy changes
-- proof-verification key rotation
-- auth/session changes
-- bridge or gateway settlement policy changes
+- on-chain program upgrades
+- treasury or fee-policy changes
+- key rotation for the deployment multisig
+- changes to identity, capability, or audit primitives
+- gateway or settlement policy changes
 
 ## Changing this document
 

@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/landing"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -13,21 +13,18 @@ updates:
           - "react"
           - "react-dom"
           - "@next/*"
-      base:
-        patterns:
-          - "viem"
-          - "wagmi"
-          - "@coinbase/*"
       tooling:
         patterns:
           - "eslint*"
           - "prettier"
           - "typescript"
-          - "turbo"
           - "@types/*"
+          - "tailwindcss"
+          - "@tailwindcss/*"
+          - "postcss"
 
   - package-ecosystem: "cargo"
-    directory: "/services/indexer"
+    directory: "/agent-os"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -35,12 +32,6 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-
-  - package-ecosystem: "docker"
-    directory: "/services/indexer"
     schedule:
       interval: "weekly"
       day: "monday"

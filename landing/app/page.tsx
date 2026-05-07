@@ -79,10 +79,10 @@ export default function Page() {
           width={2000}
           height={2000}
           priority
-          sizes="30vh"
-          className="pointer-events-none h-[30vh] w-auto"
+          sizes="80vh"
+          className="pointer-events-none h-[80vh] w-auto"
         />
-        <p className="text-xs tracking-[0.4em] text-neutral-400">
+        <p className="text-[14px] tracking-[0.4em] text-neutral-400">
           {RELEASE_DATE}
         </p>
       </section>

@@ -65,6 +65,42 @@ impl AgentId {
     }
 }
 
+/// Whitelist for `AgentId.display`: `<local>@<host>` where each side is
+/// a non-empty run of `[A-Za-z0-9_.-]`. Returns an error for any other
+/// shape so the value can't smuggle whitespace, control bytes, or
+/// punctuation into capability strings like `a2a.respond.<sender>`.
+///
+/// Called automatically from `Deserialize` so every wire-derived
+/// `AgentId` (HTTP/IPC requests, agent manifest TOML, A2A tasks)
+/// passes through it. Trusted in-process constructions via
+/// [`AgentId::new`] are not validated — the test suite and the daemon
+/// itself author display strings of known shape.
+pub fn validate_agent_id_display(s: &str) -> Result<(), AgentIdError> {
+    let (local, host) = s
+        .split_once('@')
+        .ok_or_else(|| AgentIdError::InvalidDisplay(s.to_owned()))?;
+    if local.is_empty() || host.is_empty() {
+        return Err(AgentIdError::InvalidDisplay(s.to_owned()));
+    }
+    if host.contains('@') {
+        return Err(AgentIdError::InvalidDisplay(s.to_owned()));
+    }
+    fn segment_ok(part: &str) -> bool {
+        part.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    }
+    if !segment_ok(local) || !segment_ok(host) {
+        return Err(AgentIdError::InvalidDisplay(s.to_owned()));
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AgentIdError {
+    #[error("invalid AgentId.display: {0:?}")]
+    InvalidDisplay(String),
+}
+
 #[derive(Serialize, Deserialize)]
 struct AgentIdRepr {
     display: String,
@@ -84,6 +120,7 @@ impl Serialize for AgentId {
 impl<'de> Deserialize<'de> for AgentId {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let r = AgentIdRepr::deserialize(d)?;
+        validate_agent_id_display(&r.display).map_err(serde::de::Error::custom)?;
         let bytes = bs58::decode(&r.pubkey)
             .into_vec()
             .map_err(serde::de::Error::custom)?;
@@ -180,6 +217,68 @@ mod tests {
         let bad = r#"{"display":"x@local","pubkey":"deadbeef"}"#;
         let r: Result<AgentId, _> = serde_json::from_str(bad);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn validate_display_accepts_canonical_shapes() {
+        for ok in [
+            "user@local",
+            "research@local",
+            "orch-a@host_b",
+            "a.b.c@x.y.z",
+            "u_1@h-2",
+            "A@B",
+        ] {
+            assert!(
+                validate_agent_id_display(ok).is_ok(),
+                "expected {ok:?} to validate"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_display_rejects_smuggling_shapes() {
+        for bad in [
+            "",
+            "noatsign",
+            "@local",
+            "user@",
+            "user@@local",
+            "user@a@b",
+            "user@host space",
+            "user@local;a2a.respond.victim",
+            "user@local\nrest",
+            "user@local\trest",
+            "user@local/path",
+            "user@host:port",
+            "user@host?q",
+            "user@hős",
+        ] {
+            assert!(
+                validate_agent_id_display(bad).is_err(),
+                "expected {bad:?} to fail validation"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_id_deserialize_rejects_invalid_display() {
+        let valid_pubkey = bs58::encode([0u8; 32]).into_string();
+        let bad = format!(r#"{{"display":"a2a.respond.victim;evil","pubkey":"{valid_pubkey}"}}"#);
+        let r: Result<AgentId, _> = serde_json::from_str(&bad);
+        let err = r.expect_err("should reject");
+        assert!(
+            err.to_string().contains("invalid AgentId.display"),
+            "error should name the failure: {err}"
+        );
+    }
+
+    #[test]
+    fn agent_id_deserialize_accepts_valid_display() {
+        let valid_pubkey = bs58::encode([0u8; 32]).into_string();
+        let good = format!(r#"{{"display":"orch@local","pubkey":"{valid_pubkey}"}}"#);
+        let parsed: AgentId = serde_json::from_str(&good).expect("should parse");
+        assert_eq!(parsed.display, "orch@local");
     }
 
     #[test]

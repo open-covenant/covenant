@@ -75,6 +75,11 @@ export type AuditKind =
       intent_id: string;
       intent_text: string;
       matched_pattern: string;
+    }
+  | {
+      type: "a2a_result_rejected";
+      task_id: string;
+      reason: string;
     };
 
 export type AuditEvent = {

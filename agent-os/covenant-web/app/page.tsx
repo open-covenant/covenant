@@ -368,6 +368,12 @@ export default function Home() {
                       matched {e.kind.matched_pattern}
                     </span>
                   )}
+                  {e.kind.type === "a2a_result_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      task={e.kind.task_id.slice(0, 8)}… · {e.kind.reason}
+                    </span>
+                  )}
                 </li>
               ))}
           </ul>

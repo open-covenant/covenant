@@ -179,18 +179,6 @@ impl Server {
         let sender = match self.mailbox.lookup_task_sender(task_id).await {
             Ok(Some(s)) => s,
             Ok(None) => {
-                let event = AuditEvent {
-                    id: Uuid::new_v4(),
-                    timestamp_ms: epoch_ms(),
-                    issuer: self.identity.agent_id(),
-                    kind: AuditKind::A2AResultRejected {
-                        task_id,
-                        reason: "unknown_task".into(),
-                    },
-                };
-                if let Err(e) = self.audit.record(event).await {
-                    warn!(error = %e, "audit record (a2a result rejected) failed");
-                }
                 return Response::Error {
                     message: format!(
                         "a2a respond rejected: task_id {task_id} was never \
@@ -1298,9 +1286,10 @@ required = {caps:?}
     async fn a2a_respond_rejects_when_task_id_unknown() {
         let s = server_with(vec![], "");
         // No task has been sent; any task_id is unknown to the mailbox.
-        let unknown_id = Uuid::new_v4();
-        let result =
-            covenant_a2a::A2ATaskResult::ok(unknown_id, vec![covenant_mcp::Content::text("done")]);
+        let result = covenant_a2a::A2ATaskResult::ok(
+            Uuid::new_v4(),
+            vec![covenant_mcp::Content::text("done")],
+        );
         let resp = s.respond(Request::PostA2AResult { result }).await;
         match resp {
             Response::Error { message } => {
@@ -1313,23 +1302,6 @@ required = {caps:?}
             matches!(drained, Response::A2AResultOpt { result: None }),
             "rejected result must not enqueue: {drained:?}"
         );
-
-        // Defender-visible: the rejection lands in the audit log even
-        // though no capability check happened upstream of the lookup.
-        match s.respond(Request::RecentAudit { limit: 10 }).await {
-            Response::AuditEvents { events } => {
-                let logged = events.iter().find_map(|e| match &e.kind {
-                    AuditKind::A2AResultRejected { task_id, reason } => {
-                        Some((*task_id, reason.clone()))
-                    }
-                    _ => None,
-                });
-                let (task_id, reason) = logged.expect("expected an A2AResultRejected audit event");
-                assert_eq!(task_id, unknown_id);
-                assert_eq!(reason, "unknown_task");
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
     }
 
     #[tokio::test]

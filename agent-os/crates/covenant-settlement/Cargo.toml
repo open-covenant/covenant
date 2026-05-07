@@ -1,7 +1,7 @@
 [package]
 name = "covenant-settlement"
 version = "0.1.0"
-description = "Settlement primitive — Phase 1 first burn surface (local JSONL receipt log). On-chain wiring lands in Phase 5."
+description = "Settlement primitive for Covenant. Trait-based interface with in-memory and JSONL receipt stores; off-chain credit accounting that pairs with on-chain settlement."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -1,7 +1,7 @@
 [package]
 name = "covenant-mcp"
 version = "0.1.0"
-description = "MCP-aligned tool abstraction. Tool trait + registry + native impls. External MCP server transport lands in a later sprint."
+description = "Model Context Protocol (MCP) integration for Covenant. Tool trait, in-process registry, native tools, and stdio JSON-RPC transport for external MCP servers."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

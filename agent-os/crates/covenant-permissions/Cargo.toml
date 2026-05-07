@@ -1,7 +1,7 @@
 [package]
 name = "covenant-permissions"
 version = "0.1.0"
-description = "Capability-token primitive (spec §4). SignedCapability = Capability + ed25519 signature by granted_by. JSONL store + in-memory store. v0 enforcement is read-only / audit-log only — Sprint 12 will gate dispatch on capability presence."
+description = "Capability-token primitive for Covenant. ed25519-signed capabilities with persistent and in-memory stores; revocation tombstones; verify-with-clock for expiry."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -1,7 +1,7 @@
 [package]
 name = "covenantd"
 version = "0.1.0"
-description = "Covenant daemon. Phase 0 echo loop on a Unix socket; later phases host runtime, memory, identity, permissions, comms, settlement."
+description = "Covenant daemon. Local-first coordination layer for agentic software, exposing intent dispatch, agent runtime, memory, identity, permissions, audit, and settlement over a Unix socket and an HTTP gateway."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

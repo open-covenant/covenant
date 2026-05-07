@@ -1,7 +1,7 @@
 [package]
 name = "covenant-llm"
 version = "0.1.0"
-description = "LLM provider abstraction. Trait + mock + Ollama (no key) + Anthropic + OpenAI-compatible. Live calls require keys; the interface is fully unblocked."
+description = "LLM provider abstraction for Covenant. Trait-based interface with mock, Ollama, Anthropic, and OpenAI-compatible implementations."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

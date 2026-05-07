@@ -1,7 +1,7 @@
 [package]
 name = "covenant-memory"
 version = "0.1.0"
-description = "Memory layer v0 — three-tier (working / episodic / long-term) record store. SQLite-backed for persistence; in-memory backend for tests. Vector search lands in Phase 1+ when embeddings are wired."
+description = "Three-tier memory store (working, episodic, long-term) for Covenant. SQLite-backed persistence with an in-memory backend for tests and cosine similarity search over stored vectors."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

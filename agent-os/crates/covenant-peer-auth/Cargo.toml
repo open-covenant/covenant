@@ -1,0 +1,21 @@
+[package]
+name = "covenant-peer-auth"
+version = "0.1.0"
+description = "Peer-token registry for binding ipc/http callers to AgentIds. Per-agent random 32-byte tokens; jsonl-backed event log; revocation tombstones; in-memory mock for tests."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+async-trait = { workspace = true }
+bs58 = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

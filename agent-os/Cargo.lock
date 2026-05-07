@@ -693,6 +693,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-peer-auth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bs58",
+ "covenant-types",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "covenant-permissions"
 version = "0.1.0"
 dependencies = [

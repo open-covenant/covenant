@@ -15,6 +15,7 @@ members = [
     "crates/covenant-permissions",
     "crates/covenant-mcp",
     "crates/covenant-a2a",
+    "crates/covenant-peer-auth",
     "crates/covenantd",
     "crates/covenant",
     "agents/research",

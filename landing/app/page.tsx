@@ -47,7 +47,7 @@ export default function Page() {
           width={255}
           height={54}
           priority
-          className="pointer-events-auto h-10 w-auto opacity-95 sm:h-12"
+          className="pointer-events-auto h-[50px] w-auto opacity-95 sm:h-[60px]"
         />
       </header>
 

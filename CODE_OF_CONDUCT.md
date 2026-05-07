@@ -10,7 +10,7 @@ Covenant adopts the [Contributor Covenant, version 2.1](https://www.contributor-
 
 ## Enforcement
 
-Report violations to `conduct@covenantbase.com`. Reports are confidential. Maintainers will respond within 7 days with a proposed action and the reasoning.
+Report violations to `conduct@opencovenant.org`. Reports are confidential. Maintainers will respond within 7 days with a proposed action and the reasoning.
 
 Appeals go to the same address with a different maintainer handling them.
 

@@ -6,10 +6,10 @@ Covenant support happens in public by default so answers are searchable and reus
 
 - **Bugs:** open a GitHub issue with reproduction steps, affected commit or release, and relevant logs.
 - **Docs gaps:** open an issue or pull request against the affected page.
-- **Security reports:** use GitHub private advisories or email `security@covenantbase.com`.
-- **Conduct reports:** email `conduct@covenantbase.com`.
+- **Security reports:** use GitHub private advisories or email `security@opencovenant.org`.
+- **Conduct reports:** email `conduct@opencovenant.org`.
 
-Please do not include secrets, private keys, wallet seed phrases, unreleased partner details, or private RPC credentials in public issues.
+Please do not include secrets, private keys, seed phrases, capability tokens, or private RPC credentials in public issues.
 
 ## Response expectations
 

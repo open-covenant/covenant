@@ -1,0 +1,23 @@
+[package]
+name = "covenant-memory"
+version = "0.1.0"
+description = "Memory layer v0 — three-tier (working / episodic / long-term) record store. SQLite-backed for persistence; in-memory backend for tests. Vector search lands in Phase 1+ when embeddings are wired."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+async-trait = { workspace = true }
+bs58 = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

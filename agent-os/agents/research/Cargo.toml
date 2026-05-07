@@ -1,0 +1,23 @@
+[package]
+name = "research-agent"
+version = "0.1.0"
+description = "Research agent — runs a web search via covenant-tools, summarises with an LLM via covenant-llm, returns structured result. Falls back to canned text when no provider is configured."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "research"
+path = "src/main.rs"
+
+[dependencies]
+covenant-llm = { path = "../../crates/covenant-llm" }
+covenant-tools = { path = "../../crates/covenant-tools" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tempfile = { workspace = true }

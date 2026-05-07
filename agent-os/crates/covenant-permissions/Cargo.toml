@@ -1,0 +1,23 @@
+[package]
+name = "covenant-permissions"
+version = "0.1.0"
+description = "Capability-token primitive (spec §4). SignedCapability = Capability + ed25519 signature by granted_by. JSONL store + in-memory store. v0 enforcement is read-only / audit-log only — Sprint 12 will gate dispatch on capability presence."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+async-trait = { workspace = true }
+bs58 = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+covenant-identity = { path = "../covenant-identity" }
+tempfile = { workspace = true }

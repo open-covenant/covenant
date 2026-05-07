@@ -1,0 +1,23 @@
+[package]
+name = "covenant-runtime"
+version = "0.1.0"
+description = "Agent runtime — subprocess spawn, stdin/stdout JSON protocol, wall-clock timeout. Phase 0; gVisor / Firecracker arrive in Phase 1+."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-manifest = { path = "../covenant-manifest" }
+covenant-router = { path = "../covenant-router" }
+covenant-types = { path = "../covenant-types" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+uuid = { workspace = true }

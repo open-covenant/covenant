@@ -1,0 +1,19 @@
+[package]
+name = "covenant-identity"
+version = "0.1.0"
+description = "Identity primitive — ed25519 keypair, on-disk persistence, signing/verification. Same key signs Solana settlement transactions in Phase 5."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

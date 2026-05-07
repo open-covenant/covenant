@@ -1,0 +1,342 @@
+//! JSON-RPC 2.0 transport for talking to MCP servers.
+//!
+//! [`McpClient`] is the trait the rest of the crate codes against; impls
+//! exist for stdio-based subprocess servers ([`StdioMcpClient`]) and for
+//! tests ([`MockMcpClient`]). Wire format follows the MCP spec: one JSON
+//! message per line on the subprocess's stdin/stdout streams.
+//!
+//! Lifecycle: spawn → `initialize` request → `notifications/initialized`
+//! notification → request/response loop → drop kills the child via
+//! `kill_on_drop(true)`. The reader task ends when stdout EOFs and at that
+//! point any in-flight requests resolve with [`McpClientError::Closed`].
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::{oneshot, Mutex};
+use tokio::task::JoinHandle;
+use tracing::{debug, warn};
+
+/// JSON-RPC 2.0 request envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: &'static str,
+    pub id: u64,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub params: Value,
+}
+
+/// JSON-RPC 2.0 notification (no `id`, no response expected).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcNotification {
+    pub jsonrpc: &'static str,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub params: Value,
+}
+
+/// JSON-RPC 2.0 response envelope. Either `result` or `error` is set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcResponse {
+    #[serde(default)]
+    pub jsonrpc: String,
+    pub id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum McpClientError {
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("serde: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("rpc error {code}: {message}")]
+    Rpc { code: i64, message: String },
+    #[error("transport closed")]
+    Closed,
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
+    #[error("server crashed before responding")]
+    ServerCrashed,
+}
+
+impl From<JsonRpcError> for McpClientError {
+    fn from(e: JsonRpcError) -> Self {
+        McpClientError::Rpc {
+            code: e.code,
+            message: e.message,
+        }
+    }
+}
+
+#[async_trait]
+pub trait McpClient: Send + Sync {
+    /// Send a JSON-RPC request and await its response.
+    async fn request(&self, method: &str, params: Value) -> Result<Value, McpClientError>;
+    /// Fire a JSON-RPC notification (no response expected).
+    async fn notify(&self, method: &str, params: Value) -> Result<(), McpClientError>;
+}
+
+// ---------- StdioMcpClient ----------
+
+type Pending = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, JsonRpcError>>>>>;
+
+pub struct StdioMcpClient {
+    stdin: Mutex<ChildStdin>,
+    pending: Pending,
+    next_id: AtomicU64,
+    // Holding `Child` keeps the process alive. `kill_on_drop(true)` on the
+    // builder means dropping this struct also reaps the subprocess.
+    _child: Mutex<Option<Child>>,
+    _reader: JoinHandle<()>,
+}
+
+impl StdioMcpClient {
+    /// Spawn `command` with `args` and start the JSON-RPC reader loop.
+    /// Caller is responsible for invoking `initialize` afterwards.
+    pub async fn spawn(command: &str, args: &[String]) -> Result<Arc<Self>, McpClientError> {
+        let mut child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let stdin = child.stdin.take().ok_or(McpClientError::Closed)?;
+        let stdout = child.stdout.take().ok_or(McpClientError::Closed)?;
+        if let Some(stderr) = child.stderr.take() {
+            spawn_stderr_logger(stderr);
+        }
+
+        let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
+        let reader_pending = pending.clone();
+        let reader = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<JsonRpcResponse>(&line) {
+                            Ok(resp) => deliver_response(&reader_pending, resp),
+                            Err(e) => warn!(error = %e, line, "mcp: bad json on stdout"),
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        warn!(error = %e, "mcp: stdout read failed");
+                        break;
+                    }
+                }
+            }
+            // EOF or read error: surface to anything still waiting.
+            let mut map = reader_pending.lock().expect("pending lock");
+            for (_, tx) in map.drain() {
+                let _ = tx.send(Err(JsonRpcError {
+                    code: -32099,
+                    message: "transport closed".into(),
+                    data: None,
+                }));
+            }
+        });
+
+        Ok(Arc::new(Self {
+            stdin: Mutex::new(stdin),
+            pending,
+            next_id: AtomicU64::new(1),
+            _child: Mutex::new(Some(child)),
+            _reader: reader,
+        }))
+    }
+
+    async fn write_line(&self, msg: &[u8]) -> Result<(), McpClientError> {
+        let mut s = self.stdin.lock().await;
+        s.write_all(msg).await?;
+        s.write_all(b"\n").await?;
+        s.flush().await?;
+        Ok(())
+    }
+}
+
+fn deliver_response(pending: &Pending, resp: JsonRpcResponse) {
+    let id = match resp.id {
+        Some(id) => id,
+        None => return, // Response without id can't be matched; drop.
+    };
+    let tx = {
+        let mut map = pending.lock().expect("pending lock");
+        map.remove(&id)
+    };
+    if let Some(tx) = tx {
+        let outcome = match (resp.result, resp.error) {
+            (Some(v), _) => Ok(v),
+            (None, Some(e)) => Err(e),
+            (None, None) => Ok(Value::Null),
+        };
+        let _ = tx.send(outcome);
+    } else {
+        debug!(id, "mcp: response with unknown id");
+    }
+}
+
+fn spawn_stderr_logger(stderr: tokio::process::ChildStderr) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !line.trim().is_empty() {
+                debug!(target: "mcp.stderr", "{line}");
+            }
+        }
+    });
+}
+
+#[async_trait]
+impl McpClient for StdioMcpClient {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, McpClientError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut map = self.pending.lock().expect("pending lock");
+            map.insert(id, tx);
+        }
+        let msg = serde_json::to_vec(&JsonRpcRequest {
+            jsonrpc: "2.0",
+            id,
+            method: method.to_string(),
+            params,
+        })?;
+        self.write_line(&msg).await?;
+        match rx.await {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => Err(McpClientError::Closed),
+        }
+    }
+
+    async fn notify(&self, method: &str, params: Value) -> Result<(), McpClientError> {
+        let msg = serde_json::to_vec(&JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: method.to_string(),
+            params,
+        })?;
+        self.write_line(&msg).await
+    }
+}
+
+// ---------- MockMcpClient (tests + Phase 4 audit) ----------
+
+type MockHandler = dyn Fn(&str, &Value) -> Result<Value, McpClientError> + Send + Sync;
+
+/// In-process MCP client backed by a closure. Lets tests drive
+/// [`McpClient`] without spawning anything. The handler is called for
+/// requests; notifications are recorded silently.
+pub struct MockMcpClient {
+    handler: Arc<MockHandler>,
+    notifications: StdMutex<Vec<(String, Value)>>,
+}
+
+impl MockMcpClient {
+    pub fn new<F>(handler: F) -> Self
+    where
+        F: Fn(&str, &Value) -> Result<Value, McpClientError> + Send + Sync + 'static,
+    {
+        Self {
+            handler: Arc::new(handler),
+            notifications: StdMutex::new(Vec::new()),
+        }
+    }
+
+    pub fn notifications(&self) -> Vec<(String, Value)> {
+        self.notifications.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl McpClient for MockMcpClient {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, McpClientError> {
+        (self.handler)(method, &params)
+    }
+    async fn notify(&self, method: &str, params: Value) -> Result<(), McpClientError> {
+        self.notifications
+            .lock()
+            .unwrap()
+            .push((method.to_string(), params));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_rpc_request_serialises_with_jsonrpc_2() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 7,
+            method: "tools/list".into(),
+            params: Value::Null,
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"jsonrpc\":\"2.0\""));
+        assert!(s.contains("\"id\":7"));
+        assert!(s.contains("\"method\":\"tools/list\""));
+        assert!(!s.contains("params"));
+    }
+
+    #[test]
+    fn json_rpc_response_with_error_parses() {
+        let s = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#;
+        let r: JsonRpcResponse = serde_json::from_str(s).unwrap();
+        assert_eq!(r.id, Some(1));
+        assert!(r.result.is_none());
+        let e = r.error.unwrap();
+        assert_eq!(e.code, -32601);
+    }
+
+    #[tokio::test]
+    async fn mock_client_dispatches_request_to_handler() {
+        let c = MockMcpClient::new(|method, params| {
+            assert_eq!(method, "echo");
+            Ok(params.clone())
+        });
+        let r = c
+            .request("echo", serde_json::json!({ "x": 1 }))
+            .await
+            .unwrap();
+        assert_eq!(r["x"], 1);
+    }
+
+    #[tokio::test]
+    async fn mock_client_records_notifications() {
+        let c = MockMcpClient::new(|_, _| Ok(Value::Null));
+        c.notify("notifications/initialized", Value::Null)
+            .await
+            .unwrap();
+        let n = c.notifications();
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].0, "notifications/initialized");
+    }
+}

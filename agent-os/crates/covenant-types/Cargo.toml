@@ -1,0 +1,14 @@
+[package]
+name = "covenant-types"
+version = "0.1.0"
+description = "Core data types shared across the covenant workspace."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+bs58 = { workspace = true }

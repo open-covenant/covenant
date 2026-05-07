@@ -15,7 +15,7 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@fontsource/archivo-black": "^5.2.8",
-    "marked": "^18.0.2",
+    "marked": "^18.0.3",
     "next": "16.2.4",
     "react": "19.2.5",
     "react-dom": "19.2.5"

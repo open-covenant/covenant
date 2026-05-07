@@ -1,12 +1,6 @@
 # Maintainers
 
-Active maintainers with commit and review authority.
-
-| Name | GitHub | Area |
-|---|---|---|
-| Achille Wasque | [@achillewasque](https://github.com/achillewasque) | Daemon, runtime, core types, infrastructure |
-| Iko Rane | [@iko-rane](https://github.com/iko-rane) | Web UI, landing site, frontend |
-| Noam Rook | [@nr00x](https://github.com/nr00x) | Solana programs, settlement, on-chain integration |
+Active maintainers are the people listed in the [contributors graph](https://github.com/open-covenant/covenant/graphs/contributors) with consistent, recent activity. Direct-push and review authority is held by the maintainer set.
 
 Security contact: `security@opencovenant.org` (see [SECURITY.md](./SECURITY.md)).
 

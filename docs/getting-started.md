@@ -1,82 +1,66 @@
-# Getting Started with Covenant on Base
+# Getting started
 
-From zero to a working Covenant/Base development environment.
+From zero to a working Covenant development environment.
 
 ## Prerequisites
 
 | Tool | Version |
 |------|---------|
+| Rust | stable |
 | Node.js | 22+ |
 | pnpm | 10+ |
-| Rust | stable |
-| Foundry | latest stable |
-| Docker | latest |
+| Anchor (optional, for the on-chain program) | 0.31+ |
+| solana-cli (optional, for the on-chain program) | latest |
 
 ## Clone
 
 ```bash
-git clone https://github.com/covenant-base/covenant.git
+git clone https://github.com/open-covenant/covenant.git
 cd covenant
 ```
 
-## Install dependencies
+## Build the daemon and crates
 
 ```bash
-pnpm install
+cargo build --workspace --exclude covenant-settlement-program
 ```
 
-## Start local infrastructure
+The built binary lands at `agent-os/target/debug/covenantd`. Configuration lives under `$COVENANT_HOME` (default `~/.covenant`).
+
+## Run the test suite
 
 ```bash
-docker compose up -d
+cargo test  --workspace --exclude covenant-settlement-program
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-This starts Postgres and Redis with Covenant-local defaults from [`.env.example`](../.env.example).
-
-## Build contracts and export artifacts
+Tests prefixed `live_` exercise real backends (real network, real subprocesses, real model). They are `#[ignore]`'d to keep the default run fast — opt in with:
 
 ```bash
-pnpm contracts:build
+cargo test -- --ignored live_
 ```
 
-That step compiles the Foundry workspace and refreshes the ABI + deployment data consumed by the SDK, portal, and services.
-
-## Verify the workspace
+## Build the on-chain program (optional)
 
 ```bash
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm guard:public-identifiers
+anchor build
 ```
 
-## Run the apps
+Anchor builds the Solana settlement program for the BPF target. This is a separate toolchain from `cargo build` because of the SBF compiler.
+
+## Run the landing site locally
 
 ```bash
-pnpm --filter @covenant/portal dev
-pnpm --filter @covenant/docs dev
-pnpm --filter @covenant/analytics dev
+pnpm --dir landing install --frozen-lockfile --ignore-workspace
+pnpm --dir landing dev
 ```
 
-## Run local Base deployments
-
-```bash
-pnpm contracts:deploy:local
-pnpm contracts:test
-```
-
-## Run the main services
-
-```bash
-pnpm --filter @covenant/discovery build && pnpm --filter @covenant/discovery start
-pnpm --filter @covenant/iacp build && pnpm --filter @covenant/iacp start
-pnpm --filter @covenant/proof-gen build && pnpm --filter @covenant/proof-gen start
-pnpm --filter @covenant/x402-gateway build && pnpm --filter @covenant/x402-gateway start
-cd services/indexer && cargo run
-```
+Visit http://localhost:3001.
 
 ## Where to look next
 
-- [`docs/specs/base-runtime.md`](./specs/base-runtime.md)
-- [`docs/specs/service-model.md`](./specs/service-model.md)
-- [`docs/specs/cutover-runbook.md`](./specs/cutover-runbook.md)
+- [`README.md`](../README.md) — project overview
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution guide
+- [`SECURITY.md`](../SECURITY.md) — responsible disclosure
+- [`ROADMAP.md`](../ROADMAP.md) — what's in flight

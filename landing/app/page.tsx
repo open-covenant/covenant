@@ -72,7 +72,7 @@ export default function Page() {
         </a>
       </nav>
 
-      <section className="relative z-10 flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+      <section className="relative z-10 flex h-full flex-col items-center justify-center px-6 text-center">
         <Image
           src="/hero-bg.png"
           alt=""
@@ -82,10 +82,11 @@ export default function Page() {
           sizes="80vh"
           className="pointer-events-none h-[80vh] w-auto"
         />
-        <p className="-mt-12 text-[14px] tracking-[0.4em] text-neutral-400">
-          {RELEASE_DATE}
-        </p>
       </section>
+
+      <p className="absolute left-1/2 top-[65%] z-10 -translate-x-1/2 text-[14px] tracking-[0.4em] text-neutral-400">
+        {RELEASE_DATE}
+      </p>
 
       <footer className="absolute inset-x-0 bottom-8 z-20 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
         open agent-native operating layer

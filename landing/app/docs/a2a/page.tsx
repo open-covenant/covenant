@@ -116,8 +116,15 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
           <code>a2a-send:&lt;recipient&gt;</code>.
         </li>
         <li>
-          <code>PostA2AResult</code> requires <code>a2a.respond</code>.
-          The audit row carries scope id{" "}
+          <code>PostA2AResult</code> requires{" "}
+          <code>a2a.respond.&lt;sender.display&gt;</code>, where{" "}
+          <code>sender</code> is the original sender of the task
+          identified by <code>result.task_id</code>. The daemon looks
+          the sender up via the mailbox; results whose{" "}
+          <code>task_id</code> was never dispatched through this
+          daemon are rejected before the capability check, so the
+          attacker cannot probe for granted caps with arbitrary task
+          ids. The audit row carries scope id{" "}
           <code>a2a-respond:&lt;task_id&gt;</code>.
         </li>
       </ul>
@@ -162,18 +169,19 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
         <li>
           <strong>Authentication.</strong> Both write paths are gated
           by capability tokens (<code>a2a.send.&lt;recipient&gt;</code>{" "}
-          and <code>a2a.respond</code>) checked against the
-          daemon&apos;s local identity. The cap is not yet bound to
-          the calling HTTP/IPC peer — closing that gap requires
+          and <code>a2a.respond.&lt;sender&gt;</code>) checked against
+          the daemon&apos;s local identity. The cap is not yet bound
+          to the calling HTTP/IPC peer — closing that gap requires
           per-call peer authentication, which is a separate piece of
           work.
         </li>
         <li>
-          <strong>Result attribution.</strong> The current{" "}
-          <code>a2a.respond</code> capability is coarse: a holder can
-          respond to any queued <code>task_id</code>. Narrowing to{" "}
-          <code>a2a.respond.&lt;sender&gt;</code> requires the mailbox
-          to track <code>(task_id → sender)</code>; on the roadmap.
+          <strong>Sender record.</strong> The mailbox keeps a
+          permanent record of the sender for every dispatched task so
+          that respond capabilities can be sender-scoped even after
+          the task has been recv&apos;d. For long-running daemons
+          this map grows unboundedly; a TTL or LRU policy lands with
+          the disk-backed mailbox.
         </li>
       </ul>
 

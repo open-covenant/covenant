@@ -35,7 +35,20 @@ required = ["tool.web_search"]
     AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
 }
 
-async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
+async fn spawn_test_server() -> (String, String, tokio::task::JoinHandle<()>) {
+    let identity = Arc::new(LocalIdentity::generate("user@local"));
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+    let token = covenant_peer_auth::PeerToken::generate();
+    let token_b58 = token.to_b58();
+    peers
+        .register(covenant_peer_auth::PeerEntry {
+            token,
+            agent_id: covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes()),
+            registered_at: 0,
+        })
+        .await
+        .unwrap();
     let server = Server::new(
         Arc::new(Router::from_cards(vec![stub_card()])),
         Arc::new(MockRunner::new("mocked summary")),
@@ -44,13 +57,13 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
         Arc::new(InMemoryAuditLog::new()),
         Arc::new(InMemoryCapabilityStore::new()),
         Arc::new(MockEmbedder::new(64)),
-        Arc::new(LocalIdentity::generate("user@local")),
+        identity,
         Arc::new(covenant_memory::IgnoreSet::default()),
         Arc::new(covenant_mcp::ToolRegistry::from_tools(vec![Arc::new(
             covenant_mcp::native::EchoTool,
         )])),
         Arc::new(covenant_a2a::InMemoryMailbox::new()),
-        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+        peers,
     );
     let app = router(HttpState { server });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -58,12 +71,13 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let h = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (format!("http://{addr}"), h)
+    (format!("http://{addr}"), token_b58, h)
 }
 
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
-    let (base, _h) = spawn_test_server().await;
+    let (base, _token, _h) = spawn_test_server().await;
+    // /health is the one route that does not require Authorization.
     let r = reqwest::get(format!("{base}/health")).await.unwrap();
     assert_eq!(r.status(), 200);
     let body: serde_json::Value = r.json().await.unwrap();
@@ -71,9 +85,37 @@ async fn health_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn protected_route_rejects_without_bearer() {
+    let (base, _token, _h) = spawn_test_server().await;
+    let r = reqwest::get(format!("{base}/tools")).await.unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn protected_route_rejects_with_unknown_token() {
+    let (base, _token, _h) = spawn_test_server().await;
+    let stray = covenant_peer_auth::PeerToken::generate().to_b58();
+    let r = reqwest::Client::new()
+        .get(format!("{base}/tools"))
+        .bearer_auth(&stray)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
 async fn intent_rejects_when_capabilities_missing() {
-    let (base, _h) = spawn_test_server().await;
-    let client = reqwest::Client::new();
+    let (base, token, _h) = spawn_test_server().await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
     let r: serde_json::Value = client
         .post(format!("{base}/intent"))
         .json(&json!({ "text": "find recent papers on agent memory" }))
@@ -92,8 +134,16 @@ async fn intent_rejects_when_capabilities_missing() {
 
 #[tokio::test]
 async fn intent_round_trip_after_grant() {
-    let (base, _h) = spawn_test_server().await;
-    let client = reqwest::Client::new();
+    let (base, token, _h) = spawn_test_server().await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
 
     // Grant the cap the matched agent requires.
     let g: serde_json::Value = client
@@ -194,8 +244,16 @@ async fn intent_round_trip_after_grant() {
 
 #[tokio::test]
 async fn tools_list_and_call_round_trip() {
-    let (base, _h) = spawn_test_server().await;
-    let client = reqwest::Client::new();
+    let (base, token, _h) = spawn_test_server().await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
 
     let list: serde_json::Value = client
         .get(format!("{base}/tools"))

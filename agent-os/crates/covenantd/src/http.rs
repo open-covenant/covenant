@@ -2,21 +2,26 @@
 //!
 //! Same `Server` instance, two transports: the Unix socket for the local
 //! CLI, and HTTP for browser-facing UIs (Phase 4 web UI, plus any
-//! third-party tooling). Bound to `127.0.0.1` by default — there is no
-//! authentication yet beyond "you can reach the loopback interface". Phase
-//! 5 will gate the HTTP surface behind capability tokens.
+//! third-party tooling). Bound to `127.0.0.1` by default. Every route
+//! except `/health` requires a `Authorization: Bearer <token>` header
+//! whose token resolves to a registered peer through the
+//! [`covenant_peer_auth::PeerRegistry`] the daemon was constructed
+//! with — same registry that gates the Unix-socket `Authenticate`
+//! handshake.
 
 #![allow(clippy::needless_pass_by_value)]
 
 use crate::Server;
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{Query, Request as AxumRequest, State},
+    http::{header::AUTHORIZATION, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
     Json, Router,
 };
 use covenant_ipc::{Request, Response};
+use covenant_peer_auth::PeerToken;
 use covenant_types::MemoryTier;
 use serde::Deserialize;
 
@@ -26,8 +31,7 @@ pub struct HttpState {
 }
 
 pub fn router(state: HttpState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let protected = Router::new()
         .route("/intent", post(submit_intent))
         .route("/memory/recent", get(memory_recent))
         .route("/memory/search", get(memory_search))
@@ -46,8 +50,49 @@ pub fn router(state: HttpState) -> Router {
         .route("/a2a/results", post(post_a2a_result))
         .route("/a2a/results/next", get(try_recv_a2a_result))
         .route("/a2a/results/recent", get(recent_a2a_results))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer,
+        ))
+        .with_state(state.clone());
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(protected)
         .layer(tower_http::cors::CorsLayer::permissive())
-        .with_state(state)
+}
+
+async fn require_bearer(
+    State(s): State<HttpState>,
+    req: AxumRequest,
+    next: Next,
+) -> Result<AxumResponse, AxumResponse> {
+    let header = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| unauthorized("missing Authorization header"))?;
+    // RFC 7235 §2.1: scheme is case-insensitive.
+    let (scheme, token_b58) = header
+        .split_once(' ')
+        .ok_or_else(|| unauthorized("expected `Authorization: Bearer <token>`"))?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return Err(unauthorized("expected `Authorization: Bearer <token>`"));
+    }
+    let token = PeerToken::from_b58(token_b58.trim())
+        .map_err(|_| unauthorized("malformed bearer token"))?;
+    match s.server.peers.resolve(&token).await {
+        Ok(Some(_)) => Ok(next.run(req).await),
+        _ => Err(unauthorized("unknown or revoked token")),
+    }
+}
+
+fn unauthorized(message: &'static str) -> AxumResponse {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "kind": "error", "message": message })),
+    )
+        .into_response()
 }
 
 async fn health() -> impl IntoResponse {

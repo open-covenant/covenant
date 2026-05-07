@@ -153,36 +153,28 @@ async fn main() -> Result<()> {
         peers,
     );
 
-    // HTTP gateway for browser UIs. The HTTP routes call Server::respond
-    // directly without the Unix-socket Authenticate handshake (Sprint 47
-    // gates the IPC path only; bearer-token middleware on HTTP lands in
-    // Sprint 48 paired with covenant-web's auth shim). Until that lands,
-    // refuse to bind the HTTP listener unless the operator has opted in
-    // via COVENANT_HTTP_INSECURE=1, which makes the unauthenticated
-    // configuration visible at start-up.
-    let http_handle = if std::env::var("COVENANT_HTTP_INSECURE").as_deref() == Ok("1") {
-        let http_port: u16 = std::env::var("COVENANT_HTTP_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(8421);
-        let http_addr = std::net::SocketAddr::from(([127, 0, 0, 1], http_port));
-        let http_state = covenantd::http::HttpState {
-            server: server.clone(),
-        };
-        let http_router = covenantd::http::router(http_state);
-        let http_listener = tokio::net::TcpListener::bind(http_addr)
-            .await
-            .with_context(|| format!("bind http {}", http_addr))?;
-        info!(addr = %http_addr, "http gateway listening (UNAUTHENTICATED — COVENANT_HTTP_INSECURE=1 set)");
-        Some(tokio::spawn(async move {
-            if let Err(e) = axum::serve(http_listener, http_router).await {
-                tracing::warn!(error = %e, "http gateway exited");
-            }
-        }))
-    } else {
-        info!("http gateway disabled (set COVENANT_HTTP_INSECURE=1 to enable while sprint 48 wires bearer auth)");
-        None
+    // HTTP gateway for browser UIs. Every protected route requires
+    // `Authorization: Bearer <token>` resolved via the same peer
+    // registry the Unix socket uses; only `/health` is open. Operator
+    // / web UI reads the token from `$COVENANT_HOME/peers/operator.token`.
+    let http_port: u16 = std::env::var("COVENANT_HTTP_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8421);
+    let http_addr = std::net::SocketAddr::from(([127, 0, 0, 1], http_port));
+    let http_state = covenantd::http::HttpState {
+        server: server.clone(),
     };
+    let http_router = covenantd::http::router(http_state);
+    let http_listener = tokio::net::TcpListener::bind(http_addr)
+        .await
+        .with_context(|| format!("bind http {}", http_addr))?;
+    info!(addr = %http_addr, "http gateway listening (bearer-auth enforced)");
+    let http_handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(http_listener, http_router).await {
+            tracing::warn!(error = %e, "http gateway exited");
+        }
+    });
 
     let sock_path = home.join("sock");
     if sock_path.exists() {
@@ -202,9 +194,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Some(h) = http_handle {
-        h.abort();
-    }
+    http_handle.abort();
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }

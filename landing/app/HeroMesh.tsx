@@ -512,6 +512,15 @@ export function HeroMesh({ src }: { src: string }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
       <MeshCanvas backgroundImageSrc={src} />
+      <div
+        aria-hidden
+        className="absolute inset-0"
+        style={{
+          zIndex: 2,
+          background:
+            "radial-gradient(ellipse at center, transparent 0%, transparent 28%, rgba(3,3,3,0.45) 62%, rgba(3,3,3,0.92) 100%)",
+        }}
+      />
     </div>
   );
 }

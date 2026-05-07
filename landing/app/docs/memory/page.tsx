@@ -1,0 +1,235 @@
+import Link from "next/link";
+
+export const metadata = {
+  title: "Memory tiers",
+  description:
+    "Three-tier memory store, embeddings, semantic search, and the .covenantignore allow/deny list.",
+};
+
+export default function MemoryPage() {
+  return (
+    <>
+      <h1>Memory tiers</h1>
+      <p>
+        Covenant&apos;s memory is a single store partitioned into three
+        tiers. The tiers are not separate databases — they are a
+        column on a shared schema — so an agent can be promoted from
+        one tier to another without rewriting it elsewhere.
+      </p>
+
+      <h2>Tiers</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Lifespan</th>
+            <th>Typical use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>working</code>
+            </td>
+            <td>per-task scratch; cleared explicitly</td>
+            <td>
+              Intermediate results during an intent run. Scratch
+              memory the agent uses to reason. Default tier for
+              automatic memory writes.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>episodic</code>
+            </td>
+            <td>task-grained, durable</td>
+            <td>
+              Records of completed tasks, kept across runs. Useful
+              for &quot;what happened last time I asked this&quot;
+              kind of queries.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>longterm</code>
+            </td>
+            <td>intentionally retained context</td>
+            <td>
+              Curated reference material, persistent personal
+              context, anything that should influence future routing
+              and answer composition.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Record shape</h2>
+      <pre>
+        <code>{`MemoryRecord {
+  id:          uuid,
+  tier:        "working" | "episodic" | "longterm",
+  owner:       AgentId,
+  text:        "the result text",
+  embedding:   [f32; N],          // empty if no embedder configured
+  metadata:    JSON,              // free-form, e.g. { "intent_text": "…" }
+  created_at:  u64,               // unix milliseconds
+  parent:      uuid | null
+}`}</code>
+      </pre>
+
+      <h2>Storage</h2>
+      <p>
+        The persistent backend is SQLite at{" "}
+        <code>$COVENANT_HOME/memory.db</code>. The schema is one row
+        per record; embeddings are stored as raw <code>f32</code>{" "}
+        bytes for cheap cosine math. An in-memory backend covers
+        tests; both implement the same <code>MemoryStore</code> trait.
+      </p>
+
+      <p>
+        The daemon does not use a separate vector index — cosine
+        search runs over the rows in the queried tier. The default
+        store is good for tens of thousands of records; production
+        deployments should plan for an index when row counts climb.
+      </p>
+
+      <h2>Embedding</h2>
+      <p>
+        The daemon embeds memory writes if an embedder is configured.
+        With no embedder configured, records are written without an
+        embedding and will not appear in similarity search; they
+        still surface via <code>recent</code> queries.
+      </p>
+
+      <p>
+        Configure an embedder in <code>~/.covenant/secrets.toml</code>:
+      </p>
+
+      <pre>
+        <code>{`[embed]
+provider = "ollama"
+model    = "nomic-embed-text"`}</code>
+      </pre>
+
+      <p>
+        With the above, every memory write embeds via Ollama on{" "}
+        <code>http://localhost:11434</code>. The embedder is shared
+        across writes and search queries, so query and document
+        vectors are guaranteed to be in the same space.
+      </p>
+
+      <h2>Reading recent memory</h2>
+      <pre>
+        <code>{`covenant memory recent
+covenant memory recent --tier longterm
+covenant memory recent --tier episodic --limit 50
+
+# Or via HTTP:
+curl -s '127.0.0.1:8421/memory/recent?tier=longterm&limit=50'`}</code>
+      </pre>
+
+      <h2>Semantic search</h2>
+      <p>
+        Search runs cosine similarity over stored vectors. The query
+        is embedded with the same provider used for writes; results
+        are returned in descending similarity order.
+      </p>
+
+      <pre>
+        <code>{`covenant memory search "agent memory"
+covenant memory search "agent memory" --tier longterm --limit 5
+
+# Or via HTTP:
+curl -s '127.0.0.1:8421/memory/search?q=agent+memory&tier=longterm&limit=5'`}</code>
+      </pre>
+
+      <h2>Garbage collection</h2>
+      <p>
+        Working-tier records grow unboundedly without explicit
+        cleanup. The daemon exposes a purge primitive that removes
+        records below a timestamp threshold:
+      </p>
+
+      <pre>
+        <code>{`# Purge working-tier records older than 24 hours.
+covenant memory purge --tier working --older-than-ms 86400000
+
+# Purge anything before an explicit epoch.
+covenant memory purge --before-ms 1714938000000
+
+# Purge all tiers older than seven days.
+covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
+      </pre>
+
+      <p>
+        Episodic and long-term records are typically curated rather
+        than auto-purged; the same primitive works for them, but the
+        operator should be deliberate about the threshold.
+      </p>
+
+      <h2>The .covenantignore allow/deny list</h2>
+      <p>
+        Covenant supports a <code>.covenantignore</code> file at{" "}
+        <code>$COVENANT_HOME/.covenantignore</code> with gitignore-
+        style patterns. An intent whose text matches any of the
+        active patterns is short-circuited before dispatch:
+      </p>
+
+      <ul>
+        <li>
+          The router is skipped — no agent runs.
+        </li>
+        <li>
+          No memory record is written.
+        </li>
+        <li>
+          No settlement receipt is written.
+        </li>
+        <li>
+          An <code>IntentIgnored</code> audit event is recorded with
+          the matching pattern.
+        </li>
+      </ul>
+
+      <p>
+        Pattern syntax: <code>*</code> matches any sequence within a
+        single segment, <code>**</code> across segments,{" "}
+        <code>?</code> matches a single character. <code>!</code>{" "}
+        negates an earlier match. <code>/</code> at the start anchors
+        to the path root. Last-rule-wins: a later rule supersedes an
+        earlier match.
+      </p>
+
+      <p>
+        The default seed list (created on first daemon start if no
+        file exists) covers common credential filenames so intents
+        that mention <code>id_rsa</code>, <code>.env</code>,{" "}
+        <code>credentials.json</code>, and so on are silently
+        dropped.
+      </p>
+
+      <h2>Test the ignore set</h2>
+      <pre>
+        <code>{`covenant ignore check "summarise ~/.ssh/id_rsa"
+# → ignored: true
+# → matched_pattern: "id_rsa"
+# → rules_loaded: 5`}</code>
+      </pre>
+
+      <h2>Related</h2>
+      <ul>
+        <li>
+          <Link href="/docs/cli">CLI</Link> — every memory subcommand.
+        </li>
+        <li>
+          <Link href="/docs/audit">Audit log</Link> — where{" "}
+          <code>IntentIgnored</code> lands.
+        </li>
+        <li>
+          <Link href="/docs/settlement">Settlement</Link> — memory
+          writes pair 1:1 with receipts.
+        </li>
+      </ul>
+    </>
+  );
+}

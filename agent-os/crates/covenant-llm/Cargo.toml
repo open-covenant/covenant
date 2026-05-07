@@ -1,0 +1,20 @@
+[package]
+name = "covenant-llm"
+version = "0.1.0"
+description = "LLM provider abstraction. Trait + mock + Ollama (no key) + Anthropic + OpenAI-compatible. Live calls require keys; the interface is fully unblocked."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

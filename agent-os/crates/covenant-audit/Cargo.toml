@@ -1,0 +1,21 @@
+[package]
+name = "covenant-audit"
+version = "0.1.0"
+description = "Append-only audit log. JSONL on disk. Every intent dispatch writes one entry; capability grants/revokes (Phase 2) and settlement events (Phase 5) extend the schema."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

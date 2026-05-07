@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/covenant-types",
+    "crates/covenant-manifest",
+    "crates/covenant-ipc",
+    "crates/covenant-router",
+    "crates/covenant-runtime",
+    "crates/covenant-memory",
+    "crates/covenant-settlement",
+    "crates/covenant-llm",
+    "crates/covenant-tools",
+    "crates/covenant-identity",
+    "crates/covenant-audit",
+    "crates/covenant-permissions",
+    "crates/covenant-mcp",
+    "crates/covenant-a2a",
+    "crates/covenantd",
+    "crates/covenant",
+    "agents/research",
+    "programs/settlement",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Achille Wasque <aw@opencovenant.org>"]
+repository = "https://github.com/achillewasque/covenant"
+readme = "README.md"
+
+[profile.release]
+overflow-checks = true
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+bs58 = "0.5"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs", "signal", "time", "process", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ed25519-dalek = "2"
+rand = "0.8"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors", "trace"] }

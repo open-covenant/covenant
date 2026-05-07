@@ -1,0 +1,21 @@
+[package]
+name = "covenant-settlement-program"
+version = "0.1.0"
+description = "Covenant settlement program — credit-mint and buyback PDAs on Solana. Phase 5 first scaffold; mint/consume/buyback are stubs that emit events for off-chain accounting until Pyth + Raydium are wired."
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "covenant_settlement_program"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"

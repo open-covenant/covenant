@@ -1,0 +1,21 @@
+[package]
+name = "covenant-mcp"
+version = "0.1.0"
+description = "MCP-aligned tool abstraction. Tool trait + registry + native impls. External MCP server transport lands in a later sprint."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant-mcp-fake-server"
+path = "src/bin/fake_server.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }

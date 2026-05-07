@@ -1,0 +1,20 @@
+[toolchain]
+anchor_version = "0.31.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+settlement = "CovntSettLement1111111111111111111111111111"
+
+[programs.devnet]
+settlement = "CovntSettLement1111111111111111111111111111"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[workspace]
+members = ["programs/settlement"]
+types = "target/types"

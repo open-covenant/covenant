@@ -1,0 +1,46 @@
+[package]
+name = "covenantd"
+version = "0.1.0"
+description = "Covenant daemon. Phase 0 echo loop on a Unix socket; later phases host runtime, memory, identity, permissions, comms, settlement."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenantd"
+path = "src/main.rs"
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+covenant-ipc = { path = "../covenant-ipc" }
+covenant-memory = { path = "../covenant-memory" }
+covenant-audit = { path = "../covenant-audit" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-llm = { path = "../covenant-llm" }
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-a2a = { path = "../covenant-a2a" }
+covenant-permissions = { path = "../covenant-permissions" }
+covenant-router = { path = "../covenant-router" }
+covenant-runtime = { path = "../covenant-runtime" }
+covenant-settlement = { path = "../covenant-settlement" }
+anyhow = { workspace = true }
+axum = { workspace = true }
+bs58 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+covenant-audit = { path = "../covenant-audit" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-llm = { path = "../covenant-llm" }
+covenant-manifest = { path = "../covenant-manifest" }
+covenant-permissions = { path = "../covenant-permissions" }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

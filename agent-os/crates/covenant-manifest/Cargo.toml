@@ -1,0 +1,17 @@
+[package]
+name = "covenant-manifest"
+version = "0.1.0"
+description = "Parser and validator for agent.toml."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

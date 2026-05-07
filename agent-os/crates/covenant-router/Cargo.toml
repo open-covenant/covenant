@@ -1,0 +1,16 @@
+[package]
+name = "covenant-router"
+version = "0.1.0"
+description = "Intent router v0 — keyword-overlap matching of intents to registered agent capability cards."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-manifest = { path = "../covenant-manifest" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

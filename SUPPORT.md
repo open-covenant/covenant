@@ -4,6 +4,7 @@ Covenant support happens in public by default so answers are searchable and reus
 
 ## Where to ask
 
+- **Documentation:** [opencovenant.org/docs](https://opencovenant.org/docs) covers concepts, reference, protocols, and operations.
 - **Bugs:** open a GitHub issue with reproduction steps, affected commit or release, and relevant logs.
 - **Docs gaps:** open an issue or pull request against the affected page.
 - **Security reports:** use GitHub private advisories or email `security@opencovenant.org`.

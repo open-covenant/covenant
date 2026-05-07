@@ -8,6 +8,7 @@
 Covenant is the coordination layer for agentic software. It runs on your own machine, speaks to local and remote AI agents, and provides the OS-level primitives — intent, runtime, memory, identity, permissions, comms, compositor, settlement — that humans and agents need to safely share a computer, delegate work, and pay for usage.
 
 - **Web** — [opencovenant.org](https://opencovenant.org)
+- **Docs** — [opencovenant.org/docs](https://opencovenant.org/docs)
 - **X** — [@OpenCovenant](https://x.com/OpenCovenant)
 
 ## Why
@@ -31,7 +32,14 @@ We do not recommend production use yet. We welcome design feedback, sandbox expe
 
 ## Documentation
 
-Protocol spec, architecture, and integration guides will be published at [docs.opencovenant.org](https://docs.opencovenant.org) as they stabilize.
+Concepts, architecture, reference, protocols, and operations docs are published at [opencovenant.org/docs](https://opencovenant.org/docs).
+
+- [Getting started](https://opencovenant.org/docs/getting-started) — install, run the daemon, submit your first intent.
+- [Concepts](https://opencovenant.org/docs/concepts) — the eight-primitive vocabulary.
+- [System architecture](https://opencovenant.org/docs/architecture) — components, request lifecycle, on-disk state.
+- [HTTP API](https://opencovenant.org/docs/http-api) — every gateway route.
+- [Capability tokens](https://opencovenant.org/docs/capabilities) — the permission model.
+- [Security model](https://opencovenant.org/docs/security) — trust boundaries and threat model.
 
 ## Contributing
 

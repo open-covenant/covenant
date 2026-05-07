@@ -72,7 +72,7 @@ export default function Page() {
         </a>
       </nav>
 
-      <section className="relative z-10 flex h-full flex-col items-center justify-center gap-8 px-6 text-center">
+      <section className="relative z-10 flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
         <Image
           src="/hero-bg.png"
           alt=""

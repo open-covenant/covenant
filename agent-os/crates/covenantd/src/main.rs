@@ -120,7 +120,13 @@ async fn main() -> Result<()> {
     let tools = Arc::new(covenant_mcp::ToolRegistry::from_tools(tools_vec));
     info!(count = tools.len(), tools = ?tools.names(), "tool registry ready");
 
-    let mailbox: Arc<dyn covenant_a2a::Mailbox> = Arc::new(covenant_a2a::InMemoryMailbox::new());
+    let mailbox_path = home.join("a2a").join("events.jsonl");
+    let mailbox: Arc<dyn covenant_a2a::Mailbox> = Arc::new(
+        covenant_a2a::JsonlMailbox::open(mailbox_path.clone())
+            .await
+            .with_context(|| format!("open a2a mailbox at {}", mailbox_path.display()))?,
+    );
+    info!(path = %mailbox_path.display(), "a2a mailbox open");
 
     let server = covenantd::Server::new(
         router,

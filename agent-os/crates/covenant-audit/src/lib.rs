@@ -62,6 +62,12 @@ pub enum AuditKind {
         intent_text: String,
         matched_pattern: String,
     },
+    /// Logged when `PostA2AResult` is rejected upstream of any
+    /// capability check — e.g. the supplied `task_id` was never
+    /// dispatched through this daemon. Stronger compromise indicator
+    /// than a missing-cap rejection: no honest agent generates a
+    /// nonexistent `task_id`.
+    A2AResultRejected { task_id: Uuid, reason: String },
 }
 
 #[async_trait]

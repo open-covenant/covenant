@@ -1,19 +1,18 @@
-//! Covenant settlement program — Phase 5 first scaffold.
+//! Covenant on-chain settlement program.
 //!
-//! Implements the credit-mint + consumption + buyback shape from
-//! `00_spec.md` §8 ("credits + buyback" model for a fixed-supply $covnt
-//! launched on pump.fun). v0 emits events instead of moving tokens; the
-//! actual SPL token CPIs (burn covnt, mint credits, swap via Raydium) land
-//! once Pyth oracle integration + a chosen DEX router are wired in.
+//! Anchor program implementing the credit-mint, consumption, and
+//! buyback shape of Covenant's settlement model. Three instructions:
 //!
-//! Three instructions:
-//!   - `initialize(args)`             — one-shot setup of the `Config` PDA
-//!     under seed `b"settlement-config"`. Records authority, mints, rate.
-//!   - `mint_credits(amount_covnt)`   — payer requests credits in exchange
-//!     for burned covnt. v0 emits `CreditsRequested`.
-//!   - `consume_credits(amount)`      — payer destroys credits at the
-//!     point of consumption (memory write, tool call, etc.). v0 emits
-//!     `CreditsConsumed`.
+//!   - `initialize(args)`           — one-shot setup of the [`Config`]
+//!     PDA under seed `b"settlement-config"`, recording authority,
+//!     mints, and rate.
+//!   - `mint_credits(amount_covnt)` — exchange burned tokens for credits
+//!     at the configured rate.
+//!   - `consume_credits(amount)`    — destroy credits at the point of
+//!     consumption (memory write, tool call, etc.).
+//!
+//! The current implementation emits structured events; the SPL token
+//! CPIs and oracle integration are gated on a downstream change.
 
 // Anchor 0.31.1's `#[program]` macro expands to calls that hit a few
 // deprecated `AccountInfo` methods. Suppressing here keeps clippy `-D

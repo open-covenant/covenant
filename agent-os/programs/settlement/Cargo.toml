@@ -1,7 +1,7 @@
 [package]
 name = "covenant-settlement-program"
 version = "0.1.0"
-description = "Covenant settlement program — credit-mint and buyback PDAs on Solana. Phase 5 first scaffold; mint/consume/buyback are stubs that emit events for off-chain accounting until Pyth + Raydium are wired."
+description = "Covenant on-chain settlement program. Anchor program for Solana implementing credit-mint and buyback PDAs."
 edition = "2021"
 license = "Apache-2.0"
 

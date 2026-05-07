@@ -128,6 +128,16 @@ async fn main() -> Result<()> {
     );
     info!(path = %mailbox_path.display(), "a2a mailbox open");
 
+    let peers_path = home.join("peers").join("registry.jsonl");
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(
+        covenant_peer_auth::JsonlPeerRegistry::open(peers_path.clone())
+            .await
+            .with_context(|| format!("open peer registry at {}", peers_path.display()))?,
+    );
+    info!(path = %peers_path.display(), "peer registry open");
+
+    bootstrap_operator_token(&home, &peers, &identity).await?;
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -140,27 +150,39 @@ async fn main() -> Result<()> {
         ignore,
         tools,
         mailbox,
+        peers,
     );
 
-    // HTTP gateway for browser UIs.
-    let http_port: u16 = std::env::var("COVENANT_HTTP_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8421);
-    let http_addr = std::net::SocketAddr::from(([127, 0, 0, 1], http_port));
-    let http_state = covenantd::http::HttpState {
-        server: server.clone(),
+    // HTTP gateway for browser UIs. The HTTP routes call Server::respond
+    // directly without the Unix-socket Authenticate handshake (Sprint 47
+    // gates the IPC path only; bearer-token middleware on HTTP lands in
+    // Sprint 48 paired with covenant-web's auth shim). Until that lands,
+    // refuse to bind the HTTP listener unless the operator has opted in
+    // via COVENANT_HTTP_INSECURE=1, which makes the unauthenticated
+    // configuration visible at start-up.
+    let http_handle = if std::env::var("COVENANT_HTTP_INSECURE").as_deref() == Ok("1") {
+        let http_port: u16 = std::env::var("COVENANT_HTTP_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8421);
+        let http_addr = std::net::SocketAddr::from(([127, 0, 0, 1], http_port));
+        let http_state = covenantd::http::HttpState {
+            server: server.clone(),
+        };
+        let http_router = covenantd::http::router(http_state);
+        let http_listener = tokio::net::TcpListener::bind(http_addr)
+            .await
+            .with_context(|| format!("bind http {}", http_addr))?;
+        info!(addr = %http_addr, "http gateway listening (UNAUTHENTICATED — COVENANT_HTTP_INSECURE=1 set)");
+        Some(tokio::spawn(async move {
+            if let Err(e) = axum::serve(http_listener, http_router).await {
+                tracing::warn!(error = %e, "http gateway exited");
+            }
+        }))
+    } else {
+        info!("http gateway disabled (set COVENANT_HTTP_INSECURE=1 to enable while sprint 48 wires bearer auth)");
+        None
     };
-    let http_router = covenantd::http::router(http_state);
-    let http_listener = tokio::net::TcpListener::bind(http_addr)
-        .await
-        .with_context(|| format!("bind http {}", http_addr))?;
-    info!(addr = %http_addr, "http gateway listening");
-    let http_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(http_listener, http_router).await {
-            tracing::warn!(error = %e, "http gateway exited");
-        }
-    });
 
     let sock_path = home.join("sock");
     if sock_path.exists() {
@@ -180,11 +202,121 @@ async fn main() -> Result<()> {
         }
     }
 
-    http_handle.abort();
+    if let Some(h) = http_handle {
+        h.abort();
+    }
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }
     Ok(())
+}
+
+/// Mint an operator token on first start (or read the existing one) and
+/// register it in the peer registry under the daemon's local identity.
+/// The token is the bootstrap credential the CLI and Web UI use to
+/// authenticate; it lives at `$COVENANT_HOME/peers/operator.token` with
+/// mode `0600` so only the running user can read it.
+async fn bootstrap_operator_token(
+    home: &std::path::Path,
+    peers: &Arc<dyn covenant_peer_auth::PeerRegistry>,
+    identity: &Arc<covenant_identity::LocalIdentity>,
+) -> Result<()> {
+    let token_path = home.join("peers").join("operator.token");
+    if let Some(parent) = token_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    let token = if token_path.exists() {
+        // The mode of the existing file is the operator's exposure.
+        // If anything other than 0600, refuse to trust it — silently
+        // regenerating would still leak the prior token to whoever
+        // could read it. Loud failure forces operator action.
+        require_mode_0600(&token_path).with_context(|| {
+            format!(
+                "operator token at {} has insecure permissions",
+                token_path.display()
+            )
+        })?;
+        let s = std::fs::read_to_string(&token_path)
+            .with_context(|| format!("read operator token at {}", token_path.display()))?;
+        match covenant_peer_auth::PeerToken::from_b58(s.trim()) {
+            Ok(t) => {
+                // If the registry already resolves it, nothing to do.
+                if peers.resolve(&t).await?.is_some() {
+                    info!(path = %token_path.display(), "operator token reused");
+                    return Ok(());
+                }
+                t
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = %token_path.display(), "operator token unreadable; regenerating");
+                covenant_peer_auth::PeerToken::generate()
+            }
+        }
+    } else {
+        covenant_peer_auth::PeerToken::generate()
+    };
+
+    write_token_0600(&token_path, &token.to_b58())
+        .with_context(|| format!("write operator token at {}", token_path.display()))?;
+
+    let entry = covenant_peer_auth::PeerEntry {
+        token,
+        agent_id: covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes()),
+        registered_at: epoch_ms(),
+    };
+    peers.register(entry).await?;
+    info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
+    Ok(())
+}
+
+fn write_token_0600(path: &std::path::Path, token_b58: &str) -> std::io::Result<()> {
+    use std::fs::Permissions;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    // OpenOptionsExt::mode is honoured only on file creation. If the
+    // file already exists with a permissive mode, O_CREAT|O_TRUNC reuses
+    // the inode and our 0o600 is silently ignored. Remove first to
+    // force a fresh inode, then explicitly set_permissions afterwards
+    // to defend against any umask-overlay surprises.
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(token_b58.as_bytes())?;
+    f.write_all(b"\n")?;
+    f.flush()?;
+    std::fs::set_permissions(path, Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+fn require_mode_0600(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(path)?;
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} mode is {:#o}; expected 0o600 (any group/world bit is a credential leak)",
+                path.display(),
+                mode
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn epoch_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn default_ignorefile() -> &'static str {

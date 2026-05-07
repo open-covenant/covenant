@@ -50,6 +50,18 @@ async fn full_loop_ping_intent_memory_receipts() {
     let ignore = Arc::new(covenant_memory::IgnoreSet::default());
     let tools = Arc::new(covenant_mcp::ToolRegistry::default());
     let mailbox: Arc<dyn covenant_a2a::Mailbox> = Arc::new(covenant_a2a::InMemoryMailbox::new());
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+    let token = covenant_peer_auth::PeerToken::generate();
+    let token_b58 = token.to_b58();
+    peers
+        .register(covenant_peer_auth::PeerEntry {
+            token,
+            agent_id: covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes()),
+            registered_at: 0,
+        })
+        .await
+        .unwrap();
     let server = covenantd::Server::new(
         router,
         runner,
@@ -62,11 +74,20 @@ async fn full_loop_ping_intent_memory_receipts() {
         ignore,
         tools,
         mailbox,
+        peers,
     );
 
     let server_handle = tokio::spawn(async move { server.serve(listener).await });
 
     let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    write_frame(&mut stream, &Request::Authenticate { token_b58 })
+        .await
+        .unwrap();
+    match read_frame::<_, Response>(&mut stream).await.unwrap() {
+        Response::Authenticated { display } => assert_eq!(display, "user@local"),
+        other => panic!("auth failed: {other:?}"),
+    }
 
     write_frame(&mut stream, &Request::Ping).await.unwrap();
     assert_eq!(

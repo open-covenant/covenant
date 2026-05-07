@@ -15,6 +15,7 @@ use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
+use covenant_peer_auth::{PeerRegistry, PeerToken};
 use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
 use covenant_router::Router;
 use covenant_runtime::Runner;
@@ -50,6 +51,7 @@ pub struct Server {
     ignore: Arc<IgnoreSet>,
     tools: Arc<ToolRegistry>,
     mailbox: Arc<dyn Mailbox>,
+    pub peers: Arc<dyn PeerRegistry>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -66,6 +68,7 @@ impl Server {
         ignore: Arc<IgnoreSet>,
         tools: Arc<ToolRegistry>,
         mailbox: Arc<dyn Mailbox>,
+        peers: Arc<dyn PeerRegistry>,
     ) -> Self {
         Self {
             router,
@@ -79,6 +82,7 @@ impl Server {
             ignore,
             tools,
             mailbox,
+            peers,
         }
     }
 
@@ -96,6 +100,52 @@ impl Server {
     }
 
     async fn handle(&self, mut stream: UnixStream) -> Result<()> {
+        // First frame must be `Authenticate`. Anything else terminates the
+        // connection after a single `AuthenticationFailed` reply. The
+        // authenticated peer is bound to the connection for its lifetime;
+        // a new connection requires a new handshake.
+        let first: Request = match read_frame(&mut stream).await {
+            Ok(r) => r,
+            Err(IpcError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let _peer_display = match first {
+            Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
+                Some(display) => {
+                    write_frame(
+                        &mut stream,
+                        &Response::Authenticated {
+                            display: display.clone(),
+                        },
+                    )
+                    .await?;
+                    display
+                }
+                None => {
+                    write_frame(
+                        &mut stream,
+                        &Response::AuthenticationFailed {
+                            reason: "unknown or revoked token".into(),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            },
+            _ => {
+                write_frame(
+                    &mut stream,
+                    &Response::AuthenticationFailed {
+                        reason: "first frame must be Authenticate".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
         loop {
             let req: Request = match read_frame(&mut stream).await {
                 Ok(r) => r,
@@ -109,9 +159,21 @@ impl Server {
         }
     }
 
+    async fn authenticate(&self, token_b58: &str) -> Option<String> {
+        let token = PeerToken::from_b58(token_b58).ok()?;
+        let agent_id = self.peers.resolve(&token).await.ok().flatten()?;
+        Some(agent_id.display)
+    }
+
     pub async fn respond(&self, req: Request) -> Response {
         match req {
             Request::Ping => Response::Pong,
+            Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
+                Some(display) => Response::Authenticated { display },
+                None => Response::AuthenticationFailed {
+                    reason: "unknown or revoked token".into(),
+                },
+            },
             Request::SubmitIntent { text } => self.dispatch_intent(text).await,
             Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit).await,
             Request::RecentReceipts { limit } => self.recent_receipts(limit).await,
@@ -782,6 +844,7 @@ required = {caps:?}
                 Arc::new(covenant_mcp::native::ClockTool),
             ])),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         )
     }
 
@@ -938,6 +1001,7 @@ required = {caps:?}
             Arc::new(IgnoreSet::default()),
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
         // Dispatch will be rejected, but the capability check event is still recorded.
         s.respond(Request::SubmitIntent {
@@ -1086,6 +1150,7 @@ required = {caps:?}
                 covenant_mcp::native::EchoTool,
             )])),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
         s.respond(Request::CallTool {
             name: "echo".into(),
@@ -1185,6 +1250,7 @@ required = {caps:?}
             Arc::new(IgnoreSet::default()),
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
         s.respond(Request::SendA2ATask {
             task: dummy_a2a_task(),

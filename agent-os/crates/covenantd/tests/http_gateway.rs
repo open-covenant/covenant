@@ -50,6 +50,7 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
             covenant_mcp::native::EchoTool,
         )])),
         Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
     );
     let app = router(HttpState { server });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

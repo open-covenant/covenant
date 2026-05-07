@@ -33,6 +33,28 @@ async fn wait_for_sock(path: &std::path::Path) -> bool {
     false
 }
 
+async fn read_operator_token(home: &std::path::Path) -> String {
+    let path = home.join("peers").join("operator.token");
+    for _ in 0..50 {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    panic!("operator token never appeared at {}", path.display());
+}
+
+async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
+    let token_b58 = read_operator_token(home).await;
+    match req(stream, Request::Authenticate { token_b58 }).await {
+        Response::Authenticated { .. } => {}
+        other => panic!("authenticate failed: {other:?}"),
+    }
+}
+
 async fn req(stream: &mut UnixStream, request: Request) -> Response {
     write_frame(stream, &request).await.expect("write_frame");
     read_frame(stream).await.expect("read_frame")
@@ -63,6 +85,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     }
 
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
+    authenticate(&mut stream, home.path()).await;
 
     let task = A2ATask {
         id: Uuid::new_v4(),

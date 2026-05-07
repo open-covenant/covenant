@@ -35,6 +35,31 @@ async fn wait_for_sock(path: &std::path::Path) -> bool {
     false
 }
 
+async fn read_operator_token(home: &std::path::Path) -> String {
+    let path = home.join("peers").join("operator.token");
+    for _ in 0..50 {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    panic!("operator token never appeared at {}", path.display());
+}
+
+async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
+    let token_b58 = read_operator_token(home).await;
+    write_frame(stream, &Request::Authenticate { token_b58 })
+        .await
+        .unwrap();
+    match read_frame::<_, Response>(stream).await.unwrap() {
+        Response::Authenticated { .. } => {}
+        other => panic!("authenticate failed: {other:?}"),
+    }
+}
+
 #[tokio::test]
 #[ignore = "live: full §9 acceptance path against real Ollama"]
 async fn live_covenantd_full_acceptance_with_ollama() {
@@ -92,6 +117,7 @@ cpu_ms_per_task = 60000
     }
 
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
+    authenticate(&mut stream, home.path()).await;
 
     write_frame(
         &mut stream,

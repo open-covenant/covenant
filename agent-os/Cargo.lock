@@ -812,6 +812,7 @@ dependencies = [
  "covenant-manifest",
  "covenant-mcp",
  "covenant-memory",
+ "covenant-peer-auth",
  "covenant-permissions",
  "covenant-router",
  "covenant-runtime",

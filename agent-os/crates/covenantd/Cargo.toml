@@ -20,6 +20,7 @@ covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-mcp = { path = "../covenant-mcp" }
 covenant-a2a = { path = "../covenant-a2a" }
+covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
@@ -40,6 +41,7 @@ covenant-audit = { path = "../covenant-audit" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }
+covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 reqwest = { workspace = true }
 serde_json = { workspace = true }

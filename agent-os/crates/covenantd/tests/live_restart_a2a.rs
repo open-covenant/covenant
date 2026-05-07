@@ -48,6 +48,28 @@ async fn req(stream: &mut UnixStream, request: Request) -> Response {
     read_frame(stream).await.expect("read_frame")
 }
 
+async fn read_operator_token(home: &Path) -> String {
+    let path = home.join("peers").join("operator.token");
+    for _ in 0..50 {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    panic!("operator token never appeared at {}", path.display());
+}
+
+async fn authenticate(stream: &mut UnixStream, home: &Path) {
+    let token_b58 = read_operator_token(home).await;
+    match req(stream, Request::Authenticate { token_b58 }).await {
+        Response::Authenticated { .. } => {}
+        other => panic!("authenticate failed: {other:?}"),
+    }
+}
+
 fn spawn_daemon(home: &Path, port: u16) -> Child {
     let exe = env!("CARGO_BIN_EXE_covenantd");
     Command::new(exe)
@@ -89,6 +111,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         }
 
         let mut stream = UnixStream::connect(&sock).await.expect("connect #1");
+        authenticate(&mut stream, home.path()).await;
 
         match req(
             &mut stream,
@@ -166,6 +189,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         }
 
         let mut stream = UnixStream::connect(&sock).await.expect("connect #2");
+        authenticate(&mut stream, home.path()).await;
 
         // Replay assertion #1: the queued task is recv'able.
         match req(&mut stream, Request::TryRecvA2ATask).await {

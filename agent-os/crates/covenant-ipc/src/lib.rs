@@ -31,6 +31,13 @@ pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
     Ping,
+    /// Mandatory first frame on every IPC connection. Daemon resolves the
+    /// token through `covenant_peer_auth::PeerRegistry`; on success the
+    /// resolved `AgentId` is bound to the connection for the lifetime of
+    /// the socket.
+    Authenticate {
+        token_b58: String,
+    },
     SubmitIntent {
         text: String,
     },
@@ -117,6 +124,17 @@ fn default_verify_window() -> usize {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
     Pong,
+    /// Sent in response to a successful `Authenticate`. `display` is the
+    /// resolved peer's `AgentId.display` so the caller can confirm which
+    /// identity the daemon bound the connection to.
+    Authenticated {
+        display: String,
+    },
+    /// Sent on a bad / unknown / revoked token. The daemon closes the
+    /// connection immediately after.
+    AuthenticationFailed {
+        reason: String,
+    },
     IntentResult {
         intent_id: Uuid,
         status: String,

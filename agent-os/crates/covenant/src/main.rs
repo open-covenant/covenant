@@ -32,6 +32,25 @@ fn covenant_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".covenant"))
 }
 
+async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result<()> {
+    let token_path = home.join("peers").join("operator.token");
+    let token_b58 = std::fs::read_to_string(&token_path)
+        .with_context(|| {
+            format!(
+                "read operator token at {} (start covenantd at least once to mint it)",
+                token_path.display()
+            )
+        })?
+        .trim()
+        .to_string();
+    write_frame(stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(stream).await? {
+        Response::Authenticated { .. } => Ok(()),
+        Response::AuthenticationFailed { reason } => bail!("authenticate failed: {reason}"),
+        other => bail!("unexpected response to authenticate: {other:?}"),
+    }
+}
+
 fn print_usage() {
     eprintln!("covenant — agent-native operating layer CLI");
     eprintln!();
@@ -91,13 +110,15 @@ async fn main() -> Result<()> {
         std::process::exit(2);
     }
 
-    let sock = covenant_home()?.join("sock");
+    let home = covenant_home()?;
+    let sock = home.join("sock");
     let mut stream = UnixStream::connect(&sock).await.with_context(|| {
         format!(
             "connect to daemon at {} (is covenantd running?)",
             sock.display()
         )
     })?;
+    authenticate(&mut stream, &home).await?;
 
     match args[0].as_str() {
         "ping" => {

@@ -1,73 +1,59 @@
 # Contributing to Covenant
 
-Thanks for the interest. Covenant is protocol infrastructure, not a generic library, so we treat contract behavior, settlement flows, and public interfaces with the same level of review discipline.
+Thanks for the interest. Covenant is operating-layer infrastructure — daemon, runtime, identity, permissions, settlement — and we treat behavior on those surfaces with PR-grade review discipline.
 
 ## Before you start
 
-- Read the [README](./README.md) for the current architecture.
-- Skim [`docs/specs/service-model.md`](./docs/specs/service-model.md) for the current service model and [`ROADMAP.md`](./ROADMAP.md) for planned milestones.
-- Check `packages/config/deployments/` before adding new hardcoded addresses or URLs.
+- Read the [README](./README.md) for the current shape of the project.
+- Check open issues for context — opening a small issue before a non-trivial change is welcome.
 
 ## Development setup
 
-Prerequisites: Node 22+, pnpm 10+, Rust stable, Foundry.
+Prerequisites: Rust (stable), Node.js 22+, pnpm 10+. The Solana program build also wants Anchor and `solana-cli`; everything else builds without it.
 
 ```bash
-git clone git@github.com:covenant-base/covenant.git
+git clone git@github.com:open-covenant/covenant.git
 cd covenant
-pnpm install
 ```
 
-Useful checks:
+Common checks (run from the active build root):
 
-- `pnpm typecheck`
-- `pnpm test`
-- `pnpm --filter ./contracts test`
-- `pnpm --filter ./apps/portal build`
+- `cargo check  --workspace --exclude covenant-settlement-program`
+- `cargo test   --workspace --exclude covenant-settlement-program`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo fmt --check`
 
-## Where changes go
+For the landing site:
 
-| Area | Workflow |
-|---|---|
-| `contracts/` | Spec → implement → unit/integration tests → security review |
-| `services/` | Spec → implement → operational hardening → tests |
-| `apps/`, `packages/` | Spec or issue → implement → reviewer |
-| `docs/specs/`, `docs/` | Clear rationale → implement → publish with the same change |
-
-Security-sensitive work is never a “follow-up.” If a change affects funds, signatures, auth, governance, or proofs, include the hardening in the same scope.
-
-## Spec-first for non-trivial work
-
-Before writing a new contract surface, service, or major product flow, add or update the relevant `docs/specs/<feature>.md` document with:
-
-- goal and scope
-- interfaces, events, and invariants
-- deployment or runtime assumptions
-- failure modes and rollback considerations
-- concrete done criteria
+- `pnpm --dir landing install --frozen-lockfile --ignore-workspace`
+- `pnpm --dir landing build`
 
 ## Code style
 
-- TypeScript: Prettier + shared ESLint config in `packages/config`
-- Solidity: keep contracts small, explicit, and test-first
-- Rust: `cargo fmt` + `cargo clippy -- -D warnings`
-- Match established patterns before introducing new abstractions
-- Avoid dead code and placeholder TODOs
+- Rust: `cargo fmt` + `cargo clippy -- -D warnings`. Prefer early returns over nesting; flat over abstract.
+- TypeScript: Prettier defaults; match the surrounding file's conventions.
+- Match established patterns before introducing new abstractions.
+- No filler: dead code, placeholder TODOs without owners, and AI-narration comments are out.
+
+## Tests
+
+- Unit tests live next to the code they exercise.
+- Integration tests against test doubles are the default.
+- Tests prefixed `live_` exercise real backends (real network, real subprocess, real model). They are `#[ignore]`'d to keep CI fast and run with `cargo test -- --ignored live_`.
+- Adding `live_` coverage when changing protocol-bearing surfaces is strongly preferred.
 
 ## Submitting changes
 
-- Maintainers push directly to `main` by default.
-- Run the relevant local checks before pushing.
-- Keep scope tight and intentional.
-- Include tests for the main path and the documented failure modes.
-- Mention contract/address/config implications when relevant.
-- Update docs and manifests in the same change when public behavior changes.
-- Use a pull request only when an external contribution, a risky change, or an async review trail would benefit from one.
+- Run the relevant checks before pushing.
+- Keep scope tight — one intent per commit.
+- Include tests on changed surfaces.
+- Update docs and metadata in the same change when public behavior shifts.
+- Pull requests are welcome for external contributions, risky changes, or anywhere an async review trail is useful. Direct pushes to `main` are the maintainer default.
 
 ## Reporting bugs
 
-- **Security-sensitive:** follow [SECURITY.md](./SECURITY.md)
-- **Everything else:** open an issue with reproduction steps, affected files, and relevant logs or traces
+- **Security-sensitive:** follow [SECURITY.md](./SECURITY.md). Do not open a public issue.
+- **Everything else:** open an issue with reproduction steps, the affected commit or release, and relevant logs.
 
 ## License
 

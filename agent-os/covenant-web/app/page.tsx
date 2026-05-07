@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
+  type A2ATask,
+  type A2ATaskResult,
   type AuditEvent,
   type ContentBlock,
   type Memory,
@@ -28,6 +30,8 @@ export default function Home() {
 
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [receipts, setReceipts] = useState<SettlementReceipt[]>([]);
+  const [a2aTasks, setA2aTasks] = useState<A2ATask[]>([]);
+  const [a2aResults, setA2aResults] = useState<A2ATaskResult[]>([]);
   const [memoryTier, setMemoryTier] = useState<
     "" | "working" | "episodic" | "longterm"
   >("");
@@ -41,18 +45,22 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const [m, c, t, a, r] = await Promise.all([
+      const [m, c, t, a, r, at, ar] = await Promise.all([
         api.recentMemory(20, memoryTier || undefined),
         api.recentCapabilities(20),
         api.listTools(),
         api.recentAudit(30),
         api.recentReceipts(20),
+        api.recentA2ATasks(20),
+        api.recentA2AResults(20),
       ]);
       setMemories(m.records);
       setCapabilities(c.capabilities);
       setTools(t.tools);
       setAudit(a.events);
       setReceipts(r.receipts);
+      setA2aTasks(at.tasks);
+      setA2aResults(ar.results);
       if (!toolName && t.tools.length > 0) setToolName(t.tools[0].name);
       setLastError(null);
     } catch (e) {
@@ -61,6 +69,11 @@ export default function Home() {
   }, [toolName, memoryTier]);
 
   useEffect(() => {
+    // Initial fetch + 3s polling. The lint rule against calling
+    // setState-bearing functions directly in an effect doesn't apply
+    // cleanly to a poll loop; the interval is the reason this effect
+    // exists.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
@@ -407,6 +420,60 @@ export default function Home() {
                 {m.text.length > 200 ? `${m.text.slice(0, 200)}…` : m.text}
               </li>
             ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2>queued a2a tasks</h2>
+        {a2aTasks.length === 0 ? (
+          <p className="dim">(no queued tasks)</p>
+        ) : (
+          <ul>
+            {a2aTasks.map((t) => (
+              <li key={t.id}>
+                <span className="dim">{t.sender.display}</span>
+                <span className="dim"> → </span>
+                <span className="accent">{t.recipient.display}</span>
+                <span className="dim">: </span>
+                {t.intent_text.length > 160
+                  ? `${t.intent_text.slice(0, 160)}…`
+                  : t.intent_text}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2>queued a2a results</h2>
+        {a2aResults.length === 0 ? (
+          <p className="dim">(no queued results)</p>
+        ) : (
+          <ul>
+            {a2aResults.map((r) => {
+              const summary =
+                r.content
+                  .map((c) =>
+                    c.type === "text"
+                      ? c.text
+                      : `<json:${JSON.stringify(c.value).slice(0, 60)}…>`,
+                  )
+                  .join(" ")
+                  .slice(0, 200) || "(empty)";
+              return (
+                <li key={r.task_id}>
+                  <span className="dim">[{r.status}] </span>
+                  <span className="dim">task=</span>
+                  <span className="accent">{r.task_id.slice(0, 8)}…</span>
+                  <span className="dim">: </span>
+                  {summary}
+                  {r.error_message ? (
+                    <span className="dim"> — error: {r.error_message}</span>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

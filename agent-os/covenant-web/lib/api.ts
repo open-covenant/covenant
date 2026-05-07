@@ -93,6 +93,24 @@ export type SettlementReceipt = {
   onchain_sig: string | null;
 };
 
+export type AgentId = { display: string; pubkey: string };
+
+export type A2ATask = {
+  id: string;
+  sender: AgentId;
+  recipient: AgentId;
+  intent_text: string;
+  parent: string | null;
+  deadline_ms: number | null;
+};
+
+export type A2ATaskResult = {
+  task_id: string;
+  status: "ok" | "error" | "partial";
+  content: ContentBlock[];
+  error_message: string | null;
+};
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
     ...init,
@@ -166,5 +184,15 @@ export const api = {
   recentReceipts: (limit = 20) =>
     call<{ kind: "receipts"; receipts: SettlementReceipt[] }>(
       `/receipts/recent?limit=${limit}`,
+    ),
+
+  recentA2ATasks: (limit = 20) =>
+    call<{ kind: "a2a_tasks"; tasks: A2ATask[] }>(
+      `/a2a/tasks/recent?limit=${limit}`,
+    ),
+
+  recentA2AResults: (limit = 20) =>
+    call<{ kind: "a2a_results"; results: A2ATaskResult[] }>(
+      `/a2a/results/recent?limit=${limit}`,
     ),
 };

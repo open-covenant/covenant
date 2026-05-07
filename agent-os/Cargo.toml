@@ -24,8 +24,9 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-authors = ["Achille Wasque <aw@opencovenant.org>"]
-repository = "https://github.com/achillewasque/covenant"
+authors = ["Covenant contributors"]
+repository = "https://github.com/open-covenant/covenant"
+homepage = "https://opencovenant.org"
 readme = "README.md"
 
 [profile.release]

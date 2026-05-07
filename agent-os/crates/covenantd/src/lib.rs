@@ -142,6 +142,19 @@ impl Server {
 
     async fn send_a2a_task(&self, task: covenant_a2a::A2ATask) -> Response {
         let task_id = task.id;
+        let recipient = task.recipient.display.clone();
+        let action = format!("a2a.send.{recipient}");
+        let check = self
+            .check_capabilities(format!("a2a-send:{recipient}"), vec![action.clone()])
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "a2a send to {recipient} requires capability {action:?}. \
+                     Grant it with `covenant capabilities grant {action}`."
+                ),
+            };
+        }
         match self.mailbox.send_task(task).await {
             Ok(()) => Response::A2ATaskQueued { task_id },
             Err(e) => Response::Error {
@@ -161,6 +174,18 @@ impl Server {
 
     async fn post_a2a_result(&self, result: covenant_a2a::A2ATaskResult) -> Response {
         let task_id = result.task_id;
+        let action = "a2a.respond".to_string();
+        let check = self
+            .check_capabilities(format!("a2a-respond:{task_id}"), vec![action.clone()])
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "a2a respond requires capability {action:?}. \
+                     Grant it with `covenant capabilities grant {action}`."
+                ),
+            };
+        }
         match self.mailbox.send_result(result).await {
             Ok(()) => Response::A2AResultPosted { task_id },
             Err(e) => Response::Error {
@@ -1038,17 +1063,28 @@ required = {caps:?}
         }
     }
 
-    #[tokio::test]
-    async fn a2a_task_round_trips_through_server() {
-        let s = server_with(vec![], "");
-        let task = covenant_a2a::A2ATask {
+    fn dummy_a2a_task() -> covenant_a2a::A2ATask {
+        covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
             sender: covenant_types::AgentId::new("orch@local", [0u8; 32]),
             recipient: covenant_types::AgentId::new("research@local", [0u8; 32]),
             intent_text: "find recent papers".into(),
             parent: None,
             deadline_ms: None,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_task_round_trips_through_server() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task();
+        s.respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
         let queued = s.respond(Request::SendA2ATask { task: task.clone() }).await;
         match queued {
             Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
@@ -1059,7 +1095,6 @@ required = {caps:?}
             Response::A2ATaskOpt { task: Some(t) } => assert_eq!(t.id, task.id),
             other => panic!("unexpected: {other:?}"),
         }
-        // Empty after drain.
         let again = s.respond(Request::TryRecvA2ATask).await;
         match again {
             Response::A2ATaskOpt { task: None } => {}
@@ -1068,8 +1103,78 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_send_rejects_when_capability_missing() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task();
+        let resp = s.respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("requires capability"));
+                assert!(message.contains("a2a.send.research@local"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let drained = s.respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: None }),
+            "rejected task must not enqueue: {drained:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_audits_capability_check() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        );
+        s.respond(Request::SendA2ATask {
+            task: dummy_a2a_task(),
+        })
+        .await;
+
+        let events = audit.recent(10).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. }))
+            .expect("capability check audit event present");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                agent_id,
+                required_actions,
+                passed,
+                ..
+            } => {
+                assert_eq!(agent_id, "a2a-send:research@local");
+                assert_eq!(
+                    required_actions,
+                    &vec!["a2a.send.research@local".to_string()]
+                );
+                assert!(!passed);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_result_round_trips_through_server() {
         let s = server_with(vec![], "");
+        s.respond(Request::GrantCapability {
+            action: "a2a.respond".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
         let task_id = Uuid::new_v4();
         let result =
             covenant_a2a::A2ATaskResult::ok(task_id, vec![covenant_mcp::Content::text("done")]);
@@ -1097,6 +1202,27 @@ required = {caps:?}
             Response::A2AResultOpt { result: None } => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a2a_respond_rejects_when_capability_missing() {
+        let s = server_with(vec![], "");
+        let task_id = Uuid::new_v4();
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task_id, vec![covenant_mcp::Content::text("done")]);
+        let resp = s.respond(Request::PostA2AResult { result }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("requires capability"));
+                assert!(message.contains("a2a.respond"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let drained = s.respond(Request::TryRecvA2AResult).await;
+        assert!(
+            matches!(drained, Response::A2AResultOpt { result: None }),
+            "rejected result must not enqueue: {drained:?}"
+        );
     }
 
     #[tokio::test]

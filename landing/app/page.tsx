@@ -37,27 +37,33 @@ function GithubIcon({ className }: { className?: string }) {
 
 export default function Page() {
   return (
-    <main className="relative h-screen overflow-hidden bg-[#030303]">
+    <main className="relative h-[100dvh] min-h-[100svh] overflow-hidden bg-[#030303]">
       <HeroMesh src="/hero-bg.png" />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-10 sm:pt-14">
+      <header
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center sm:pt-14"
+        style={{ paddingTop: "max(2.5rem, env(safe-area-inset-top))" }}
+      >
         <Image
           src="/logo.svg"
           alt="covenant"
           width={255}
           height={54}
           priority
-          className="pointer-events-auto h-[50px] w-auto opacity-95 sm:h-[60px]"
+          className="pointer-events-auto h-[42px] w-auto opacity-95 sm:h-[60px]"
         />
       </header>
 
-      <nav className="absolute top-8 right-6 z-20 flex items-center gap-4 sm:top-10 sm:right-10">
+      <nav
+        className="absolute right-2 z-20 flex items-center gap-1 sm:right-8 sm:top-10 sm:gap-3"
+        style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
+      >
         <a
           href={X_URL}
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Covenant on X"
-          className="text-neutral-400 transition-colors hover:text-neutral-50"
+          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
         >
           <XIcon className="h-5 w-5" />
         </a>
@@ -66,29 +72,32 @@ export default function Page() {
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Covenant on GitHub"
-          className="text-neutral-400 transition-colors hover:text-neutral-50"
+          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
         >
           <GithubIcon className="h-5 w-5" />
         </a>
       </nav>
 
-      <section className="relative z-10 flex h-full flex-col items-center justify-center px-6 text-center">
+      <section className="relative z-10 flex h-full flex-col items-center justify-center px-4 text-center">
         <Image
           src="/hero-bg.png"
           alt=""
           width={2000}
           height={2000}
           priority
-          sizes="80vh"
-          className="pointer-events-none h-[80vh] w-auto"
+          sizes="(max-width: 640px) 90vw, 80vh"
+          className="pointer-events-none h-[min(80vh,90vw)] w-[min(80vh,90vw)] max-w-none"
         />
       </section>
 
-      <p className="absolute left-1/2 top-[80%] z-10 -translate-x-1/2 text-[14px] tracking-[0.4em] text-neutral-400">
+      <p className="absolute left-1/2 top-[80%] z-10 -translate-x-1/2 px-4 text-[12px] tracking-[0.4em] text-neutral-400 sm:text-[14px]">
         {RELEASE_DATE}
       </p>
 
-      <footer className="absolute inset-x-0 bottom-8 z-20 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
+      <footer
+        className="absolute inset-x-0 z-20 flex justify-center px-4 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]"
+        style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+      >
         open agent-native operating layer
       </footer>
     </main>

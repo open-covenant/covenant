@@ -136,8 +136,8 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     {
         Response::Error { message } => {
             assert!(
-                message.contains("a2a.respond"),
-                "rejection should name the missing cap: {message}"
+                message.contains("a2a.respond.orch@local"),
+                "rejection should name the sender-scoped cap: {message}"
             );
         }
         other => panic!("expected Error, got {other:?}"),
@@ -148,11 +148,25 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
         other => panic!("rejected result must not enqueue: {other:?}"),
     }
 
-    // 4. Grant a2a.respond, post, recv.
+    // 3a. A result for an unknown task_id is rejected even though
+    //     a2a.respond.<some-sender> may eventually be granted: the
+    //     mailbox has no record of the task ever having been sent.
+    let stray = A2ATaskResult::ok(Uuid::new_v4(), vec![Content::text("stray")]);
+    match req(&mut stream, Request::PostA2AResult { result: stray }).await {
+        Response::Error { message } => {
+            assert!(
+                message.contains("never dispatched"),
+                "rejection should call out the unknown task_id: {message}"
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    // 4. Grant a2a.respond.<sender>, post, recv.
     match req(
         &mut stream,
         Request::GrantCapability {
-            action: "a2a.respond".into(),
+            action: format!("a2a.respond.{}", task.sender.display),
             scope: None,
             expires_at: None,
         },

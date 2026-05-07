@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use covenant_mcp::Content;
 use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -99,14 +99,25 @@ pub trait Mailbox: Send + Sync {
     /// Read-only snapshot of the most recent queued results, oldest first
     /// up to `limit`. Does not consume from the queue. Operator-facing.
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError>;
+
+    /// Look up the original sender for a task that was previously
+    /// dispatched through [`Mailbox::send_task`]. Returns `None` for any
+    /// `task_id` the mailbox has never seen. Used by the daemon to gate
+    /// `PostA2AResult` on the sender-scoped `a2a.respond.<sender>`
+    /// capability.
+    async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError>;
 }
 
 /// In-process FIFO mailbox. Useful for tests and for orchestrator agents
-/// that fan tasks within the same daemon. Real cross-process A2A lands
-/// in a follow-up sprint.
+/// that fan tasks within the same daemon.
 pub struct InMemoryMailbox {
     tasks: Mutex<VecDeque<A2ATask>>,
     results: Mutex<VecDeque<A2ATaskResult>>,
+    /// Permanent record of who sent each task, populated on
+    /// [`Mailbox::send_task`] and never pruned. The daemon uses this map
+    /// to attribute `PostA2AResult` calls back to the original sender so
+    /// the capability check can use the sender-scoped action.
+    senders: Mutex<HashMap<Uuid, AgentId>>,
     task_notify: Notify,
     result_notify: Notify,
 }
@@ -122,6 +133,7 @@ impl InMemoryMailbox {
         Self {
             tasks: Mutex::new(VecDeque::new()),
             results: Mutex::new(VecDeque::new()),
+            senders: Mutex::new(HashMap::new()),
             task_notify: Notify::new(),
             result_notify: Notify::new(),
         }
@@ -131,6 +143,10 @@ impl InMemoryMailbox {
 #[async_trait]
 impl Mailbox for InMemoryMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
+        self.senders
+            .lock()
+            .unwrap()
+            .insert(task.id, task.sender.clone());
         self.tasks.lock().unwrap().push_back(task);
         self.task_notify.notify_one();
         Ok(())
@@ -188,6 +204,10 @@ impl Mailbox for InMemoryMailbox {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
+        Ok(self.senders.lock().unwrap().get(&task_id).cloned())
     }
 }
 
@@ -272,6 +292,35 @@ mod tests {
         assert!(got.is_some());
         // After draining, empty again.
         assert!(m.try_recv_task().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn lookup_task_sender_returns_sender_after_send_and_after_recv() {
+        let m = InMemoryMailbox::new();
+        let t = dummy_task();
+        let sender = t.sender.clone();
+        m.send_task(t.clone()).await.unwrap();
+
+        // Available immediately after send.
+        assert_eq!(
+            m.lookup_task_sender(t.id).await.unwrap(),
+            Some(sender.clone())
+        );
+
+        // Still available after the task has been recv'd — the result
+        // can come back later and still attribute correctly.
+        let _ = m.recv_task().await.unwrap();
+        assert_eq!(m.lookup_task_sender(t.id).await.unwrap(), Some(sender));
+    }
+
+    #[tokio::test]
+    async fn lookup_task_sender_returns_none_for_unknown_task_id() {
+        let m = InMemoryMailbox::new();
+        assert!(m
+            .lookup_task_sender(Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

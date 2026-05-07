@@ -41,7 +41,7 @@ if ! command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-PROMPT='Read HANDOVER.md, then AGENTS.md, then PROJECT_STATE.md, then the tail of SPRINT_LOG.md (the latest "Resume from here" block). Continue the autonomous sprint loop from there. The previous session paused itself for a clean context; pick up exactly where it left off, with the same rules. Do not stop unless a true blocker appears.'
+PROMPT='Read HANDOVER.md, then WORKFLOW.md, then PROJECT_STATE.md, then the tail of SPRINT_LOG.md (the latest "Resume from here" block). Continue the autonomous sprint loop from there. The previous session paused itself for a clean context; pick up exactly where it left off, with the same rules. Do not stop unless a true blocker appears.'
 
 # Build a temporary launch script. Putting the multi-line shell command in a
 # tempfile lets us avoid double-escaping into AppleScript / xterm -e.

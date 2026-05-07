@@ -71,16 +71,11 @@ export default function Page() {
       </nav>
 
       <section className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6 text-center">
-        <HeroMesh src="/hero.png" />
+        <HeroMesh src="/hero-bg.png" width={2000} height={2000} />
 
-        <div className="flex flex-col items-center gap-4">
-          <p className="font-mono text-3xl font-light tracking-tight text-neutral-50 uppercase sm:text-5xl">
-            Release
-          </p>
-          <p className="text-xs tracking-[0.4em] text-neutral-400">
-            {RELEASE_DATE}
-          </p>
-        </div>
+        <p className="text-xs tracking-[0.4em] text-neutral-400">
+          {RELEASE_DATE}
+        </p>
 
         <footer className="absolute inset-x-0 bottom-8 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
           open agent-native operating layer

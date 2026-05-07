@@ -501,9 +501,20 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
   );
 }
 
-export function HeroMesh({ src }: { src: string }) {
+export function HeroMesh({
+  src,
+  width,
+  height,
+}: {
+  src: string;
+  width: number;
+  height: number;
+}) {
   return (
-    <div className="relative aspect-square w-[25vw] min-w-[180px] max-w-sm overflow-hidden bg-[#030303]">
+    <div
+      className="relative overflow-hidden bg-[#030303]"
+      style={{ width, height }}
+    >
       <div
         aria-hidden
         className="absolute inset-0 bg-cover bg-center"

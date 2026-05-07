@@ -4,11 +4,11 @@ Active maintainers with commit and review authority.
 
 | Name | GitHub | Area |
 |---|---|---|
-| Adrian Vale | [@0xadrenalin](https://github.com/0xadrenalin) | Contracts, proof verification, settlement, security review |
-| Mika Peltonen | [@mkpltnn](https://github.com/mkpltnn) | Portal, SDK, task flows, developer experience |
-| Nicola Mariano | [@nic0xmariano](https://github.com/nic0xmariano) | Services, indexing, infrastructure, release operations |
+| Achille Wasque | [@achillewasque](https://github.com/achillewasque) | Daemon, runtime, core types, infrastructure |
+| Iko Rane | [@iko-rane](https://github.com/iko-rane) | Web UI, landing site, frontend |
+| Noam Rook | [@nr00x](https://github.com/nr00x) | Solana programs, settlement, on-chain integration |
 
-Security contact: `security@covenantbase.com` (see [SECURITY.md](./SECURITY.md)).
+Security contact: `security@opencovenant.org` (see [SECURITY.md](./SECURITY.md)).
 
 ## Becoming a maintainer
 

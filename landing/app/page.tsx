@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { HeroMesh } from "./HeroMesh";
 
 const RELEASE_DATE = "13.05.2026";
@@ -58,6 +59,12 @@ export default function Page() {
         className="absolute right-2 z-20 flex items-center gap-1 sm:right-8 sm:top-10 sm:gap-3"
         style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
       >
+        <Link
+          href="/docs"
+          className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+        >
+          docs
+        </Link>
         <a
           href={X_URL}
           target="_blank"

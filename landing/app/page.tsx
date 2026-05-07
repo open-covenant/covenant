@@ -84,7 +84,7 @@ export default function Page() {
         />
       </section>
 
-      <p className="absolute left-1/2 top-[85%] z-10 -translate-x-1/2 text-[14px] tracking-[0.4em] text-neutral-400">
+      <p className="absolute left-1/2 top-[80%] z-10 -translate-x-1/2 text-[14px] tracking-[0.4em] text-neutral-400">
         {RELEASE_DATE}
       </p>
 

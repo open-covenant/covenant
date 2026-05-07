@@ -30,7 +30,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.26.0",
     "@covenant/sdk": "workspace:*",
-    "viem": "^2.48.4",
+    "viem": "^2.48.8",
     "zod": "4.3.6"
   },
   "devDependencies": {

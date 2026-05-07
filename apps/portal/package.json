@@ -28,8 +28,8 @@
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "three": "^0.184.0",
-    "viem": "^2.48.4",
-    "wagmi": "^3.6.4"
+    "viem": "^2.48.8",
+    "wagmi": "^3.6.9"
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^16.2.4",

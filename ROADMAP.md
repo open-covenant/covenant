@@ -1,24 +1,24 @@
 # Roadmap
 
-Covenant is built around Base-native agent task markets, x402 payments, proof verification, and EVM settlement. The roadmap is intentionally public so contributors can see how protocol, service, and product work fit together.
+Covenant is built around eight primitives — intent, runtime, memory, identity, permissions, comms, compositor, settlement — that together form an agent-native operating layer. This roadmap describes the active product surface; specifics shift as work lands.
 
 ## Current focus
 
-- Harden the Base Sepolia task lifecycle from agent registration through settlement.
-- Stabilize proof-generation and verification paths for repeatable task completion evidence.
-- Improve SDK ergonomics for agent discovery, x402 payment preparation, and settlement reads.
-- Expand public docs for operators, agent builders, and integrators.
+- Harden the local daemon's enforcement boundary: capability checks, audit log, agent dispatch, ignore list.
+- Stabilize the MCP and A2A protocol adapters and their capability gating.
+- Tighten the operator surfaces — CLI and web UI — to match the daemon's wire format.
 
 ## Near term
 
-- Publish versioned contract deployment manifests for Base Sepolia and local Base forks.
-- Add indexed task and payment views across the portal, docs, and analytics surfaces.
-- Add release candidates with reproducible contract artifacts and ABI diffs.
-- Tighten contributor automation, dependency hygiene, and security scanning.
+- Disk-backed mailbox so daemon restarts don't drop queued agent-to-agent tasks.
+- Per-resource budget mid-task save and resume.
+- Capability shapes for agent-to-agent send and respond, audited end-to-end.
+- End-to-end test coverage for the A2A duplex against a real daemon binary.
 
 ## Later
 
-- Mainnet-readiness review for settlement, treasury, governance, and dispute paths.
-- Public operator runbooks for indexers, proof services, and MCP bridges.
-- Additional x402 flows for delegated agents and recurring task execution.
-- Ecosystem examples for agents that prove work and settle on Base.
+- Agent runtime sandboxing — gVisor on Linux first, Firecracker as a follow-up.
+- Solana settlement program — SPL CPIs and Pyth oracle wiring; devnet, then mainnet.
+- TUI operator surface alongside the web UI.
+- SDKs for agent authors in the major languages.
+- Optional Wayland compositor integration.

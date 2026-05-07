@@ -82,7 +82,7 @@ export default function Page() {
           sizes="80vh"
           className="pointer-events-none h-[80vh] w-auto"
         />
-        <p className="text-[14px] tracking-[0.4em] text-neutral-400">
+        <p className="-mt-12 text-[14px] tracking-[0.4em] text-neutral-400">
           {RELEASE_DATE}
         </p>
       </section>

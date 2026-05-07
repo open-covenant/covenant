@@ -69,30 +69,28 @@ export default function Page() {
         </a>
       </nav>
 
-      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 text-center">
-        <div className="absolute inset-0 -z-0">
-          <Image
-            src="/hero.png"
-            alt=""
-            fill
-            priority
-            sizes="100vw"
-            className="object-cover opacity-70"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black" />
-        </div>
+      <section className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6 text-center">
+        <Image
+          src="/hero.png"
+          alt=""
+          width={2000}
+          height={2000}
+          priority
+          sizes="25vw"
+          className="h-auto w-[25vw] min-w-[180px] max-w-sm"
+        />
 
-        <div className="relative z-10 flex flex-col items-center gap-8 pt-32">
-          <p className="text-xs tracking-[0.4em] text-neutral-400 uppercase">
+        <div className="flex flex-col items-center gap-4">
+          <p className="font-mono text-3xl font-light tracking-tight text-neutral-50 uppercase sm:text-5xl">
             Release
           </p>
-          <p className="font-mono text-3xl font-light tracking-tight text-neutral-50 sm:text-5xl">
+          <p className="text-xs tracking-[0.4em] text-neutral-400">
             {RELEASE_DATE}
           </p>
         </div>
 
         <footer className="absolute inset-x-0 bottom-8 flex justify-center text-[11px] tracking-widest text-neutral-500 uppercase">
-          covenant — an open agent-native operating layer
+          open agent-native operating layer
         </footer>
       </section>
     </main>

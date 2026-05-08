@@ -55,6 +55,16 @@ async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
     }
 }
 
+/// Reads the daemon's on-disk ed25519 public key bytes — same value the
+/// operator peer was registered with. Required because Sprint 49's spoof
+/// check compares the full `AgentId` (display + pubkey) on every A2A send.
+fn read_peer_pubkey(home: &std::path::Path) -> [u8; 32] {
+    let path = home.join("identity").join("local.key");
+    let id = covenant_identity::LocalIdentity::load_or_create(&path, "user@local")
+        .expect("load identity");
+    id.pubkey_bytes()
+}
+
 async fn req(stream: &mut UnixStream, request: Request) -> Response {
     write_frame(stream, &request).await.expect("write_frame");
     read_frame(stream).await.expect("read_frame")
@@ -87,9 +97,12 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
+    // Sprint 49: `task.sender` must match the authenticated peer; the
+    // operator authenticates as `user@local` so that's the sender we use.
+    let peer = read_peer_pubkey(home.path());
     let task = A2ATask {
         id: Uuid::new_v4(),
-        sender: AgentId::new("orch@local", [0u8; 32]),
+        sender: AgentId::new("user@local", peer),
         recipient: AgentId::new("research@local", [0u8; 32]),
         intent_text: "find recent papers".into(),
         parent: None,
@@ -159,7 +172,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     {
         Response::Error { message } => {
             assert!(
-                message.contains("a2a.respond.orch@local"),
+                message.contains(&format!("a2a.respond.{}", task.sender.display)),
                 "rejection should name the sender-scoped cap: {message}"
             );
         }

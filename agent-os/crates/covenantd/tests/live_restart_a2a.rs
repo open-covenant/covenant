@@ -70,6 +70,17 @@ async fn authenticate(stream: &mut UnixStream, home: &Path) {
     }
 }
 
+/// Reads the daemon's on-disk ed25519 pubkey — the operator-peer's pubkey,
+/// which Sprint 49's spoof check requires `task.sender.pubkey` to match.
+fn read_peer_pubkey(home: &Path) -> [u8; 32] {
+    let id = covenant_identity::LocalIdentity::load_or_create(
+        &home.join("identity").join("local.key"),
+        "user@local",
+    )
+    .expect("load identity");
+    id.pubkey_bytes()
+}
+
 fn spawn_daemon(home: &Path, port: u16) -> Child {
     let exe = env!("CARGO_BIN_EXE_covenantd");
     Command::new(exe)
@@ -94,9 +105,18 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
     //     process abruptly so the test exercises the on-disk replay path
     //     rather than any clean-shutdown drain logic.
 
+    // Sprint 49 spoof check: `task.sender` must match the authenticated
+    // peer (display + pubkey). Pre-create the on-disk identity so we can
+    // build the task's sender with the right pubkey before either daemon
+    // run touches it.
+    let _ = covenant_identity::LocalIdentity::load_or_create(
+        &home.path().join("identity").join("local.key"),
+        "user@local",
+    )
+    .expect("seed identity");
     let task = A2ATask {
         id: Uuid::new_v4(),
-        sender: AgentId::new("orch@local", [0u8; 32]),
+        sender: AgentId::new("user@local", read_peer_pubkey(home.path())),
         recipient: AgentId::new("research@local", [0u8; 32]),
         intent_text: "find recent papers".into(),
         parent: None,
@@ -195,7 +215,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         match req(&mut stream, Request::TryRecvA2ATask).await {
             Response::A2ATaskOpt { task: Some(t) } => {
                 assert_eq!(t.id, task.id, "replayed task id mismatch");
-                assert_eq!(t.sender.display, "orch@local");
+                assert_eq!(t.sender.display, task.sender.display);
                 assert_eq!(t.recipient.display, "research@local");
                 assert_eq!(t.intent_text, "find recent papers");
             }
@@ -203,7 +223,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         }
 
         // Replay assertion #2: the senders map replayed. Posting a result
-        // for the task must require `a2a.respond.orch@local` — the sender
+        // for the task must require `a2a.respond.<sender>` — the sender
         // is only knowable if the TaskSent event was applied at open().
         let result = A2ATaskResult::ok(task.id, vec![Content::text("done")]);
         match req(
@@ -216,7 +236,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         {
             Response::Error { message } => {
                 assert!(
-                    message.contains("a2a.respond.orch@local"),
+                    message.contains(&format!("a2a.respond.{}", task.sender.display)),
                     "rejection should name the replayed sender-scoped cap: {message}"
                 );
             }

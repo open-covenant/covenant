@@ -68,6 +68,28 @@ pub enum AuditKind {
     /// than a missing-cap rejection: no honest agent generates a
     /// nonexistent `task_id`.
     A2AResultRejected { task_id: Uuid, reason: String },
+    /// Logged on every rejected authentication attempt — bad first
+    /// frame on the IPC socket, missing/malformed `Authorization`
+    /// header on HTTP, or a token the registry doesn't resolve.
+    /// `transport` is `"ipc"` or `"http"`; `reason` is the same
+    /// short message the caller saw.
+    AuthenticationFailed { transport: String, reason: String },
+    /// Logged when `SendA2ATask` is rejected because the supplied
+    /// `task.sender` does not match the authenticated peer on the
+    /// connection. Closes the spoof attack class flagged in the
+    /// Sprint 47 security review.
+    A2ASenderMismatch {
+        peer_display: String,
+        claimed_sender_display: String,
+    },
+    /// Logged when `RevokeCapability` is rejected because the
+    /// authenticated peer is not the subject of the capability they
+    /// asked to revoke. Closes the cross-peer-revoke gap flagged in
+    /// the Sprint 49 mid-sprint security review.
+    CapabilityRevokeRejected {
+        signature_b58: String,
+        reason: String,
+    },
 }
 
 #[async_trait]

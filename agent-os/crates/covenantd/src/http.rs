@@ -13,7 +13,7 @@
 
 use crate::Server;
 use axum::{
-    extract::{Query, Request as AxumRequest, State},
+    extract::{Extension, Query, Request as AxumRequest, State},
     http::{header::AUTHORIZATION, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response as AxumResponse},
@@ -22,7 +22,7 @@ use axum::{
 };
 use covenant_ipc::{Request, Response};
 use covenant_peer_auth::PeerToken;
-use covenant_types::MemoryTier;
+use covenant_types::{AgentId, MemoryTier};
 use serde::Deserialize;
 
 #[derive(Clone)]
@@ -64,30 +64,40 @@ pub fn router(state: HttpState) -> Router {
 
 async fn require_bearer(
     State(s): State<HttpState>,
-    req: AxumRequest,
+    mut req: AxumRequest,
     next: Next,
 ) -> Result<AxumResponse, AxumResponse> {
-    let header = req
+    let header = match req
         .headers()
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| unauthorized("missing Authorization header"))?;
+    {
+        Some(h) => h,
+        None => return Err(reject(&s, "missing Authorization header").await),
+    };
     // RFC 7235 §2.1: scheme is case-insensitive.
-    let (scheme, token_b58) = header
-        .split_once(' ')
-        .ok_or_else(|| unauthorized("expected `Authorization: Bearer <token>`"))?;
+    let (scheme, token_b58) = match header.split_once(' ') {
+        Some(parts) => parts,
+        None => return Err(reject(&s, "expected `Authorization: Bearer <token>`").await),
+    };
     if !scheme.eq_ignore_ascii_case("bearer") {
-        return Err(unauthorized("expected `Authorization: Bearer <token>`"));
+        return Err(reject(&s, "expected `Authorization: Bearer <token>`").await);
     }
-    let token = PeerToken::from_b58(token_b58.trim())
-        .map_err(|_| unauthorized("malformed bearer token"))?;
+    let token = match PeerToken::from_b58(token_b58.trim()) {
+        Ok(t) => t,
+        Err(_) => return Err(reject(&s, "malformed bearer token").await),
+    };
     match s.server.peers.resolve(&token).await {
-        Ok(Some(_)) => Ok(next.run(req).await),
-        _ => Err(unauthorized("unknown or revoked token")),
+        Ok(Some(agent_id)) => {
+            req.extensions_mut().insert(agent_id);
+            Ok(next.run(req).await)
+        }
+        _ => Err(reject(&s, "unknown or revoked token").await),
     }
 }
 
-fn unauthorized(message: &'static str) -> AxumResponse {
+async fn reject(s: &HttpState, message: &'static str) -> AxumResponse {
+    s.server.record_auth_failure("http", message).await;
     (
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({ "kind": "error", "message": message })),
@@ -106,11 +116,12 @@ struct SubmitIntentBody {
 
 async fn submit_intent(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(b): Json<SubmitIntentBody>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::SubmitIntent { text: b.text })
+            .respond(Request::SubmitIntent { text: b.text }, &peer)
             .await,
     ))
 }
@@ -123,14 +134,18 @@ struct RecentParams {
 
 async fn memory_recent(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<RecentParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentMemory {
-                tier: q.tier,
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::RecentMemory {
+                    tier: q.tier,
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -144,15 +159,19 @@ struct SearchParams {
 
 async fn memory_search(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<SearchParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::SearchMemory {
-                query: q.q,
-                tier: q.tier,
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::SearchMemory {
+                    query: q.q,
+                    tier: q.tier,
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -165,14 +184,18 @@ struct PurgeBody {
 
 async fn memory_purge(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(b): Json<PurgeBody>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::PurgeMemory {
-                tier: b.tier,
-                before_ms: b.before_ms,
-            })
+            .respond(
+                Request::PurgeMemory {
+                    tier: b.tier,
+                    before_ms: b.before_ms,
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -184,13 +207,17 @@ struct VerifyParams {
 
 async fn verify(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<VerifyParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::Verify {
-                window: q.window.unwrap_or(100),
-            })
+            .respond(
+                Request::Verify {
+                    window: q.window.unwrap_or(100),
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -202,26 +229,34 @@ struct LimitParams {
 
 async fn receipts_recent(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentReceipts {
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::RecentReceipts {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
 
 async fn capabilities_recent(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentCapabilities {
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::RecentCapabilities {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -237,15 +272,19 @@ struct GrantBody {
 
 async fn grant_capability(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(b): Json<GrantBody>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::GrantCapability {
-                action: b.action,
-                scope: b.scope,
-                expires_at: b.expires_at,
-            })
+            .respond(
+                Request::GrantCapability {
+                    action: b.action,
+                    scope: b.scope,
+                    expires_at: b.expires_at,
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -257,80 +296,113 @@ struct RevokeBody {
 
 async fn revoke_capability(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(b): Json<RevokeBody>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RevokeCapability {
-                signature_b58: b.signature_b58,
-            })
+            .respond(
+                Request::RevokeCapability {
+                    signature_b58: b.signature_b58,
+                },
+                &peer,
+            )
             .await,
     ))
 }
 
-async fn list_tools(State(s): State<HttpState>) -> Result<Json<Response>, ApiError> {
-    Ok(Json(s.server.respond(Request::ListTools).await))
+async fn list_tools(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(s.server.respond(Request::ListTools, &peer).await))
 }
 
 async fn audit_recent(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentAudit {
-                limit: q.limit.unwrap_or(20),
-            })
+            .respond(
+                Request::RecentAudit {
+                    limit: q.limit.unwrap_or(20),
+                },
+                &peer,
+            )
             .await,
     ))
 }
 
 async fn send_a2a_task(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(task): Json<covenant_a2a::A2ATask>,
 ) -> Result<Json<Response>, ApiError> {
-    Ok(Json(s.server.respond(Request::SendA2ATask { task }).await))
+    Ok(Json(
+        s.server.respond(Request::SendA2ATask { task }, &peer).await,
+    ))
 }
 
-async fn try_recv_a2a_task(State(s): State<HttpState>) -> Result<Json<Response>, ApiError> {
-    Ok(Json(s.server.respond(Request::TryRecvA2ATask).await))
+async fn try_recv_a2a_task(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(s.server.respond(Request::TryRecvA2ATask, &peer).await))
 }
 
 async fn post_a2a_result(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(result): Json<covenant_a2a::A2ATaskResult>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
-        s.server.respond(Request::PostA2AResult { result }).await,
+        s.server
+            .respond(Request::PostA2AResult { result }, &peer)
+            .await,
     ))
 }
 
-async fn try_recv_a2a_result(State(s): State<HttpState>) -> Result<Json<Response>, ApiError> {
-    Ok(Json(s.server.respond(Request::TryRecvA2AResult).await))
+async fn try_recv_a2a_result(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server.respond(Request::TryRecvA2AResult, &peer).await,
+    ))
 }
 
 async fn recent_a2a_tasks(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentA2ATasks {
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::RecentA2ATasks {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
 
 async fn recent_a2a_results(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::RecentA2AResults {
-                limit: q.limit.unwrap_or(10),
-            })
+            .respond(
+                Request::RecentA2AResults {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
             .await,
     ))
 }
@@ -344,14 +416,18 @@ struct CallToolBody {
 
 async fn call_tool(
     State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
     Json(b): Json<CallToolBody>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::CallTool {
-                name: b.name,
-                arguments: b.arguments,
-            })
+            .respond(
+                Request::CallTool {
+                    name: b.name,
+                    arguments: b.arguments,
+                },
+                &peer,
+            )
             .await,
     ))
 }

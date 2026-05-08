@@ -21,7 +21,8 @@ use covenant_router::Router;
 use covenant_runtime::Runner;
 use covenant_settlement::{memory_write_credits, Settlement};
 use covenant_types::{
-    Capability, Intent, MemoryRecord, MemoryTier, Priority, ResourceKind, SettlementReceipt,
+    AgentId, Capability, Intent, MemoryRecord, MemoryTier, Priority, ResourceKind,
+    SettlementReceipt,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -111,23 +112,25 @@ impl Server {
             }
             Err(e) => return Err(e.into()),
         };
-        let _peer_display = match first {
+        let peer = match first {
             Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
-                Some(display) => {
+                Some(agent_id) => {
                     write_frame(
                         &mut stream,
                         &Response::Authenticated {
-                            display: display.clone(),
+                            display: agent_id.display.clone(),
                         },
                     )
                     .await?;
-                    display
+                    agent_id
                 }
                 None => {
+                    let reason = "unknown or revoked token";
+                    self.record_auth_failure("ipc", reason).await;
                     write_frame(
                         &mut stream,
                         &Response::AuthenticationFailed {
-                            reason: "unknown or revoked token".into(),
+                            reason: reason.into(),
                         },
                     )
                     .await?;
@@ -135,10 +138,12 @@ impl Server {
                 }
             },
             _ => {
+                let reason = "first frame must be Authenticate";
+                self.record_auth_failure("ipc", reason).await;
                 write_frame(
                     &mut stream,
                     &Response::AuthenticationFailed {
-                        reason: "first frame must be Authenticate".into(),
+                        reason: reason.into(),
                     },
                 )
                 .await?;
@@ -154,27 +159,43 @@ impl Server {
                 }
                 Err(e) => return Err(e.into()),
             };
-            let resp = self.respond(req).await;
+            let resp = self.respond(req, &peer).await;
             write_frame(&mut stream, &resp).await?;
         }
     }
 
-    async fn authenticate(&self, token_b58: &str) -> Option<String> {
+    async fn authenticate(&self, token_b58: &str) -> Option<AgentId> {
         let token = PeerToken::from_b58(token_b58).ok()?;
-        let agent_id = self.peers.resolve(&token).await.ok().flatten()?;
-        Some(agent_id.display)
+        self.peers.resolve(&token).await.ok().flatten()
     }
 
-    pub async fn respond(&self, req: Request) -> Response {
+    pub async fn record_auth_failure(&self, transport: &str, reason: &str) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: self.identity.agent_id(),
+            kind: AuditKind::AuthenticationFailed {
+                transport: transport.to_string(),
+                reason: reason.to_string(),
+            },
+        };
+        if let Err(e) = self.audit.record(event).await {
+            warn!(error = %e, "audit record (auth failure) failed");
+        }
+    }
+
+    pub async fn respond(&self, req: Request, peer: &AgentId) -> Response {
         match req {
             Request::Ping => Response::Pong,
             Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
-                Some(display) => Response::Authenticated { display },
+                Some(agent_id) => Response::Authenticated {
+                    display: agent_id.display,
+                },
                 None => Response::AuthenticationFailed {
                     reason: "unknown or revoked token".into(),
                 },
             },
-            Request::SubmitIntent { text } => self.dispatch_intent(text).await,
+            Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
             Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit).await,
             Request::RecentReceipts { limit } => self.recent_receipts(limit).await,
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit).await,
@@ -182,9 +203,9 @@ impl Server {
                 action,
                 scope,
                 expires_at,
-            } => self.grant_capability(action, scope, expires_at).await,
+            } => self.grant_capability(action, scope, expires_at, peer).await,
             Request::RevokeCapability { signature_b58 } => {
-                self.revoke_capability(signature_b58).await
+                self.revoke_capability(signature_b58, peer).await
             }
             Request::SearchMemory { query, tier, limit } => {
                 self.search_memory(query, tier, limit).await
@@ -193,23 +214,44 @@ impl Server {
             Request::Verify { window } => self.verify_recent(window).await,
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
-            Request::CallTool { name, arguments } => self.call_tool(name, arguments).await,
+            Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit).await,
-            Request::SendA2ATask { task } => self.send_a2a_task(task).await,
+            Request::SendA2ATask { task } => self.send_a2a_task(task, peer).await,
             Request::TryRecvA2ATask => self.try_recv_a2a_task().await,
-            Request::PostA2AResult { result } => self.post_a2a_result(result).await,
+            Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
             Request::TryRecvA2AResult => self.try_recv_a2a_result().await,
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
         }
     }
 
-    async fn send_a2a_task(&self, task: covenant_a2a::A2ATask) -> Response {
+    async fn send_a2a_task(&self, task: covenant_a2a::A2ATask, peer: &AgentId) -> Response {
+        if task.sender != *peer {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::A2ASenderMismatch {
+                    peer_display: peer.display.clone(),
+                    claimed_sender_display: task.sender.display.clone(),
+                },
+            };
+            if let Err(e) = self.audit.record(event).await {
+                warn!(error = %e, "audit record (a2a sender mismatch) failed");
+            }
+            return Response::Error {
+                message: format!(
+                    "a2a send rejected: task.sender {:?} does not match \
+                     authenticated peer {:?}",
+                    task.sender.display, peer.display
+                ),
+            };
+        }
         let task_id = task.id;
         let recipient = task.recipient.display.clone();
         let action = format!("a2a.send.{recipient}");
         let check = self
-            .check_capabilities(format!("a2a-send:{recipient}"), vec![action.clone()])
+            .check_capabilities(format!("a2a-send:{recipient}"), vec![action.clone()], peer)
             .await;
         if !check.passed {
             return Response::Error {
@@ -236,7 +278,11 @@ impl Server {
         }
     }
 
-    async fn post_a2a_result(&self, result: covenant_a2a::A2ATaskResult) -> Response {
+    async fn post_a2a_result(
+        &self,
+        result: covenant_a2a::A2ATaskResult,
+        peer: &AgentId,
+    ) -> Response {
         let task_id = result.task_id;
         let sender = match self.mailbox.lookup_task_sender(task_id).await {
             Ok(Some(s)) => s,
@@ -244,7 +290,7 @@ impl Server {
                 let event = AuditEvent {
                     id: Uuid::new_v4(),
                     timestamp_ms: epoch_ms(),
-                    issuer: self.identity.agent_id(),
+                    issuer: peer.clone(),
                     kind: AuditKind::A2AResultRejected {
                         task_id,
                         reason: "unknown_task".into(),
@@ -268,7 +314,7 @@ impl Server {
         };
         let action = format!("a2a.respond.{}", sender.display);
         let check = self
-            .check_capabilities(format!("a2a-respond:{task_id}"), vec![action.clone()])
+            .check_capabilities(format!("a2a-respond:{task_id}"), vec![action.clone()], peer)
             .await;
         if !check.passed {
             return Response::Error {
@@ -329,10 +375,15 @@ impl Server {
         }
     }
 
-    async fn call_tool(&self, name: String, arguments: serde_json::Value) -> Response {
+    async fn call_tool(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
         let required = vec![format!("tool.call.{name}")];
         let check = self
-            .check_capabilities(format!("tool:{name}"), required)
+            .check_capabilities(format!("tool:{name}"), required, peer)
             .await;
         if !check.passed {
             return Response::Error {
@@ -363,11 +414,11 @@ impl Server {
         }
     }
 
-    async fn dispatch_intent(&self, text: String) -> Response {
+    async fn dispatch_intent(&self, text: String, peer: &AgentId) -> Response {
         let intent_id = Uuid::new_v4();
         let issued_at = epoch_ms();
 
-        let issuer = self.identity.agent_id();
+        let issuer = peer.clone();
 
         let ignore_check = self.ignore.check(&text);
         if ignore_check.ignored {
@@ -404,7 +455,11 @@ impl Server {
 
         let (text_out, sources_out) = if let Some(card) = card {
             let check = self
-                .check_capabilities(card.id.clone(), card.manifest.capabilities.required.clone())
+                .check_capabilities(
+                    card.id.clone(),
+                    card.manifest.capabilities.required.clone(),
+                    peer,
+                )
                 .await;
             if !check.passed {
                 return Response::Error {
@@ -502,14 +557,17 @@ impl Server {
     }
 
     /// Capability check: returns required + missing + passed. Logs a
-    /// `CapabilityCheck` audit event as a side-effect. Callers use `passed`
-    /// to decide whether to reject the request. `scope_id` is the subject
-    /// of the check (an agent id or `tool:<name>`); it lands in the audit
-    /// row so operators can distinguish.
+    /// `CapabilityCheck` audit event attributed to `peer`. `scope_id` is
+    /// the subject of the check (an agent id or `tool:<name>`); it lands
+    /// in the audit row so operators can distinguish. The capability set
+    /// consulted is the one keyed on `peer.pubkey` — in v0 every authenticated
+    /// caller is the operator (peer.pubkey == identity.pubkey), but the
+    /// per-peer keying lays groundwork for multi-peer.
     async fn check_capabilities(
         &self,
         scope_id: String,
         required: Vec<String>,
+        peer: &AgentId,
     ) -> CapabilityCheckOutcome {
         let now = epoch_ms();
         if required.is_empty() {
@@ -521,7 +579,7 @@ impl Server {
         }
         let user_caps = self
             .capabilities
-            .list_for_subject(self.identity.pubkey_bytes())
+            .list_for_subject(peer.pubkey)
             .await
             .unwrap_or_default();
         let valid_actions: Vec<String> = user_caps
@@ -538,7 +596,7 @@ impl Server {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: now,
-            issuer: self.identity.agent_id(),
+            issuer: peer.clone(),
             kind: AuditKind::CapabilityCheck {
                 agent_id: scope_id,
                 required_actions: required.clone(),
@@ -561,13 +619,14 @@ impl Server {
         action: String,
         scope: Option<serde_json::Value>,
         expires_at: Option<u64>,
+        peer: &AgentId,
     ) -> Response {
-        let issuer = self.identity.agent_id();
+        let granted_by = self.identity.agent_id();
         let cap = Capability {
-            subject: issuer.clone(),
+            subject: peer.clone(),
             action: action.clone(),
             scope: scope.unwrap_or_else(|| serde_json::json!({})),
-            granted_by: issuer.clone(),
+            granted_by: granted_by.clone(),
             expires_at,
         };
         let signed = sign_capability(cap, self.identity.signing_key());
@@ -582,11 +641,11 @@ impl Server {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: epoch_ms(),
-            issuer: issuer.clone(),
+            issuer: peer.clone(),
             kind: AuditKind::CapabilityGranted {
-                subject_display: issuer.display.clone(),
+                subject_display: peer.display.clone(),
                 action: action.clone(),
-                granted_by_display: issuer.display.clone(),
+                granted_by_display: granted_by.display.clone(),
                 signature_b58: signature_b58.clone(),
             },
         };
@@ -594,7 +653,7 @@ impl Server {
 
         Response::CapabilityGranted {
             signature_b58,
-            subject_display: issuer.display,
+            subject_display: peer.display.clone(),
             action,
         }
     }
@@ -752,7 +811,7 @@ impl Server {
         }
     }
 
-    async fn revoke_capability(&self, signature_b58: String) -> Response {
+    async fn revoke_capability(&self, signature_b58: String, peer: &AgentId) -> Response {
         let bytes = match bs58::decode(&signature_b58).into_vec() {
             Ok(b) if b.len() == 64 => {
                 let mut arr = [0u8; 64];
@@ -770,6 +829,33 @@ impl Server {
                 };
             }
         };
+        // Peer can only revoke caps whose subject is peer. The daemon
+        // is the trust root and signs every cap, but the cap is *for*
+        // the subject — a different peer must not be able to revoke it
+        // by replaying a signature visible on `/capabilities/recent`.
+        let owned = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .unwrap_or_default();
+        if !owned.iter().any(|c| c.signature == bytes) {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::CapabilityRevokeRejected {
+                    signature_b58: signature_b58.clone(),
+                    reason: "peer is not the subject of this capability".into(),
+                },
+            };
+            if let Err(e) = self.audit.record(event).await {
+                warn!(error = %e, "audit record (revoke rejected) failed");
+            }
+            return Response::Error {
+                message: "revoke rejected: capability subject does not match authenticated peer"
+                    .into(),
+            };
+        }
         match self.capabilities.revoke(bytes).await {
             Ok(removed) => Response::CapabilityRevoked {
                 signature_b58,
@@ -779,6 +865,18 @@ impl Server {
                 message: format!("permissions: {e}"),
             },
         }
+    }
+}
+
+#[cfg(test)]
+impl Server {
+    /// Test convenience: respond with the daemon's own identity acting as
+    /// the authenticated peer. In production v0 the operator peer is the
+    /// daemon's own identity, so this matches what `handle` does after
+    /// the auth handshake.
+    async fn op_respond(&self, req: Request) -> Response {
+        let peer = self.identity.agent_id();
+        self.respond(req, &peer).await
     }
 }
 
@@ -851,7 +949,7 @@ required = {caps:?}
     #[tokio::test]
     async fn ping_returns_pong() {
         let s = server_with(vec![], "");
-        assert_eq!(s.respond(Request::Ping).await, Response::Pong);
+        assert_eq!(s.op_respond(Request::Ping).await, Response::Pong);
     }
 
     #[tokio::test]
@@ -861,14 +959,14 @@ required = {caps:?}
             "mocked summary",
         );
         // Hard enforcement: grant the required cap up-front.
-        s.respond(Request::GrantCapability {
+        s.op_respond(Request::GrantCapability {
             action: "tool.web_search".into(),
             scope: None,
             expires_at: None,
         })
         .await;
         let resp = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
             })
             .await;
@@ -885,7 +983,7 @@ required = {caps:?}
             "mocked summary",
         );
         let resp = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
             })
             .await;
@@ -905,7 +1003,7 @@ required = {caps:?}
             "mocked summary",
         );
         let grant = s
-            .respond(Request::GrantCapability {
+            .op_respond(Request::GrantCapability {
                 action: "tool.web_search".into(),
                 scope: None,
                 expires_at: None,
@@ -917,7 +1015,7 @@ required = {caps:?}
         };
         // Dispatch passes after grant.
         let r = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "find papers".into(),
             })
             .await;
@@ -925,7 +1023,7 @@ required = {caps:?}
 
         // Revoke; dispatch now fails.
         let revoked = s
-            .respond(Request::RevokeCapability {
+            .op_respond(Request::RevokeCapability {
                 signature_b58: sig_b58,
             })
             .await;
@@ -934,7 +1032,7 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         }
         let r2 = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "find papers".into(),
             })
             .await;
@@ -945,7 +1043,7 @@ required = {caps:?}
     async fn submit_intent_falls_back_to_echo_when_no_match() {
         let s = server_with(vec![stub_card("research", vec!["tool.web_search"])], "");
         let resp = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "zzz no keywords".into(),
             })
             .await;
@@ -959,7 +1057,7 @@ required = {caps:?}
     async fn grant_capability_signs_and_persists() {
         let s = server_with(vec![], "");
         let resp = s
-            .respond(Request::GrantCapability {
+            .op_respond(Request::GrantCapability {
                 action: "tool.web_search".into(),
                 scope: None,
                 expires_at: None,
@@ -970,7 +1068,9 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         };
         // Recently-granted cap should round-trip through `recent_capabilities`.
-        let recent = s.respond(Request::RecentCapabilities { limit: 10 }).await;
+        let recent = s
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await;
         match recent {
             Response::Capabilities { capabilities } => {
                 assert_eq!(capabilities.len(), 1);
@@ -1004,7 +1104,7 @@ required = {caps:?}
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
         // Dispatch will be rejected, but the capability check event is still recorded.
-        s.respond(Request::SubmitIntent {
+        s.op_respond(Request::SubmitIntent {
             text: "find papers".into(),
         })
         .await;
@@ -1033,7 +1133,7 @@ required = {caps:?}
         let ignore = IgnoreSet::parse("id_rsa\n");
         let s = server_with_ignore(vec![], "echo", ignore);
         let resp = s
-            .respond(Request::SubmitIntent {
+            .op_respond(Request::SubmitIntent {
                 text: "summarise ~/.ssh/id_rsa".into(),
             })
             .await;
@@ -1056,7 +1156,7 @@ required = {caps:?}
     #[tokio::test]
     async fn list_tools_returns_registered_tool_specs() {
         let s = server_with(vec![], "");
-        let resp = s.respond(Request::ListTools).await;
+        let resp = s.op_respond(Request::ListTools).await;
         match resp {
             Response::ToolList { tools } => {
                 let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
@@ -1069,14 +1169,14 @@ required = {caps:?}
     #[tokio::test]
     async fn call_tool_dispatches_through_registry() {
         let s = server_with(vec![], "");
-        s.respond(Request::GrantCapability {
+        s.op_respond(Request::GrantCapability {
             action: "tool.call.echo".into(),
             scope: None,
             expires_at: None,
         })
         .await;
         let resp = s
-            .respond(Request::CallTool {
+            .op_respond(Request::CallTool {
                 name: "echo".into(),
                 arguments: serde_json::json!({ "text": "hi" }),
             })
@@ -1097,14 +1197,14 @@ required = {caps:?}
     #[tokio::test]
     async fn call_tool_returns_error_for_unknown_name() {
         let s = server_with(vec![], "");
-        s.respond(Request::GrantCapability {
+        s.op_respond(Request::GrantCapability {
             action: "tool.call.missing".into(),
             scope: None,
             expires_at: None,
         })
         .await;
         let resp = s
-            .respond(Request::CallTool {
+            .op_respond(Request::CallTool {
                 name: "missing".into(),
                 arguments: serde_json::Value::Null,
             })
@@ -1119,7 +1219,7 @@ required = {caps:?}
     async fn call_tool_rejects_when_capability_missing() {
         let s = server_with(vec![], "");
         let resp = s
-            .respond(Request::CallTool {
+            .op_respond(Request::CallTool {
                 name: "echo".into(),
                 arguments: serde_json::json!({ "text": "hi" }),
             })
@@ -1152,7 +1252,7 @@ required = {caps:?}
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
-        s.respond(Request::CallTool {
+        s.op_respond(Request::CallTool {
             name: "echo".into(),
             arguments: serde_json::json!({ "text": "hi" }),
         })
@@ -1177,10 +1277,13 @@ required = {caps:?}
         }
     }
 
-    fn dummy_a2a_task() -> covenant_a2a::A2ATask {
+    /// Builds a task whose `sender` matches `s.identity.agent_id()` so it
+    /// passes the Sprint 49 spoof check. Tests that need a mismatched
+    /// sender construct the task inline.
+    fn dummy_a2a_task_for(s: &Server) -> covenant_a2a::A2ATask {
         covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
-            sender: covenant_types::AgentId::new("orch@local", [0u8; 32]),
+            sender: s.identity.agent_id(),
             recipient: covenant_types::AgentId::new("research@local", [0u8; 32]),
             intent_text: "find recent papers".into(),
             parent: None,
@@ -1191,25 +1294,27 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_task_round_trips_through_server() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task();
-        s.respond(Request::GrantCapability {
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,
             expires_at: None,
         })
         .await;
 
-        let queued = s.respond(Request::SendA2ATask { task: task.clone() }).await;
+        let queued = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
         match queued {
             Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
             other => panic!("unexpected: {other:?}"),
         }
-        let recv = s.respond(Request::TryRecvA2ATask).await;
+        let recv = s.op_respond(Request::TryRecvA2ATask).await;
         match recv {
             Response::A2ATaskOpt { task: Some(t) } => assert_eq!(t.id, task.id),
             other => panic!("unexpected: {other:?}"),
         }
-        let again = s.respond(Request::TryRecvA2ATask).await;
+        let again = s.op_respond(Request::TryRecvA2ATask).await;
         match again {
             Response::A2ATaskOpt { task: None } => {}
             other => panic!("unexpected: {other:?}"),
@@ -1219,8 +1324,8 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_send_rejects_when_capability_missing() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task();
-        let resp = s.respond(Request::SendA2ATask { task }).await;
+        let task = dummy_a2a_task_for(&s);
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
         match resp {
             Response::Error { message } => {
                 assert!(message.contains("requires capability"));
@@ -1228,7 +1333,7 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
-        let drained = s.respond(Request::TryRecvA2ATask).await;
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
         assert!(
             matches!(drained, Response::A2ATaskOpt { task: None }),
             "rejected task must not enqueue: {drained:?}"
@@ -1252,8 +1357,8 @@ required = {caps:?}
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
         );
-        s.respond(Request::SendA2ATask {
-            task: dummy_a2a_task(),
+        s.op_respond(Request::SendA2ATask {
+            task: dummy_a2a_task_for(&s),
         })
         .await;
 
@@ -1283,16 +1388,17 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_result_round_trips_through_server() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task();
-        s.respond(Request::GrantCapability {
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,
             expires_at: None,
         })
         .await;
-        s.respond(Request::SendA2ATask { task: task.clone() }).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
 
-        s.respond(Request::GrantCapability {
+        s.op_respond(Request::GrantCapability {
             action: format!("a2a.respond.{}", task.sender.display),
             scope: None,
             expires_at: None,
@@ -1302,7 +1408,7 @@ required = {caps:?}
         let result =
             covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
         let posted = s
-            .respond(Request::PostA2AResult {
+            .op_respond(Request::PostA2AResult {
                 result: result.clone(),
             })
             .await;
@@ -1310,7 +1416,7 @@ required = {caps:?}
             Response::A2AResultPosted { task_id: id } => assert_eq!(id, task.id),
             other => panic!("unexpected: {other:?}"),
         }
-        let recv = s.respond(Request::TryRecvA2AResult).await;
+        let recv = s.op_respond(Request::TryRecvA2AResult).await;
         match recv {
             Response::A2AResultOpt {
                 result: Some(got), ..
@@ -1320,7 +1426,7 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
-        let again = s.respond(Request::TryRecvA2AResult).await;
+        let again = s.op_respond(Request::TryRecvA2AResult).await;
         match again {
             Response::A2AResultOpt { result: None } => {}
             other => panic!("unexpected: {other:?}"),
@@ -1330,15 +1436,16 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_recent_returns_queued_tasks_without_consuming() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task();
-        s.respond(Request::GrantCapability {
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,
             expires_at: None,
         })
         .await;
-        s.respond(Request::SendA2ATask { task: task.clone() }).await;
-        s.respond(Request::SendA2ATask {
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        s.op_respond(Request::SendA2ATask {
             task: covenant_a2a::A2ATask {
                 id: Uuid::new_v4(),
                 ..task.clone()
@@ -1346,7 +1453,7 @@ required = {caps:?}
         })
         .await;
 
-        let recent = s.respond(Request::RecentA2ATasks { limit: 10 }).await;
+        let recent = s.op_respond(Request::RecentA2ATasks { limit: 10 }).await;
         match recent {
             Response::A2ATasks { tasks } => {
                 assert_eq!(tasks.len(), 2);
@@ -1356,7 +1463,7 @@ required = {caps:?}
         }
 
         // recent must not consume — try_recv still finds tasks.
-        let drained = s.respond(Request::TryRecvA2ATask).await;
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
         assert!(matches!(drained, Response::A2ATaskOpt { task: Some(_) }));
     }
 
@@ -1367,14 +1474,14 @@ required = {caps:?}
         let unknown_id = Uuid::new_v4();
         let result =
             covenant_a2a::A2ATaskResult::ok(unknown_id, vec![covenant_mcp::Content::text("done")]);
-        let resp = s.respond(Request::PostA2AResult { result }).await;
+        let resp = s.op_respond(Request::PostA2AResult { result }).await;
         match resp {
             Response::Error { message } => {
                 assert!(message.contains("never dispatched"));
             }
             other => panic!("unexpected: {other:?}"),
         }
-        let drained = s.respond(Request::TryRecvA2AResult).await;
+        let drained = s.op_respond(Request::TryRecvA2AResult).await;
         assert!(
             matches!(drained, Response::A2AResultOpt { result: None }),
             "rejected result must not enqueue: {drained:?}"
@@ -1382,7 +1489,7 @@ required = {caps:?}
 
         // Defender-visible: the rejection lands in the audit log even
         // though no capability check happened upstream of the lookup.
-        match s.respond(Request::RecentAudit { limit: 10 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
             Response::AuditEvents { events } => {
                 let logged = events.iter().find_map(|e| match &e.kind {
                     AuditKind::A2AResultRejected { task_id, reason } => {
@@ -1401,43 +1508,187 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_respond_rejects_when_sender_capability_missing() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task();
-        s.respond(Request::GrantCapability {
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,
             expires_at: None,
         })
         .await;
-        s.respond(Request::SendA2ATask { task: task.clone() }).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
 
         // Task is now known; respond cap is still missing.
         let result =
             covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
-        let resp = s.respond(Request::PostA2AResult { result }).await;
+        let resp = s.op_respond(Request::PostA2AResult { result }).await;
         match resp {
             Response::Error { message } => {
                 assert!(message.contains("requires capability"));
-                assert!(message.contains("a2a.respond.orch@local"));
+                assert!(message.contains(&format!("a2a.respond.{}", task.sender.display)));
             }
             other => panic!("unexpected: {other:?}"),
         }
     }
 
     #[tokio::test]
+    async fn a2a_send_rejects_when_sender_does_not_match_peer() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+        );
+        // Authenticated peer is `user@local`, but the task claims to be from
+        // `evil@local`. Even with the send cap granted, the spoof check fires
+        // first and the task never reaches the mailbox.
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.research@local".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: covenant_types::AgentId::new("evil@local", [9u8; 32]),
+            recipient: covenant_types::AgentId::new("research@local", [0u8; 32]),
+            intent_text: "stolen identity".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("does not match"));
+                assert!(message.contains("evil@local"));
+                assert!(message.contains("user@local"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: None }),
+            "spoofed task must not enqueue: {drained:?}"
+        );
+        let events = audit.recent(20).await.unwrap();
+        let mismatch = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::A2ASenderMismatch { .. }))
+            .expect("expected an A2ASenderMismatch audit event");
+        match &mismatch.kind {
+            AuditKind::A2ASenderMismatch {
+                peer_display,
+                claimed_sender_display,
+            } => {
+                assert_eq!(peer_display, "user@local");
+                assert_eq!(claimed_sender_display, "evil@local");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_rejects_when_peer_is_not_subject() {
+        let s = server_with(vec![], "");
+        // Operator (= s.identity) grants themselves a cap. The capability's
+        // subject pubkey is the operator's. A different peer asking to
+        // revoke that signature must be rejected even though the signature
+        // is publicly visible via `/capabilities/recent`.
+        let granted = s
+            .op_respond(Request::GrantCapability {
+                action: "tool.web_search".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        let sig_b58 = match granted {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let stranger = AgentId::new("stranger@local", [7u8; 32]);
+        let resp = s
+            .respond(
+                Request::RevokeCapability {
+                    signature_b58: sig_b58.clone(),
+                },
+                &stranger,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("does not match")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        // Cap is still live: operator can still revoke it.
+        let owner = s
+            .op_respond(Request::RevokeCapability {
+                signature_b58: sig_b58,
+            })
+            .await;
+        match owner {
+            Response::CapabilityRevoked { removed, .. } => assert!(removed),
+            other => panic!("expected CapabilityRevoked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_failure_records_audit_event() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+        );
+        s.record_auth_failure("ipc", "first frame must be Authenticate")
+            .await;
+        s.record_auth_failure("http", "missing Authorization header")
+            .await;
+        let events = audit.recent(10).await.unwrap();
+        let mut transports: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                AuditKind::AuthenticationFailed { transport, .. } => Some(transport.as_str()),
+                _ => None,
+            })
+            .collect();
+        transports.sort();
+        assert_eq!(transports, vec!["http", "ipc"]);
+    }
+
+    #[tokio::test]
     async fn recent_audit_returns_events_in_order() {
         let s = server_with(vec![], "");
-        s.respond(Request::GrantCapability {
+        s.op_respond(Request::GrantCapability {
             action: "tool.call.echo".into(),
             scope: None,
             expires_at: None,
         })
         .await;
-        s.respond(Request::CallTool {
+        s.op_respond(Request::CallTool {
             name: "echo".into(),
             arguments: serde_json::json!({ "text": "hi" }),
         })
         .await;
-        let resp = s.respond(Request::RecentAudit { limit: 10 }).await;
+        let resp = s.op_respond(Request::RecentAudit { limit: 10 }).await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(
@@ -1462,7 +1713,7 @@ required = {caps:?}
         let ignore = IgnoreSet::parse("**/*.pem\n");
         let s = server_with_ignore(vec![], "echo", ignore);
         let resp = s
-            .respond(Request::IgnoreCheck {
+            .op_respond(Request::IgnoreCheck {
                 text: "load /etc/ssl/server.pem please".into(),
             })
             .await;

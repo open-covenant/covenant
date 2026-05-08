@@ -3,7 +3,7 @@
 //! response shape end-to-end. Complements the unix-socket
 //! `tests/end_to_end.rs`.
 
-use covenant_audit::InMemoryAuditLog;
+use covenant_audit::{AuditLog, InMemoryAuditLog};
 use covenant_identity::LocalIdentity;
 use covenant_llm::MockEmbedder;
 use covenant_manifest::Manifest;
@@ -35,7 +35,14 @@ required = ["tool.web_search"]
     AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
 }
 
-async fn spawn_test_server() -> (String, String, tokio::task::JoinHandle<()>) {
+struct TestServer {
+    base: String,
+    token: String,
+    audit: Arc<InMemoryAuditLog>,
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+async fn spawn_test_server() -> TestServer {
     let identity = Arc::new(LocalIdentity::generate("user@local"));
     let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
         Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
@@ -49,12 +56,13 @@ async fn spawn_test_server() -> (String, String, tokio::task::JoinHandle<()>) {
         })
         .await
         .unwrap();
+    let audit = Arc::new(InMemoryAuditLog::new());
     let server = Server::new(
         Arc::new(Router::from_cards(vec![stub_card()])),
         Arc::new(MockRunner::new("mocked summary")),
         Arc::new(InMemoryStore::new()),
         Arc::new(InMemorySettlement::new()),
-        Arc::new(InMemoryAuditLog::new()),
+        audit.clone(),
         Arc::new(InMemoryCapabilityStore::new()),
         Arc::new(MockEmbedder::new(64)),
         identity,
@@ -68,17 +76,22 @@ async fn spawn_test_server() -> (String, String, tokio::task::JoinHandle<()>) {
     let app = router(HttpState { server });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move {
+    let _handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (format!("http://{addr}"), token_b58, h)
+    TestServer {
+        base: format!("http://{addr}"),
+        token: token_b58,
+        audit,
+        _handle,
+    }
 }
 
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
-    let (base, _token, _h) = spawn_test_server().await;
+    let s = spawn_test_server().await;
     // /health is the one route that does not require Authorization.
-    let r = reqwest::get(format!("{base}/health")).await.unwrap();
+    let r = reqwest::get(format!("{}/health", s.base)).await.unwrap();
     assert_eq!(r.status(), 200);
     let body: serde_json::Value = r.json().await.unwrap();
     assert_eq!(body["status"], "ok");
@@ -86,17 +99,17 @@ async fn health_endpoint_returns_ok() {
 
 #[tokio::test]
 async fn protected_route_rejects_without_bearer() {
-    let (base, _token, _h) = spawn_test_server().await;
-    let r = reqwest::get(format!("{base}/tools")).await.unwrap();
+    let s = spawn_test_server().await;
+    let r = reqwest::get(format!("{}/tools", s.base)).await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
 #[tokio::test]
 async fn protected_route_rejects_with_unknown_token() {
-    let (base, _token, _h) = spawn_test_server().await;
+    let s = spawn_test_server().await;
     let stray = covenant_peer_auth::PeerToken::generate().to_b58();
     let r = reqwest::Client::new()
-        .get(format!("{base}/tools"))
+        .get(format!("{}/tools", s.base))
         .bearer_auth(&stray)
         .send()
         .await
@@ -105,8 +118,46 @@ async fn protected_route_rejects_with_unknown_token() {
 }
 
 #[tokio::test]
+async fn auth_failure_lands_in_audit_log() {
+    let s = spawn_test_server().await;
+    // Three different failure modes — three audit rows.
+    let _ = reqwest::get(format!("{}/tools", s.base)).await.unwrap();
+    let _ = reqwest::Client::new()
+        .get(format!("{}/tools", s.base))
+        .bearer_auth(covenant_peer_auth::PeerToken::generate().to_b58())
+        .send()
+        .await
+        .unwrap();
+    let _ = reqwest::Client::new()
+        .get(format!("{}/tools", s.base))
+        .header(reqwest::header::AUTHORIZATION, "Bearer not-base58!")
+        .send()
+        .await
+        .unwrap();
+    let events = s.audit.recent(20).await.unwrap();
+    let failures: Vec<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            covenant_audit::AuditKind::AuthenticationFailed { transport, reason } => {
+                assert_eq!(transport, "http");
+                Some(reason.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        failures.len(),
+        3,
+        "expected three auth failures: {failures:?}"
+    );
+    assert!(failures.iter().any(|r| r.contains("missing")));
+    assert!(failures.iter().any(|r| r.contains("unknown")));
+    assert!(failures.iter().any(|r| r.contains("malformed")));
+}
+
+#[tokio::test]
 async fn intent_rejects_when_capabilities_missing() {
-    let (base, token, _h) = spawn_test_server().await;
+    let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::AUTHORIZATION,
@@ -134,7 +185,7 @@ async fn intent_rejects_when_capabilities_missing() {
 
 #[tokio::test]
 async fn intent_round_trip_after_grant() {
-    let (base, token, _h) = spawn_test_server().await;
+    let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::AUTHORIZATION,
@@ -244,7 +295,7 @@ async fn intent_round_trip_after_grant() {
 
 #[tokio::test]
 async fn tools_list_and_call_round_trip() {
-    let (base, token, _h) = spawn_test_server().await;
+    let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::AUTHORIZATION,

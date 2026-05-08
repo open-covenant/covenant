@@ -7,7 +7,7 @@
 //!   covenant memory search <query>
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>)
 //!   covenant capabilities recent [--limit N]
-//!   covenant capabilities grant <action>
+//!   covenant capabilities grant <action>          (auto-expands `a2a.{send,recv,respond}.<pubkey-prefix>` to full b58)
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N]
@@ -27,6 +27,7 @@
 
 use anyhow::{bail, Context, Result};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_peer_auth::PeerSummary;
 use covenant_types::MemoryTier;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
@@ -351,6 +352,39 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
+                    let action = match peer_prefix_to_lookup(&action) {
+                        Some(prefix) => {
+                            write_frame(
+                                &mut stream,
+                                &Request::ListPeers {
+                                    limit: PEER_LOOKUP_LIMIT,
+                                    pubkey_prefix: Some(prefix.to_string()),
+                                },
+                            )
+                            .await?;
+                            let peers = match read_frame::<_, Response>(&mut stream).await? {
+                                Response::PeerList { peers, .. } => peers,
+                                Response::Error { message } => {
+                                    bail!("daemon error during peer lookup: {message}")
+                                }
+                                other => bail!(
+                                    "unexpected response to ListPeers during grant expansion: {other:?}"
+                                ),
+                            };
+                            match expand_a2a_action(&action, &peers) {
+                                Ok(ExpandOutcome::Unchanged) => action,
+                                Ok(ExpandOutcome::Rewritten { full, .. }) => {
+                                    eprintln!("expanding {prefix} → {full}");
+                                    full
+                                }
+                                Err(err) => {
+                                    print_expand_error(&err);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        None => action,
+                    };
                     write_frame(
                         &mut stream,
                         &Request::GrantCapability {
@@ -926,4 +960,355 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+const PEER_LOOKUP_LIMIT: usize = 16;
+const PEER_SCOPED_PREFIXES: &[&str] = &["a2a.send.", "a2a.recv.", "a2a.respond."];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpandOutcome {
+    Unchanged,
+    Rewritten {
+        full: String,
+        peer_pubkey_b58: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpandError {
+    NoMatch {
+        tail: String,
+    },
+    Ambiguous {
+        tail: String,
+        matches: Vec<PeerSummary>,
+    },
+    RevokedOnly {
+        tail: String,
+        matches: Vec<PeerSummary>,
+    },
+}
+
+fn peer_prefix_to_lookup(action: &str) -> Option<&str> {
+    for prefix in PEER_SCOPED_PREFIXES {
+        if let Some(tail) = action.strip_prefix(prefix) {
+            if tail.is_empty() || tail.contains('.') || tail.contains('@') {
+                return None;
+            }
+            return Some(tail);
+        }
+    }
+    None
+}
+
+fn expand_a2a_action(
+    action: &str,
+    peers: &[PeerSummary],
+) -> std::result::Result<ExpandOutcome, ExpandError> {
+    let (prefix, tail) = match PEER_SCOPED_PREFIXES
+        .iter()
+        .find_map(|p| action.strip_prefix(p).map(|t| (p.trim_end_matches('.'), t)))
+    {
+        Some(pair) => pair,
+        None => return Ok(ExpandOutcome::Unchanged),
+    };
+    if tail.is_empty() || tail.contains('.') || tail.contains('@') {
+        return Ok(ExpandOutcome::Unchanged);
+    }
+
+    let mut live: Vec<PeerSummary> = Vec::new();
+    let mut revoked: Vec<PeerSummary> = Vec::new();
+    for p in peers {
+        if !p.agent_id.pubkey_base58().starts_with(tail) {
+            continue;
+        }
+        if p.revoked_at.is_some() {
+            revoked.push(p.clone());
+        } else {
+            live.push(p.clone());
+        }
+    }
+
+    match live.len() {
+        1 => {
+            let peer = &live[0];
+            let pubkey = peer.agent_id.pubkey_base58();
+            let full = format!("{prefix}.{pubkey}");
+            Ok(ExpandOutcome::Rewritten {
+                full,
+                peer_pubkey_b58: pubkey,
+            })
+        }
+        0 if revoked.is_empty() => Err(ExpandError::NoMatch {
+            tail: tail.to_string(),
+        }),
+        0 => Err(ExpandError::RevokedOnly {
+            tail: tail.to_string(),
+            matches: revoked,
+        }),
+        _ => Err(ExpandError::Ambiguous {
+            tail: tail.to_string(),
+            matches: live,
+        }),
+    }
+}
+
+fn print_expand_error(err: &ExpandError) {
+    match err {
+        ExpandError::NoMatch { tail } => {
+            eprintln!("no peer matched pubkey-prefix `{tail}`");
+            eprintln!(
+                "  use `covenant peers list --prefix <pubkey-b58-prefix>` to see registered peers"
+            );
+        }
+        ExpandError::Ambiguous { tail, matches } => {
+            eprintln!(
+                "pubkey-prefix `{tail}` matched {n} live peers — narrow the prefix:",
+                n = matches.len()
+            );
+            for p in matches {
+                eprintln!(
+                    "  {display}\t{pubkey}\tregistered@{registered}",
+                    display = p.agent_id.display,
+                    pubkey = p.agent_id.pubkey_base58(),
+                    registered = p.registered_at,
+                );
+            }
+        }
+        ExpandError::RevokedOnly { tail, matches } => {
+            eprintln!(
+                "pubkey-prefix `{tail}` matched only revoked peers — granting against a revoked peer is meaningless:"
+            );
+            for p in matches {
+                eprintln!(
+                    "  {display}\t{pubkey}\trevoked@{revoked}",
+                    display = p.agent_id.display,
+                    pubkey = p.agent_id.pubkey_base58(),
+                    revoked = p.revoked_at.unwrap_or(0),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use covenant_types::AgentId;
+
+    fn make_peer(seed: u8, display: &str, revoked: bool) -> PeerSummary {
+        let mut pk = [0u8; 32];
+        pk[0] = seed;
+        PeerSummary {
+            agent_id: AgentId::new(display, pk),
+            token_prefix: "tokenp".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: if revoked {
+                Some(1_700_000_001_000)
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn peer_prefix_to_lookup_returns_none_for_non_a2a_actions() {
+        assert_eq!(peer_prefix_to_lookup("tool.call.foo"), None);
+        assert_eq!(peer_prefix_to_lookup("audit.purge"), None);
+        assert_eq!(peer_prefix_to_lookup("a2a.compact"), None);
+    }
+
+    #[test]
+    fn peer_prefix_to_lookup_returns_none_for_display_form() {
+        assert_eq!(peer_prefix_to_lookup("a2a.send.research@local"), None);
+        assert_eq!(peer_prefix_to_lookup("a2a.recv.orch@local"), None);
+        assert_eq!(peer_prefix_to_lookup("a2a.respond.user@host"), None);
+    }
+
+    #[test]
+    fn peer_prefix_to_lookup_returns_some_for_pubkey_form() {
+        assert_eq!(peer_prefix_to_lookup("a2a.send.abc"), Some("abc"));
+        assert_eq!(peer_prefix_to_lookup("a2a.recv.xyzPQ"), Some("xyzPQ"));
+        assert_eq!(peer_prefix_to_lookup("a2a.respond.1"), Some("1"));
+    }
+
+    #[test]
+    fn peer_prefix_to_lookup_returns_none_for_empty_tail() {
+        assert_eq!(peer_prefix_to_lookup("a2a.send."), None);
+        assert_eq!(peer_prefix_to_lookup("a2a.respond."), None);
+    }
+
+    #[test]
+    fn expand_unchanged_when_no_a2a_prefix() {
+        let peers = vec![make_peer(7, "x@y", false)];
+        assert_eq!(
+            expand_a2a_action("tool.call.foo", &peers),
+            Ok(ExpandOutcome::Unchanged)
+        );
+    }
+
+    #[test]
+    fn expand_unchanged_when_tail_contains_at_sign() {
+        let peers = vec![make_peer(7, "x@y", false)];
+        assert_eq!(
+            expand_a2a_action("a2a.send.research@local", &peers),
+            Ok(ExpandOutcome::Unchanged)
+        );
+    }
+
+    #[test]
+    fn expand_unchanged_for_a2a_compact() {
+        assert_eq!(
+            expand_a2a_action("a2a.compact", &[]),
+            Ok(ExpandOutcome::Unchanged)
+        );
+    }
+
+    #[test]
+    fn expand_rewrites_unique_live_match_for_send() {
+        let peer = make_peer(7, "alice@host", false);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let prefix: String = pubkey.chars().take(3).collect();
+        let action = format!("a2a.send.{prefix}");
+        let outcome = expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap();
+        assert_eq!(
+            outcome,
+            ExpandOutcome::Rewritten {
+                full: format!("a2a.send.{pubkey}"),
+                peer_pubkey_b58: pubkey,
+            }
+        );
+    }
+
+    #[test]
+    fn expand_rewrites_unique_live_match_for_recv() {
+        let peer = make_peer(11, "bob@host", false);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let prefix: String = pubkey.chars().take(2).collect();
+        let action = format!("a2a.recv.{prefix}");
+        let ExpandOutcome::Rewritten { full, .. } =
+            expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap()
+        else {
+            panic!("expected Rewritten");
+        };
+        assert_eq!(full, format!("a2a.recv.{pubkey}"));
+    }
+
+    #[test]
+    fn expand_rewrites_unique_live_match_for_respond() {
+        let peer = make_peer(13, "carol@host", false);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let prefix: String = pubkey.chars().take(4).collect();
+        let action = format!("a2a.respond.{prefix}");
+        let ExpandOutcome::Rewritten { full, .. } =
+            expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap()
+        else {
+            panic!("expected Rewritten");
+        };
+        assert_eq!(full, format!("a2a.respond.{pubkey}"));
+    }
+
+    #[test]
+    fn expand_errors_no_match_when_zero_peers() {
+        let err = expand_a2a_action("a2a.send.abc", &[]).unwrap_err();
+        assert_eq!(
+            err,
+            ExpandError::NoMatch {
+                tail: "abc".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn expand_errors_ambiguous_when_multiple_live_matches() {
+        // Two peers with leading-zero-byte pubkeys differ only in the trailing
+        // byte; bs58 maps each leading zero byte to '1', so both encode to
+        // strings starting with many '1's. Tail "1" matches both → Ambiguous.
+        let mut pk1 = [0u8; 32];
+        pk1[31] = 1;
+        let mut pk2 = [0u8; 32];
+        pk2[31] = 2;
+        let p1 = PeerSummary {
+            agent_id: AgentId::new("alice@host", pk1),
+            token_prefix: "tokenp".into(),
+            registered_at: 0,
+            revoked_at: None,
+        };
+        let p2 = PeerSummary {
+            agent_id: AgentId::new("bob@host", pk2),
+            token_prefix: "tokenp".into(),
+            registered_at: 0,
+            revoked_at: None,
+        };
+        assert!(p1.agent_id.pubkey_base58().starts_with('1'));
+        assert!(p2.agent_id.pubkey_base58().starts_with('1'));
+        let err = expand_a2a_action("a2a.send.1", &[p1, p2]).unwrap_err();
+        match err {
+            ExpandError::Ambiguous { matches, tail } => {
+                assert_eq!(tail, "1");
+                assert_eq!(matches.len(), 2);
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expand_errors_revoked_only_when_unique_match_is_revoked() {
+        let peer = make_peer(17, "dave@host", true);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let prefix: String = pubkey.chars().take(3).collect();
+        let action = format!("a2a.send.{prefix}");
+        let err = expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap_err();
+        match err {
+            ExpandError::RevokedOnly { matches, .. } => {
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].agent_id.pubkey_base58(), pubkey);
+            }
+            other => panic!("expected RevokedOnly, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expand_treats_full_44_char_b58_as_lookup_and_succeeds_when_peer_present() {
+        let peer = make_peer(23, "eve@host", false);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let action = format!("a2a.send.{pubkey}");
+        let outcome = expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap();
+        assert_eq!(
+            outcome,
+            ExpandOutcome::Rewritten {
+                full: format!("a2a.send.{pubkey}"),
+                peer_pubkey_b58: pubkey,
+            }
+        );
+    }
+
+    #[test]
+    fn expand_full_length_b58_with_no_match_errors() {
+        let registered = make_peer(29, "frank@host", false);
+        let phantom = make_peer(31, "ghost@host", false);
+        let phantom_pubkey = phantom.agent_id.pubkey_base58();
+        let action = format!("a2a.send.{phantom_pubkey}");
+        let err = expand_a2a_action(&action, &[registered]).unwrap_err();
+        assert_eq!(
+            err,
+            ExpandError::NoMatch {
+                tail: phantom_pubkey
+            }
+        );
+    }
+
+    #[test]
+    fn expand_does_not_carry_token_prefix_in_outcome() {
+        let peer = make_peer(37, "hank@host", false);
+        let pubkey = peer.agent_id.pubkey_base58();
+        let prefix: String = pubkey.chars().take(3).collect();
+        let action = format!("a2a.send.{prefix}");
+        let outcome = expand_a2a_action(&action, std::slice::from_ref(&peer)).unwrap();
+        let dump = format!("{outcome:?}");
+        assert!(
+            !dump.contains(&peer.token_prefix),
+            "Rewritten outcome must not carry token_prefix: {dump}"
+        );
+    }
 }

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Repo-local pre-commit hook. Two responsibilities:
+#
+#   1. Enforce one-autonomous-session-per-checkout via session-id lock.
+#   2. Chain to the operator's global covenant-hooks/pre-commit so the
+#      existing identity / leakage checks still fire.
+#
+# Activated by `git config core.hooksPath hooks` at the repo root.
+# scripts/handover.sh calls that config command idempotently at every
+# spawn, so a fresh clone gets the hook the first time the autonomous
+# loop runs handover.
+
+set -euo pipefail
+
+# --- Session lock ---
+#
+# When COVENANT_SESSION_ID is set in env (autonomous session spawned by
+# scripts/handover.sh), it must match `.covenant-session-id` at the repo
+# root. Mismatch means a parallel session has taken over — refuse the
+# commit and ask the older session to exit.
+#
+# When COVENANT_SESSION_ID is unset, treat the commit as operator-driven
+# (manual cleanup, dependabot tweak, etc.) and skip the check entirely.
+
+if [ -n "${COVENANT_SESSION_ID:-}" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  LOCK_PATH="$REPO_ROOT/.covenant-session-id"
+
+  if [ ! -f "$LOCK_PATH" ]; then
+    echo "covenant pre-commit: COVENANT_SESSION_ID set but $LOCK_PATH does not exist." >&2
+    echo "  Run scripts/bootstrap-session.sh once to write the lock," >&2
+    echo "  or unset COVENANT_SESSION_ID for an operator-mode commit." >&2
+    exit 1
+  fi
+
+  ACTUAL="$(tr -d '[:space:]' <"$LOCK_PATH")"
+  if [ "${COVENANT_SESSION_ID}" != "$ACTUAL" ]; then
+    echo "covenant pre-commit: session-id mismatch — another session has taken over." >&2
+    echo "  this session: ${COVENANT_SESSION_ID}" >&2
+    echo "  active session: $ACTUAL" >&2
+    echo "  Exit and let the active session continue (one-session-per-checkout rule)." >&2
+    exit 1
+  fi
+fi
+
+# --- Chain to global covenant-hooks ---
+#
+# `core.hooksPath` is a hard override of the default `.git/hooks/` dir,
+# which means setting it for this repo silently disables the operator's
+# global pre-commit at ~/.config/git/covenant-hooks/pre-commit (author
+# email, $USER/$HOME/hostname leakage, etc.). Re-invoke that hook here
+# so its checks still apply.
+
+GLOBAL_HOOK="$HOME/.config/git/covenant-hooks/pre-commit"
+if [ -x "$GLOBAL_HOOK" ]; then
+  exec "$GLOBAL_HOOK" "$@"
+fi
+
+exit 0

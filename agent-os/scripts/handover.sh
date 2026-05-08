@@ -41,6 +41,40 @@ if ! command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+# --- Session lock bootstrap ---
+#
+# Generate a fresh session-id, write it to <repo-root>/.covenant-session-id,
+# and pass it to the spawned Claude via $COVENANT_SESSION_ID. The repo's
+# pre-commit hook (hooks/pre-commit) reads both the env var and the file
+# and refuses commits when they don't match — so an older session that
+# stays alive (operator forgot to close the previous Terminal window)
+# cannot land work after this one starts.
+#
+# Also (idempotently) sets `core.hooksPath = hooks` on the repo so the
+# tracked hook actually fires. Operator action: zero. The hook chains to
+# any existing global covenant-hooks/pre-commit so the identity / leakage
+# checks still run.
+
+REPO_ROOT="$(git -C "$DIR_ABS" rev-parse --show-toplevel 2>/dev/null || echo "$DIR_ABS")"
+LOCK_PATH="$REPO_ROOT/.covenant-session-id"
+
+if command -v uuidgen >/dev/null 2>&1; then
+  SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+else
+  # Fallback: 32 hex chars from /dev/urandom. Same entropy class as
+  # uuidgen for our purposes (it's a single-process opaque token).
+  SESSION_ID="$(head -c 16 /dev/urandom | xxd -p)"
+fi
+printf '%s\n' "$SESSION_ID" >"$LOCK_PATH"
+chmod 0600 "$LOCK_PATH" 2>/dev/null || true
+
+if [ -d "$REPO_ROOT/hooks" ]; then
+  current_hooks_path="$(git -C "$REPO_ROOT" config --get core.hooksPath 2>/dev/null || true)"
+  if [ "$current_hooks_path" != "hooks" ]; then
+    git -C "$REPO_ROOT" config core.hooksPath hooks
+  fi
+fi
+
 PROMPT='Read HANDOVER.md, then WORKFLOW.md, then PROJECT_STATE.md, then the tail of SPRINT_LOG.md (the latest "Resume from here" block). Continue the autonomous sprint loop from there. The previous session paused itself for a clean context; pick up exactly where it left off, with the same rules. Do not stop unless a true blocker appears.'
 
 # Build a temporary launch script. Putting the multi-line shell command in a
@@ -52,6 +86,7 @@ cat >"$LAUNCH" <<EOF
 # Auto-removed after launch; the new Claude session captures the handover
 # from HANDOVER.md, not this file.
 cd $(printf '%q' "$DIR_ABS")
+export COVENANT_SESSION_ID=$(printf '%q' "$SESSION_ID")
 exec ${CLAUDE_CMD} $(printf '%q' "$PROMPT")
 EOF
 
@@ -99,3 +134,5 @@ esac
 
 echo "handover.sh: launched ${CLAUDE_CMD} in a new terminal at $DIR_ABS"
 echo "  → next session will read HANDOVER.md and resume from SPRINT_LOG.md's tail"
+echo "  → session-id: $SESSION_ID (written to $LOCK_PATH)"
+echo "  → any older session attempting a commit will be refused by hooks/pre-commit"

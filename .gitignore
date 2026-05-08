@@ -29,6 +29,10 @@ AGENTS.md
 backlog/
 /domain-infrastructure/
 
+# Per-clone session-lock written by scripts/handover.sh and verified by
+# hooks/pre-commit to enforce one-autonomous-session-per-checkout.
+.covenant-session-id
+
 playwright-report/
 test-results/
 

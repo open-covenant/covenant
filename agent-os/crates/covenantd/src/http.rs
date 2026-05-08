@@ -51,15 +51,26 @@ const DEFAULT_CORS_ORIGIN: &str = "http://localhost:3000";
 /// [`DEFAULT_CORS_ORIGIN`]. Invalid origins are skipped — origins that
 /// fail to parse as `HeaderValue`s would never be sent by a real
 /// browser anyway, so erroring would just trade an ignored config typo
-/// for a daemon that fails to start.
+/// for a daemon that fails to start. If *every* entry fails to parse
+/// (e.g. `COVENANT_HTTP_ORIGINS=garbage,invalid`), fall back to the
+/// default rather than constructing an empty allow-list — an empty
+/// list with `allow_credentials(true)` would reject every cross-origin
+/// request, which is worse than the typo's consequence.
 fn cors_origins_from_env() -> Vec<HeaderValue> {
     match std::env::var("COVENANT_HTTP_ORIGINS") {
-        Ok(s) if !s.trim().is_empty() => s
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| HeaderValue::from_str(s).ok())
-            .collect(),
+        Ok(s) if !s.trim().is_empty() => {
+            let parsed: Vec<HeaderValue> = s
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| HeaderValue::from_str(s).ok())
+                .collect();
+            if parsed.is_empty() {
+                vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)]
+            } else {
+                parsed
+            }
+        }
         _ => vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)],
     }
 }
@@ -577,5 +588,81 @@ impl IntoResponse for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         Self(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_env<F: FnOnce()>(key: &str, value: Option<&str>, f: F) {
+        // Env-var manipulation is process-global; tests that touch it
+        // need to be serialised. We don't run multiple of these in
+        // parallel, but we still restore the prior value defensively.
+        let prior = std::env::var(key).ok();
+        match value {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        f();
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn cors_origins_default_when_env_unset() {
+        with_env("COVENANT_HTTP_ORIGINS", None, || {
+            let v = cors_origins_from_env();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
+        });
+    }
+
+    #[test]
+    fn cors_origins_parses_comma_separated() {
+        with_env(
+            "COVENANT_HTTP_ORIGINS",
+            Some("http://localhost:3000,https://app.example.com"),
+            || {
+                let v = cors_origins_from_env();
+                assert_eq!(v.len(), 2);
+                assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
+                assert_eq!(v[1].to_str().unwrap(), "https://app.example.com");
+            },
+        );
+    }
+
+    #[test]
+    fn cors_origins_falls_back_to_default_when_all_entries_invalid() {
+        // Sprint 56 LOW carry-forward: previously, an env var whose
+        // entries all fail `HeaderValue::from_str` would produce an
+        // empty allow-list; combined with `allow_credentials(true)`
+        // this rejects every cross-origin request. Falling back to the
+        // default keeps the daemon functional under operator typos.
+        with_env(
+            "COVENANT_HTTP_ORIGINS",
+            // \n is rejected by HeaderValue::from_str.
+            Some("bad\norigin,also\rbad"),
+            || {
+                let v = cors_origins_from_env();
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
+            },
+        );
+    }
+
+    #[test]
+    fn cors_origins_skips_invalid_but_keeps_valid_entries() {
+        with_env(
+            "COVENANT_HTTP_ORIGINS",
+            Some("http://localhost:3000,bad\norigin"),
+            || {
+                let v = cors_origins_from_env();
+                assert_eq!(v.len(), 1, "the invalid entry is dropped");
+                assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
+            },
+        );
     }
 }

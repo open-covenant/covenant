@@ -226,6 +226,7 @@ impl Server {
             Request::TryRecvA2AResult => self.try_recv_a2a_result(peer).await,
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
+            Request::CompactA2A => self.compact_a2a(peer).await,
         }
     }
 
@@ -358,6 +359,26 @@ impl Server {
     async fn recent_a2a_results(&self, limit: usize) -> Response {
         match self.mailbox.recent_results(limit).await {
             Ok(results) => Response::A2AResults { results },
+            Err(e) => Response::Error {
+                message: format!("a2a: {e}"),
+            },
+        }
+    }
+
+    async fn compact_a2a(&self, peer: &AgentId) -> Response {
+        let required = vec!["a2a.compact".to_string()];
+        let check = self
+            .check_capabilities("a2a:compact".into(), required, peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "a2a compact requires capability \"a2a.compact\". \
+                     Grant it with `covenant capabilities grant a2a.compact`."
+                    .into(),
+            };
+        }
+        match self.mailbox.compact().await {
+            Ok(dropped) => Response::A2ACompacted { dropped },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
             },
@@ -1723,6 +1744,38 @@ required = {caps:?}
         match resp {
             Response::CapabilitiesPurged { .. } => {}
             other => panic!("expected CapabilitiesPurged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compact_a2a_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let resp = s.op_respond(Request::CompactA2A).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("a2a.compact"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compact_a2a_passes_after_grant() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.compact".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::CompactA2A).await;
+        match resp {
+            Response::A2ACompacted { dropped } => {
+                // No tasks to compact in a fresh in-memory mailbox.
+                assert_eq!(dropped, 0);
+            }
+            other => panic!("expected A2ACompacted, got {other:?}"),
         }
     }
 

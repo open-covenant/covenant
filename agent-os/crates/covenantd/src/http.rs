@@ -52,6 +52,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/a2a/results", post(post_a2a_result))
         .route("/a2a/results/next", get(try_recv_a2a_result))
         .route("/a2a/results/recent", get(recent_a2a_results))
+        .route("/a2a/compact", post(compact_a2a))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -451,6 +452,13 @@ async fn recent_a2a_results(
             )
             .await,
     ))
+}
+
+async fn compact_a2a(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(s.server.respond(Request::CompactA2A, &peer).await))
 }
 
 #[derive(Deserialize)]

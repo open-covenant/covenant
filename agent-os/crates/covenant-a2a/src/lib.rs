@@ -120,6 +120,21 @@ pub trait Mailbox: Send + Sync {
     /// `PostA2AResult` on the sender-scoped `a2a.respond.<sender>`
     /// capability.
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError>;
+
+    /// Drop dead state from the underlying event log so the on-disk
+    /// representation stays bounded over a long-running daemon. Returns
+    /// the number of log events removed (zero if nothing was eligible
+    /// or the implementation has no on-disk log).
+    ///
+    /// "Dead state" is operator-driven and conservatively defined: a
+    /// `task_id` is droppable iff (a) it has been received (`TaskRecv`
+    /// in the log) AND (b) at least one result has been posted for it
+    /// AND (c) every posted result has a matching `ResultRecv`. Any
+    /// task still queued, drained-but-no-result-yet, or with results
+    /// that have not been drained stays in the log. Fire-and-forget
+    /// tasks (no result ever posted) are never droppable in v0 — a
+    /// future timestamp-aware compaction mode would close that gap.
+    async fn compact(&self) -> Result<u64, A2AError>;
 }
 
 /// In-process FIFO mailbox. Useful for tests and for orchestrator agents
@@ -231,6 +246,14 @@ impl Mailbox for InMemoryMailbox {
 
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
         Ok(self.senders.lock().unwrap().get(&task_id).cloned())
+    }
+
+    async fn compact(&self) -> Result<u64, A2AError> {
+        // No on-disk event log to compact. The senders map could in
+        // principle be pruned for fully-resolved tasks, but this impl
+        // is for tests and short-lived in-process orchestrators where
+        // the map's growth is bounded by the test's lifetime.
+        Ok(0)
     }
 }
 
@@ -478,6 +501,108 @@ impl Mailbox for JsonlMailbox {
 
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
         Ok(self.state.lock().unwrap().senders.get(&task_id).cloned())
+    }
+
+    async fn compact(&self) -> Result<u64, A2AError> {
+        // Hold the file_lock across read-filter-rewrite so concurrent
+        // send/recv can't race with the rewrite. Atomicity comes from
+        // tempfile + rename.
+        let _g = self.file_lock.lock().await;
+
+        let raw = match fs::read_to_string(&self.path).await {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let events: Vec<MailboxEvent> = raw
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let droppable = compute_droppable_task_ids(&events);
+        if droppable.is_empty() {
+            return Ok(0);
+        }
+        let kept: Vec<&MailboxEvent> = events
+            .iter()
+            .filter(|ev| !event_belongs_to_droppable(ev, &droppable))
+            .collect();
+        let dropped = (events.len() - kept.len()) as u64;
+        if dropped == 0 {
+            return Ok(0);
+        }
+
+        let tmp_path = self.path.with_extension("jsonl.tmp");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        for ev in &kept {
+            let line = serde_json::to_string(ev)?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        drop(f);
+        fs::rename(&tmp_path, &self.path).await?;
+
+        // Mirror the on-disk drop into in-memory state so the senders
+        // map stays consistent without a reopen. Replay-on-open is the
+        // ground truth; this update is purely a perf shortcut.
+        let mut s = self.state.lock().unwrap();
+        for tid in &droppable {
+            s.senders.remove(tid);
+        }
+        Ok(dropped)
+    }
+}
+
+fn compute_droppable_task_ids(events: &[MailboxEvent]) -> std::collections::HashSet<Uuid> {
+    use std::collections::{HashMap, HashSet};
+    // Per task_id: count TaskRecv, ResultPosted, ResultRecv. TaskSent
+    // is implicit from membership in `seen`.
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    let mut recv: HashSet<Uuid> = HashSet::new();
+    let mut posted: HashMap<Uuid, u64> = HashMap::new();
+    let mut drained: HashMap<Uuid, u64> = HashMap::new();
+    for ev in events {
+        match ev {
+            MailboxEvent::TaskSent { task } => {
+                seen.insert(task.id);
+            }
+            MailboxEvent::TaskRecv { task_id } => {
+                recv.insert(*task_id);
+            }
+            MailboxEvent::ResultPosted { result } => {
+                *posted.entry(result.task_id).or_insert(0) += 1;
+            }
+            MailboxEvent::ResultRecv { task_id } => {
+                *drained.entry(*task_id).or_insert(0) += 1;
+            }
+        }
+    }
+    seen.into_iter()
+        .filter(|tid| recv.contains(tid))
+        .filter(|tid| {
+            let p = posted.get(tid).copied().unwrap_or(0);
+            let d = drained.get(tid).copied().unwrap_or(0);
+            p > 0 && p == d
+        })
+        .collect()
+}
+
+fn event_belongs_to_droppable(
+    ev: &MailboxEvent,
+    droppable: &std::collections::HashSet<Uuid>,
+) -> bool {
+    match ev {
+        MailboxEvent::TaskSent { task } => droppable.contains(&task.id),
+        MailboxEvent::TaskRecv { task_id } => droppable.contains(task_id),
+        MailboxEvent::ResultPosted { result } => droppable.contains(&result.task_id),
+        MailboxEvent::ResultRecv { task_id } => droppable.contains(task_id),
     }
 }
 
@@ -874,5 +999,200 @@ mod tests {
             .await
             .unwrap();
         assert!(m.try_recv_result_for(&alice).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn in_memory_compact_returns_zero() {
+        let m = InMemoryMailbox::new();
+        m.send_task(dummy_task()).await.unwrap();
+        assert_eq!(m.compact().await.unwrap(), 0);
+    }
+
+    fn task_between(sender: AgentId, recipient: AgentId) -> A2ATask {
+        A2ATask {
+            id: Uuid::new_v4(),
+            sender,
+            recipient,
+            intent_text: "x".into(),
+            parent: None,
+            deadline_ms: None,
+        }
+    }
+
+    async fn drive_round_trip(m: &JsonlMailbox, t: &A2ATask) {
+        m.send_task(t.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&t.recipient).await.unwrap().unwrap();
+        m.send_result(A2ATaskResult::ok(t.id, vec![]))
+            .await
+            .unwrap();
+        let _ = m.try_recv_result_for(&t.sender).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_drops_fully_resolved_task_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let t = task_between(alice.clone(), bob.clone());
+        drive_round_trip(&m, &t).await;
+
+        // Pre-compact: 4 events on disk (TaskSent, TaskRecv, ResultPosted, ResultRecv).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let count = raw.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(count, 4);
+
+        let dropped = m.compact().await.unwrap();
+        assert_eq!(dropped, 4);
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.lines().find(|l| !l.is_empty()).is_none());
+
+        // Reopen — should yield empty in-memory state because every event
+        // was for the now-resolved task.
+        let m2 = JsonlMailbox::open(path).await.unwrap();
+        assert!(m2.recent_tasks(10).await.unwrap().is_empty());
+        assert!(m2.recent_results(10).await.unwrap().is_empty());
+        assert!(m2.lookup_task_sender(t.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_keeps_in_flight_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let carol = dummy_agent("carol@local");
+        // Three recipients so each task drains independently when its
+        // recipient asks for it. Otherwise `try_recv_task_for(bob)` on a
+        // shared recipient queue would always drain the oldest match.
+        let resolved = task_between(alice.clone(), bob.clone());
+        let in_flight = task_between(alice.clone(), bob.clone());
+        let no_result_yet = task_between(alice.clone(), carol.clone());
+
+        drive_round_trip(&m, &resolved).await;
+        // in_flight: send only — never drained.
+        m.send_task(in_flight.clone()).await.unwrap();
+        // no_result_yet: send + recv (different recipient so the drain
+        // doesn't fight in_flight) but no result posted yet.
+        m.send_task(no_result_yet.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&carol).await.unwrap().unwrap();
+
+        let dropped = m.compact().await.unwrap();
+        assert_eq!(
+            dropped, 4,
+            "only the four events for the resolved task drop"
+        );
+
+        // Reopen — both in-flight tasks survive in their respective
+        // states. `in_flight` is still a queued task; `no_result_yet`'s
+        // task was drained, but its sender entry is still required so
+        // a future `post_a2a_result` for it can be attributed.
+        let m2 = JsonlMailbox::open(path).await.unwrap();
+        let queued = m2.recent_tasks(10).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].id, in_flight.id);
+        assert_eq!(
+            m2.lookup_task_sender(no_result_yet.id).await.unwrap(),
+            Some(alice.clone()),
+            "drained-but-no-result task keeps its sender entry"
+        );
+        assert!(m2.lookup_task_sender(resolved.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_no_op_when_nothing_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+
+        // Two queued tasks, one drained-but-no-result task. None are
+        // fully resolved, so the compact call must be a no-op.
+        m.send_task(task_between(
+            dummy_agent("alice@local"),
+            dummy_agent("bob@local"),
+        ))
+        .await
+        .unwrap();
+        let drained = task_between(dummy_agent("alice@local"), dummy_agent("bob@local"));
+        m.send_task(drained.clone()).await.unwrap();
+        let _ = m
+            .try_recv_task_for(&drained.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let raw_before = std::fs::read_to_string(&path).unwrap();
+        let dropped = m.compact().await.unwrap();
+        assert_eq!(dropped, 0);
+        let raw_after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            raw_before, raw_after,
+            "no-op compact must not touch the file"
+        );
+        assert!(!path.with_extension("jsonl.tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_replay_yields_same_state_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let resolved = task_between(alice.clone(), bob.clone());
+        let queued = task_between(alice.clone(), bob.clone());
+
+        let snapshot_pre = {
+            let m = JsonlMailbox::open(path.clone()).await.unwrap();
+            drive_round_trip(&m, &resolved).await;
+            m.send_task(queued.clone()).await.unwrap();
+            (
+                m.recent_tasks(10).await.unwrap(),
+                m.recent_results(10).await.unwrap(),
+                m.lookup_task_sender(queued.id).await.unwrap(),
+            )
+        };
+
+        // Compact in a fresh handle so the test is realistic — the
+        // operator triggers compaction on a running daemon.
+        let m_compact = JsonlMailbox::open(path.clone()).await.unwrap();
+        m_compact.compact().await.unwrap();
+
+        // Reopen and confirm the in-memory state matches.
+        let m_post = JsonlMailbox::open(path).await.unwrap();
+        let snapshot_post = (
+            m_post.recent_tasks(10).await.unwrap(),
+            m_post.recent_results(10).await.unwrap(),
+            m_post.lookup_task_sender(queued.id).await.unwrap(),
+        );
+        assert_eq!(snapshot_pre, snapshot_post);
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_does_not_drop_results_with_unposted_tasks() {
+        // Defence-in-depth: a `ResultPosted` whose `task_id` was never
+        // `TaskSent` is a corruption signal. The compact logic uses
+        // `seen` (TaskSent membership) as the gate, so an orphaned
+        // result is not droppable — it survives and can be inspected.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+
+        let orphan_task_id = Uuid::new_v4();
+        m.send_result(A2ATaskResult::ok(orphan_task_id, vec![]))
+            .await
+            .unwrap();
+
+        let dropped = m.compact().await.unwrap();
+        assert_eq!(dropped, 0);
+
+        // Surviving event still on disk and still replays.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(&orphan_task_id.to_string()));
     }
 }

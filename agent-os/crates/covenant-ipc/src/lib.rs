@@ -121,6 +121,10 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Drop the on-disk event log lines for fully-resolved A2A tasks
+    /// (TaskSent + TaskRecv + ≥1 ResultPosted with matching ResultRecv
+    /// counts). Operator-driven; no scheduled compaction in v0.
+    CompactA2A,
 }
 
 fn default_recent_limit() -> usize {
@@ -217,6 +221,9 @@ pub enum Response {
     },
     A2AResults {
         results: Vec<A2ATaskResult>,
+    },
+    A2ACompacted {
+        dropped: u64,
     },
     Error {
         message: String,

@@ -15,6 +15,7 @@
 //!   covenant ignore check <text>
 //!   covenant tools list
 //!   covenant tools call <name> [--args <json>]
+//!   covenant a2a compact
 //! ```
 
 #![deny(unsafe_code)]
@@ -76,6 +77,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant a2a compact                  drop event-log lines for fully-resolved a2a tasks"
     );
 }
 
@@ -610,6 +614,20 @@ async fn main() -> Result<()> {
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::AuditPurged { purged } => {
                     println!("purged {purged} event(s)");
+                }
+                Response::Error { message } => bail!("daemon error: {message}"),
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
+        "a2a" => {
+            if args.len() < 2 || args[1] != "compact" {
+                eprintln!("covenant a2a: expected `compact`");
+                std::process::exit(2);
+            }
+            write_frame(&mut stream, &Request::CompactA2A).await?;
+            match read_frame::<_, Response>(&mut stream).await? {
+                Response::A2ACompacted { dropped } => {
+                    println!("dropped {dropped} a2a event(s)");
                 }
                 Response::Error { message } => bail!("daemon error: {message}"),
                 other => bail!("unexpected response: {other:?}"),

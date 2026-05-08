@@ -216,6 +216,7 @@ impl Server {
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit).await,
+            Request::PurgeAudit { before_ms } => self.purge_audit(before_ms).await,
             Request::SendA2ATask { task } => self.send_a2a_task(task, peer).await,
             Request::TryRecvA2ATask => self.try_recv_a2a_task(peer).await,
             Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
@@ -363,6 +364,15 @@ impl Server {
     async fn recent_audit(&self, limit: usize) -> Response {
         match self.audit.recent(limit).await {
             Ok(events) => Response::AuditEvents { events },
+            Err(e) => Response::Error {
+                message: format!("audit: {e}"),
+            },
+        }
+    }
+
+    async fn purge_audit(&self, before_ms: u64) -> Response {
+        match self.audit.purge_older_than(before_ms).await {
+            Ok(purged) => Response::AuditPurged { purged },
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },

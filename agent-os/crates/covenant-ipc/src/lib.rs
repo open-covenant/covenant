@@ -94,6 +94,11 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Drop audit events strictly older than `before_ms`. Operator-driven
+    /// retention; no scheduled compaction in v0.
+    PurgeAudit {
+        before_ms: u64,
+    },
     SendA2ATask {
         task: A2ATask,
     },
@@ -182,6 +187,9 @@ pub enum Response {
     },
     AuditEvents {
         events: Vec<AuditEvent>,
+    },
+    AuditPurged {
+        purged: u64,
     },
     A2ATaskQueued {
         task_id: Uuid,

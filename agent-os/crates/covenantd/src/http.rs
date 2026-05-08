@@ -44,6 +44,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/tools", get(list_tools))
         .route("/tools/call", post(call_tool))
         .route("/audit/recent", get(audit_recent))
+        .route("/audit/purge", post(audit_purge))
         .route("/a2a/tasks", post(send_a2a_task))
         .route("/a2a/tasks/next", get(try_recv_a2a_task))
         .route("/a2a/tasks/recent", get(recent_a2a_tasks))
@@ -328,6 +329,28 @@ async fn audit_recent(
             .respond(
                 Request::RecentAudit {
                     limit: q.limit.unwrap_or(20),
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Deserialize)]
+struct PurgeAuditBody {
+    before_ms: u64,
+}
+
+async fn audit_purge(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PurgeAuditBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::PurgeAudit {
+                    before_ms: b.before_ms,
                 },
                 &peer,
             )

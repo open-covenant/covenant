@@ -96,6 +96,11 @@ pub enum AuditKind {
 pub trait AuditLog: Send + Sync {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError>;
+    /// Drop every event with `timestamp_ms < before_ms`. Returns the
+    /// count deleted. Operator-driven retention: with no purge call the
+    /// log grows unbounded for the lifetime of the daemon. Mirrors the
+    /// `MemoryStore::purge_older_than` shape from Sprint 19.
+    async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError>;
 }
 
 pub struct JsonlAuditLog {
@@ -161,6 +166,47 @@ impl AuditLog for JsonlAuditLog {
         let start = all.len().saturating_sub(limit);
         Ok(all.split_off(start))
     }
+
+    async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
+        // Read-filter-rewrite under the same lock that record uses, so a
+        // concurrent record can't race against the rewrite. Atomicity of
+        // the rewrite comes from `tempfile + rename` — readers see either
+        // the old log or the new one, never a partial rewrite.
+        let _g = self.lock.lock().await;
+        let existing: Vec<AuditEvent> = match fs::read_to_string(&self.path).await {
+            Ok(s) => s
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<Vec<_>, _>>()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let kept: Vec<&AuditEvent> = existing
+            .iter()
+            .filter(|e| e.timestamp_ms >= before_ms)
+            .collect();
+        let purged = (existing.len() - kept.len()) as u64;
+        if purged == 0 {
+            return Ok(0);
+        }
+        let tmp_path = self.path.with_extension("jsonl.tmp");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        for e in &kept {
+            let line = serde_json::to_string(e)?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        drop(f);
+        fs::rename(&tmp_path, &self.path).await?;
+        Ok(purged)
+    }
 }
 
 #[derive(Default)]
@@ -185,6 +231,13 @@ impl AuditLog for InMemoryAuditLog {
         let g = self.events.lock().await;
         let start = g.len().saturating_sub(limit);
         Ok(g[start..].to_vec())
+    }
+
+    async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
+        let mut g = self.events.lock().await;
+        let len_before = g.len();
+        g.retain(|e| e.timestamp_ms >= before_ms);
+        Ok((len_before - g.len()) as u64)
     }
 }
 
@@ -270,5 +323,70 @@ mod tests {
         let json = serde_json::to_string(&e).unwrap();
         let back: AuditEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
+    }
+
+    fn dated(ts: u64) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: ts,
+            issuer: AgentId::new("user@local", [0u8; 32]),
+            kind: intent_kind("ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn in_memory_purge_drops_old_events_and_keeps_new() {
+        let log = InMemoryAuditLog::new();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+        let purged = log.purge_older_than(250).await.unwrap();
+        assert_eq!(purged, 2);
+        let remaining = log.recent(10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].timestamp_ms, 300);
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_rewrites_only_when_something_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        let purged = log.purge_older_than(150).await.unwrap();
+        assert_eq!(purged, 1);
+        // Re-open to confirm the rewrite landed on disk and the survivors
+        // can still be parsed back.
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        let kept = log2.recent(10).await.unwrap();
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|e| e.timestamp_ms >= 150));
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_no_op_when_nothing_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        let purged = log.purge_older_than(50).await.unwrap();
+        assert_eq!(purged, 0);
+        // No tempfile.tmp left lying around — atomic-rename path skipped.
+        assert!(!path.with_extension("jsonl.tmp").exists());
+        let kept = log.recent(10).await.unwrap();
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_on_missing_file_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(log.purge_older_than(1_000_000).await.unwrap(), 0);
     }
 }

@@ -793,7 +793,10 @@ impl Server {
             .list_summaries(limit, pubkey_prefix.as_deref())
             .await
         {
-            Ok(peers) => Response::PeerList { peers },
+            Ok(peers) => Response::PeerList {
+                peers,
+                operator_pubkey_b58: bs58::encode(self.identity.agent_id().pubkey).into_string(),
+            },
             Err(e) => Response::Error {
                 message: format!("peers: {e}"),
             },
@@ -4735,7 +4738,7 @@ budget_credits_per_hour = {credits}
             })
             .await;
         let peers = match resp {
-            Response::PeerList { peers } => peers,
+            Response::PeerList { peers, .. } => peers,
             other => panic!("expected PeerList, got {other:?}"),
         };
         assert_eq!(peers.len(), 2, "live + revoked both surface");
@@ -4887,7 +4890,7 @@ budget_credits_per_hour = {credits}
             })
             .await;
         let peers = match resp {
-            Response::PeerList { peers } => peers,
+            Response::PeerList { peers, .. } => peers,
             other => panic!("expected PeerList, got {other:?}"),
         };
         assert_eq!(peers.len(), 1, "only the matching pubkey surfaces");
@@ -4927,6 +4930,138 @@ budget_credits_per_hour = {credits}
             json.contains(&prefix),
             "response should still expose the 6-char redacted prefix"
         );
+    }
+
+    /// Sprint 67 — `Response::PeerList` carries the daemon's own
+    /// identity pubkey as `operator_pubkey_b58` so the web UI can hide
+    /// the revoke button on the operator's own row (clicking it would
+    /// brick auth in v0 single-peer). The value is the b58 encoding of
+    /// `self.identity.pubkey` — exactly the encoding used by the
+    /// `peer_pubkey_b58` audit-row field, so existing redaction rules
+    /// apply.
+    #[tokio::test]
+    async fn list_peers_response_carries_operator_pubkey_b58() {
+        let s = server_with(vec![], "");
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+            })
+            .await;
+        match resp {
+            Response::PeerList {
+                operator_pubkey_b58,
+                ..
+            } => {
+                assert_eq!(
+                    operator_pubkey_b58,
+                    bs58::encode(s.identity.agent_id().pubkey).into_string(),
+                );
+            }
+            other => panic!("expected PeerList, got {other:?}"),
+        }
+    }
+
+    /// Sprint 67 — `operator_pubkey_b58` is consumer-stable across
+    /// every successful `list_peers` response: it does not depend on
+    /// the prefix filter, the registry contents, or whether the
+    /// operator's bootstrap entry happens to be in the registry. Web
+    /// UI's self-row predicate is therefore safe to apply on every
+    /// poll without recomputing the comparator.
+    #[tokio::test]
+    async fn list_peers_operator_pubkey_b58_is_stable_across_filters() {
+        let s = server_with(vec![], "");
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let unfiltered = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+            })
+            .await;
+        let filtered = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: Some("zzzzzz".into()),
+            })
+            .await;
+        let a = match unfiltered {
+            Response::PeerList {
+                operator_pubkey_b58,
+                ..
+            } => operator_pubkey_b58,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let b = match filtered {
+            Response::PeerList {
+                peers,
+                operator_pubkey_b58,
+            } => {
+                assert!(peers.is_empty(), "no peer matches the bogus prefix");
+                operator_pubkey_b58
+            }
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(a, b);
+    }
+
+    /// Sprint 67 — wire-format invariant: `Response::PeerList` JSON
+    /// has a top-level `operator_pubkey_b58` field whose value matches
+    /// the b58 encoding of `self.identity.pubkey`. Catches a
+    /// regression where someone removes the field thinking the web
+    /// UI's per-row pubkey already suffices (it doesn't — without the
+    /// comparator, the UI cannot distinguish the operator's own row).
+    #[tokio::test]
+    async fn list_peers_response_serialises_operator_pubkey_b58_field() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+            })
+            .await;
+        let json = serde_json::to_string(&resp).expect("serialize PeerList");
+        let expected = bs58::encode(s.identity.agent_id().pubkey).into_string();
+        assert!(
+            json.contains(&format!("\"operator_pubkey_b58\":\"{expected}\"")),
+            "expected operator_pubkey_b58 field with daemon identity b58: {json}"
+        );
+    }
+
+    /// Sprint 67 — `#[serde(default)]` lets a stale CLI built before
+    /// Sprint 67 deserialise a new daemon's `PeerList` response and
+    /// receive `operator_pubkey_b58: ""`. The empty string never
+    /// matches a real pubkey b58, so the consumer's self-row predicate
+    /// falls through to the pre-Sprint-67 behaviour (no false-self
+    /// hides) — strictly safer than a hard deserialize error.
+    #[test]
+    fn list_peers_response_deserialises_without_operator_pubkey_b58_field() {
+        let json = r#"{"kind":"peer_list","peers":[]}"#;
+        let resp: Response = serde_json::from_str(json).expect("deserialize");
+        match resp {
+            Response::PeerList {
+                peers,
+                operator_pubkey_b58,
+            } => {
+                assert!(peers.is_empty());
+                assert_eq!(operator_pubkey_b58, "");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     /// Sprint 65 — operator-only `peers revoke` succeeds under the C3

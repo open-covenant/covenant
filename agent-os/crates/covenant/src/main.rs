@@ -744,19 +744,27 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::PeerList { peers } => {
+                        Response::PeerList {
+                            peers,
+                            operator_pubkey_b58,
+                        } => {
                             if peers.is_empty() {
                                 println!("(no matching peers)");
                             } else {
                                 for p in peers {
+                                    let pubkey = p.agent_id.pubkey_base58();
+                                    let self_marker = if pubkey == operator_pubkey_b58 {
+                                        " (self)"
+                                    } else {
+                                        ""
+                                    };
                                     let status = match p.revoked_at {
                                         Some(ts) => format!("revoked@{ts}"),
                                         None => "live".into(),
                                     };
                                     println!(
-                                        "{display}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
+                                        "{display}{self_marker}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
                                         display = p.agent_id.display,
-                                        pubkey = p.agent_id.pubkey_base58(),
                                         prefix = p.token_prefix,
                                         registered = p.registered_at,
                                     );

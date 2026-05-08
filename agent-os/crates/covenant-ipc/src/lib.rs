@@ -308,8 +308,21 @@ pub enum Response {
     },
     /// Successful response to [`Request::ListPeers`]. Token bytes are
     /// **never** carried — only the 6-char `token_prefix`. Sprint 62.
+    ///
+    /// `operator_pubkey_b58` is the daemon's own identity pubkey
+    /// (base58 of `self.identity.pubkey`) so callers can identify which
+    /// row is the operator's bootstrap peer without a second round-trip.
+    /// Web UI uses it to hide the revoke button on the operator's own
+    /// row (Sprint 67) — clicking revoke there would brick auth in v0
+    /// single-peer. `#[serde(default)]` so a stale CLI built before
+    /// Sprint 67 still deserialises a new daemon's response (the field
+    /// reads as `String::new()`, which never matches a real pubkey b58
+    /// — the consumer's predicate falls through to the pre-Sprint-67
+    /// behaviour). Sprint 67.
     PeerList {
         peers: Vec<PeerSummary>,
+        #[serde(default)]
+        operator_pubkey_b58: String,
     },
     /// Response to [`Request::RevokePeer`]. The four `RevokeOutcome`
     /// cases (Revoked / AlreadyRevoked / NotFound / Ambiguous) are

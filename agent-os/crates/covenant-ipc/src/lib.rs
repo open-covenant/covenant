@@ -156,6 +156,16 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Mint a fresh bootstrap token, register it in the peer registry,
+    /// rewrite `$COVENANT_HOME/peers/operator.token` with mode 0600, and
+    /// revoke the old token — all in that order so a crash mid-rotation
+    /// leaves a working setup behind. Gated to `peer.pubkey ==
+    /// self.identity.pubkey` (Sprint 60); a guest peer cannot rotate the
+    /// operator's own token. The new token is delivered in the response
+    /// because HTTP callers (the web UI) cannot read the on-disk file.
+    /// Live IPC connections authenticated under the old token survive
+    /// until they drop; HTTP rejects the old token immediately.
+    RotateOperatorToken,
 }
 
 fn default_recent_limit() -> usize {
@@ -261,6 +271,15 @@ pub enum Response {
     },
     Debits {
         debits: Vec<BudgetDebit>,
+    },
+    /// Successful response to [`Request::RotateOperatorToken`]. The
+    /// daemon has registered the new token, written it to
+    /// `$COVENANT_HOME/peers/operator.token` (mode 0600), and revoked
+    /// the old token. The caller's *current* connection (authenticated
+    /// against the old token) keeps working; *new* connections must
+    /// authenticate with `token_b58`.
+    OperatorTokenRotated {
+        token_b58: String,
     },
     Error {
         message: String,

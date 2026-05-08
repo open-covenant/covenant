@@ -16,7 +16,7 @@ use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
-use covenant_peer_auth::{PeerRegistry, PeerToken};
+use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken};
 use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -55,6 +55,14 @@ pub struct Server {
     mailbox: Arc<dyn Mailbox>,
     pub peers: Arc<dyn PeerRegistry>,
     budget: Arc<dyn BudgetLedger>,
+    /// `$COVENANT_HOME` for this daemon — set via [`Server::with_home`]
+    /// in the binary's `main`. Required by [`Server::rotate_operator_token`]
+    /// (which needs to read the current operator token from
+    /// `<home>/peers/operator.token` and write the rotated one back to
+    /// the same path with mode 0600). All other handlers are home-agnostic
+    /// — they go through the storage traits — so unit tests that don't
+    /// exercise rotation leave this `None`.
+    home: Option<PathBuf>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -88,7 +96,17 @@ impl Server {
             mailbox,
             peers,
             budget,
+            home: None,
         }
+    }
+
+    /// Bind a `$COVENANT_HOME` path so [`Server::rotate_operator_token`]
+    /// knows where to read the current token and where to rewrite it.
+    /// Daemon `main` calls this once after [`Server::new`]. Without it,
+    /// `RotateOperatorToken` returns `Response::Error`.
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = Some(home);
+        self
     }
 
     /// Walk the router's registered agents and seed each one's budget
@@ -306,6 +324,7 @@ impl Server {
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
             Request::RecentDebits { limit } => self.recent_debits(limit).await,
+            Request::RotateOperatorToken => self.rotate_operator_token(peer).await,
         }
     }
 
@@ -577,6 +596,103 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
             },
+        }
+    }
+
+    /// Rotate the operator's bootstrap token. Sprint 60.
+    ///
+    /// Order is load-bearing — see Plan-gate A1 in SPRINT_LOG Sprint 60.
+    /// 1. Mint a fresh `PeerToken`.
+    /// 2. Read the current token off disk so we know which one to revoke.
+    /// 3. Register the new entry under the operator's `AgentId`.
+    /// 4. Write the new token to `<home>/peers/operator.token` (mode 0600).
+    /// 5. Revoke the old token in the registry.
+    /// 6. Record an `OperatorTokenRotated` audit event.
+    ///
+    /// Crashing between (3) and (4) leaves the new token registered but
+    /// not on disk; the next daemon boot reads the old (still-valid)
+    /// token from disk and the orphan registry entry is harmless. The
+    /// inverse — write-disk-before-register — would expose a window where
+    /// the on-disk token resolves to nothing, locking the operator out.
+    ///
+    /// Gated to the operator's own identity — `peer.pubkey ==
+    /// self.identity.pubkey`. v0 has only one peer (the operator), so any
+    /// authenticated caller would pass a `peers.rotate` capability check
+    /// anyway; the identity gate is the right invariant going into Phase-1
+    /// multi-peer where a guest peer must not rotate the operator's token.
+    async fn rotate_operator_token(&self, peer: &AgentId) -> Response {
+        let identity_pubkey = self.identity.agent_id().pubkey;
+        if peer.pubkey != identity_pubkey {
+            return Response::Error {
+                message: "operator token rotation requires the operator identity".into(),
+            };
+        }
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message:
+                    "operator token rotation unavailable: server has no home directory configured"
+                        .into(),
+            };
+        };
+        let token_path = home.join("peers").join("operator.token");
+
+        let old_token = match read_operator_token_b58(&token_path) {
+            Ok(t) => t,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("read operator token at {}: {e}", token_path.display()),
+                };
+            }
+        };
+
+        let new_token = PeerToken::generate();
+        let new_entry = PeerEntry {
+            token: new_token,
+            agent_id: peer.clone(),
+            registered_at: epoch_ms(),
+        };
+        if let Err(e) = self.peers.register(new_entry).await {
+            return Response::Error {
+                message: format!("register new operator token: {e}"),
+            };
+        }
+        if let Err(e) = write_operator_token_0600(&token_path, &new_token.to_b58()) {
+            // Best-effort rollback: the new token is registered but the
+            // on-disk write failed, so the old token still resolves and is
+            // still on disk. Leave the new entry in the registry — it
+            // costs one row and a future rotation (or peer purge) cleans
+            // it up. Surfacing the error preserves operator agency.
+            return Response::Error {
+                message: format!("write new operator token to {}: {e}", token_path.display()),
+            };
+        }
+        match self.peers.revoke(&old_token).await {
+            Ok(_) => {}
+            Err(e) => {
+                // The new token is on disk and registered; the old token
+                // failed to revoke. The operator's next boot reads the new
+                // token from disk and authenticates fine; the old one is
+                // still live as a registry record but the operator no
+                // longer has its bytes. Audit + warn rather than error
+                // out — the rotation succeeded for every observable use.
+                warn!(error = %e, "rotate: revoke old token failed; new token is live");
+            }
+        }
+
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::OperatorTokenRotated {
+                peer_display: peer.display.clone(),
+                old_token_prefix: token_b58_prefix(&old_token),
+                new_token_prefix: token_b58_prefix(&new_token),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+
+        Response::OperatorTokenRotated {
+            token_b58: new_token.to_b58(),
         }
     }
 
@@ -1379,6 +1495,81 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Read a base58-encoded operator token off disk and decode it. The file
+/// is expected at `<home>/peers/operator.token` and must be mode 0600 —
+/// any group/world bit is treated as a credential leak and the read
+/// fails. Used by daemon boot to reuse an existing token and by
+/// [`Server::rotate_operator_token`] to identify which token to revoke.
+fn read_operator_token_b58(path: &std::path::Path) -> std::io::Result<PeerToken> {
+    require_operator_token_mode_0600(path)?;
+    let s = std::fs::read_to_string(path)?;
+    PeerToken::from_b58(s.trim()).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("decode token: {e}"),
+        )
+    })
+}
+
+/// Atomically write `token_b58` to `path` with mode 0600. Reused by
+/// daemon boot ([`crate::main`]'s `bootstrap_operator_token`) and
+/// [`Server::rotate_operator_token`].
+///
+/// `OpenOptionsExt::mode` is honoured only on file creation. If the
+/// file already exists with a permissive mode, `O_CREAT|O_TRUNC` reuses
+/// the inode and our `0o600` is silently ignored. We `remove_file`
+/// first to force a fresh inode, then `set_permissions` after writing
+/// to defend against any umask-overlay surprises (Sprint 47 lesson).
+pub fn write_operator_token_0600(path: &std::path::Path, token_b58: &str) -> std::io::Result<()> {
+    use std::fs::Permissions;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(token_b58.as_bytes())?;
+    f.write_all(b"\n")?;
+    f.flush()?;
+    std::fs::set_permissions(path, Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+/// Refuse to read a token whose mode is anything but `0o600`. Loud
+/// failure forces operator action — silently regenerating would still
+/// leak the prior token to whoever could read the permissive file.
+pub fn require_operator_token_mode_0600(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(path)?;
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} mode is {:#o}; expected 0o600 (any group/world bit is a credential leak)",
+                path.display(),
+                mode
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// 6-char base58 prefix of `token`. Matches `PeerToken::Debug`'s
+/// redaction posture so audit rows stay grep-correlatable with debug
+/// logs without ever recording the full secret.
+fn token_b58_prefix(token: &PeerToken) -> String {
+    let s = token.to_b58();
+    s.chars().take(6).collect()
 }
 
 /// Coarse-bucket rounding for the `tokens_remaining` value embedded in
@@ -3758,6 +3949,233 @@ budget_credits_per_hour = {credits}
                 assert_eq!(debits[1].agent.display, "alpha@agent");
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Sprint 60. Constructs a Server with a tempdir-bound home and a
+    /// pre-seeded operator token (b58 written to `<home>/peers/operator.token`
+    /// at mode 0600 + registered to the daemon identity in the peer
+    /// registry). Returns the server, the tempdir handle (drop = teardown),
+    /// the old token, and the operator's `AgentId` for assertions.
+    async fn server_with_operator_token() -> (Server, tempfile::TempDir, PeerToken, AgentId) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+
+        let old_token = PeerToken::generate();
+        let operator = identity.agent_id();
+        peers
+            .register(PeerEntry {
+                token: old_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .expect("register old token");
+
+        let token_path = dir.path().join("peers").join("operator.token");
+        write_operator_token_0600(&token_path, &old_token.to_b58()).expect("seed operator.token");
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+        (s, dir, old_token, operator)
+    }
+
+    /// Sprint 60 happy path: rotation under the operator identity returns
+    /// the new token, the registry resolves it to the operator, the old
+    /// token no longer resolves, and the on-disk file holds the new b58.
+    #[tokio::test]
+    async fn rotate_token_succeeds_under_operator_identity() {
+        let (s, dir, old_token, operator) = server_with_operator_token().await;
+
+        let new_b58 = match s.op_respond(Request::RotateOperatorToken).await {
+            Response::OperatorTokenRotated { token_b58 } => token_b58,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let new_token = PeerToken::from_b58(&new_b58).expect("decode new b58");
+
+        // Registry: new resolves to operator; old returns None.
+        assert_eq!(
+            s.peers.resolve(&new_token).await.unwrap(),
+            Some(operator.clone()),
+            "new token must resolve to the operator identity"
+        );
+        assert_eq!(
+            s.peers.resolve(&old_token).await.unwrap(),
+            None,
+            "old token must be revoked after rotation"
+        );
+
+        // Disk: file holds the new b58, mode 0600.
+        let token_path = dir.path().join("peers").join("operator.token");
+        let on_disk = std::fs::read_to_string(&token_path).expect("read operator.token");
+        assert_eq!(on_disk.trim(), new_b58);
+        require_operator_token_mode_0600(&token_path).expect("0600 enforced post-rotate");
+    }
+
+    /// Sprint 60 — Plan-gate C3 enforcement. A non-operator peer (whose
+    /// pubkey doesn't match `self.identity.pubkey`) must be rejected
+    /// regardless of authentication state. The C2 "any authenticated peer
+    /// can rotate" alternative was rejected for exactly this reason — in
+    /// Phase-1 multi-peer a guest peer would inherit operator-rotation
+    /// capability via authentication alone.
+    #[tokio::test]
+    async fn rotate_token_rejects_when_peer_is_not_operator_identity() {
+        let (s, _dir, old_token, _operator) = server_with_operator_token().await;
+        // A foreign peer authenticated by a different ed25519 keypair —
+        // valid registration on the wire, but pubkey ≠ identity.pubkey.
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+        let resp = s.respond(Request::RotateOperatorToken, &foreign).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "rejection message must name the gate; got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // Old token must still resolve — the rotation didn't run.
+        assert!(
+            s.peers.resolve(&old_token).await.unwrap().is_some(),
+            "rejected rotation must leave the old token alive"
+        );
+    }
+
+    /// Sprint 60 — verifies the audit row layout: issuer is the operator
+    /// peer (Sprint 58f invariant), kind is `OperatorTokenRotated`, and
+    /// the embedded prefixes are the 6-char base58 prefixes of the
+    /// before/after tokens (no full token bytes in the audit log).
+    #[tokio::test]
+    async fn rotate_token_records_audit_event_with_token_prefixes() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+        let old_token = PeerToken::generate();
+        let operator = identity.agent_id();
+        peers
+            .register(PeerEntry {
+                token: old_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        write_operator_token_0600(
+            &dir.path().join("peers").join("operator.token"),
+            &old_token.to_b58(),
+        )
+        .unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+
+        let new_b58 = match s.op_respond(Request::RotateOperatorToken).await {
+            Response::OperatorTokenRotated { token_b58 } => token_b58,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let events = audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::OperatorTokenRotated { .. }))
+            .expect("OperatorTokenRotated row");
+        assert_eq!(row.issuer.pubkey, operator.pubkey, "Sprint 58f invariant");
+        match &row.kind {
+            AuditKind::OperatorTokenRotated {
+                peer_display,
+                old_token_prefix,
+                new_token_prefix,
+            } => {
+                assert_eq!(peer_display, &operator.display);
+                let expected_old: String = old_token.to_b58().chars().take(6).collect();
+                let expected_new: String = new_b58.chars().take(6).collect();
+                assert_eq!(old_token_prefix, &expected_old);
+                assert_eq!(new_token_prefix, &expected_new);
+                assert_eq!(old_token_prefix.len(), 6);
+                assert_eq!(new_token_prefix.len(), 6);
+                assert_ne!(
+                    old_token_prefix, new_token_prefix,
+                    "the rotation must produce a fresh token"
+                );
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+    }
+
+    /// Sprint 60 — guard against the `with_home` builder being skipped.
+    /// Without a configured home, the rotation can't read or write the
+    /// on-disk token, so the verb returns `Error` with a message naming
+    /// the missing home. Tests that don't construct a tempdir-bound
+    /// server (most of them) shouldn't accidentally rotate either.
+    #[tokio::test]
+    async fn rotate_token_errors_when_server_has_no_home() {
+        let s = server_with(vec![], "ignored");
+        match s.op_respond(Request::RotateOperatorToken).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("home"),
+                    "message must mention the missing home; got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// Sprint 60 — the rotation must short-circuit on the C3 gate before
+    /// touching the registry. A foreign peer with no on-disk token
+    /// available should still be rejected on the identity check, not on
+    /// a downstream "read operator token" io-error. Tests that the gate
+    /// orderings match the docstring's enumerated steps.
+    #[tokio::test]
+    async fn rotate_token_identity_gate_runs_before_disk_read() {
+        // Server with a configured home but NO on-disk token — if the
+        // identity gate ran second, the response would be a `read operator
+        // token` io-error, not the identity-check rejection.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "ignored").with_home(dir.path().to_path_buf());
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+        match s.respond(Request::RotateOperatorToken, &foreign).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "must rejected on identity gate; got {message:?}"
+                );
+                assert!(
+                    !message.contains("read operator token"),
+                    "must not have reached the disk read; got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
         }
     }
 }

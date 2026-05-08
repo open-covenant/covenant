@@ -138,6 +138,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/results/recent", get(recent_a2a_results))
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
+        .route("/peers/rotate", post(peers_rotate))
         .route("/intents/resume", post(intents_resume))
         .route("/budget/debits", get(budget_debits))
         .layer(middleware::from_fn_with_state(
@@ -567,6 +568,15 @@ async fn peers_purge(
                 &peer,
             )
             .await,
+    ))
+}
+
+async fn peers_rotate(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server.respond(Request::RotateOperatorToken, &peer).await,
     ))
 }
 

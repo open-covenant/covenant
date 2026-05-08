@@ -137,6 +137,19 @@ pub enum AuditKind {
         intent_id: Uuid,
         requested: u64,
     },
+    /// Logged when the operator rotates their bootstrap token via
+    /// `RotateOperatorToken`. Token bytes never enter the audit log;
+    /// only 6-char base58 prefixes are recorded so an operator can
+    /// correlate a rotation row with the on-disk file's first chars
+    /// (which is also what `PeerToken::Debug` redacts to). The new
+    /// token's prefix lets the operator verify, after a rotation
+    /// they did or did not initiate, that the file on disk came
+    /// from this row. Sprint 60.
+    OperatorTokenRotated {
+        peer_display: String,
+        old_token_prefix: String,
+        new_token_prefix: String,
+    },
 }
 
 #[async_trait]

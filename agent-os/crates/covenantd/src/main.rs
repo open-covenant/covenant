@@ -160,7 +160,8 @@ async fn main() -> Result<()> {
         mailbox,
         peers,
         budget,
-    );
+    )
+    .with_home(home.clone());
 
     server
         .register_agent_budgets()
@@ -235,7 +236,7 @@ async fn bootstrap_operator_token(
         // If anything other than 0600, refuse to trust it — silently
         // regenerating would still leak the prior token to whoever
         // could read it. Loud failure forces operator action.
-        require_mode_0600(&token_path).with_context(|| {
+        covenantd::require_operator_token_mode_0600(&token_path).with_context(|| {
             format!(
                 "operator token at {} has insecure permissions",
                 token_path.display()
@@ -261,7 +262,7 @@ async fn bootstrap_operator_token(
         covenant_peer_auth::PeerToken::generate()
     };
 
-    write_token_0600(&token_path, &token.to_b58())
+    covenantd::write_operator_token_0600(&token_path, &token.to_b58())
         .with_context(|| format!("write operator token at {}", token_path.display()))?;
 
     let entry = covenant_peer_auth::PeerEntry {
@@ -271,47 +272,6 @@ async fn bootstrap_operator_token(
     };
     peers.register(entry).await?;
     info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
-    Ok(())
-}
-
-fn write_token_0600(path: &std::path::Path, token_b58: &str) -> std::io::Result<()> {
-    use std::fs::Permissions;
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    // OpenOptionsExt::mode is honoured only on file creation. If the
-    // file already exists with a permissive mode, O_CREAT|O_TRUNC reuses
-    // the inode and our 0o600 is silently ignored. Remove first to
-    // force a fresh inode, then explicitly set_permissions afterwards
-    // to defend against any umask-overlay surprises.
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(token_b58.as_bytes())?;
-    f.write_all(b"\n")?;
-    f.flush()?;
-    std::fs::set_permissions(path, Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-fn require_mode_0600(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(path)?;
-    let mode = meta.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!(
-                "{} mode is {:#o}; expected 0o600 (any group/world bit is a credential leak)",
-                path.display(),
-                mode
-            ),
-        ));
-    }
     Ok(())
 }
 

@@ -247,7 +247,7 @@ impl Server {
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
-            Request::RecentAudit { limit } => self.recent_audit(limit).await,
+            Request::RecentAudit { limit } => self.recent_audit(limit, peer).await,
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
                 self.purge_capabilities(before_ms, peer).await
@@ -439,9 +439,27 @@ impl Server {
         }
     }
 
-    async fn recent_audit(&self, limit: usize) -> Response {
+    /// Returns audit rows whose `issuer.pubkey` matches `peer.pubkey`.
+    /// Filtering at the Server boundary (not in the storage trait) keeps
+    /// `AuditLog` peer-agnostic and lets every read surface re-use the
+    /// same predicate. Compared on the 32-byte pubkey, not the display
+    /// string, because the display can be re-used across pubkeys at the
+    /// wire boundary even with `validate_agent_id_display` (Sprint 45).
+    /// In v0 every authenticated caller is the operator and `peer.pubkey
+    /// == identity.pubkey`, so the filter degenerates to a no-op — the
+    /// behaviour change matters only once a second peer authenticates.
+    /// `AuthenticationFailed` rows have `issuer == identity` (no
+    /// authenticated peer at the moment of rejection) and so naturally
+    /// remain visible only to the operator.
+    async fn recent_audit(&self, limit: usize, peer: &AgentId) -> Response {
         match self.audit.recent(limit).await {
-            Ok(events) => Response::AuditEvents { events },
+            Ok(events) => {
+                let events = events
+                    .into_iter()
+                    .filter(|e| e.issuer.pubkey == peer.pubkey)
+                    .collect();
+                Response::AuditEvents { events }
+            }
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },
@@ -782,14 +800,22 @@ impl Server {
                 };
             }
         };
-        let text = events.iter().rev().find_map(|e| match &e.kind {
-            AuditKind::BudgetExhausted {
-                intent_id: row_id,
-                intent_text,
-                ..
-            } if *row_id == intent_id => Some(intent_text.clone()),
-            _ => None,
-        });
+        // Filter to the resuming peer's own rows BEFORE the find_map.
+        // Resuming someone else's `BudgetExhausted` would otherwise leak
+        // their `intent_text` through `dispatch_intent`'s code path. Same
+        // pubkey-equality predicate as `recent_audit`. Sprint 58d.
+        let text = events
+            .iter()
+            .filter(|e| e.issuer.pubkey == peer.pubkey)
+            .rev()
+            .find_map(|e| match &e.kind {
+                AuditKind::BudgetExhausted {
+                    intent_id: row_id,
+                    intent_text,
+                    ..
+                } if *row_id == intent_id => Some(intent_text.clone()),
+                _ => None,
+            });
         match text {
             Some(t) => self.dispatch_intent(t, peer).await,
             None => Response::Error {
@@ -2186,6 +2212,139 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn recent_audit_scrubs_other_peers_rows() {
+        let s = server_with(vec![], "");
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: alien.clone(),
+                kind: AuditKind::BudgetExhausted {
+                    agent_display: "research@agent".into(),
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "alice's secret intent".into(),
+                    requested: 1,
+                    tokens_remaining: 0,
+                    refill_eta_ms: u64::MAX,
+                },
+            })
+            .await
+            .unwrap();
+        let mine = s.identity.agent_id();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: mine.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "operator's own intent".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b""),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        let resp = s.op_respond(Request::RecentAudit { limit: 100 }).await;
+        match resp {
+            Response::AuditEvents { events } => {
+                assert!(
+                    events.iter().all(|e| e.issuer.pubkey == mine.pubkey),
+                    "every returned row must belong to the requesting peer"
+                );
+                assert!(
+                    !events.iter().any(|e| matches!(
+                        &e.kind,
+                        AuditKind::BudgetExhausted { intent_text, .. }
+                            if intent_text == "alice's secret intent"
+                    )),
+                    "alien BudgetExhausted row leaked through filter"
+                );
+                assert!(
+                    events.iter().any(|e| matches!(
+                        &e.kind,
+                        AuditKind::IntentDispatched { intent_text, .. }
+                            if intent_text == "operator's own intent"
+                    )),
+                    "operator's own row should still be visible"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_intent_rejects_other_peers_intent() {
+        let s = server_with(vec![], "");
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        let alien_intent_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: alien,
+                kind: AuditKind::BudgetExhausted {
+                    agent_display: "research@agent".into(),
+                    intent_id: alien_intent_id,
+                    intent_text: "leaked".into(),
+                    requested: 1,
+                    tokens_remaining: 0,
+                    refill_eta_ms: u64::MAX,
+                },
+            })
+            .await
+            .unwrap();
+        let resp = s
+            .op_respond(Request::ResumeIntent {
+                intent_id: alien_intent_id,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("no BudgetExhausted audit row"),
+                    "expected the not-found error, got: {message}"
+                );
+                assert!(
+                    !message.contains("leaked"),
+                    "intent_text must not appear in the error"
+                );
+            }
+            other => panic!("expected Response::Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_audit_v0_operator_sees_own_events() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::CallTool {
+            name: "echo".into(),
+            arguments: serde_json::json!({ "text": "hi" }),
+        })
+        .await;
+        let me = s.identity.agent_id();
+        let resp = s.op_respond(Request::RecentAudit { limit: 10 }).await;
+        match resp {
+            Response::AuditEvents { events } => {
+                assert!(!events.is_empty(), "operator should see their own rows");
+                assert!(
+                    events.iter().all(|e| e.issuer.pubkey == me.pubkey),
+                    "filter must keep operator's rows"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn ignore_check_returns_matched_pattern() {
         let ignore = IgnoreSet::parse("**/*.pem\n");
         let s = server_with_ignore(vec![], "echo", ignore);
@@ -2488,13 +2647,15 @@ budget_credits_per_hour = {credits}
 
         // Synthesise a BudgetExhausted row as if a previous dispatch had
         // been rejected. The resume verb scans recent audit, finds this
-        // row by intent_id, and re-dispatches the captured text.
+        // row by intent_id, and re-dispatches the captured text. Tag the
+        // synthesised row with the daemon's real pubkey so the Sprint 58d
+        // per-peer filter passes it through to the find_map.
         let exhausted_intent = Uuid::new_v4();
         audit
             .record(AuditEvent {
                 id: Uuid::new_v4(),
                 timestamp_ms: epoch_ms(),
-                issuer: AgentId::new("user@local", [0u8; 32]),
+                issuer: s.identity.agent_id(),
                 kind: AuditKind::BudgetExhausted {
                     agent_display: "research@agent".into(),
                     intent_id: exhausted_intent,

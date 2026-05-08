@@ -16,6 +16,7 @@ covenant-types = { path = "../covenant-types" }
 covenant-ipc = { path = "../covenant-ipc" }
 covenant-memory = { path = "../covenant-memory" }
 covenant-audit = { path = "../covenant-audit" }
+covenant-budget = { path = "../covenant-budget" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-mcp = { path = "../covenant-mcp" }

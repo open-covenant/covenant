@@ -10,6 +10,7 @@ pub mod http;
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
 use covenant_audit::{hash_hex, AuditEvent, AuditKind, AuditLog};
+use covenant_budget::{BudgetError, BudgetLedger};
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
 use covenant_llm::Embedder;
@@ -17,9 +18,9 @@ use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerRegistry, PeerToken};
 use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
-use covenant_router::Router;
+use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
-use covenant_settlement::{memory_write_credits, Settlement};
+use covenant_settlement::{intent_dispatch_credits, memory_write_credits, Settlement};
 use covenant_types::{
     AgentId, Capability, Intent, MemoryRecord, MemoryTier, Priority, ResourceKind,
     SettlementReceipt,
@@ -53,6 +54,7 @@ pub struct Server {
     tools: Arc<ToolRegistry>,
     mailbox: Arc<dyn Mailbox>,
     pub peers: Arc<dyn PeerRegistry>,
+    budget: Arc<dyn BudgetLedger>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -70,6 +72,7 @@ impl Server {
         tools: Arc<ToolRegistry>,
         mailbox: Arc<dyn Mailbox>,
         peers: Arc<dyn PeerRegistry>,
+        budget: Arc<dyn BudgetLedger>,
     ) -> Self {
         Self {
             router,
@@ -84,7 +87,36 @@ impl Server {
             tools,
             mailbox,
             peers,
+            budget,
         }
+    }
+
+    /// Walk the router's registered agents and seed each one's budget
+    /// bucket from its manifest's `Settlement.budget_credits_per_hour`.
+    /// Cards with `budget_credits_per_hour == 0` are skipped — the spec's
+    /// `Settlement` rustdoc says "Phase 0 tolerates 0; enforced from
+    /// Phase 1," and `dispatch_intent` mirrors the predicate. Idempotent:
+    /// calling twice is fine because [`BudgetLedger::set_capacity`]
+    /// re-stamps the bucket without resetting `tokens_remaining` further
+    /// than the (possibly shrunk) capacity. Daemon main calls this once
+    /// after `Server::new`; tests that need budget enforcement call it
+    /// explicitly.
+    pub async fn register_agent_budgets(&self) -> Result<(), BudgetSeedError> {
+        for card in self.router.agents() {
+            let cap = card.manifest.settlement.budget_credits_per_hour;
+            if cap == 0 {
+                continue;
+            }
+            let agent = agent_id_for_card(card);
+            self.budget
+                .set_capacity(&agent, cap)
+                .await
+                .map_err(|source| BudgetSeedError {
+                    agent_id: card.id.clone(),
+                    source,
+                })?;
+        }
+        Ok(())
     }
 
     pub async fn serve(&self, listener: UnixListener) -> Result<()> {
@@ -502,6 +534,11 @@ impl Server {
 
     async fn dispatch_intent(&self, text: String, peer: &AgentId) -> Response {
         let intent_id = Uuid::new_v4();
+        // Pre-allocated so the budget debit's `paired_receipt` and the
+        // settlement receipt's `id` agree — joining the budget log to
+        // the receipt log on this UUID matches 1:1 instead of producing
+        // zero matches (security-review L1 closure).
+        let receipt_id = Uuid::new_v4();
         let issued_at = epoch_ms();
 
         let issuer = peer.clone();
@@ -555,6 +592,63 @@ impl Server {
                     ),
                 };
             }
+            // Phase-0 manifests still default `budget_credits_per_hour = 0`.
+            // The `Settlement` rustdoc says "Phase 0 tolerates 0; enforced
+            // from Phase 1." So skip the debit path entirely when the
+            // manifest opts out of budget enforcement. Non-zero capacity
+            // gets the full token-bucket gate.
+            if card.manifest.settlement.budget_credits_per_hour > 0 {
+                let agent = agent_id_for_card(card);
+                let requested = intent_dispatch_credits();
+                match self.budget.try_debit(&agent, requested, receipt_id).await {
+                    Ok(()) => {}
+                    Err(BudgetError::NoCapacity(_)) => {
+                        // Manifest opts in to budget but the bucket was never
+                        // seeded — operator forgot to call
+                        // `register_agent_budgets`. Warn loudly and pass for
+                        // v0 (don't block dispatch on a misconfigured
+                        // daemon); Sprint 58c hardens this.
+                        warn!(
+                            agent = %card.id,
+                            "no budget capacity registered for agent; \
+                             dispatching without debit (call register_agent_budgets at startup)"
+                        );
+                    }
+                    Err(BudgetError::Exhausted {
+                        tokens_remaining,
+                        refill_eta_ms,
+                    }) => {
+                        let event = AuditEvent {
+                            id: Uuid::new_v4(),
+                            timestamp_ms: epoch_ms(),
+                            issuer: issuer.clone(),
+                            kind: AuditKind::BudgetExhausted {
+                                agent_display: agent.display.clone(),
+                                intent_id,
+                                requested,
+                                tokens_remaining,
+                                refill_eta_ms,
+                            },
+                        };
+                        if let Err(e) = self.audit.record(event).await {
+                            warn!(error = %e, "audit record (budget exhausted) failed");
+                        }
+                        return Response::Error {
+                            message: format!(
+                                "agent {} budget exhausted: requested {requested} credit(s), \
+                                 {tokens_remaining} remaining, refill eta {refill_eta_ms}ms",
+                                card.id
+                            ),
+                        };
+                    }
+                    Err(e) => {
+                        warn!(agent = %card.id, error = %e, "budget debit failed");
+                        return Response::Error {
+                            message: format!("budget debit failed for {}: {e}", card.id),
+                        };
+                    }
+                }
+            }
             let intent = Intent {
                 id: intent_id,
                 text: text.clone(),
@@ -605,7 +699,7 @@ impl Server {
             warn!(error = %e, "memory write failed");
         } else {
             let receipt = SettlementReceipt {
-                id: Uuid::new_v4(),
+                id: receipt_id,
                 payer: issuer.clone(),
                 resource: ResourceKind::Memory,
                 credits_consumed: memory_write_credits(bytes_written),
@@ -973,11 +1067,55 @@ struct CapabilityCheckOutcome {
     missing: Vec<String>,
 }
 
+/// Wraps a [`BudgetError`] from [`Server::register_agent_budgets`] with
+/// the manifest id that failed, so startup error messages name the
+/// offending agent instead of dropping a bare `serde:` line on the
+/// operator (security-review L5 closure).
+#[derive(Debug)]
+pub struct BudgetSeedError {
+    pub agent_id: String,
+    pub source: BudgetError,
+}
+
+impl std::fmt::Display for BudgetSeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "seed budget for agent {:?}: {}",
+            self.agent_id, self.source
+        )
+    }
+}
+
+impl std::error::Error for BudgetSeedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 fn epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Map an `AgentCard` to a stable `AgentId` for budget keying. v0 agents
+/// don't yet have their own ed25519 keypair (the daemon's identity is
+/// reused across every agent at dispatch time), so we synthesise a
+/// deterministic one from the manifest id: zero-padded bytes for the
+/// pubkey, `<id>@agent` for the display. The pubkey is opaque to the
+/// budget ledger — used only as a hash-map key — so collision risk is
+/// bounded by manifest-id uniqueness, which the operator already
+/// enforces. The `@agent` host segment satisfies `validate_agent_id_display`'s
+/// `<local>@<host>` shape so the synthesised id round-trips through
+/// `JsonlLedger`'s serde without rejection.
+fn agent_id_for_card(card: &AgentCard) -> AgentId {
+    let mut pk = [0u8; 32];
+    for (i, b) in card.id.bytes().take(32).enumerate() {
+        pk[i] = b;
+    }
+    AgentId::new(format!("{}@agent", card.id), pk)
 }
 
 #[cfg(test)]
@@ -1029,6 +1167,7 @@ required = {caps:?}
             ])),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         )
     }
 
@@ -1188,6 +1327,7 @@ required = {caps:?}
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         // Dispatch will be rejected, but the capability check event is still recorded.
         s.op_respond(Request::SubmitIntent {
@@ -1337,6 +1477,7 @@ required = {caps:?}
             )])),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         s.op_respond(Request::CallTool {
             name: "echo".into(),
@@ -1453,6 +1594,7 @@ required = {caps:?}
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         s.op_respond(Request::SendA2ATask {
             task: dummy_a2a_task_for(&s),
@@ -1655,6 +1797,7 @@ required = {caps:?}
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         // Authenticated peer is `user@local`, but the task claims to be from
         // `evil@local`. Even with the send cap granted, the spoof check fires
@@ -1892,6 +2035,7 @@ required = {caps:?}
             Arc::new(ToolRegistry::default()),
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         s.record_auth_failure("ipc", "first frame must be Authenticate")
             .await;
@@ -1963,6 +2107,195 @@ required = {caps:?}
                 assert_eq!(rules_loaded, 1);
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    fn stub_card_with_budget(id: &str, capabilities: Vec<&str>, credits: u64) -> AgentCard {
+        let toml = format!(
+            r#"
+[agent]
+id = "{id}"
+name = "{id}"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./fake"
+
+[capabilities]
+required = {caps:?}
+
+[settlement]
+budget_credits_per_hour = {credits}
+"#,
+            caps = capabilities
+        );
+        let m = Manifest::parse(&toml).unwrap();
+        AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
+    }
+
+    /// Register-then-dispatch path: capacity = 10, one debit lands, token
+    /// count drops to 9, dispatch returns the runner's mocked output.
+    #[tokio::test]
+    async fn dispatch_passes_when_budget_healthy() {
+        let s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.register_agent_budgets().await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+            })
+            .await;
+        match resp {
+            Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
+            other => panic!("unexpected: {other:?}"),
+        }
+        let synth = agent_id_for_card(&stub_card_with_budget(
+            "research",
+            vec!["tool.web_search"],
+            10,
+        ));
+        assert_eq!(s.budget.tokens_remaining(&synth).await.unwrap(), 9);
+    }
+
+    /// Capacity = 1, two dispatches: the second is rejected with
+    /// `Response::Error`, leaves a `BudgetExhausted` row in the audit log,
+    /// and writes no memory record / receipt for the rejected attempt.
+    #[tokio::test]
+    async fn dispatch_rejects_and_audits_when_budget_exhausted() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let memory = Arc::new(InMemoryStore::new());
+        let settlement = Arc::new(InMemorySettlement::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                1,
+            )])),
+            Arc::new(MockRunner::new("mocked summary")),
+            memory.clone(),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        s.register_agent_budgets().await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let first = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers".into(),
+            })
+            .await;
+        assert!(matches!(first, Response::IntentResult { .. }));
+        let memory_after_first = memory.recent(None, 10).await.unwrap().len();
+        let receipts_after_first = settlement.recent(10).await.unwrap().len();
+
+        let second = s
+            .op_respond(Request::SubmitIntent {
+                text: "find more recent papers".into(),
+            })
+            .await;
+        match second {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget exhausted"),
+                    "expected budget exhaustion message, got {message:?}"
+                );
+                assert!(message.contains("research"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        // Rejected dispatch must not have advanced memory or receipts.
+        assert_eq!(
+            memory.recent(None, 10).await.unwrap().len(),
+            memory_after_first
+        );
+        assert_eq!(
+            settlement.recent(10).await.unwrap().len(),
+            receipts_after_first
+        );
+
+        let events = audit.recent(50).await.unwrap();
+        let exhausted = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::BudgetExhausted { .. }))
+            .expect("expected a BudgetExhausted audit event");
+        // Pin the issuer attribution: the audit row's issuer is the
+        // rejected caller (peer), not the synthesised agent. A future
+        // refactor that flips it would silently re-key audit feeds.
+        assert_eq!(exhausted.issuer.display, "user@local");
+        match &exhausted.kind {
+            AuditKind::BudgetExhausted {
+                agent_display,
+                requested,
+                tokens_remaining,
+                ..
+            } => {
+                assert_eq!(agent_display, "research@agent");
+                assert_eq!(*requested, 1);
+                assert_eq!(*tokens_remaining, 0);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Phase-0 manifests have `budget_credits_per_hour = 0`. The daemon
+    /// must keep dispatching them — register_agent_budgets seeds capacity
+    /// 0, the bucket has no tokens, and try_debit returns Exhausted; the
+    /// dispatch path treats credit-0 agents as "no enforcement requested"
+    /// and skips the debit. (Equivalent test: card with budget = 0 plus
+    /// no register_agent_budgets call, exercising the NoCapacity warn-
+    /// and-pass branch.)
+    #[tokio::test]
+    async fn dispatch_skips_budget_for_zero_credit_agents() {
+        let s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                0,
+            )],
+            "mocked summary",
+        );
+        // Don't call register_agent_budgets — the agent has no bucket,
+        // so try_debit will return NoCapacity, which dispatch treats as
+        // a warn-and-pass for v0.
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+            })
+            .await;
+        match resp {
+            Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
+            other => panic!("expected IntentResult for zero-budget agent, got {other:?}"),
         }
     }
 }

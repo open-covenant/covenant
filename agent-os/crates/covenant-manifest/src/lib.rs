@@ -119,6 +119,23 @@ impl Manifest {
                 )));
             }
         }
+        // `agent.id` flows into a synthesised `AgentId.display` of shape
+        // `<id>@agent` for budget keying (covenantd::agent_id_for_card).
+        // The display is round-tripped through `AgentId`'s serde, which
+        // calls `validate_agent_id_display`'s `[A-Za-z0-9_.-]+` filter on
+        // each side — so an id with characters outside that set boots
+        // fine but breaks JSONL replay on next reopen. Catch it here.
+        if !self
+            .agent
+            .id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+        {
+            return Err(ManifestError::Validation(format!(
+                "agent.id {:?} must be ASCII [A-Za-z0-9_.-]+",
+                self.agent.id
+            )));
+        }
         for cap in self
             .capabilities
             .required
@@ -203,6 +220,31 @@ entry = "./tiny"
         assert_eq!(m.resources.network, NetworkPolicy::OutboundHttpsOnly);
         assert_eq!(m.settlement.budget_credits_per_hour, 0);
         assert_eq!(m.settlement.priority, Priority::Normal);
+    }
+
+    #[test]
+    fn rejects_id_with_disallowed_chars() {
+        // `agent.id` flows into `<id>@agent` for budget keying; chars
+        // outside `[A-Za-z0-9_.-]` would boot fine but trip
+        // `validate_agent_id_display` on JSONL replay. Reject early.
+        for bad in ["foo bar", "foo@host", "foo:bar", "fooé", "foo/bar"] {
+            let toml = format!(
+                r#"
+[agent]
+id = "{bad}"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#
+            );
+            match Manifest::parse(&toml) {
+                Err(ManifestError::Validation(msg)) => {
+                    assert!(msg.contains("agent.id"), "{bad}: {msg}");
+                }
+                other => panic!("expected validation error for {bad:?}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

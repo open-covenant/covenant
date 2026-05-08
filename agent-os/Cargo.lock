@@ -820,6 +820,7 @@ dependencies = [
  "bs58",
  "covenant-a2a",
  "covenant-audit",
+ "covenant-budget",
  "covenant-identity",
  "covenant-ipc",
  "covenant-llm",

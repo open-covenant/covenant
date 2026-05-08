@@ -147,6 +147,23 @@ pub fn memory_write_credits(bytes: usize) -> u64 {
     ((bytes as u64).div_ceil(1024)).max(1)
 }
 
+/// Credit cost of one intent dispatch — the unit `BudgetLedger::try_debit`
+/// charges in Sprint 58b's daemon wiring. Flat 1-credit-per-intent for v0
+/// per the Plan-gate decision: the spec phrase "budget credits" connotes a
+/// quota, not a meter; v0 is single-operator with no price-discrimination
+/// pressure; and a flat cost gives `BudgetError::Exhausted::refill_eta_ms`
+/// a deterministic value that Sprint 58c's pause-and-queue verb can size
+/// the resume around. A future per-agent `cost_per_intent` manifest field
+/// would land at this call site.
+pub const INTENT_DISPATCH_CREDITS: u64 = 1;
+
+/// Accessor mirror of [`INTENT_DISPATCH_CREDITS`]. Future variants that
+/// price per agent or per tool-call can replace the body without touching
+/// callers.
+pub fn intent_dispatch_credits() -> u64 {
+    INTENT_DISPATCH_CREDITS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

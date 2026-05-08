@@ -138,6 +138,14 @@ async fn main() -> Result<()> {
 
     bootstrap_operator_token(&home, &peers, &identity).await?;
 
+    let budget_path = home.join("budget").join("ledger.jsonl");
+    let budget: Arc<dyn covenant_budget::BudgetLedger> = Arc::new(
+        covenant_budget::JsonlLedger::open(budget_path.clone())
+            .await
+            .with_context(|| format!("open budget ledger at {}", budget_path.display()))?,
+    );
+    info!(path = %budget_path.display(), "budget ledger open");
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -151,7 +159,13 @@ async fn main() -> Result<()> {
         tools,
         mailbox,
         peers,
+        budget,
     );
+
+    server
+        .register_agent_budgets()
+        .await
+        .context("seed agent budget capacities from manifests")?;
 
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer

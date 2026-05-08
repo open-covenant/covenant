@@ -62,6 +62,8 @@ async fn full_loop_ping_intent_memory_receipts() {
         })
         .await
         .unwrap();
+    let budget: Arc<dyn covenant_budget::BudgetLedger> =
+        Arc::new(covenant_budget::InMemoryLedger::new());
     let server = covenantd::Server::new(
         router,
         runner,
@@ -75,6 +77,7 @@ async fn full_loop_ping_intent_memory_receipts() {
         tools,
         mailbox,
         peers,
+        budget,
     );
 
     let server_handle = tokio::spawn(async move { server.serve(listener).await });

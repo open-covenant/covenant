@@ -72,6 +72,7 @@ async fn spawn_test_server() -> TestServer {
         )])),
         Arc::new(covenant_a2a::InMemoryMailbox::new()),
         peers,
+        Arc::new(covenant_budget::InMemoryLedger::new()),
     );
     let app = router(HttpState { server });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -398,6 +399,7 @@ async fn spawn_test_server_with_origins(origins: Vec<&'static str>) -> TestServe
         )])),
         Arc::new(covenant_a2a::InMemoryMailbox::new()),
         peers,
+        Arc::new(covenant_budget::InMemoryLedger::new()),
     );
     let origins_hv: Vec<HeaderValue> = origins.into_iter().map(HeaderValue::from_static).collect();
     let app = router_with_origins(HttpState { server }, origins_hv);

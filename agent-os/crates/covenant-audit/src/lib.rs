@@ -90,6 +90,21 @@ pub enum AuditKind {
         signature_b58: String,
         reason: String,
     },
+    /// Logged when `dispatch_intent` rejects an intent because the
+    /// matched agent's budget bucket is exhausted. `agent_display` is
+    /// the synthesized `AgentId.display` for the matched agent (e.g.
+    /// `research@agent`); `requested` is the credit cost the daemon
+    /// tried to debit; `tokens_remaining` is what the bucket actually
+    /// had at the moment of the check; `refill_eta_ms` is the wall
+    /// time until the bucket can satisfy `requested` again. Sprint 58c
+    /// uses the same row to schedule the resume of a paused intent.
+    BudgetExhausted {
+        agent_display: String,
+        intent_id: Uuid,
+        requested: u64,
+        tokens_remaining: u64,
+        refill_eta_ms: u64,
+    },
 }
 
 #[async_trait]

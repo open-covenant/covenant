@@ -11,19 +11,18 @@ export default function McpPage() {
     <>
       <h1>MCP integration</h1>
       <p>
-        Covenant integrates with the Model Context Protocol (MCP) — the
-        protocol agents use to discover and call external tools. The
-        same <code>Tool</code> trait backs native Rust implementations
-        and external MCP servers reached over JSON-RPC, so the daemon
-        and any client can list and invoke tools through a single
-        surface.
+        Covenant integrates the Model Context Protocol (MCP) for tool
+        discovery and invocation. The same <code>Tool</code> trait backs
+        native Rust implementations and external MCP servers reached over
+        JSON-RPC; the daemon and its clients list and invoke tools
+        through a single surface.
       </p>
 
       <h2>Wire shapes</h2>
       <p>
-        Covenant&apos;s MCP types follow the public MCP shapes verbatim
-        so a tool catalogue is portable between Covenant and any other
-        MCP-aware host.
+        Covenant&apos;s MCP types match the published MCP shapes
+        verbatim, so a tool catalogue is portable between Covenant and
+        any other MCP-aware host.
       </p>
 
       <pre>
@@ -54,22 +53,21 @@ ToolCallResult {
       </p>
 
       <p>
-        Two native tools ship with the daemon out of the box:
+        Two native tools are bundled with the daemon:
       </p>
 
       <ul>
         <li>
           <code>echo</code> — returns its <code>text</code> argument
-          verbatim. Validates the schema (rejects missing or
-          non-string <code>text</code>); useful as a smoke test for
-          the registry plumbing and as a reference for argument
-          validation.
+          verbatim. Performs schema validation (missing or non-string{" "}
+          <code>text</code> is rejected). Serves as the reference
+          implementation for argument validation against the registry.
         </li>
         <li>
-          <code>clock</code> — no-arg, returns{" "}
-          <code>{"{ \"epoch_ms\": <u64> }"}</code>. Useful for
-          confirming the daemon is alive without granting any
-          capability.
+          <code>clock</code> — no arguments; returns{" "}
+          <code>{"{ \"epoch_ms\": <u64> }"}</code>. Provides a daemon
+          liveness probe that does not require additional capability
+          grants.
         </li>
       </ul>
 
@@ -120,23 +118,23 @@ env     = { LOG_LEVEL = "info" }`}</code>
 
       <h3>Transport</h3>
       <p>
-        Covenant speaks line-delimited JSON-RPC 2.0 over the spawned
+        Covenant uses line-delimited JSON-RPC 2.0 over the spawned
         process&apos;s stdin/stdout. Each request carries a stable id;
-        the daemon correlates responses by id and ignores anything
-        unrecognised. The child process is started with{" "}
-        <code>kill_on_drop(true)</code>, so an unclean daemon exit
-        also stops the child — there are no orphan tool processes.
+        the daemon correlates responses by id and discards unrecognised
+        messages. Child processes are started with{" "}
+        <code>kill_on_drop(true)</code>, so an unclean daemon exit also
+        terminates the child and prevents orphan tool processes.
       </p>
 
       <h2>Security</h2>
       <p>
-        External MCP servers run as the operator. They have access to
-        whatever the daemon&apos;s user account has access to. The
-        capability gate (<code>tool.call.&lt;name&gt;</code>) governs
-        who can <em>invoke</em> a tool through the daemon, but it
-        cannot govern what the tool itself does on the operator&apos;s
-        machine once invoked. Vet servers before configuring them and
-        prefer the most narrowly-scoped server for the job.
+        External MCP servers execute with the operator&apos;s privileges
+        and have access to whatever the daemon&apos;s user account can
+        reach. The capability gate (<code>tool.call.&lt;name&gt;</code>)
+        controls invocation through the daemon but cannot constrain
+        server behavior post-invocation. Operators should review
+        external servers before configuration and select the
+        narrowest-scoped server appropriate for the task.
       </p>
 
       <h2>Related</h2>

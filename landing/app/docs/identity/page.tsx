@@ -11,27 +11,24 @@ export default function IdentityPage() {
     <>
       <h1>Identity and keys</h1>
       <p>
-        Every Covenant install owns a single ed25519 keypair. The same
-        key signs capability grants, signs Solana settlement
-        transactions, and fronts the daemon&apos;s issuer field on
-        audit events and memory records. There is no second key
-        system.
+        Every Covenant install holds a single ed25519 keypair. The same
+        key signs capability grants, signs Solana settlement transactions,
+        and appears as the issuer on audit events and memory records.
+        Covenant does not maintain a secondary key system.
       </p>
 
       <h2>Persistence</h2>
       <p>
         The keypair is stored as the raw 32-byte seed at{" "}
-        <code>$COVENANT_HOME/identity/local.key</code>. The daemon
-        writes the file with mode <code>0600</code> (owner
-        read/write, no group, no other). On startup the daemon
-        refuses to load a key file with broader permissions; tighten
-        it with <code>chmod 0600</code> if you ever see this error.
+        <code>$COVENANT_HOME/identity/local.key</code> with mode{" "}
+        <code>0600</code> (owner read/write only). The daemon refuses to
+        start if the key file has broader permissions; restrict the file
+        with <code>chmod 0600</code> to recover.
       </p>
 
       <p>
-        The matching public key is derivable from the seed and is
-        attached to every <code>AgentId</code> the daemon emits as
-        the issuer.
+        The corresponding public key is derived from the seed and attached
+        to every <code>AgentId</code> the daemon emits as issuer.
       </p>
 
       <h2>The <code>AgentId</code> shape</h2>
@@ -44,9 +41,9 @@ export default function IdentityPage() {
 
       <p>
         The display half is set on first daemon start (default{" "}
-        <code>user@&lt;hostname&gt;</code>). The pubkey half is
-        derived from the seed and is the cryptographically meaningful
-        identifier — display strings can collide; pubkeys cannot.
+        <code>user@&lt;hostname&gt;</code>). The public key is derived
+        from the seed and is the cryptographically meaningful identifier;
+        display strings may collide, public keys cannot.
       </p>
 
       <h2>Signing helpers</h2>
@@ -78,13 +75,13 @@ export default function IdentityPage() {
       </ul>
 
       <p>
-        The signing helpers are deliberately small: they do not
-        prescribe a canonical encoding for the message. The capability
-        layer (<code>covenant-permissions</code>) supplies its own
-        encoder and feeds the signing helpers the resulting bytes.
+        The signing helpers are deliberately minimal and do not prescribe
+        a canonical message encoding. The capability layer
+        (<code>covenant-permissions</code>) supplies its own encoder and
+        passes the resulting bytes to the signing helpers.
       </p>
 
-      <h2>Same key, two roles</h2>
+      <h2>Roles</h2>
       <p>
         The same ed25519 keypair is used to:
       </p>
@@ -97,59 +94,57 @@ export default function IdentityPage() {
           receipts on-chain;
         </li>
         <li>
-          appear as the <code>issuer</code> on audit events and the{" "}
+          appear as the <code>issuer</code> on audit events and as the{" "}
           <code>owner</code> on memory records.
         </li>
       </ul>
       <p>
-        Reusing the key across roles keeps the operator&apos;s mental
-        model small. The cost is that compromise of the key
-        compromises all three; the benefit is that there is only one
-        thing to back up, rotate, and protect.
+        A single key across all three roles reduces the operator&apos;s
+        key-management surface to one artifact. The trade-off is that
+        compromise of the key affects all three roles; the deployment
+        benefit is one artifact to back up, rotate, and protect.
       </p>
 
       <h2>Rotation</h2>
       <p>
         Rotation is deliberate and disruptive. Re-issuing the keypair
-        invalidates every signed capability written under the old key
-        — verifying a token after rotation will fail because the
-        expected granter pubkey no longer matches the daemon&apos;s
-        live key. Plan for the re-grant when you rotate.
+        invalidates every capability signed under the prior key:
+        verification fails because the expected granter public key no
+        longer matches the daemon&apos;s active key. Plan the
+        corresponding re-grant in advance of rotation.
       </p>
 
-      <p>The procedure:</p>
+      <p>Procedure:</p>
 
       <ol>
         <li>Stop the daemon.</li>
         <li>
-          Move the existing key file aside (or delete it once you are
-          sure no other state references it).
+          Move the existing key file aside, or delete it once no other
+          state references the corresponding public key.
         </li>
         <li>
-          Start the daemon. It will generate a fresh key on first
-          run.
+          Start the daemon. A new keypair is generated on first run.
         </li>
         <li>
-          Re-grant every capability your agents need. The audit log
-          will record both the rotation (implicitly, via the absence
-          of the old issuer in subsequent events) and the new
-          grants.
+          Re-grant the capabilities required by registered agents. The
+          audit log records the rotation implicitly through the change
+          of issuer on subsequent events, and explicitly through the new
+          grant events.
         </li>
         <li>
-          Update any external systems that bound to the old pubkey
-          (Solana program authority records, third-party
-          integrations).
+          Update any external systems bound to the prior public key
+          (Solana program authority records, third-party integrations).
         </li>
       </ol>
 
-      <h2>Keys at scale</h2>
+      <h2>Subordinate keys</h2>
       <p>
-        Today Covenant runs one keypair per machine. A future shape
-        will allow multiple subordinate keys for delegated agents
-        (each subordinate signed by the root), so an agent compromise
-        does not require a full root rotation. Until then, treat the
-        single keypair the way you would treat your shell&apos;s SSH
-        key.
+        The current implementation provisions one keypair per host. A
+        later milestone introduces subordinate keys for delegated agents,
+        each signed by the root key, so that compromise of an individual
+        subordinate does not require a full root rotation. Until that
+        capability ships, the single keypair carries the same protection
+        requirements as a host SSH key.
       </p>
 
       <h2>Related</h2>

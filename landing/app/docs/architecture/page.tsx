@@ -392,20 +392,21 @@ export default function ArchitecturePage() {
       </p>
 
       <p>
-        The program is deliberately small. Bigger token mechanics —
-        oracle integration, DEX routing for buyback — live one layer up
-        and can change without touching the on-chain authority surface.
+        The on-chain program is deliberately minimal. Higher-level token
+        mechanics — oracle integration, DEX routing for buyback — are
+        implemented one layer up and may evolve without modification to
+        the on-chain authority surface.
       </p>
 
-      <h2>What is not in scope</h2>
+      <h2>Position in the stack</h2>
       <p>
-        Covenant is not an LLM, not an agent framework, and not a chat
-        product. It does not host models, and it does not prescribe how
-        agents should reason. The goal is for an agent stack of any kind
-        — handcrafted, framework-built, fine-tuned end-to-end — to plug
-        into the same primitives so that permissions, memory, identity,
-        and settlement are not each application&apos;s problem to solve
-        from scratch.
+        Covenant operates between the host operating system and user-facing
+        agentic applications. It does not host language models and does not
+        prescribe agent reasoning strategies. Custom agents, framework-built
+        agents, and end-to-end fine-tuned agents integrate against the same
+        primitive set, so that identity, permissions, memory, communication,
+        and settlement are provided as shared host-level services rather
+        than reimplemented per application.
       </p>
     </>
   );

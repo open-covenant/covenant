@@ -12,10 +12,10 @@ export default function IpcPage() {
       <h1>Local IPC</h1>
       <p>
         The daemon&apos;s canonical wire protocol. Clients on the same
-        machine — the CLI, an operator UI, third-party tooling — speak
-        length-prefixed JSON over a Unix socket at{" "}
+        host — the CLI, operator UIs, third-party tooling — communicate
+        with the daemon over length-prefixed JSON on a Unix socket at{" "}
         <code>$COVENANT_HOME/sock</code>. The HTTP gateway is a thin
-        adapter on top of the same surface.
+        adapter over the same surface.
       </p>
 
       <h2>Frame format</h2>
@@ -34,12 +34,11 @@ export default function IpcPage() {
       </pre>
 
       <p>
-        The framing applies in both directions: the request frame is
+        The framing applies in both directions: each request frame is
         followed by exactly one response frame, and a long-lived
         connection can carry many request/response pairs in sequence.
-        Connections are not pooled by the daemon; clients are expected
-        to reuse a single connection or open one per request as
-        convenient.
+        Connections are not pooled by the daemon; clients may reuse a
+        single connection or open one per request.
       </p>
 
       <h2>Request shapes</h2>
@@ -153,25 +152,26 @@ export default function IpcPage() {
       <h2>Implementation notes</h2>
       <ul>
         <li>
-          <strong>Backpressure.</strong> The daemon reads one frame at
-          a time per connection; long-running operations hold the
-          connection open until they complete, so a slow handler will
-          delay the next request on that connection.
+          <strong>Backpressure.</strong> The daemon reads one frame at a
+          time per connection; long-running operations hold the connection
+          open until completion, so a slow handler delays the next request
+          on that connection.
         </li>
         <li>
           <strong>Frame size.</strong> The 8 MiB cap applies in both
-          directions. Returning a memory record set that exceeds it
-          should not happen in normal operation, but a verification
-          window over millions of records can. Use{" "}
-          <code>limit</code> arguments where they exist.
+          directions. A memory record set exceeding the cap is rare under
+          normal operation, but a verification window over millions of
+          records can reach it. Use the available <code>limit</code>{" "}
+          arguments to bound response sizes.
         </li>
         <li>
           <strong>Timeouts.</strong> The daemon does not impose a
-          per-request timeout. Clients should set their own.
+          per-request timeout. Clients are responsible for their own
+          timeouts.
         </li>
         <li>
-          <strong>Authentication.</strong> Connecting to the Unix
-          socket is the credential. Anything with read access to{" "}
+          <strong>Authentication.</strong> Connection to the Unix socket
+          is the sole credential. Any process with read access to{" "}
           <code>$COVENANT_HOME/sock</code> can submit intents.
         </li>
       </ul>
@@ -180,9 +180,9 @@ export default function IpcPage() {
       <p>
         The <code>covenant-ipc</code> Rust crate provides{" "}
         <code>read_frame</code> and <code>write_frame</code> helpers
-        plus the <code>Request</code> and <code>Response</code> enums.
-        See <Link href="/cli">CLI</Link> for an end-to-end
-        example using both.
+        alongside the <code>Request</code> and <code>Response</code> enums.
+        Refer to the <Link href="/cli">CLI</Link> for an end-to-end
+        example.
       </p>
 
       <h2>Related</h2>

@@ -11,9 +11,9 @@ export default function GettingStartedPage() {
     <>
       <h1>Getting started</h1>
       <p>
-        From an empty machine to a running Covenant daemon and a successful
-        first intent. The whole loop runs locally — no accounts, no API keys
-        required.
+        This guide installs Covenant from source, brings up the daemon, and
+        dispatches a first intent end-to-end. The full loop runs on the
+        local host without external accounts or credentials.
       </p>
 
       <h2>Prerequisites</h2>
@@ -109,9 +109,9 @@ model    = "nomic-embed-text"
       </pre>
 
       <p>
-        Without this file, Covenant falls back to a mock LLM and a mock
-        search provider — useful for sandboxing, but the research agent will
-        return canned text. See{" "}
+        In the absence of this file, Covenant defaults to a mock LLM and a
+        mock search provider; the research agent will return placeholder
+        text under that configuration. Refer to{" "}
         <Link href="/concepts">Concepts</Link> and{" "}
         <Link href="/agent-manifest">Agent manifest</Link> for the full
         configuration surface.
@@ -147,9 +147,9 @@ model    = "nomic-embed-text"
         </li>
       </ul>
 
-      <h2>Submit your first intent</h2>
+      <h2>Submit a first intent</h2>
 
-      <p>From a second terminal:</p>
+      <p>From a second terminal session:</p>
 
       <pre>
         <code>{`./target/debug/covenant ping
@@ -159,9 +159,9 @@ model    = "nomic-embed-text"
       </pre>
 
       <p>
-        With no agents registered, the daemon falls back to an echo
-        response and writes a working-tier memory record plus a settlement
-        receipt. Inspect them:
+        With no agents registered, the daemon returns a deterministic echo
+        response and persists a working-tier memory record alongside a
+        settlement receipt. Inspect both:
       </p>
 
       <pre>
@@ -169,13 +169,13 @@ model    = "nomic-embed-text"
 ./target/debug/covenant receipts recent`}</code>
       </pre>
 
-      <h2>Register a real agent</h2>
+      <h2>Register an agent</h2>
 
       <p>
-        Drop an agent manifest into{" "}
-        <code>$COVENANT_HOME/agents/</code>. The repository ships a{" "}
+        Place an agent manifest under{" "}
+        <code>$COVENANT_HOME/agents/</code>. The repository includes a{" "}
         <code>research</code> agent at <code>agents/research</code>. Build
-        it, then point a manifest at the binary:
+        the agent and create a manifest pointing at the resulting binary:
       </p>
 
       <pre>
@@ -202,8 +202,8 @@ EOF`}</code>
       </pre>
 
       <p>
-        Restart the daemon, grant the capability, then submit an intent that
-        matches the agent&apos;s registered keywords:
+        Restart the daemon, grant the required capability, and submit an
+        intent that matches the agent&apos;s registered keywords:
       </p>
 
       <pre>
@@ -212,15 +212,15 @@ EOF`}</code>
       </pre>
 
       <p>
-        The daemon routes the intent to <code>research@local</code>, runs
-        the binary as a subprocess, captures the response, writes memory and
-        a receipt, and emits an audit event for the dispatch and the
-        capability check.
+        The daemon routes the intent to <code>research@local</code>,
+        executes the binary as a subprocess, captures the response,
+        persists the memory record and settlement receipt, and emits audit
+        events for both the dispatch and the capability check.
       </p>
 
-      <h2>Verify the local state</h2>
+      <h2>Verify local state</h2>
 
-      <p>The CLI exposes every primitive&apos;s recent state:</p>
+      <p>Each primitive&apos;s recent state is queryable through the CLI:</p>
 
       <pre>
         <code>{`covenant memory recent --limit 20
@@ -235,27 +235,28 @@ covenant verify --window 100`}</code>
         reports any drift.
       </p>
 
-      <h2>Where to go next</h2>
+      <h2>Further reading</h2>
 
       <ul>
         <li>
-          <Link href="/concepts">Concepts</Link> — the mental model:
-          intents, agents, capabilities, memory, audit, settlement.
+          <Link href="/concepts">Concepts</Link> — data model: intents,
+          agents, capabilities, memory, audit, and settlement.
         </li>
         <li>
-          <Link href="/cli">CLI reference</Link> — every subcommand.
+          <Link href="/cli">CLI reference</Link> — complete subcommand
+          reference.
         </li>
         <li>
-          <Link href="/http-api">HTTP API</Link> — the gateway routes,
-          for browser-facing UIs and third-party tooling.
+          <Link href="/http-api">HTTP API</Link> — gateway routes for
+          browser-facing UIs and third-party integrations.
         </li>
         <li>
-          <Link href="/agent-manifest">Agent manifest</Link> — the full{" "}
+          <Link href="/agent-manifest">Agent manifest</Link> — full{" "}
           <code>agent.toml</code> schema.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — what Covenant
-          protects, and what it does not.
+          <Link href="/security">Security model</Link> — trust
+          boundaries and operator responsibilities.
         </li>
       </ul>
     </>

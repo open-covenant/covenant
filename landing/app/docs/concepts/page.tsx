@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "Concepts",
   description:
-    "The mental model: intents, agents, capabilities, memory, audit, and settlement.",
+    "The Covenant data model: intents, agents, capabilities, memory, audit, and settlement.",
 };
 
 export default function ConceptsPage() {
@@ -11,9 +11,10 @@ export default function ConceptsPage() {
     <>
       <h1>Concepts</h1>
       <p>
-        Covenant is built around a small vocabulary. Once you know what an
-        intent, an agent, a capability, and a settlement receipt are, the
-        rest of the system follows.
+        Covenant is organized around a fixed vocabulary. Intents, agents,
+        capabilities, memory records, audit events, and settlement receipts
+        are the primary types in the data model; every higher-level behavior
+        in the system is defined in terms of these.
       </p>
 
       <h2>Intent</h2>
@@ -27,10 +28,10 @@ export default function ConceptsPage() {
       </p>
 
       <p>
-        Submit an intent over the local socket, the HTTP gateway, or the
-        CLI. The daemon routes it via keyword overlap against the
-        capability cards of registered agents; an unmatched intent falls
-        through to a deterministic echo response.
+        Intents are submitted over the local socket, the HTTP gateway, or
+        the CLI. The daemon routes each intent by keyword overlap against
+        the capability cards of registered agents; an intent that matches
+        no agent receives a deterministic echo response.
       </p>
 
       <h2>Agent</h2>
@@ -121,9 +122,9 @@ export default function ConceptsPage() {
 
       <ul>
         <li>
-          <strong>working</strong> — short-lived per-task scratch. Cleared
-          with intent completion in the steady state; today persists until
-          GC&apos;d explicitly.
+          <strong>working</strong> — short-lived per-task scratch.
+          Persists until purged via the memory garbage-collection
+          primitive.
         </li>
         <li>
           <strong>episodic</strong> — task-grained records that survive
@@ -168,20 +169,21 @@ export default function ConceptsPage() {
       </ul>
 
       <p>
-        There is no second key system. Operator key hygiene matters
-        accordingly — see <Link href="/identity">Identity and keys</Link>{" "}
-        and <Link href="/security">Security model</Link>.
+        There is no secondary key system. Refer to{" "}
+        <Link href="/identity">Identity and keys</Link> and{" "}
+        <Link href="/security">Security model</Link> for key-management
+        practices.
       </p>
 
       <h2>Audit</h2>
       <p>
-        Every state-changing surface in Covenant emits an{" "}
-        <code>AuditEvent</code>: intent dispatch, capability check,
-        capability grant, capability revoke, ignored intent. Events are
-        appended to <code>$COVENANT_HOME/audit/events.jsonl</code> with a
-        deterministic schema. The audit log is the system&apos;s ground
-        truth — operators read it; <code>covenant verify</code>{" "}
-        cross-checks it against the other state files for drift.
+        Every state-changing operation emits an <code>AuditEvent</code>:
+        intent dispatch, capability check, capability grant, capability
+        revocation, ignored intent. Events are appended to{" "}
+        <code>$COVENANT_HOME/audit/events.jsonl</code> under a deterministic
+        schema. The audit log is the system of record;{" "}
+        <code>covenant verify</code> cross-checks it against the other
+        state files for drift.
       </p>
 
       <p>
@@ -234,22 +236,22 @@ export default function ConceptsPage() {
 
       <h2>Compositor</h2>
       <p>
-        The compositor is whatever surface the operator uses to drive
-        Covenant — CLI today, web UI alongside, TUI on the way, and an
-        optional Wayland compositor in the longer term. Compositors talk
-        to the daemon through the same transports listed above; the
-        daemon does not assume any specific UI.
+        The compositor is the surface through which an operator interacts
+        with the daemon: the CLI, the web UI, a terminal interface, or a
+        native Wayland compositor on supported milestones. Compositors
+        communicate with the daemon through the transports listed above;
+        the daemon makes no assumptions about the client surface.
       </p>
 
-      <h2>Putting it together</h2>
+      <h2>End-to-end intent flow</h2>
       <p>
-        A successful intent flow touches every primitive. A user submits
-        an intent. The daemon checks the issuer&apos;s capabilities, picks
-        an agent via the router, runs it through the runtime with a
-        wall-clock budget, captures the result, writes a memory record,
-        emits a settlement receipt, and lands one or more audit events
-        describing what happened. The operator can replay the day from
-        the audit log alone.
+        A successful intent dispatch exercises every primitive. The daemon
+        receives the intent, validates the issuer&apos;s capabilities,
+        selects an agent through the router, executes the agent under a
+        wall-clock budget, captures the result, persists a memory record,
+        emits a settlement receipt, and writes the corresponding audit
+        events. Operational state is fully reconstructible from the audit
+        log.
       </p>
     </>
   );

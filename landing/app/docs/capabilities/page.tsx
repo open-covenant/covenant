@@ -11,10 +11,10 @@ export default function CapabilitiesPage() {
     <>
       <h1>Capability tokens</h1>
       <p>
-        A capability token is a typed, signed permission slip. It names an
+        A capability token is a typed, signed authorization. It names an
         action, optionally scopes it to a JSON predicate, and is signed by
-        the granter with their ed25519 key. Capability tokens are how
-        Covenant enforces what an agent or a tool is allowed to do.
+        the granter with their ed25519 key. Covenant enforces agent and
+        tool authorization through capability tokens.
       </p>
 
       <h2>Shape</h2>
@@ -73,11 +73,11 @@ export default function CapabilitiesPage() {
 
       <h2>Canonical encoding</h2>
       <p>
-        Tokens are signed over a deterministic byte encoding so any
+        Tokens are signed over a deterministic byte encoding, so any
         verifier produces the same bytes for the same capability. The
-        encoder is intentionally explicit and length-prefixed; it lives
-        in one place (<code>canonical_message</code>) and can be
-        replaced without disturbing the wire format.
+        encoder is explicit and length-prefixed and is located in a
+        single function (<code>canonical_message</code>); it can be
+        replaced without affecting the wire format.
       </p>
 
       <pre>
@@ -141,11 +141,12 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
 
       <p>
         At dispatch the daemon enumerates the issuer&apos;s active
-        capabilities, drops anything that fails{" "}
+        capabilities, discards any that fail{" "}
         <code>verify_with_clock</code>, computes the set of{" "}
-        <code>action</code>s, and checks that every required action
-        from the matched agent&apos;s manifest is in that set. Missing
-        actions land in the audit event and the dispatch is rejected.
+        <code>action</code>s, and verifies that every required action
+        from the matched agent&apos;s manifest is present. Missing
+        actions are recorded in the audit event and the dispatch is
+        rejected.
       </p>
 
       <h2>Revocation</h2>

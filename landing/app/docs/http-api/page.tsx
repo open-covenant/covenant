@@ -26,20 +26,20 @@ export default function HttpApiPage() {
           Request bodies are JSON; responses are JSON.
         </li>
         <li>
-          Validation-level problems (missing capability, no agent
-          matched) come back as <code>200 OK</code> with{" "}
-          <code>{"{ \"kind\": \"error\", \"message\": \"…\" }"}</code>. This
-          mirrors the IPC behaviour and keeps callers reading a
-          consistent shape.
+          Validation-level conditions (missing capability, no agent
+          matched) return <code>200 OK</code> with{" "}
+          <code>{"{ \"kind\": \"error\", \"message\": \"…\" }"}</code>,
+          matching IPC behavior so that callers parse a single response
+          shape.
         </li>
         <li>
-          Internal errors (panic, I/O fault) come back as{" "}
+          Internal errors (panic, I/O fault) return{" "}
           <code>500 Internal Server Error</code> with{" "}
           <code>{"{ \"error\": \"…\" }"}</code>.
         </li>
         <li>
-          CORS is permissive on the gateway; treat it as a local-only
-          surface and do not expose it beyond loopback.
+          CORS is permissive. The gateway is intended for local use only
+          and must not be exposed beyond loopback.
         </li>
       </ul>
 
@@ -154,13 +154,12 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot`}</code>
 
       <h2>Authentication</h2>
       <p>
-        The HTTP gateway has no token authentication; reaching the
-        loopback interface is the only credential. Treat the daemon as
-        you would treat your shell — anything that can connect to{" "}
-        <code>127.0.0.1:8421</code> can submit intents and grant
-        capabilities. A future release will gate the HTTP surface
-        behind capability tokens; until then, do not expose the
-        gateway beyond loopback.
+        The HTTP gateway provides no token authentication; access to the
+        loopback interface is the sole credential. Any process that can
+        connect to <code>127.0.0.1:8421</code> can submit intents and
+        grant capabilities. A subsequent milestone introduces capability
+        gating on the HTTP surface; until then the gateway must not be
+        exposed beyond loopback.
       </p>
 
       <h2>Related</h2>

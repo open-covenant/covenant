@@ -11,10 +11,10 @@ export default function A2APage() {
     <>
       <h1>Agent-to-agent</h1>
       <p>
-        Agent-to-agent (A2A) is the surface one Covenant agent uses to
-        send a task to another, get the result back, and reconstruct a
-        task graph across many such exchanges. The wire types are
-        small; the storage and routing are intentionally pluggable.
+        Agent-to-agent (A2A) is the surface through which one Covenant
+        agent dispatches a task to another, receives a result, and
+        reconstructs a task graph across many such exchanges. The wire
+        types are minimal; storage and routing are pluggable.
       </p>
 
       <h2>Wire types</h2>
@@ -65,12 +65,12 @@ A2ATaskResult {
       </pre>
 
       <p>
-        The blocking <code>recv_*</code> variants suit in-process
-        agents that idle on a long-lived connection; the non-blocking{" "}
-        <code>try_recv_*</code> variants suit RPC-style callers that
-        prefer to poll over a single round-trip; the non-consuming{" "}
-        <code>recent_*</code> variants suit operator dashboards that
-        need to inspect the queue without draining it.
+        The blocking <code>recv_*</code> variants are appropriate for
+        in-process agents on long-lived connections. The non-blocking{" "}
+        <code>try_recv_*</code> variants are appropriate for RPC-style
+        callers that poll over a single round-trip. The non-consuming{" "}
+        <code>recent_*</code> variants support operator dashboards that
+        inspect the queue without draining it.
       </p>
 
       <h2>Daemon-mediated flow</h2>
@@ -129,59 +129,59 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
         </li>
       </ul>
       <p>
-        Read paths (<code>TryRecv*</code>, <code>Recent*</code>) are
-        not gated. Drain operations on the operator&apos;s own daemon
-        are treated as a local-trust action.
+        Read paths (<code>TryRecv*</code>, <code>Recent*</code>) are not
+        gated. Drain operations on the operator&apos;s own daemon are
+        treated as local-trust actions.
       </p>
 
       <h2>Orchestration patterns</h2>
       <h3>Fan-out</h3>
       <p>
-        An orchestrator receives a root intent, generates several
-        child <code>A2ATask</code> envelopes (each with{" "}
-        <code>parent = root_intent.id</code>), sends them via{" "}
+        An orchestrator receives a root intent, generates a set of child{" "}
+        <code>A2ATask</code> envelopes (each with{" "}
+        <code>parent = root_intent.id</code>), submits them via{" "}
         <code>POST /a2a/tasks</code>, and polls{" "}
-        <code>GET /a2a/results/next</code> until it has results for
-        every dispatched child.
+        <code>GET /a2a/results/next</code> until results have been
+        received for every dispatched child.
       </p>
 
       <h3>Pipeline</h3>
       <p>
         Two agents form a producer-consumer pipeline. The producer
-        sends tasks tagged for the consumer&apos;s{" "}
-        <code>recipient</code>; the consumer pulls them off the
-        mailbox via <code>recv_task</code> and posts results back.
+        submits tasks tagged for the consumer&apos;s{" "}
+        <code>recipient</code>; the consumer dequeues them via{" "}
+        <code>recv_task</code> and posts results back.
       </p>
 
       <h2>Implementation notes</h2>
       <ul>
         <li>
-          <strong>Persistence.</strong> The default mailbox is in
-          memory. A daemon restart drops every queued task and result.
-          A disk-backed mailbox is on the roadmap.
+          <strong>Persistence.</strong> The default mailbox is
+          in-memory; a daemon restart discards every queued task and
+          result. A disk-backed mailbox is scheduled for a subsequent
+          milestone.
         </li>
         <li>
-          <strong>Routing.</strong> The default mailbox is global FIFO
-          — every <code>recv_task</code> caller pulls from the same
-          queue regardless of <code>recipient</code>. Per-recipient
-          routing is on the roadmap.
+          <strong>Routing.</strong> The default mailbox is global FIFO:
+          every <code>recv_task</code> caller pulls from the same queue
+          regardless of <code>recipient</code>. Per-recipient routing
+          is scheduled for a subsequent milestone.
         </li>
         <li>
-          <strong>Authentication.</strong> Both write paths are gated
-          by capability tokens (<code>a2a.send.&lt;recipient&gt;</code>{" "}
-          and <code>a2a.respond.&lt;sender&gt;</code>) checked against
-          the daemon&apos;s local identity. The cap is not yet bound
-          to the calling HTTP/IPC peer — closing that gap requires
-          per-call peer authentication, which is a separate piece of
-          work.
+          <strong>Authentication.</strong> Both write paths are gated by
+          capability tokens (<code>a2a.send.&lt;recipient&gt;</code> and{" "}
+          <code>a2a.respond.&lt;sender&gt;</code>) checked against the
+          daemon&apos;s local identity. The capability is not yet bound
+          to the calling HTTP/IPC peer; per-call peer authentication is
+          tracked separately.
         </li>
         <li>
-          <strong>Sender record.</strong> The mailbox keeps a
+          <strong>Sender record.</strong> The mailbox retains a
           permanent record of the sender for every dispatched task so
-          that respond capabilities can be sender-scoped even after
-          the task has been recv&apos;d. For long-running daemons
-          this map grows unboundedly; a TTL or LRU policy lands with
-          the disk-backed mailbox.
+          that respond capabilities remain sender-scoped after the task
+          has been received. For long-running daemons this map grows
+          unboundedly; a TTL or LRU policy is introduced with the
+          disk-backed mailbox.
         </li>
       </ul>
 

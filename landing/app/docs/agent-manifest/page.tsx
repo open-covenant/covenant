@@ -11,12 +11,12 @@ export default function AgentManifestPage() {
     <>
       <h1>Agent manifest</h1>
       <p>
-        Every Covenant agent registers itself with the daemon by
-        dropping an <code>agent.toml</code> file under{" "}
+        Each Covenant agent is registered through an{" "}
+        <code>agent.toml</code> file placed under{" "}
         <code>$COVENANT_HOME/agents/</code>. The manifest declares the
-        agent&apos;s identity, what runtime it expects, where its
-        executable lives, the capabilities it needs, the resource
-        budget it should run under, and an optional settlement hint.
+        agent&apos;s identity, runtime, executable path, required
+        capabilities, resource budget, and an optional settlement
+        configuration.
       </p>
 
       <h2>Example</h2>
@@ -307,11 +307,10 @@ runtime = "node"       →   exec node    entry`}</code>
       </pre>
 
       <p>
-        Any output on stderr is captured by the daemon&apos;s tracing
-        subsystem and surfaces in the operator&apos;s logs. The agent
-        process must terminate within{" "}
-        <code>resources.cpu_ms_per_task</code>; a longer-running agent
-        is killed and the dispatch returns an error.
+        Stderr output is captured by the daemon&apos;s tracing subsystem
+        and surfaces in operator logs. The agent process must terminate
+        within <code>resources.cpu_ms_per_task</code>; processes that
+        exceed the budget are killed and the dispatch returns an error.
       </p>
 
       <h2>Validation rules</h2>
@@ -335,16 +334,16 @@ runtime = "node"       →   exec node    entry`}</code>
 
       <p>
         Unknown top-level sections are tolerated for forward
-        compatibility; future Covenant releases may attach meaning to
-        them.
+        compatibility; subsequent releases may attach meaning to them.
       </p>
 
-      <h2>Where manifests live</h2>
+      <h2>Manifest discovery</h2>
       <p>
         The daemon scans <code>$COVENANT_HOME/agents/*.toml</code> on
-        startup. There is no online registration; restart the daemon
-        after dropping a new manifest. Existing manifests can be
-        edited in place — they are re-read on the next daemon start.
+        startup. Online registration is not supported; the daemon must
+        be restarted after a new manifest is added. Existing manifests
+        may be edited in place and are re-read on the next daemon
+        start.
       </p>
 
       <h2>Related</h2>

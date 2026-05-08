@@ -87,12 +87,12 @@ export default function SettlementPage() {
 
       <h2>Buyback</h2>
       <p>
-        Credits are minted in exchange for burned tokens. The mint
-        side burns; the consume side destroys. Net circulating
-        supply contracts as the system is used. The buyback shape
-        leans on the on-chain program to prevent simultaneous mint
-        and consume races and to bind credits to a single authority
-        per cluster.
+        Credits are minted in exchange for burned tokens; the mint side
+        burns, the consume side destroys. Net circulating supply
+        contracts as the system is used. The on-chain program
+        serializes mint and consume operations and binds credits to a
+        single authority per cluster, ensuring buyback semantics are not
+        subject to mint-versus-consume races.
       </p>
 
       <h2>Storage layout</h2>
@@ -128,21 +128,21 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
 
       <h2>Verification</h2>
       <p>
-        <code>covenant verify</code> cross-checks memory writes
-        against settlement receipts: a successful memory write that
-        did not produce a receipt (or the reverse) shows up as drift.
-        The daemon is fail-soft on receipt write — a failed receipt
-        does not cancel the memory write — so drift here is the most
-        common operator-visible signal of a settlement-side bug.
+        <code>covenant verify</code> cross-checks memory writes against
+        settlement receipts: a memory write without a corresponding
+        receipt, or the inverse, surfaces as drift. The daemon is
+        fail-soft on receipt write — a failed receipt does not cancel
+        the memory write — so drift in this dimension is the principal
+        operator-visible indicator of a settlement-side fault.
       </p>
 
-      <h2>Implementation status</h2>
+      <h2>Release</h2>
       <p>
-        Off-chain receipts are live. The on-chain Anchor program is
-        scaffolded and emits structured events; the SPL token CPIs
-        and oracle wiring are gated on a downstream change. Receipts
-        carry <code>onchain_sig: null</code> until the on-chain side
-        is fully connected.
+        Off-chain receipts and the local credit accounting are stable.
+        The on-chain settlement program is deployed to Solana mainnet
+        from the alpha release; an external security audit follows on
+        the M2 milestone. Refer to the public roadmap for the milestone
+        schedule.
       </p>
 
       <h2>Related</h2>

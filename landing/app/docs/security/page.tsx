@@ -11,13 +11,12 @@ export default function SecurityPage() {
     <>
       <h1>Security model</h1>
       <p>
-        Covenant is a local-first daemon. It assumes the operator owns
-        the machine and trusts their own user account; it does not
-        defend against an attacker who already has the operator&apos;s
-        shell. Within that assumption it offers strong guarantees
-        about what agents and tools can do — capability tokens with
-        ed25519 signatures, append-only audit, hard enforcement at
-        dispatch.
+        Covenant is a local-first daemon. The model assumes the operator
+        owns the host and trusts their own user account; it does not defend
+        against an adversary that has already obtained shell access as the
+        operator. Within that boundary, Covenant provides strong guarantees
+        over agent and tool behavior: ed25519-signed capability tokens, an
+        append-only audit log, and hard enforcement at dispatch.
       </p>
 
       <h2>Trust boundaries</h2>
@@ -63,10 +62,10 @@ export default function SecurityPage() {
             <td>External MCP server</td>
             <td>No</td>
             <td>
-              Servers run with the operator&apos;s privileges. The
+              Servers execute with the operator&apos;s privileges. The
               daemon gates <em>invocation</em> via{" "}
-              <code>tool.call.&lt;name&gt;</code>; it cannot govern
-              what a malicious server does once invoked.
+              <code>tool.call.&lt;name&gt;</code> but cannot constrain
+              the behavior of a malicious server post-invocation.
             </td>
           </tr>
           <tr>
@@ -136,28 +135,29 @@ export default function SecurityPage() {
         </li>
       </ul>
 
-      <h2>Defaults that matter</h2>
+      <h2>Defaults</h2>
 
       <ul>
         <li>
-          Identity key written at mode <code>0600</code>; refusal to
-          start if the key file is world-readable.
+          Identity key written at mode <code>0600</code>; the daemon
+          refuses to start if the key file is world-readable.
         </li>
         <li>
-          HTTP gateway bound to <code>127.0.0.1</code>. Override
-          deliberately if you need remote access — and gate the
-          surface behind your own auth proxy when you do.
+          HTTP gateway bound to <code>127.0.0.1</code>. Remote access
+          requires deliberate configuration and an authentication proxy
+          in front of the gateway.
         </li>
         <li>
           Default agent network policy is{" "}
-          <code>outbound-https-only</code>; opt into{" "}
-          <code>full</code> only when the agent needs it.
+          <code>outbound-https-only</code>;{" "}
+          <code>full</code> network access requires explicit opt-in per
+          agent.
         </li>
         <li>
           The default <code>.covenantignore</code> seeds rules for
-          common credential filenames so that intents whose text
-          mentions e.g. <code>id_rsa</code> are short-circuited and
-          never written to memory.
+          common credential filenames; intents whose text references
+          paths such as <code>id_rsa</code> are short-circuited and
+          never persisted to memory.
         </li>
       </ul>
 
@@ -165,30 +165,30 @@ export default function SecurityPage() {
 
       <ul>
         <li>
-          Treat <code>$COVENANT_HOME</code> as you would treat your
-          shell&apos;s dotfiles. Back it up; restrict access; do not
-          check it into version control.
+          <code>$COVENANT_HOME</code> contains identity material,
+          capability tokens, and the full audit log. Restrict access,
+          back it up, and exclude it from version control.
         </li>
         <li>
-          Vet every external MCP server before configuring it.
-          Prefer the most narrowly-scoped server for the job.
+          Review external MCP servers prior to configuration. Prefer the
+          server with the narrowest scope appropriate to the task.
         </li>
         <li>
-          Audit capability grants. If an agent suddenly needs a new
-          action, that should be a deliberate decision, not a
-          drive-by grant.
+          Treat capability grants as deliberate authorization decisions.
+          Each grant is recorded in the audit log; new grants should be
+          reviewed and justified rather than issued ad hoc.
         </li>
         <li>
-          Read the audit log periodically. The cross-references{" "}
-          <code>covenant verify</code> checks are a smoke test, not
-          a substitute for occasionally tailing{" "}
-          <code>events.jsonl</code> by hand.
+          Inspect the audit log on a regular cadence.{" "}
+          <code>covenant verify</code> provides drift detection across
+          the cross-references but does not replace direct inspection
+          of <code>events.jsonl</code>.
         </li>
         <li>
-          Rotate the identity key on a schedule that matches your
-          security posture. Re-issuing the keypair invalidates every
-          signed capability written under the old key — plan for the
-          re-grant.
+          Rotate the identity key on a schedule consistent with the
+          deployment&apos;s security requirements. Re-issuing the keypair
+          invalidates every capability signed under the prior key; plan
+          the corresponding re-grant in advance of rotation.
         </li>
       </ul>
 

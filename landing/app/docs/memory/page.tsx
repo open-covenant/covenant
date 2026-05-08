@@ -12,9 +12,9 @@ export default function MemoryPage() {
       <h1>Memory tiers</h1>
       <p>
         Covenant&apos;s memory is a single store partitioned into three
-        tiers. The tiers are not separate databases — they are a
-        column on a shared schema — so an agent can be promoted from
-        one tier to another without rewriting it elsewhere.
+        tiers. Tiers are represented as a column on a shared schema rather
+        than as separate databases; records can be promoted between tiers
+        without migration.
       </p>
 
       <h2>Tiers</h2>
@@ -44,9 +44,9 @@ export default function MemoryPage() {
             </td>
             <td>task-grained, durable</td>
             <td>
-              Records of completed tasks, kept across runs. Useful
-              for &quot;what happened last time I asked this&quot;
-              kind of queries.
+              Records of completed tasks retained across daemon
+              restarts; the basis for queries about prior task
+              outcomes.
             </td>
           </tr>
           <tr>
@@ -87,10 +87,11 @@ export default function MemoryPage() {
       </p>
 
       <p>
-        The daemon does not use a separate vector index — cosine
-        search runs over the rows in the queried tier. The default
-        store is good for tens of thousands of records; production
-        deployments should plan for an index when row counts climb.
+        The daemon does not maintain a separate vector index; cosine
+        search executes against the rows in the queried tier. The
+        default store performs adequately for tens of thousands of
+        records. Deployments expecting larger row counts should plan
+        for a dedicated vector index.
       </p>
 
       <h2>Embedding</h2>
@@ -162,9 +163,9 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
       </pre>
 
       <p>
-        Episodic and long-term records are typically curated rather
-        than auto-purged; the same primitive works for them, but the
-        operator should be deliberate about the threshold.
+        Episodic and long-term records are typically curated rather than
+        auto-purged. The same primitive applies to those tiers; operators
+        should select retention thresholds deliberately.
       </p>
 
       <h2>The .covenantignore allow/deny list</h2>
@@ -201,11 +202,11 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
       </p>
 
       <p>
-        The default seed list (created on first daemon start if no
-        file exists) covers common credential filenames so intents
-        that mention <code>id_rsa</code>, <code>.env</code>,{" "}
-        <code>credentials.json</code>, and so on are silently
-        dropped.
+        The default seed list, created on first daemon start when no file
+        is present, covers common credential filenames. Intents that
+        reference paths such as <code>id_rsa</code>, <code>.env</code>,
+        or <code>credentials.json</code> are dropped without persisting
+        to memory or producing a settlement receipt.
       </p>
 
       <h2>Test the ignore set</h2>

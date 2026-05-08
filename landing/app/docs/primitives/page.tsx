@@ -11,10 +11,12 @@ export default function PrimitivesPage() {
     <>
       <h1>The eight primitives</h1>
       <p>
-        Covenant exposes a fixed vocabulary of eight primitives. They
-        cover everything an agent stack needs to share a computer with a
-        human, with another agent, and with itself across time. Every
-        higher-level concept in the system is composed from these eight.
+        Covenant exposes a fixed set of eight primitives covering the
+        operations required for human users, software agents, and
+        external tools to share a host system: dispatch of work, isolated
+        execution, persistent context, identity, authorization,
+        communication, presentation, and economic settlement. Every
+        higher-level behavior in the system is composed from these eight.
       </p>
 
       <h2>Intent</h2>
@@ -69,15 +71,15 @@ export default function PrimitivesPage() {
 
       <h2>Identity</h2>
       <p>
-        A single ed25519 keypair per Covenant install. The same key
-        signs capability grants, signs Solana settlement transactions,
-        and fronts the daemon&apos;s issuer field on audit events and
-        memory records. Persisted as a raw 32-byte seed at{" "}
-        <code>$COVENANT_HOME/identity/local.key</code>, mode{" "}
+        A single ed25519 keypair per Covenant install. The same key signs
+        capability grants, signs Solana settlement transactions, and
+        appears as the daemon&apos;s issuer on audit events and memory
+        records. Persisted as a raw 32-byte seed at{" "}
+        <code>$COVENANT_HOME/identity/local.key</code> with mode{" "}
         <code>0600</code>.
       </p>
       <p>
-        There is no second key system. See{" "}
+        There is no secondary key system. See{" "}
         <Link href="/identity">Identity and keys</Link>.
       </p>
 
@@ -129,11 +131,11 @@ export default function PrimitivesPage() {
 
       <h2>Compositor</h2>
       <p>
-        Whatever the operator uses to drive Covenant. The CLI today, a
-        web UI alongside, a TUI later, and an optional Wayland
-        compositor in the longer term. Compositors are clients of the
-        daemon — they speak Local IPC or HTTP and own no state of their
-        own beyond the user&apos;s preferences.
+        The presentation surface through which an operator interacts with
+        the daemon: the CLI, the web UI, a terminal interface, or a native
+        Wayland compositor on later milestones. Compositors are clients of
+        the daemon, communicating over Local IPC or HTTP, and hold no state
+        beyond user preferences.
       </p>
 
       <h2>Settlement</h2>
@@ -149,14 +151,13 @@ export default function PrimitivesPage() {
         See <Link href="/settlement">Settlement</Link>.
       </p>
 
-      <h2>Why these eight</h2>
+      <h2>Design rationale</h2>
       <p>
-        Every primitive was selected because it is something every
-        non-trivial agent stack needs and currently re-implements badly.
-        The set is intentionally complete: an agent that uses all eight
-        primitives can run alongside a different agent using all eight,
-        on the same machine, without either knowing about the other,
-        and the operator can audit and pay for both.
+        Each primitive corresponds to a concern that production agent
+        deployments must resolve independently. The set is intentionally
+        complete: two agents implemented against all eight primitives can
+        co-exist on the same host without coordination, and the operator
+        can audit and account for both through the same surfaces.
       </p>
     </>
   );

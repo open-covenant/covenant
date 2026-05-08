@@ -11,10 +11,10 @@ export default function CliPage() {
     <>
       <h1>Command-line interface</h1>
       <p>
-        The <code>covenant</code> CLI talks to a running daemon over the
-        Unix socket at <code>$COVENANT_HOME/sock</code>. Every subcommand
-        is a single round-trip; the CLI does no caching and holds no
-        state of its own.
+        The <code>covenant</code> CLI communicates with a running daemon
+        over the Unix socket at <code>$COVENANT_HOME/sock</code>. Each
+        subcommand is a single round-trip; the CLI performs no caching
+        and holds no state of its own.
       </p>
 
       <h2>Synopsis</h2>
@@ -116,15 +116,15 @@ export default function CliPage() {
       <h3>Submit an intent</h3>
       <pre>
         <code>{`$ covenant intent "summarise recent work on agent memory"
-phase 0 echo (no agent matched): summarise recent work on agent memory`}</code>
+echo (no agent matched): summarise recent work on agent memory`}</code>
       </pre>
 
       <h3>Inspect recent memory</h3>
       <pre>
         <code>{`$ covenant memory recent -n 3
-[1714938191234] working: phase 0 echo (no agent matched): summarise...
-[1714938018993] working: phase 0 echo (no agent matched): index the...
-[1714937883112] working: phase 0 echo (no agent matched): list any open...`}</code>
+[1714938191234] working: echo (no agent matched): summarise...
+[1714938018993] working: echo (no agent matched): index the...
+[1714937883112] working: echo (no agent matched): list any open...`}</code>
       </pre>
 
       <h3>Semantic search across all tiers</h3>

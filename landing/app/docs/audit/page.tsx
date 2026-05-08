@@ -88,14 +88,14 @@ export default function AuditPage() {
       <ul>
         <li>
           <strong>Append-only on disk.</strong> The file is opened for
-          append; the daemon never rewrites prior lines. Backup with{" "}
-          <code>cp</code> or <code>tar</code>; rotate with care
-          (rotation is your problem, not the daemon&apos;s).
+          append; the daemon never rewrites prior lines. Backups via{" "}
+          <code>cp</code> or <code>tar</code>; log rotation is the
+          operator&apos;s responsibility.
         </li>
         <li>
-          <strong>One event per line.</strong> Read it with{" "}
-          <code>tail -F</code>, <code>jq</code>, or any JSONL-aware
-          tool.
+          <strong>One event per line.</strong> Compatible with{" "}
+          <code>tail -F</code>, <code>jq</code>, and other JSONL-aware
+          tooling.
         </li>
         <li>
           <strong>Deterministic schema.</strong> Each variant
@@ -149,17 +149,18 @@ curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
       <h2>Trust model</h2>
       <p>
         The audit log is local. A user with write access to{" "}
-        <code>$COVENANT_HOME</code> can rewrite history. The daemon
-        does not sign individual events today; the protection is the
-        OS file-permission model and the{" "}
-        <code>covenant verify</code> drift check that catches
-        out-of-band edits if they break the cross-references.
+        <code>$COVENANT_HOME</code> can rewrite history. The daemon does
+        not sign individual events at this layer; protection derives from
+        the operating system&apos;s file permissions and the{" "}
+        <code>covenant verify</code> drift check, which surfaces
+        out-of-band edits that break the cross-references.
       </p>
       <p>
-        For environments where the operator is not the only writer to
-        the host, sign individual events or stream the log to an
-        append-only system with the right trust model. That layer
-        plugs into the existing <code>AuditLog</code> trait.
+        Deployments where the operator is not the sole writer to the host
+        should either sign individual events or stream the log to an
+        append-only system with the appropriate trust model. Both
+        approaches integrate against the existing <code>AuditLog</code>{" "}
+        trait.
       </p>
 
       <h2>Related</h2>

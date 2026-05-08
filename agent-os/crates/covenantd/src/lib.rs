@@ -623,6 +623,30 @@ impl Server {
     async fn rotate_operator_token(&self, peer: &AgentId) -> Response {
         let identity_pubkey = self.identity.agent_id().pubkey;
         if peer.pubkey != identity_pubkey {
+            // Sprint 61: surface the rejected attempt in the audit log so
+            // probes are visible to the operator. Issuer is the daemon
+            // identity (matching `AuthenticationFailed` from Sprint 49)
+            // so the row passes the Sprint 58d operator-feed filter
+            // (`issuer.pubkey == peer.pubkey` where peer == operator on
+            // the operator's `/audit` call). The rejected peer's identity
+            // is preserved in the kind payload — `peer_pubkey_b58` is the
+            // unforgeable identifier because `.display` is wire-supplied
+            // and a colliding display string is exactly the kind of
+            // probe this row exists to surface. Mid-sprint security
+            // review (Sprint 61) caught this — the natural mirror of
+            // `A2ARecipientRejected` (Sprint 59) gets the audience
+            // wrong here: the operator is the security audience, not
+            // the rejected peer.
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind: AuditKind::OperatorTokenRotationRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            self.record_daemon_event(event).await;
             return Response::Error {
                 message: "operator token rotation requires the operator identity".into(),
             };
@@ -4176,6 +4200,367 @@ budget_credits_per_hour = {credits}
                 );
             }
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// Sprint 61 — a foreign peer's RotateOperatorToken attempt records
+    /// an `OperatorTokenRotationRejected` audit row. Issuer is the
+    /// daemon identity (Sprint 58d audience model — see also Sprint
+    /// 49's `AuthenticationFailed`); the rejected peer's identity is
+    /// preserved in the kind payload (`peer_display` +
+    /// `peer_pubkey_b58`). No `OperatorTokenRotated` row appears (the
+    /// rotation didn't run).
+    #[tokio::test]
+    async fn rotate_token_rejection_records_audit_event_with_pubkey_b58() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+        // Seed the operator's on-disk token so we can prove the rotation
+        // didn't run (and would otherwise have read it).
+        let operator_token = PeerToken::generate();
+        let operator = identity.agent_id();
+        peers
+            .register(PeerEntry {
+                token: operator_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        write_operator_token_0600(
+            &dir.path().join("peers").join("operator.token"),
+            &operator_token.to_b58(),
+        )
+        .unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+
+        let foreign_pubkey = [9u8; 32];
+        let foreign = AgentId::new("guest@local", foreign_pubkey);
+        match s.respond(Request::RotateOperatorToken, &foreign).await {
+            Response::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        let events = audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. }))
+            .expect("OperatorTokenRotationRejected row");
+        assert_eq!(
+            row.issuer.pubkey, operator.pubkey,
+            "issuer is the daemon identity (Sprint 58d operator-feed audience)"
+        );
+        match &row.kind {
+            AuditKind::OperatorTokenRotationRejected {
+                peer_display,
+                peer_pubkey_b58,
+            } => {
+                assert_eq!(peer_display, &foreign.display);
+                assert_eq!(peer_pubkey_b58, &bs58::encode(foreign_pubkey).into_string());
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+        // The rotation must NOT have run — no successful row.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorTokenRotated { .. })),
+            "rejected attempt must not have produced a success row"
+        );
+    }
+
+    /// Sprint 61 — the rejection row is visible to the operator's
+    /// `/audit` feed under the Sprint 58d filter (`issuer.pubkey ==
+    /// peer.pubkey`). Regression test for the mid-sprint security
+    /// review finding: the natural `issuer = peer` shape (mirror of
+    /// `A2ARecipientRejected`) hid probes from the operator. Setting
+    /// `issuer = self.identity.agent_id()` matches the
+    /// `AuthenticationFailed` audience model.
+    #[tokio::test]
+    async fn rotate_token_rejection_visible_to_operator_audit_feed() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let operator = identity.agent_id();
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+        let operator_token = PeerToken::generate();
+        peers
+            .register(PeerEntry {
+                token: operator_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        write_operator_token_0600(
+            &dir.path().join("peers").join("operator.token"),
+            &operator_token.to_b58(),
+        )
+        .unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+
+        // Foreign peer attempts rotation and is rejected.
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+        match s.respond(Request::RotateOperatorToken, &foreign).await {
+            Response::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        // Operator opens /audit. The Sprint 58d filter
+        // (`issuer.pubkey == peer.pubkey`) keeps only rows where
+        // issuer == operator. The rejection row's issuer is the
+        // daemon identity == operator, so it must appear.
+        let resp = s
+            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .await;
+        let events = match resp {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. })),
+            "operator must see the rejection row in their filtered /audit feed"
+        );
+
+        // And the foreign peer's filtered feed must NOT contain the
+        // row — it carries the operator's pubkey, not the foreign
+        // peer's. Probing attacker doesn't get to confirm the probe.
+        let resp_foreign = s
+            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .await;
+        let events_foreign = match resp_foreign {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            !events_foreign
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. })),
+            "foreign peer must not see the rejection row in their filtered /audit feed"
+        );
+    }
+
+    /// Sprint 61 — the operator's own rotation must not produce a
+    /// rejection row. v0 single-peer regression: the rejection arm is
+    /// dead code under `peer == operator`, so the audit log only carries
+    /// the success row.
+    #[tokio::test]
+    async fn rotate_token_operator_does_not_record_rejection() {
+        let (s, _dir, _old_token, operator) = server_with_operator_token().await;
+        match s.respond(Request::RotateOperatorToken, &operator).await {
+            Response::OperatorTokenRotated { .. } => {}
+            other => panic!("expected OperatorTokenRotated, got {other:?}"),
+        }
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. })),
+            "operator's own rotation must not produce a rejection row"
+        );
+    }
+
+    /// Sprint 61 — the rejection audit row records before the
+    /// `Response::Error` returns. Catches the regression where someone
+    /// later moves the audit call after the early-return for "tidiness."
+    /// Done here by asserting two foreign-peer attempts produce two
+    /// distinct audit rows (the audit must persist even on the rejection
+    /// path for both attempts to surface).
+    #[tokio::test]
+    async fn rotate_token_rejection_audit_persists_per_attempt() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+        let operator_token = PeerToken::generate();
+        let operator = identity.agent_id();
+        peers
+            .register(PeerEntry {
+                token: operator_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        write_operator_token_0600(
+            &dir.path().join("peers").join("operator.token"),
+            &operator_token.to_b58(),
+        )
+        .unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+
+        let foreign_a = AgentId::new("guestA@local", [9u8; 32]);
+        let foreign_b = AgentId::new("guestB@local", [7u8; 32]);
+        for peer in [&foreign_a, &foreign_b] {
+            match s.respond(Request::RotateOperatorToken, peer).await {
+                Response::Error { .. } => {}
+                other => panic!("expected Error, got {other:?}"),
+            }
+        }
+
+        let events = audit.recent(50).await.unwrap();
+        let rejected: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. }))
+            .collect();
+        assert_eq!(rejected.len(), 2, "two attempts must produce two rows");
+        // Each row's issuer is the daemon identity (operator); the
+        // attempting peer's pubkey lives in the kind payload.
+        assert!(
+            rejected.iter().all(|e| e.issuer.pubkey == operator.pubkey),
+            "every rejection row's issuer must be the daemon identity"
+        );
+        let kinds: Vec<&AuditKind> = rejected.iter().map(|e| &e.kind).collect();
+        let pubkey_a = bs58::encode([9u8; 32]).into_string();
+        let pubkey_b = bs58::encode([7u8; 32]).into_string();
+        assert!(
+            kinds.iter().any(|k| matches!(
+                k,
+                AuditKind::OperatorTokenRotationRejected { peer_pubkey_b58, .. }
+                    if peer_pubkey_b58 == &pubkey_a
+            )),
+            "expected guestA's pubkey in a kind payload"
+        );
+        assert!(
+            kinds.iter().any(|k| matches!(
+                k,
+                AuditKind::OperatorTokenRotationRejected { peer_pubkey_b58, .. }
+                    if peer_pubkey_b58 == &pubkey_b
+            )),
+            "expected guestB's pubkey in a kind payload"
+        );
+    }
+
+    /// Sprint 61 — display-collision probe: a foreign peer registers
+    /// against `user@local` (the operator's display) but their pubkey
+    /// differs. The audit row's `peer_pubkey_b58` carries the
+    /// unforgeable identifier; without it, an operator scanning the
+    /// audit log by `peer_display` alone would miss the attack class
+    /// the C3 gate exists to surface.
+    #[tokio::test]
+    async fn rotate_token_rejection_records_distinct_pubkey_under_display_collision() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let operator = identity.agent_id();
+        let peers = Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+        let operator_token = PeerToken::generate();
+        peers
+            .register(PeerEntry {
+                token: operator_token,
+                agent_id: operator.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        write_operator_token_0600(
+            &dir.path().join("peers").join("operator.token"),
+            &operator_token.to_b58(),
+        )
+        .unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("ignored")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_home(dir.path().to_path_buf());
+
+        // Same display string as the operator, different pubkey.
+        let attacker_pubkey = [13u8; 32];
+        assert_ne!(
+            attacker_pubkey, operator.pubkey,
+            "test premise: attacker's pubkey differs from operator"
+        );
+        let attacker = AgentId::new(operator.display.clone(), attacker_pubkey);
+
+        match s.respond(Request::RotateOperatorToken, &attacker).await {
+            Response::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let events = audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::OperatorTokenRotationRejected { .. }))
+            .expect("rejection row");
+        match &row.kind {
+            AuditKind::OperatorTokenRotationRejected {
+                peer_display,
+                peer_pubkey_b58,
+            } => {
+                assert_eq!(peer_display, &operator.display);
+                assert_eq!(
+                    peer_pubkey_b58,
+                    &bs58::encode(attacker_pubkey).into_string()
+                );
+                assert_ne!(
+                    peer_pubkey_b58,
+                    &bs58::encode(operator.pubkey).into_string(),
+                    "row must distinguish attacker's pubkey from operator's"
+                );
+            }
+            other => panic!("unexpected kind: {other:?}"),
         }
     }
 }

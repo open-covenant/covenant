@@ -150,6 +150,35 @@ pub enum AuditKind {
         old_token_prefix: String,
         new_token_prefix: String,
     },
+    /// Logged when `RotateOperatorToken` is rejected because the
+    /// authenticated peer's pubkey does not match the operator
+    /// identity. Sprint 60's C3 gate is silent in v0 single-peer
+    /// (only the operator can authenticate, so the rejection branch
+    /// is dead code); becomes load-bearing at Phase-1 multi-peer
+    /// where a guest peer reaching this path is a probe worth
+    /// surfacing in `/audit`.
+    ///
+    /// Issuer is the daemon identity (not the rejected peer) so the
+    /// row passes the Sprint 58d operator-feed filter and the
+    /// operator can see probes on their own `/audit` — mirrors the
+    /// [`AuditKind::AuthenticationFailed`] audience model. The
+    /// rejected peer's identity lives entirely in the kind payload.
+    ///
+    /// `peer_pubkey_b58` carries the unforgeable identity — the
+    /// `.display` is wire-supplied and a future attacker could
+    /// register `user@local` against any pubkey. The base58 form
+    /// matches `bs58::encode(peer.pubkey)` and survives operator
+    /// grep through the audit log unmodified.
+    ///
+    /// Distinct from [`AuditKind::CapabilityCheck`] because no
+    /// capability is checked (the gate is identity-pubkey equality)
+    /// and from [`AuditKind::AuthenticationFailed`] because the
+    /// peer authenticated successfully — they failed an
+    /// authorization check, not authentication. Sprint 61.
+    OperatorTokenRotationRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
 }
 
 #[async_trait]

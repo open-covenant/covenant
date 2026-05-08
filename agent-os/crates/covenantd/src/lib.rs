@@ -216,7 +216,7 @@ impl Server {
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit).await,
-            Request::PurgeAudit { before_ms } => self.purge_audit(before_ms).await,
+            Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::SendA2ATask { task } => self.send_a2a_task(task, peer).await,
             Request::TryRecvA2ATask => self.try_recv_a2a_task(peer).await,
             Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
@@ -370,7 +370,18 @@ impl Server {
         }
     }
 
-    async fn purge_audit(&self, before_ms: u64) -> Response {
+    async fn purge_audit(&self, before_ms: u64, peer: &AgentId) -> Response {
+        let required = vec!["audit.purge".to_string()];
+        let check = self
+            .check_capabilities("audit:purge".into(), required, peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "audit purge requires capability \"audit.purge\". \
+                     Grant it with `covenant capabilities grant audit.purge`."
+                    .into(),
+            };
+        }
         match self.audit.purge_older_than(before_ms).await {
             Ok(purged) => Response::AuditPurged { purged },
             Err(e) => Response::Error {
@@ -1625,6 +1636,37 @@ required = {caps:?}
                 assert_eq!(claimed_sender_display, "evil@local");
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_audit_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        // No `audit.purge` cap granted — purge attempt is rejected even
+        // though the peer is authenticated.
+        let resp = s.op_respond(Request::PurgeAudit { before_ms: 1 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("audit.purge"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_audit_passes_after_grant() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "audit.purge".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::PurgeAudit { before_ms: 0 }).await;
+        match resp {
+            Response::AuditPurged { .. } => {}
+            other => panic!("expected AuditPurged, got {other:?}"),
         }
     }
 

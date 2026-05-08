@@ -140,6 +140,14 @@ pub trait CapabilityStore: Send + Sync {
         subject_pubkey: [u8; 32],
     ) -> Result<Vec<SignedCapability>, PermissionError>;
     async fn recent(&self, limit: usize) -> Result<Vec<SignedCapability>, PermissionError>;
+    /// Drop every revocation with `revoked_at < before_ms` along with its
+    /// matching grant. Returns the count of revocations dropped (which equals
+    /// the count of grant lines also dropped, modulo any pre-existing
+    /// revocation-without-grant entries — those are also dropped from
+    /// `revoked.jsonl`). Operator-driven retention; the live-set remains
+    /// `granted ⊝ revoked` so a grant whose revocation has been purged is
+    /// **not** resurrected. Live (non-revoked) grants are never touched.
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError>;
 }
 
 /// Revocation record. The daemon writes one of these per `revoke()` call;
@@ -324,12 +332,71 @@ impl CapabilityStore for JsonlCapabilityStore {
         let start = live.len().saturating_sub(limit);
         Ok(live.split_off(start))
     }
+
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError> {
+        // Read-filter-rewrite under the same lock that record / revoke use, so
+        // a concurrent grant/revoke can't race with the rewrite. Atomicity of
+        // the per-file rewrite comes from `tempfile + rename`. The two files
+        // are rewritten sequentially: the granted file first (so a crash mid
+        // rewrite leaves a strict superset of revoked entries — the live-set
+        // is unchanged), then the revoked file.
+        let _g = self.lock.lock().await;
+
+        let revocations = Self::read_jsonl::<Revocation>(&self.revoked_path).await?;
+        let drop_sigs: std::collections::HashSet<[u8; 64]> = revocations
+            .iter()
+            .filter(|r| r.revoked_at < before_ms)
+            .map(|r| r.signature)
+            .collect();
+        let purged = drop_sigs.len() as u64;
+        if purged == 0 {
+            return Ok(0);
+        }
+
+        let grants = Self::read_jsonl::<SignedCapability>(&self.granted_path).await?;
+        let kept_grants: Vec<&SignedCapability> = grants
+            .iter()
+            .filter(|s| !drop_sigs.contains(&s.signature))
+            .collect();
+        let kept_revocations: Vec<&Revocation> = revocations
+            .iter()
+            .filter(|r| !drop_sigs.contains(&r.signature))
+            .collect();
+
+        Self::rewrite_atomically(&self.granted_path, &kept_grants).await?;
+        Self::rewrite_atomically(&self.revoked_path, &kept_revocations).await?;
+        Ok(purged)
+    }
+}
+
+impl JsonlCapabilityStore {
+    async fn rewrite_atomically<T: serde::Serialize>(
+        path: &std::path::Path,
+        rows: &[&T],
+    ) -> Result<(), PermissionError> {
+        let tmp_path = path.with_extension("jsonl.tmp");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        for r in rows {
+            let line = serde_json::to_string(r)?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        drop(f);
+        fs::rename(&tmp_path, path).await?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
 pub struct InMemoryCapabilityStore {
     granted: Mutex<Vec<SignedCapability>>,
-    revoked: Mutex<std::collections::HashSet<[u8; 64]>>,
+    revoked: Mutex<std::collections::HashMap<[u8; 64], u64>>,
 }
 
 impl InMemoryCapabilityStore {
@@ -347,19 +414,19 @@ impl CapabilityStore for InMemoryCapabilityStore {
 
     async fn revoke(&self, signature: [u8; 64]) -> Result<bool, PermissionError> {
         let mut revoked = self.revoked.lock().await;
-        if revoked.contains(&signature) {
+        if revoked.contains_key(&signature) {
             return Ok(false);
         }
         let granted = self.granted.lock().await;
         if !granted.iter().any(|c| c.signature == signature) {
             return Ok(false);
         }
-        revoked.insert(signature);
+        revoked.insert(signature, JsonlCapabilityStore::epoch_ms());
         Ok(true)
     }
 
     async fn is_revoked(&self, signature: [u8; 64]) -> Result<bool, PermissionError> {
-        Ok(self.revoked.lock().await.contains(&signature))
+        Ok(self.revoked.lock().await.contains_key(&signature))
     }
 
     async fn list_for_subject(
@@ -371,7 +438,7 @@ impl CapabilityStore for InMemoryCapabilityStore {
         Ok(granted
             .iter()
             .filter(|s| s.capability.subject.pubkey == subject_pubkey)
-            .filter(|s| !revoked.contains(&s.signature))
+            .filter(|s| !revoked.contains_key(&s.signature))
             .cloned()
             .collect())
     }
@@ -381,11 +448,31 @@ impl CapabilityStore for InMemoryCapabilityStore {
         let granted = self.granted.lock().await;
         let live: Vec<SignedCapability> = granted
             .iter()
-            .filter(|s| !revoked.contains(&s.signature))
+            .filter(|s| !revoked.contains_key(&s.signature))
             .cloned()
             .collect();
         let start = live.len().saturating_sub(limit);
         Ok(live[start..].to_vec())
+    }
+
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError> {
+        let mut revoked = self.revoked.lock().await;
+        let drop_sigs: Vec<[u8; 64]> = revoked
+            .iter()
+            .filter(|(_, ts)| **ts < before_ms)
+            .map(|(s, _)| *s)
+            .collect();
+        let purged = drop_sigs.len() as u64;
+        if purged == 0 {
+            return Ok(0);
+        }
+        let drop_set: std::collections::HashSet<[u8; 64]> = drop_sigs.iter().copied().collect();
+        for s in &drop_sigs {
+            revoked.remove(s);
+        }
+        let mut granted = self.granted.lock().await;
+        granted.retain(|c| !drop_set.contains(&c.signature));
+        Ok(purged)
     }
 }
 
@@ -555,5 +642,154 @@ mod tests {
         let s = InMemoryCapabilityStore::new();
         let r = s.revoke([0u8; 64]).await.unwrap();
         assert!(!r);
+    }
+
+    #[tokio::test]
+    async fn in_memory_purge_drops_old_revocations_and_their_grants() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let s = InMemoryCapabilityStore::new();
+        // Two grants. Only one will get revoked.
+        let live = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let dead = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(live.clone()).await.unwrap();
+        s.record(dead.clone()).await.unwrap();
+        assert!(s.revoke(dead.signature).await.unwrap());
+
+        // Force the revocation timestamp into the past so the purge picks
+        // it up. (`revoke` stamps with epoch_ms which is far in the future
+        // relative to a `before_ms` of 100.)
+        s.revoked.lock().await.insert(dead.signature, 50);
+
+        let purged = s.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Live grant survived.
+        let recent = s.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].signature, live.signature);
+
+        // Revoked-grant entry is gone from the granted vec.
+        assert_eq!(s.granted.lock().await.len(), 1);
+
+        // The tombstone is gone too — but the live-set is unchanged because
+        // the matching grant was removed in lockstep.
+        assert!(!s.is_revoked(dead.signature).await.unwrap());
+        assert!(s
+            .list_for_subject(subject.pubkey)
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.signature != dead.signature));
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_rewrites_both_files_and_keeps_live_grants() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+
+        let live = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let dead = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(live.clone()).await.unwrap();
+        s.record(dead.clone()).await.unwrap();
+        assert!(s.revoke(dead.signature).await.unwrap());
+
+        // The on-disk revocation was just stamped with `epoch_ms()`; rewrite
+        // it with a deterministic past timestamp so the purge picks it up.
+        let rev_path = dir.path().join("revoked.jsonl");
+        let rewritten = serde_json::to_string(&Revocation {
+            signature: dead.signature,
+            revoked_at: 50,
+        })
+        .unwrap();
+        std::fs::write(&rev_path, format!("{rewritten}\n")).unwrap();
+
+        let purged = s.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Reopen to confirm both files round-trip through serde.
+        let s2 = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        let recent = s2.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].signature, live.signature);
+        assert!(!s2.is_revoked(dead.signature).await.unwrap());
+
+        // The tempfile.tmp left behind would be a leak. The atomic-rename
+        // path drops it; nothing should match.
+        assert!(!path.with_extension("jsonl.tmp").exists());
+        assert!(!rev_path.with_extension("jsonl.tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_no_op_when_no_revocations_match() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+
+        let live = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(live.clone()).await.unwrap();
+        assert!(s.revoke(live.signature).await.unwrap());
+
+        // Fresh revocation timestamp — `before_ms` of 100 finds nothing.
+        let purged = s.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 0);
+
+        // No tempfile.tmp left behind: the atomic-rewrite branch never ran.
+        assert!(!path.with_extension("jsonl.tmp").exists());
+        let rev_path = dir.path().join("revoked.jsonl");
+        assert!(!rev_path.with_extension("jsonl.tmp").exists());
+
+        // Tombstone is still on disk.
+        assert!(s.is_revoked(live.signature).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn purge_does_not_resurrect_purged_grants() {
+        // Defence-in-depth: after a purge, the dropped-grant signature must
+        // not reappear in `recent`/`list_for_subject`. The grant line is gone
+        // and the revocation tombstone is gone, but the live-set semantics
+        // (`granted ⊝ revoked`) still report no live entry for that sig.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let s = InMemoryCapabilityStore::new();
+        let dead = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(dead.clone()).await.unwrap();
+        assert!(s.revoke(dead.signature).await.unwrap());
+        s.revoked.lock().await.insert(dead.signature, 50);
+
+        assert_eq!(s.purge_revoked_older_than(100).await.unwrap(), 1);
+
+        // Even though `is_revoked` now reports false (tombstone gone), the
+        // grant line is also gone, so neither lookup surfaces it.
+        assert!(!s.is_revoked(dead.signature).await.unwrap());
+        assert!(s.recent(10).await.unwrap().is_empty());
+        assert!(s.list_for_subject(subject.pubkey).await.unwrap().is_empty());
     }
 }

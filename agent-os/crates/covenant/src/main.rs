@@ -9,6 +9,7 @@
 //!   covenant capabilities recent [--limit N]
 //!   covenant capabilities grant <action>
 //!   covenant capabilities revoke <signature-b58>
+//!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N]
 //!   covenant verify [--window N]
 //!   covenant ignore check <text>
@@ -72,6 +73,9 @@ fn print_usage() {
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
     eprintln!(
         "  covenant audit purge (--before-ms M | --older-than-ms D)  drop audit events older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
     );
 }
 
@@ -365,6 +369,44 @@ async fn main() -> Result<()> {
                             } else {
                                 println!("(no live capability with that signature)");
                             }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "purge" => {
+                    let mut before_ms: Option<u64> = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--before-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--before-ms needs a value")?;
+                                before_ms = Some(
+                                    v.parse()
+                                        .context("--before-ms must be an integer (epoch ms)")?,
+                                );
+                            }
+                            "--older-than-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--older-than-ms needs a value")?;
+                                let dur: u64 =
+                                    v.parse().context("--older-than-ms must be an integer")?;
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                before_ms = Some(now.saturating_sub(dur));
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let before_ms = before_ms.context("missing --before-ms or --older-than-ms")?;
+                    write_frame(&mut stream, &Request::PurgeCapabilities { before_ms }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::CapabilitiesPurged { purged } => {
+                            println!("purged {purged} revoked capability(ies)");
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),

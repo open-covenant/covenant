@@ -217,6 +217,9 @@ impl Server {
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit).await,
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
+            Request::PurgeCapabilities { before_ms } => {
+                self.purge_capabilities(before_ms, peer).await
+            }
             Request::SendA2ATask { task } => self.send_a2a_task(task, peer).await,
             Request::TryRecvA2ATask => self.try_recv_a2a_task(peer).await,
             Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
@@ -386,6 +389,26 @@ impl Server {
             Ok(purged) => Response::AuditPurged { purged },
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
+            },
+        }
+    }
+
+    async fn purge_capabilities(&self, before_ms: u64, peer: &AgentId) -> Response {
+        let required = vec!["capabilities.purge".to_string()];
+        let check = self
+            .check_capabilities("capabilities:purge".into(), required, peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "capabilities purge requires capability \"capabilities.purge\". \
+                     Grant it with `covenant capabilities grant capabilities.purge`."
+                    .into(),
+            };
+        }
+        match self.capabilities.purge_revoked_older_than(before_ms).await {
+            Ok(purged) => Response::CapabilitiesPurged { purged },
+            Err(e) => Response::Error {
+                message: format!("permissions: {e}"),
             },
         }
     }
@@ -1667,6 +1690,39 @@ required = {caps:?}
         match resp {
             Response::AuditPurged { .. } => {}
             other => panic!("expected AuditPurged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::PurgeCapabilities { before_ms: 1 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("capabilities.purge"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_passes_after_grant() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "capabilities.purge".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::PurgeCapabilities { before_ms: 0 })
+            .await;
+        match resp {
+            Response::CapabilitiesPurged { .. } => {}
+            other => panic!("expected CapabilitiesPurged, got {other:?}"),
         }
     }
 

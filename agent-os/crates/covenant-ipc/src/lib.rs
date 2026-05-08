@@ -99,6 +99,12 @@ pub enum Request {
     PurgeAudit {
         before_ms: u64,
     },
+    /// Drop revocation tombstones (and their matching grants) whose
+    /// `revoked_at` is strictly older than `before_ms`. Live grants are
+    /// untouched. Same operator-driven retention shape as `PurgeAudit`.
+    PurgeCapabilities {
+        before_ms: u64,
+    },
     SendA2ATask {
         task: A2ATask,
     },
@@ -189,6 +195,9 @@ pub enum Response {
         events: Vec<AuditEvent>,
     },
     AuditPurged {
+        purged: u64,
+    },
+    CapabilitiesPurged {
         purged: u64,
     },
     A2ATaskQueued {

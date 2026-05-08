@@ -6,9 +6,9 @@ type Cell = { col: number; row: number; startMs: number };
 
 export function PixelReveal({
   src,
-  cellSize = 14,
-  stagger = 900,
-  fadeDur = 320,
+  cellSize = 8,
+  stagger = 1500,
+  fadeDur = 280,
 }: {
   src: string;
   cellSize?: number;

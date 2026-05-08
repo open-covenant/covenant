@@ -63,6 +63,20 @@ impl AgentId {
     pub fn pubkey_base58(&self) -> String {
         bs58::encode(self.pubkey).into_string()
     }
+
+    /// Two action-string forms scoped to this identity:
+    /// `[<prefix>.<display>, <prefix>.<pubkey_b58>]`. The display form
+    /// is the v0 default for ergonomics (matches existing CLI/UI grants);
+    /// the pubkey-b58 form is the unforgeable Phase-1+ form that resists
+    /// the display-collision attack a second peer enables. A capability
+    /// granted under either form satisfies a check that consults the
+    /// pair — see `check_capabilities_any_of` in covenantd.
+    pub fn scoped_action_alternatives(&self, prefix: &str) -> [String; 2] {
+        [
+            format!("{prefix}.{}", self.display),
+            format!("{prefix}.{}", self.pubkey_base58()),
+        ]
+    }
 }
 
 /// Whitelist for `AgentId.display`: `<local>@<host>` where each side is
@@ -279,6 +293,23 @@ mod tests {
         let good = format!(r#"{{"display":"orch@local","pubkey":"{valid_pubkey}"}}"#);
         let parsed: AgentId = serde_json::from_str(&good).expect("should parse");
         assert_eq!(parsed.display, "orch@local");
+    }
+
+    #[test]
+    fn scoped_action_alternatives_emits_display_first() {
+        let id = AgentId::new("research@local", [7u8; 32]);
+        let pair = id.scoped_action_alternatives("a2a.send");
+        assert_eq!(pair[0], "a2a.send.research@local");
+        assert!(pair[1].starts_with("a2a.send."));
+        assert_ne!(pair[0], pair[1]);
+    }
+
+    #[test]
+    fn scoped_action_alternatives_b58_uses_pubkey() {
+        let id = AgentId::new("orch@local", [7u8; 32]);
+        let pair = id.scoped_action_alternatives("a2a.recv");
+        let expected_b58 = bs58::encode([7u8; 32]).into_string();
+        assert_eq!(pair[1], format!("a2a.recv.{expected_b58}"));
     }
 
     #[test]

@@ -358,15 +358,20 @@ impl Server {
         }
         let task_id = task.id;
         let recipient = task.recipient.display.clone();
-        let action = format!("a2a.send.{recipient}");
+        let alternatives = task.recipient.scoped_action_alternatives("a2a.send");
+        let display_action = alternatives[0].clone();
         let check = self
-            .check_capabilities(format!("a2a-send:{recipient}"), vec![action.clone()], peer)
+            .check_capabilities_any_of(
+                format!("a2a-send:{recipient}"),
+                vec![alternatives.to_vec()],
+                peer,
+            )
             .await;
         if !check.passed {
             return Response::Error {
                 message: format!(
-                    "a2a send to {recipient} requires capability {action:?}. \
-                     Grant it with `covenant capabilities grant {action}`."
+                    "a2a send to {recipient} requires capability {display_action:?}. \
+                     Grant it with `covenant capabilities grant {display_action}`."
                 ),
             };
         }
@@ -374,13 +379,13 @@ impl Server {
         // (cross-peer send), the recipient peer must have granted
         // `a2a.recv.<sender>` to themselves. v0 single-peer is loopback
         // (peer == recipient), so the gate is a no-op there. The
-        // pubkey-byte compare defeats display spoofing.
+        // pubkey-byte compare defeats display spoofing. Sprint 71: the
+        // grant satisfies the gate under either the sender's display or
+        // pubkey-b58 form.
         if peer.pubkey != task.recipient.pubkey {
-            let recv_action = format!("a2a.recv.{}", peer.display);
-            if !self
-                .recipient_has_recv_action(&task.recipient, &recv_action)
-                .await
-            {
+            let recv_alternatives = peer.scoped_action_alternatives("a2a.recv");
+            let recv_display_action = recv_alternatives[0].clone();
+            if !self.recipient_has_recv_for(&task.recipient, peer).await {
                 let event = AuditEvent {
                     id: Uuid::new_v4(),
                     timestamp_ms: epoch_ms(),
@@ -388,14 +393,14 @@ impl Server {
                     kind: AuditKind::A2ARecipientRejected {
                         sender_display: peer.display.clone(),
                         recipient_display: task.recipient.display.clone(),
-                        action: recv_action.clone(),
+                        action: recv_display_action.clone(),
                     },
                 };
                 self.record_peer_event(peer, event).await;
                 return Response::Error {
                     message: format!(
                         "a2a send to {} rejected: recipient has not granted \
-                         capability {recv_action:?}",
+                         capability {recv_display_action:?}",
                         task.recipient.display
                     ),
                 };
@@ -410,11 +415,14 @@ impl Server {
     }
 
     /// Returns true iff the capability store has a non-revoked,
-    /// non-expired grant for `action` with `subject = recipient.pubkey`.
-    /// Used by Sprint 59's recipient admission gate. The lookup keys on
-    /// the 32-byte pubkey, not the wire-supplied display.
-    async fn recipient_has_recv_action(&self, recipient: &AgentId, action: &str) -> bool {
+    /// non-expired grant for `a2a.recv.<sender>` (under either the
+    /// display or pubkey-b58 form, per Sprint 71's accept-both-shapes)
+    /// with `subject = recipient.pubkey`. Used by Sprint 59's recipient
+    /// admission gate. The subject lookup keys on the 32-byte pubkey,
+    /// not the wire-supplied display.
+    async fn recipient_has_recv_for(&self, recipient: &AgentId, sender: &AgentId) -> bool {
         let now = epoch_ms();
+        let alternatives = sender.scoped_action_alternatives("a2a.recv");
         let caps = self
             .capabilities
             .list_for_subject(recipient.pubkey)
@@ -422,7 +430,7 @@ impl Server {
             .unwrap_or_default();
         caps.iter()
             .filter(|c| verify_with_clock(c, now).is_ok())
-            .any(|c| c.capability.action == action)
+            .any(|c| alternatives.iter().any(|a| a == &c.capability.action))
     }
 
     async fn try_recv_a2a_task(&self, peer: &AgentId) -> Response {
@@ -466,15 +474,20 @@ impl Server {
                 };
             }
         };
-        let action = format!("a2a.respond.{}", sender.display);
+        let alternatives = sender.scoped_action_alternatives("a2a.respond");
+        let display_action = alternatives[0].clone();
         let check = self
-            .check_capabilities(format!("a2a-respond:{task_id}"), vec![action.clone()], peer)
+            .check_capabilities_any_of(
+                format!("a2a-respond:{task_id}"),
+                vec![alternatives.to_vec()],
+                peer,
+            )
             .await;
         if !check.passed {
             return Response::Error {
                 message: format!(
-                    "a2a respond to {} requires capability {action:?}. \
-                     Grant it with `covenant capabilities grant {action}`.",
+                    "a2a respond to {} requires capability {display_action:?}. \
+                     Grant it with `covenant capabilities grant {display_action}`.",
                     sender.display
                 ),
             };
@@ -1312,24 +1325,41 @@ impl Server {
         }
     }
 
-    /// Capability check: returns required + missing + passed. Logs a
-    /// `CapabilityCheck` audit event attributed to `peer`. `scope_id` is
-    /// the subject of the check (an agent id or `tool:<name>`); it lands
-    /// in the audit row so operators can distinguish. The capability set
-    /// consulted is the one keyed on `peer.pubkey` — in v0 every authenticated
-    /// caller is the operator (peer.pubkey == identity.pubkey), but the
-    /// per-peer keying lays groundwork for multi-peer.
+    /// Capability check for plain (single-form) actions. Thin wrapper
+    /// over [`Self::check_capabilities_any_of`] — each required action
+    /// becomes a single-element alternative group.
     async fn check_capabilities(
         &self,
         scope_id: String,
         required: Vec<String>,
         peer: &AgentId,
     ) -> CapabilityCheckOutcome {
+        let groups = required.into_iter().map(|a| vec![a]).collect();
+        self.check_capabilities_any_of(scope_id, groups, peer).await
+    }
+
+    /// Capability check where each requirement is satisfied by **any**
+    /// of a list of equivalent action forms — used by Sprint 71's
+    /// accept-both-shapes for peer-scoped actions (`a2a.send.<display>`
+    /// is satisfied by either `a2a.send.<display>` or
+    /// `a2a.send.<pubkey_b58>` per [`AgentId::scoped_action_alternatives`]).
+    ///
+    /// Audit attribution: when an alternative group has a granted match,
+    /// `required_actions` records the form that actually matched; on a
+    /// miss it records the first element of the group (the display form
+    /// by helper convention) so operator-facing rendering stays
+    /// display-form on the failure path.
+    async fn check_capabilities_any_of(
+        &self,
+        scope_id: String,
+        alternatives_per_required: Vec<Vec<String>>,
+        peer: &AgentId,
+    ) -> CapabilityCheckOutcome {
         let now = epoch_ms();
-        if required.is_empty() {
+        if alternatives_per_required.is_empty() {
             return CapabilityCheckOutcome {
                 passed: true,
-                required,
+                required: Vec::new(),
                 missing: Vec::new(),
             };
         }
@@ -1343,11 +1373,19 @@ impl Server {
             .filter(|c| verify_with_clock(c, now).is_ok())
             .map(|c| c.capability.action.clone())
             .collect();
-        let missing: Vec<String> = required
-            .iter()
-            .filter(|a| !valid_actions.iter().any(|v| v == *a))
-            .cloned()
-            .collect();
+        let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
+        let mut missing: Vec<String> = Vec::new();
+        for group in &alternatives_per_required {
+            let matched = group.iter().find(|a| valid_actions.iter().any(|v| v == *a));
+            match matched {
+                Some(form) => required.push(form.clone()),
+                None => {
+                    let canonical = group.first().cloned().unwrap_or_default();
+                    required.push(canonical.clone());
+                    missing.push(canonical);
+                }
+            }
+        }
         let passed = missing.is_empty();
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -2794,6 +2832,350 @@ required = {caps:?}
                 assert!(message.contains("recipient has not granted"));
             }
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    // Sprint 71 — accept-both-shapes: a2a.{send,recv,respond} caps are
+    // satisfied by either the peer's display form or its pubkey-b58 form.
+    // Display remains the v0 default; b58 is the unforgeable form that
+    // closes Sprint 59's display-collision failure mode going into
+    // Phase-1 multi-peer.
+
+    #[tokio::test]
+    async fn a2a_send_accepts_pubkey_b58_grant() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task_for(&s);
+        // Grant the b58 form against the recipient's pubkey rather than
+        // the display "research@local". The check must accept it.
+        let alternatives = task.recipient.scoped_action_alternatives("a2a.send");
+        s.op_respond(Request::GrantCapability {
+            action: alternatives[1].clone(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        match resp {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("b58 grant must satisfy send-cap, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_audit_records_matched_b58_form() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let task = dummy_a2a_task_for(&s);
+        let alternatives = task.recipient.scoped_action_alternatives("a2a.send");
+        let b58_form = alternatives[1].clone();
+        s.op_respond(Request::GrantCapability {
+            action: b58_form.clone(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task }).await;
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .filter(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. }))
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck { agent_id, .. } => agent_id.starts_with("a2a-send:"),
+                _ => false,
+            })
+            .expect("expected a CapabilityCheck for the send call");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                required_actions,
+                missing_actions,
+                passed,
+                ..
+            } => {
+                assert_eq!(required_actions, &vec![b58_form.clone()]);
+                assert!(missing_actions.is_empty());
+                assert!(*passed);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_audit_records_display_on_miss() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        // No grant — both forms miss. C1 records the canonical (display)
+        // form so operator-facing renderers stay display-form on failures.
+        s.op_respond(Request::SendA2ATask {
+            task: dummy_a2a_task_for(&s),
+        })
+        .await;
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. }))
+            .expect("capability check audit event present");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                required_actions,
+                missing_actions,
+                passed,
+                ..
+            } => {
+                assert_eq!(
+                    required_actions,
+                    &vec!["a2a.send.research@local".to_string()]
+                );
+                assert_eq!(
+                    missing_actions,
+                    &vec!["a2a.send.research@local".to_string()]
+                );
+                assert!(!passed);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_rejects_other_peer_b58_grant() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task_for(&s);
+        // Compose a b58 form against a *different* pubkey. The check
+        // must NOT honour it — defeats the Sprint 59 display-collision
+        // attack a Phase-1 second peer would otherwise enable.
+        let other = AgentId::new("research@local", [42u8; 32]);
+        let other_alternatives = other.scoped_action_alternatives("a2a.send");
+        assert_ne!(
+            other_alternatives[1],
+            task.recipient.scoped_action_alternatives("a2a.send")[1],
+            "test premise: the b58 forms must differ between the two pubkeys"
+        );
+        s.op_respond(Request::GrantCapability {
+            action: other_alternatives[1].clone(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("requires capability"));
+                assert!(message.contains("a2a.send.research@local"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_recv_gate_accepts_pubkey_b58_grant() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        // Recipient grants `a2a.recv.<sender_pubkey_b58>` instead of the
+        // display form. The gate must accept it.
+        let recv_alternatives = peer.scoped_action_alternatives("a2a.recv");
+        let alien_grantor = LocalIdentity::generate("granter@local");
+        let recv_cap = covenant_types::Capability {
+            subject: foreign_recipient.clone(),
+            action: recv_alternatives[1].clone(),
+            scope: serde_json::json!({}),
+            granted_by: alien_grantor.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(recv_cap, alien_grantor.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient,
+            intent_text: "authorised via b58".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        match resp {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("recv gate must accept b58 form, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_recv_gate_rejects_other_peer_b58_grant() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        // Recipient grants the b58 form for a *different* sender pubkey.
+        // The gate must reject this send — collision-attack defense.
+        let other = AgentId::new(peer.display.clone(), [42u8; 32]);
+        let other_recv = other.scoped_action_alternatives("a2a.recv");
+        assert_ne!(
+            other_recv[1],
+            peer.scoped_action_alternatives("a2a.recv")[1]
+        );
+        let alien_grantor = LocalIdentity::generate("granter@local");
+        let recv_cap = covenant_types::Capability {
+            subject: foreign_recipient.clone(),
+            action: other_recv[1].clone(),
+            scope: serde_json::json!({}),
+            granted_by: alien_grantor.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(recv_cap, alien_grantor.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient,
+            intent_text: "spoofed b58".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("recipient has not granted"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_respond_accepts_pubkey_b58_grant() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        // Grant the b58 form for the respond cap; the respond check must
+        // accept it.
+        let respond_alternatives = task.sender.scoped_action_alternatives("a2a.respond");
+        s.op_respond(Request::GrantCapability {
+            action: respond_alternatives[1].clone(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        let resp = s.op_respond(Request::PostA2AResult { result }).await;
+        match resp {
+            Response::A2AResultPosted { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("b58 grant must satisfy respond-cap, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_respond_audit_records_matched_b58_form() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let task = dummy_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let respond_alternatives = task.sender.scoped_action_alternatives("a2a.respond");
+        let b58_form = respond_alternatives[1].clone();
+        s.op_respond(Request::GrantCapability {
+            action: b58_form.clone(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        s.op_respond(Request::PostA2AResult { result }).await;
+
+        let events = audit.recent(50).await.unwrap();
+        let cap = events
+            .iter()
+            .filter(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. }))
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck { agent_id, .. } => agent_id.starts_with("a2a-respond:"),
+                _ => false,
+            })
+            .expect("expected a CapabilityCheck for the respond call");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                required_actions,
+                missing_actions,
+                passed,
+                ..
+            } => {
+                assert_eq!(required_actions, &vec![b58_form.clone()]);
+                assert!(missing_actions.is_empty());
+                assert!(*passed);
+            }
+            other => panic!("unexpected: {other:?}"),
         }
     }
 

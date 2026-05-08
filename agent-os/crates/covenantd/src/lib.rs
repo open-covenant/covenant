@@ -227,6 +227,7 @@ impl Server {
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
+            Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
         }
     }
 
@@ -381,6 +382,26 @@ impl Server {
             Ok(dropped) => Response::A2ACompacted { dropped },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
+            },
+        }
+    }
+
+    async fn purge_peers(&self, before_ms: u64, peer: &AgentId) -> Response {
+        let required = vec!["peers.purge".to_string()];
+        let check = self
+            .check_capabilities("peers:purge".into(), required, peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "peers purge requires capability \"peers.purge\". \
+                     Grant it with `covenant capabilities grant peers.purge`."
+                    .into(),
+            };
+        }
+        match self.peers.purge_revoked_older_than(before_ms).await {
+            Ok(purged) => Response::PeersPurged { purged },
+            Err(e) => Response::Error {
+                message: format!("peers: {e}"),
             },
         }
     }
@@ -1776,6 +1797,37 @@ required = {caps:?}
                 assert_eq!(dropped, 0);
             }
             other => panic!("expected A2ACompacted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_peers_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let resp = s.op_respond(Request::PurgePeers { before_ms: 1 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("peers.purge"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_peers_passes_after_grant() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "peers.purge".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::PurgePeers { before_ms: 0 }).await;
+        match resp {
+            Response::PeersPurged { purged } => {
+                assert_eq!(purged, 0, "no revocations to purge in a fresh registry");
+            }
+            other => panic!("expected PeersPurged, got {other:?}"),
         }
     }
 

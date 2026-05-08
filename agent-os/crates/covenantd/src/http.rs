@@ -53,6 +53,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/a2a/results/next", get(try_recv_a2a_result))
         .route("/a2a/results/recent", get(recent_a2a_results))
         .route("/a2a/compact", post(compact_a2a))
+        .route("/peers/purge", post(peers_purge))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -459,6 +460,28 @@ async fn compact_a2a(
     Extension(peer): Extension<AgentId>,
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(s.server.respond(Request::CompactA2A, &peer).await))
+}
+
+#[derive(Debug, Deserialize)]
+struct PurgePeersBody {
+    before_ms: u64,
+}
+
+async fn peers_purge(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PurgePeersBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::PurgePeers {
+                    before_ms: b.before_ms,
+                },
+                &peer,
+            )
+            .await,
+    ))
 }
 
 #[derive(Deserialize)]

@@ -127,6 +127,13 @@ pub trait PeerRegistry: Send + Sync {
     /// Returns only currently-live entries (revoked tokens excluded).
     /// Operator-facing.
     async fn recent(&self, limit: usize) -> Result<Vec<PeerEntry>, PeerError>;
+    /// Drop revocation tombstones with `revoked_at < before_ms` along
+    /// with their matching `Registered` entries. Returns the number of
+    /// revocations dropped (= number of `Registered` entries also
+    /// dropped, modulo any pre-existing orphaned revocations — those
+    /// drop too). Live entries (registered but never revoked) are
+    /// untouched. Mirrors `CapabilityStore::purge_revoked_older_than`.
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError>;
 }
 
 /// In-process registry suitable for tests.
@@ -192,6 +199,26 @@ impl PeerRegistry for InMemoryPeerRegistry {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError> {
+        let mut revoked = self.revoked.lock().await;
+        let drop_tokens: Vec<[u8; 32]> = revoked
+            .iter()
+            .filter(|(_, ts)| **ts < before_ms)
+            .map(|(t, _)| *t)
+            .collect();
+        let purged = drop_tokens.len() as u64;
+        if purged == 0 {
+            return Ok(0);
+        }
+        let drop_set: std::collections::HashSet<[u8; 32]> = drop_tokens.iter().copied().collect();
+        for t in &drop_tokens {
+            revoked.remove(t);
+        }
+        let mut entries = self.entries.lock().await;
+        entries.retain(|e| !drop_set.contains(e.token.as_bytes()));
+        Ok(purged)
     }
 }
 
@@ -321,6 +348,82 @@ impl PeerRegistry for JsonlPeerRegistry {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError> {
+        // Hold file_lock across the whole read-filter-rewrite so a
+        // concurrent register / revoke can't race with the rewrite.
+        // Atomicity of the rewrite comes from tempfile + rename.
+        let _g = self.file_lock.lock().await;
+
+        let raw = match fs::read_to_string(&self.path).await {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let events: Vec<PeerEvent> = raw
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let drop_tokens: std::collections::HashSet<[u8; 32]> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                PeerEvent::Revoked { token, revoked_at } if *revoked_at < before_ms => {
+                    Some(*token.as_bytes())
+                }
+                _ => None,
+            })
+            .collect();
+        let purged = drop_tokens.len() as u64;
+        if purged == 0 {
+            return Ok(0);
+        }
+
+        let kept: Vec<&PeerEvent> = events
+            .iter()
+            .filter(|ev| match ev {
+                PeerEvent::Registered(entry) => !drop_tokens.contains(entry.token.as_bytes()),
+                PeerEvent::Revoked { token, .. } => !drop_tokens.contains(token.as_bytes()),
+            })
+            .collect();
+
+        let tmp_path = self.path.with_extension("jsonl.tmp");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        for ev in &kept {
+            let line = serde_json::to_string(ev)?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        drop(f);
+        fs::rename(&tmp_path, &self.path).await?;
+
+        // Mirror the on-disk drop into in-memory state. Entries-first,
+        // revoked-second is load-bearing: `resolve()` checks `revoked`
+        // before `entries`, so the intermediate state must keep a
+        // dropped token's tombstone visible until its entry is gone.
+        // Reversing the order would expose a TOCTOU window where a
+        // recently-purged token's `Registered` entry is still in
+        // `entries` after its tombstone was removed from `revoked` —
+        // a concurrent `resolve()` would authenticate the dead token.
+        {
+            let mut entries = self.entries.lock().await;
+            entries.retain(|e| !drop_tokens.contains(e.token.as_bytes()));
+        }
+        {
+            let mut revoked = self.revoked.lock().await;
+            for t in &drop_tokens {
+                revoked.remove(t);
+            }
+        }
+        Ok(purged)
     }
 }
 
@@ -465,5 +568,206 @@ mod tests {
             None,
             "fresh registry resolves nothing"
         );
+    }
+
+    #[tokio::test]
+    async fn in_memory_purge_drops_old_revocations_and_their_entries() {
+        let r = InMemoryPeerRegistry::new();
+        let (live_token, live_entry) = entry("live@local");
+        let (dead_token, dead_entry) = entry("dead@local");
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(dead_entry.clone()).await.unwrap();
+        assert!(r.revoke(&dead_token).await.unwrap());
+
+        // Force the revocation timestamp into the past.
+        r.revoked.lock().await.insert(*dead_token.as_bytes(), 50);
+
+        let purged = r.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Live token still resolves.
+        assert_eq!(
+            r.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id)
+        );
+        // Dead token no longer resolves; tombstone is gone but the
+        // entry is gone too, so resolution returns None.
+        assert_eq!(r.resolve(&dead_token).await.unwrap(), None);
+        // Recent shows only the live entry.
+        let recent = r.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_rewrites_atomically_and_keeps_live_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+
+        let (live_token, live_entry) = entry("live@local");
+        let (dead_token, dead_entry) = entry("dead@local");
+        let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(dead_entry.clone()).await.unwrap();
+        assert!(r.revoke(&dead_token).await.unwrap());
+
+        // Hand-rewrite the on-disk revocation with a deterministic past
+        // timestamp (the in-process revoke just stamped now).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = raw.lines().map(String::from).collect();
+        for line in lines.iter_mut() {
+            if line.contains("\"revoked\"") {
+                let ev: PeerEvent = serde_json::from_str(line).unwrap();
+                if let PeerEvent::Revoked { token, .. } = ev {
+                    *line = serde_json::to_string(&PeerEvent::Revoked {
+                        token,
+                        revoked_at: 50,
+                    })
+                    .unwrap();
+                }
+            }
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        // Reopen so the in-memory state matches the rewritten file.
+        let r2 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        let purged = r2.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Reopen again — only the live entry survived.
+        let r3 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        assert_eq!(
+            r3.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id)
+        );
+        assert_eq!(r3.resolve(&dead_token).await.unwrap(), None);
+        let recent = r3.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+
+        // No tempfile.tmp left lying around.
+        assert!(!path.with_extension("jsonl.tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_no_op_when_no_revocations_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        let (token, e) = entry("a@local");
+        r.register(e).await.unwrap();
+        r.revoke(&token).await.unwrap();
+
+        // Fresh revocation — `before_ms = 100` matches nothing.
+        let purged = r.purge_revoked_older_than(100).await.unwrap();
+        assert_eq!(purged, 0);
+        // No tempfile.tmp left behind.
+        assert!(!path.with_extension("jsonl.tmp").exists());
+        // Tombstone still on disk and resolves correctly.
+        assert_eq!(r.resolve(&token).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_concurrent_resolve_never_returns_purged_token() {
+        // Regression test for the Sprint 55 mid-sprint security-review
+        // MEDIUM finding: between the two in-memory mutation blocks of
+        // `purge_revoked_older_than`, a concurrent `resolve()` of a
+        // recently-purged token used to observe `not in revoked` AND
+        // `entry in entries` simultaneously — authenticating a token
+        // whose tombstone was just dropped. Fix: mutate `entries` first
+        // so the intermediate state keeps the tombstone visible.
+        //
+        // This stress test fires many concurrent resolves while the
+        // purge runs; with the fix, every resolve must return None.
+        // Without the fix, the race surfaced reliably under tokio's
+        // task scheduler within a few hundred iterations.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = std::sync::Arc::new(JsonlPeerRegistry::open(path.clone()).await.unwrap());
+
+        let (token, e) = entry("dead@local");
+        r.register(e).await.unwrap();
+        r.revoke(&token).await.unwrap();
+        // Force the in-memory revocation timestamp into the past so the
+        // purge picks it up.
+        r.revoked.lock().await.insert(*token.as_bytes(), 50);
+
+        // Spawn a small army of concurrent resolves *during* the purge.
+        let r_resolve = r.clone();
+        let resolve_handle = tokio::spawn(async move {
+            let mut max_some_seen = 0usize;
+            for _ in 0..2000 {
+                if r_resolve.resolve(&token).await.unwrap().is_some() {
+                    max_some_seen += 1;
+                }
+                tokio::task::yield_now().await;
+            }
+            max_some_seen
+        });
+
+        let _ = r.purge_revoked_older_than(100).await.unwrap();
+        let some_count = resolve_handle.await.unwrap();
+        assert_eq!(
+            some_count, 0,
+            "no concurrent resolve should ever authenticate a purged token"
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_replay_yields_same_state_as_before() {
+        // Replay-equivalence: after compact, reopening the registry
+        // must yield an identical resolve/recent surface vs. the
+        // pre-compact state for every live token.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+
+        let (live_a, e_a) = entry("a@local");
+        let (live_b, e_b) = entry("b@local");
+        let (dead, e_dead) = entry("dead@local");
+
+        let snapshot_pre = {
+            let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+            r.register(e_a.clone()).await.unwrap();
+            r.register(e_b.clone()).await.unwrap();
+            r.register(e_dead.clone()).await.unwrap();
+            r.revoke(&dead).await.unwrap();
+            (
+                r.resolve(&live_a).await.unwrap(),
+                r.resolve(&live_b).await.unwrap(),
+                r.resolve(&dead).await.unwrap(),
+                r.recent(10).await.unwrap().len(),
+            )
+        };
+
+        // Hand-stamp the dead-token revocation timestamp into the past,
+        // then compact via a fresh handle.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = raw.lines().map(String::from).collect();
+        for line in lines.iter_mut() {
+            if line.contains("\"revoked\"") {
+                let ev: PeerEvent = serde_json::from_str(line).unwrap();
+                if let PeerEvent::Revoked { token, .. } = ev {
+                    *line = serde_json::to_string(&PeerEvent::Revoked {
+                        token,
+                        revoked_at: 50,
+                    })
+                    .unwrap();
+                }
+            }
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let r_compact = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        r_compact.purge_revoked_older_than(100).await.unwrap();
+
+        // Snapshot the post-compact state from yet another fresh handle
+        // — the operator's restart-after-compact path.
+        let r_post = JsonlPeerRegistry::open(path).await.unwrap();
+        let snapshot_post = (
+            r_post.resolve(&live_a).await.unwrap(),
+            r_post.resolve(&live_b).await.unwrap(),
+            r_post.resolve(&dead).await.unwrap(),
+            r_post.recent(10).await.unwrap().len(),
+        );
+        assert_eq!(snapshot_pre, snapshot_post);
     }
 }

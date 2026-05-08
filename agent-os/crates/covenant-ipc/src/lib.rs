@@ -125,6 +125,14 @@ pub enum Request {
     /// (TaskSent + TaskRecv + ≥1 ResultPosted with matching ResultRecv
     /// counts). Operator-driven; no scheduled compaction in v0.
     CompactA2A,
+    /// Drop revocation tombstones (and their matching `Registered`
+    /// entries) from `peers/registry.jsonl` whose `revoked_at` is
+    /// strictly older than `before_ms`. Live registrations are
+    /// untouched. Same operator-driven retention shape as
+    /// `PurgeAudit` / `PurgeCapabilities`.
+    PurgePeers {
+        before_ms: u64,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -224,6 +232,9 @@ pub enum Response {
     },
     A2ACompacted {
         dropped: u64,
+    },
+    PeersPurged {
+        purged: u64,
     },
     Error {
         message: String,

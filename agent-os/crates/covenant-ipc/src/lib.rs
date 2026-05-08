@@ -196,10 +196,20 @@ pub enum Request {
     /// `#[serde(default)]` lets a stale CLI built before the guard
     /// landed send frames without the field; the new daemon parses
     /// them as `force: false`, the safe default.
+    ///
+    /// `match_limit` caps `RevokeOutcome::Ambiguous.matches` when the
+    /// prefix is non-unique. `None` (the default) lets the daemon use
+    /// its built-in constant; `Some(N)` overrides it for the operator
+    /// who wants more (or fewer) candidates rendered in one round-trip.
+    /// `#[serde(default)]` keeps stale CLIs forward-compatible — the
+    /// missing field deserialises as `None`, the daemon falls back to
+    /// the constant, and the response shape is unchanged.
     RevokePeer {
         token_prefix: String,
         #[serde(default)]
         force: bool,
+        #[serde(default)]
+        match_limit: Option<usize>,
     },
 }
 

@@ -154,6 +154,7 @@ async fn live_covenantd_peers_revoke_terminates_authentication() {
             Request::RevokePeer {
                 token_prefix: guest_token_b58.clone(),
                 force: false,
+                match_limit: None,
             },
         )
         .await;

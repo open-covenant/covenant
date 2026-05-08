@@ -342,7 +342,11 @@ impl Server {
             Request::RevokePeer {
                 token_prefix,
                 force,
-            } => self.revoke_peer(token_prefix, force, peer).await,
+                match_limit,
+            } => {
+                self.revoke_peer(token_prefix, force, match_limit, peer)
+                    .await
+            }
         }
     }
 
@@ -837,12 +841,12 @@ impl Server {
     /// SelfRevokeForbidden) survive on the wire so the CLI can render
     /// each clearly without re-calling `peers list` for narrowing.
     ///
-    /// `Ambiguous.matches` is bounded at [`PEER_MATCH_LIMIT`]; when more
-    /// than that many entries match the prefix, `Ambiguous.truncated`
-    /// is `true` and the displayed list carries exactly the cap. The
-    /// operator narrows by re-running with a longer prefix; a future
-    /// `--limit-matches` CLI flag would route through the same registry
-    /// parameter.
+    /// `Ambiguous.matches` is bounded at the caller's `match_limit` if
+    /// set, falling back to [`PEER_MATCH_LIMIT`] when `None`; when more
+    /// than the cap matches, `Ambiguous.truncated` is `true` and the
+    /// displayed list carries exactly the cap. The operator narrows by
+    /// re-running with a longer prefix or by raising `--limit-matches`
+    /// on the CLI.
     ///
     /// Gated to the operator's own identity — `peer.pubkey ==
     /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`
@@ -884,7 +888,13 @@ impl Server {
     /// test the recovery flow" use case. The peek's TOCTOU is benign
     /// because `self.identity.agent_id().pubkey` is stable across token
     /// rotation (rotation rotates the token, not the keypair).
-    async fn revoke_peer(&self, token_prefix: String, force: bool, peer: &AgentId) -> Response {
+    async fn revoke_peer(
+        &self,
+        token_prefix: String,
+        force: bool,
+        match_limit: Option<usize>,
+        peer: &AgentId,
+    ) -> Response {
         if peer.pubkey != self.identity.agent_id().pubkey {
             let event = AuditEvent {
                 id: Uuid::new_v4(),
@@ -903,6 +913,18 @@ impl Server {
         if token_prefix.is_empty() {
             return Response::Error {
                 message: "peer revoke requires a non-empty token prefix".into(),
+            };
+        }
+        if matches!(match_limit, Some(0)) {
+            // Defence-in-depth against the bypass-CLI footgun: the CLI
+            // rejects 0 client-side, but a direct HTTP caller (curl with
+            // the operator bearer) could send `{"match_limit":0}` and
+            // silently collapse `Ambiguous` detection — `take(0 + 1)`
+            // would collect a single arbitrary match and the unique-match
+            // path would tombstone the wrong row. Mirrors the empty-prefix
+            // rejection above; same posture, same response shape.
+            return Response::Error {
+                message: "peer revoke match_limit must be at least 1".into(),
             };
         }
         if !force {
@@ -935,9 +957,10 @@ impl Server {
                 }
             }
         }
+        let limit = match_limit.unwrap_or(PEER_MATCH_LIMIT);
         let outcome = match self
             .peers
-            .revoke_by_token_prefix(&token_prefix, PEER_MATCH_LIMIT)
+            .revoke_by_token_prefix(&token_prefix, limit)
             .await
         {
             Ok(o) => o,
@@ -5543,6 +5566,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
                 force: false,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -5598,6 +5622,7 @@ budget_credits_per_hour = {credits}
                 Request::RevokePeer {
                     token_prefix: "abcdef".into(),
                     force: false,
+                    match_limit: None,
                 },
                 &foreign,
             )
@@ -5647,6 +5672,7 @@ budget_credits_per_hour = {credits}
                 Request::RevokePeer {
                     token_prefix: "abcdef".into(),
                     force: false,
+                    match_limit: None,
                 },
                 &foreign,
             )
@@ -5701,6 +5727,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: "1".into(),
                 force: false,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -5778,6 +5805,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: "1".into(),
                 force: false,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -5793,6 +5821,74 @@ budget_credits_per_hour = {credits}
                 other => panic!("expected Ambiguous, got {other:?}"),
             },
             other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+    }
+
+    /// `Request::RevokePeer.match_limit = Some(N)` caps the response's
+    /// `Ambiguous.matches` at `N` even when more than `PEER_MATCH_LIMIT`
+    /// entries match. The CLI's `--limit-matches` flag rides this
+    /// through; `truncated` is set whenever more entries existed than
+    /// the caller's `N`.
+    #[tokio::test]
+    async fn revoke_peer_match_limit_overrides_constant() {
+        let s = server_with(vec![], "");
+        for i in 0..5u8 {
+            let mut pubkey = [0u8; 32];
+            pubkey[0] = i;
+            let (_, ent) =
+                peer_with_token_b58_starting_with("1", &format!("collide{i}@local"), pubkey);
+            s.peers.register(ent).await.unwrap();
+        }
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: "1".into(),
+                force: false,
+                match_limit: Some(2),
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked {
+                outcome: RevokeOutcome::Ambiguous { matches, truncated },
+            } => {
+                assert_eq!(matches.len(), 2, "caller-supplied cap honoured");
+                assert!(truncated, "five matches existed beyond the cap of 2");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    /// `match_limit: None` falls back to the daemon's `PEER_MATCH_LIMIT`
+    /// constant. The Sprint 77 wire shape preserves the daemon-side
+    /// safe default for stale CLIs that don't yet know about the field.
+    #[tokio::test]
+    async fn revoke_peer_match_limit_none_uses_daemon_constant() {
+        let s = server_with(vec![], "");
+        for i in 0..(PEER_MATCH_LIMIT + 2) {
+            let mut pubkey = [0u8; 32];
+            pubkey[0] = i as u8;
+            let (_, ent) =
+                peer_with_token_b58_starting_with("1", &format!("collide{i}@local"), pubkey);
+            s.peers.register(ent).await.unwrap();
+        }
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: "1".into(),
+                force: false,
+                match_limit: None,
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked {
+                outcome: RevokeOutcome::Ambiguous { matches, truncated },
+            } => {
+                assert_eq!(
+                    matches.len(),
+                    PEER_MATCH_LIMIT,
+                    "None falls back to constant",
+                );
+                assert!(truncated);
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
         }
     }
 
@@ -5816,6 +5912,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
                 force: false,
+                match_limit: None,
             })
             .await;
         let json = serde_json::to_string(&resp).expect("serialize PeerRevoked");
@@ -5828,6 +5925,35 @@ budget_credits_per_hour = {credits}
             json.contains(&prefix),
             "response should still expose the 6-char redacted prefix"
         );
+    }
+
+    /// `match_limit: Some(0)` is rejected at the daemon boundary.
+    /// Without this guard a `take(0 + 1)` peek collapses ambiguous-prefix
+    /// detection into a unique-match revoke of an arbitrary row. The CLI
+    /// already rejects 0 client-side; this regression test pins the
+    /// daemon-side defence-in-depth against direct HTTP callers.
+    #[tokio::test]
+    async fn revoke_peer_rejects_zero_match_limit() {
+        let s = server_with(vec![], "");
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        match s
+            .op_respond(Request::RevokePeer {
+                token_prefix: "anything".into(),
+                force: false,
+                match_limit: Some(0),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(message.contains("at least 1")),
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     /// Empty prefix is rejected at the daemon boundary. Without this
@@ -5848,6 +5974,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: String::new(),
                 force: false,
+                match_limit: None,
             })
             .await
         {
@@ -5889,6 +6016,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
                 force: false,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -5945,6 +6073,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
                 force: true,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -5999,6 +6128,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix,
                 force: false,
+                match_limit: None,
             })
             .await;
         match resp {
@@ -6010,20 +6140,27 @@ budget_credits_per_hour = {credits}
     }
 
     /// `#[serde(default)]` regression: a `Request::RevokePeer` JSON
-    /// without the `force` field deserialises with `force == false`
-    /// (the safe default — guard fires). This is what a stale CLI built
-    /// before the field landed produces; the new daemon must accept it.
+    /// without the `force` or `match_limit` fields deserialises with
+    /// `force == false` (the safe default — guard fires) and
+    /// `match_limit == None` (daemon falls back to its built-in
+    /// constant). This is what a stale CLI built before either field
+    /// landed produces; the new daemon must accept it.
     #[tokio::test]
-    async fn revoke_peer_force_field_defaults_to_false_on_deserialize() {
+    async fn revoke_peer_optional_fields_default_on_deserialize() {
         let json = r#"{"kind":"revoke_peer","token_prefix":"abcdef"}"#;
         let req: Request = serde_json::from_str(json).expect("stale-CLI frame deserialises");
         match req {
             Request::RevokePeer {
                 token_prefix,
                 force,
+                match_limit,
             } => {
                 assert_eq!(token_prefix, "abcdef");
                 assert!(!force, "missing force field defaults to false");
+                assert!(
+                    match_limit.is_none(),
+                    "missing match_limit field defaults to None"
+                );
             }
             other => panic!("expected RevokePeer, got {other:?}"),
         }
@@ -6066,6 +6203,7 @@ budget_credits_per_hour = {credits}
                 Request::RevokePeer {
                     token_prefix: "anything".into(),
                     force: false,
+                    match_limit: None,
                 },
                 &foreign_caller,
             )
@@ -6110,6 +6248,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix,
                 force: false,
+                match_limit: None,
             })
             .await;
         let json = serde_json::to_string(&resp).expect("serialize PeerRevoked");

@@ -19,7 +19,7 @@
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>]
-//!   covenant peers revoke <token-prefix> [--force]
+//!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>]
 //!   covenant intents resume <intent-id>
 //! ```
 
@@ -97,7 +97,7 @@ fn print_usage() {
         "  covenant peers list [--limit N] [--prefix B58]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix"
     );
     eprintln!(
-        "  covenant peers revoke <TOKEN-PREFIX> [--force]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard"
+        "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard, --limit-matches caps ambiguous-match render"
     );
     eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
@@ -781,29 +781,10 @@ async fn main() -> Result<()> {
                         Response::PeerList {
                             peers,
                             operator_pubkey_b58,
-                            ..
+                            truncated,
                         } => {
-                            if peers.is_empty() {
-                                println!("(no matching peers)");
-                            } else {
-                                for p in peers {
-                                    let pubkey = p.agent_id.pubkey_base58();
-                                    let self_marker = if pubkey == operator_pubkey_b58 {
-                                        " (self)"
-                                    } else {
-                                        ""
-                                    };
-                                    let status = match p.revoked_at {
-                                        Some(ts) => format!("revoked@{ts}"),
-                                        None => "live".into(),
-                                    };
-                                    println!(
-                                        "{display}{self_marker}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
-                                        display = p.agent_id.display,
-                                        prefix = p.token_prefix,
-                                        registered = p.registered_at,
-                                    );
-                                }
+                            for line in peer_list_lines(&peers, &operator_pubkey_b58, truncated) {
+                                println!("{line}");
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -812,17 +793,38 @@ async fn main() -> Result<()> {
                 }
                 "revoke" => {
                     let force = args.iter().any(|a| a == "--force");
-                    let token_prefix = args
-                        .iter()
-                        .skip(2)
-                        .find(|a| !a.starts_with("--"))
-                        .context("covenant peers revoke: missing TOKEN-PREFIX argument")?
-                        .clone();
+                    let mut match_limit: Option<usize> = None;
+                    let mut token_prefix: Option<String> = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--force" => {}
+                            "--limit-matches" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit-matches needs a value")?;
+                                let n: usize = v
+                                    .parse()
+                                    .context("--limit-matches must be a positive integer")?;
+                                if n == 0 {
+                                    bail!("--limit-matches must be at least 1");
+                                }
+                                match_limit = Some(n);
+                            }
+                            other if !other.starts_with("--") && token_prefix.is_none() => {
+                                token_prefix = Some(other.to_string());
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let token_prefix = token_prefix
+                        .context("covenant peers revoke: missing TOKEN-PREFIX argument")?;
                     write_frame(
                         &mut stream,
                         &Request::RevokePeer {
                             token_prefix,
                             force,
+                            match_limit,
                         },
                     )
                     .await?;
@@ -850,23 +852,9 @@ async fn main() -> Result<()> {
                                 eprintln!("no peer matched the supplied prefix");
                                 std::process::exit(1);
                             }
-                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches, .. } => {
-                                eprintln!(
-                                    "prefix matched {n} peers — narrow the prefix:",
-                                    n = matches.len()
-                                );
-                                for p in matches {
-                                    let status = match p.revoked_at {
-                                        Some(ts) => format!("revoked@{ts}"),
-                                        None => "live".into(),
-                                    };
-                                    eprintln!(
-                                        "  {display}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
-                                        display = p.agent_id.display,
-                                        pubkey = p.agent_id.pubkey_base58(),
-                                        prefix = p.token_prefix,
-                                        registered = p.registered_at,
-                                    );
+                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches, truncated } => {
+                                for line in peer_revoke_ambiguous_lines(&matches, truncated) {
+                                    eprintln!("{line}");
                                 }
                                 std::process::exit(1);
                             }
@@ -1052,6 +1040,72 @@ fn expand_a2a_action(
             matches: live,
         }),
     }
+}
+
+fn peer_list_lines(
+    peers: &[PeerSummary],
+    operator_pubkey_b58: &str,
+    truncated: bool,
+) -> Vec<String> {
+    if peers.is_empty() {
+        return vec!["(no matching peers)".into()];
+    }
+    let mut out: Vec<String> = peers
+        .iter()
+        .map(|p| {
+            let pubkey = p.agent_id.pubkey_base58();
+            let self_marker = if pubkey == operator_pubkey_b58 {
+                " (self)"
+            } else {
+                ""
+            };
+            let status = match p.revoked_at {
+                Some(ts) => format!("revoked@{ts}"),
+                None => "live".into(),
+            };
+            format!(
+                "{display}{self_marker}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
+                display = p.agent_id.display,
+                prefix = p.token_prefix,
+                registered = p.registered_at,
+            )
+        })
+        .collect();
+    if truncated {
+        out.push(format!(
+            "(truncated; {n} shown — narrow with --prefix or raise --limit)",
+            n = peers.len()
+        ));
+    }
+    out
+}
+
+fn peer_revoke_ambiguous_lines(matches: &[PeerSummary], truncated: bool) -> Vec<String> {
+    let mut out = Vec::with_capacity(matches.len() + 2);
+    out.push(format!(
+        "prefix matched {n} peers — narrow the prefix:",
+        n = matches.len()
+    ));
+    for p in matches {
+        let status = match p.revoked_at {
+            Some(ts) => format!("revoked@{ts}"),
+            None => "live".into(),
+        };
+        out.push(format!(
+            "  {display}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
+            display = p.agent_id.display,
+            pubkey = p.agent_id.pubkey_base58(),
+            prefix = p.token_prefix,
+            registered = p.registered_at,
+        ));
+    }
+    if truncated {
+        out.push(format!(
+            "(truncated; {n} shown — re-run with a longer prefix or raise --limit-matches)",
+            n = matches.len()
+        ));
+    }
+    out
 }
 
 fn print_expand_error(err: &ExpandError) {
@@ -1310,6 +1364,68 @@ mod tests {
         assert!(
             !dump.contains(&peer.token_prefix),
             "Rewritten outcome must not carry token_prefix: {dump}"
+        );
+    }
+
+    #[test]
+    fn peer_list_lines_renders_empty_marker_when_no_peers() {
+        let out = peer_list_lines(&[], "OPB58", false);
+        assert_eq!(out, vec!["(no matching peers)"]);
+    }
+
+    #[test]
+    fn peer_list_lines_marks_self_row_and_omits_truncation_hint_when_not_truncated() {
+        let p = make_peer(7, "alice@host", false);
+        let operator = p.agent_id.pubkey_base58();
+        let out = peer_list_lines(std::slice::from_ref(&p), &operator, false);
+        assert_eq!(out.len(), 1, "exactly one row, no trailing hint");
+        assert!(
+            out[0].starts_with("alice@host (self)\t"),
+            "self marker missing: {}",
+            out[0]
+        );
+        assert!(out[0].contains("\tlive"));
+        assert!(!out.iter().any(|l| l.contains("truncated")));
+    }
+
+    #[test]
+    fn peer_list_lines_appends_truncation_hint_when_truncated() {
+        let p = make_peer(7, "alice@host", false);
+        let q = make_peer(8, "bob@host", false);
+        let out = peer_list_lines(&[p, q], "different-pubkey", true);
+        assert_eq!(out.len(), 3, "two rows + one hint line");
+        let hint = out.last().unwrap();
+        assert!(hint.starts_with("(truncated; 2 shown — "), "hint: {hint}");
+        assert!(
+            hint.contains("--prefix") && hint.contains("--limit"),
+            "hint should suggest narrowing: {hint}"
+        );
+    }
+
+    #[test]
+    fn peer_revoke_ambiguous_lines_omits_hint_when_not_truncated() {
+        let p = make_peer(7, "alice@host", false);
+        let q = make_peer(8, "bob@host", true);
+        let out = peer_revoke_ambiguous_lines(&[p, q], false);
+        assert_eq!(out.len(), 3, "header + two rows, no hint");
+        assert!(out[0].starts_with("prefix matched 2 peers"));
+        assert!(out[1].contains("alice@host"));
+        assert!(out[1].contains("\tlive"));
+        assert!(out[2].contains("bob@host"));
+        assert!(out[2].contains("\trevoked@"));
+        assert!(!out.iter().any(|l| l.contains("truncated")));
+    }
+
+    #[test]
+    fn peer_revoke_ambiguous_lines_appends_truncation_hint_when_truncated() {
+        let p = make_peer(7, "alice@host", false);
+        let q = make_peer(8, "bob@host", false);
+        let out = peer_revoke_ambiguous_lines(&[p, q], true);
+        let hint = out.last().unwrap();
+        assert!(hint.starts_with("(truncated; 2 shown — "), "hint: {hint}");
+        assert!(
+            hint.contains("longer prefix") && hint.contains("--limit-matches"),
+            "hint should suggest both narrowing options: {hint}"
         );
     }
 }

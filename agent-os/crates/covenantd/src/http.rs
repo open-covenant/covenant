@@ -611,6 +611,8 @@ struct RevokePeerBody {
     token_prefix: String,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    match_limit: Option<usize>,
 }
 
 async fn peers_revoke(
@@ -624,6 +626,7 @@ async fn peers_revoke(
                 Request::RevokePeer {
                     token_prefix: b.token_prefix,
                     force: b.force,
+                    match_limit: b.match_limit,
                 },
                 &peer,
             )

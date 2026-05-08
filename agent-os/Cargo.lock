@@ -642,6 +642,7 @@ version = "0.1.0"
 dependencies = [
  "covenant-a2a",
  "covenant-audit",
+ "covenant-budget",
  "covenant-mcp",
  "covenant-permissions",
  "covenant-types",

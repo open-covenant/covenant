@@ -7,6 +7,7 @@
 
 use covenant_a2a::{A2ATask, A2ATaskResult};
 use covenant_audit::AuditEvent;
+use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
@@ -144,6 +145,17 @@ pub enum Request {
     ResumeIntent {
         intent_id: Uuid,
     },
+    /// Aggregate the most recent budget-debit events across every agent
+    /// the daemon's router knows about. Operator-facing surface for the
+    /// per-agent burn-rate dashboard. Daemon-side fan-out: the underlying
+    /// `BudgetLedger::recent_debits` is per-agent; the daemon iterates
+    /// `router.agents()`, calls it per non-zero-budget card, and returns
+    /// one flat list sorted newest-first. Each [`BudgetDebit`] carries
+    /// `agent: AgentId` so the UI can re-group client-side.
+    RecentDebits {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -246,6 +258,9 @@ pub enum Response {
     },
     PeersPurged {
         purged: u64,
+    },
+    Debits {
+        debits: Vec<BudgetDebit>,
     },
     Error {
         message: String,

@@ -139,6 +139,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
         .route("/intents/resume", post(intents_resume))
+        .route("/budget/debits", get(budget_debits))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -584,6 +585,23 @@ async fn intents_resume(
             .respond(
                 Request::ResumeIntent {
                     intent_id: b.intent_id,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+async fn budget_debits(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Query(q): Query<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::RecentDebits {
+                    limit: q.limit.unwrap_or(20),
                 },
                 &peer,
             )

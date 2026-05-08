@@ -305,6 +305,7 @@ impl Server {
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
+            Request::RecentDebits { limit } => self.recent_debits(limit).await,
         }
     }
 
@@ -437,6 +438,35 @@ impl Server {
                 message: format!("a2a: {e}"),
             },
         }
+    }
+
+    /// Daemon-side fan-out across `router.agents()` for the operator
+    /// budget dashboard. Per-agent buckets live in [`BudgetLedger`] and
+    /// the trait method takes a single agent — for the flat operator
+    /// view we walk the registered cards (skipping zero-budget Phase-0
+    /// manifests, same predicate as [`Self::register_agent_budgets`]),
+    /// pull `limit` debits per agent, merge, sort newest-first, and
+    /// truncate. Read-only; no capability gate, same posture as
+    /// `RecentMemory` / `RecentReceipts` / `RecentAudit`.
+    async fn recent_debits(&self, limit: usize) -> Response {
+        let mut all: Vec<covenant_budget::BudgetDebit> = Vec::new();
+        for card in self.router.agents() {
+            if card.manifest.settlement.budget_credits_per_hour == 0 {
+                continue;
+            }
+            let agent = agent_id_for_card(card);
+            match self.budget.recent_debits(&agent, limit).await {
+                Ok(debits) => all.extend(debits),
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("budget: {e}"),
+                    };
+                }
+            }
+        }
+        all.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+        all.truncate(limit);
+        Response::Debits { debits: all }
     }
 
     async fn compact_a2a(&self, peer: &AgentId) -> Response {
@@ -2854,5 +2884,100 @@ budget_credits_per_hour = {credits}
             recent.iter().any(|e| e.id == event_id),
             "expected daemon event {event_id} to land in audit.recent"
         );
+    }
+
+    #[tokio::test]
+    async fn recent_debits_returns_empty_when_router_has_no_agents() {
+        let s = server_with(vec![], "");
+        match s.op_respond(Request::RecentDebits { limit: 10 }).await {
+            Response::Debits { debits } => assert!(debits.is_empty()),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_debits_skips_zero_budget_agents() {
+        // A `budget_credits_per_hour = 0` manifest never has its bucket
+        // seeded by `register_agent_budgets`, so a `recent_debits` query
+        // for it would return `NoCapacity`. The fan-out must skip those
+        // cards before calling into the ledger.
+        let s = server_with(
+            vec![stub_card("zero", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        s.register_agent_budgets().await.unwrap();
+        match s.op_respond(Request::RecentDebits { limit: 10 }).await {
+            Response::Debits { debits } => assert!(debits.is_empty()),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_debits_returns_debit_after_dispatch() {
+        let s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.register_agent_budgets().await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+            })
+            .await;
+        assert!(matches!(resp, Response::IntentResult { .. }));
+        match s.op_respond(Request::RecentDebits { limit: 10 }).await {
+            Response::Debits { debits } => {
+                assert_eq!(debits.len(), 1);
+                assert_eq!(debits[0].agent.display, "research@agent");
+                assert_eq!(debits[0].credits, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_debits_sorts_newest_first_across_agents() {
+        // Two agents, two debits each. The flat list must be newest-first
+        // by `at_ms` regardless of which agent the debits came from.
+        let s = server_with(
+            vec![
+                stub_card_with_budget("alpha", vec![], 100),
+                stub_card_with_budget("beta", vec![], 100),
+            ],
+            "ignored",
+        );
+        s.register_agent_budgets().await.unwrap();
+        let alpha = agent_id_for_card(&stub_card_with_budget("alpha", vec![], 100));
+        let beta = agent_id_for_card(&stub_card_with_budget("beta", vec![], 100));
+        // Hand-debit so the test controls timing without depending on
+        // dispatch wall-clock granularity.
+        s.budget.try_debit(&alpha, 1, Uuid::new_v4()).await.unwrap();
+        // Wait one ms so the second debit is strictly later.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&beta, 1, Uuid::new_v4()).await.unwrap();
+        match s.op_respond(Request::RecentDebits { limit: 10 }).await {
+            Response::Debits { debits } => {
+                assert_eq!(debits.len(), 2);
+                assert!(
+                    debits[0].at_ms >= debits[1].at_ms,
+                    "expected newest-first; got {} then {}",
+                    debits[0].at_ms,
+                    debits[1].at_ms
+                );
+                assert_eq!(debits[0].agent.display, "beta@agent");
+                assert_eq!(debits[1].agent.display, "alpha@agent");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

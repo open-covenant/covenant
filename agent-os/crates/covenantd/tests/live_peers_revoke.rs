@@ -1,19 +1,17 @@
-//! Live integration test for Sprint 65: spawns covenantd against a
-//! tempdir HOME pre-seeded with a guest peer in
-//! `peers/registry.jsonl`, authenticates with the bootstrap operator
-//! token, revokes the guest by token-prefix via `Request::RevokePeer`,
-//! then opens a fresh connection and verifies that (a) the revoked
-//! guest token fails the `Authenticate` handshake with a
-//! "revoked"/"unknown" reason and the connection closes, while
-//! (b) the operator token still authenticates.
+//! Live integration test: spawns covenantd against a tempdir HOME
+//! pre-seeded with a guest peer in `peers/registry.jsonl`,
+//! authenticates with the bootstrap operator token, revokes the guest
+//! by token-prefix via `Request::RevokePeer`, then opens a fresh
+//! connection and verifies that (a) the revoked guest token fails the
+//! `Authenticate` handshake with a "revoked"/"unknown" reason and the
+//! connection closes, while (b) the operator token still authenticates.
 //!
-//! Closes Sprint 65's "no live test for the success path"
-//! carry-forward. The mock tests in covenantd lib unit cover the
-//! IPC framing seam; this test covers the full process boundary —
-//! JSONL replay on `JsonlPeerRegistry::open()`, the bootstrap
-//! operator-token flow appending alongside a pre-seeded guest, and
-//! the `respond` → `revoke_by_token_prefix` → `revoked` map →
-//! `resolve` → `AuthenticationFailed` chain through real IPC frames.
+//! The mock tests in covenantd lib unit cover the IPC framing seam;
+//! this test covers the full process boundary — JSONL replay on
+//! `JsonlPeerRegistry::open()`, the bootstrap operator-token flow
+//! appending alongside a pre-seeded guest, and the `respond` →
+//! `revoke_by_token_prefix` → `revoked` map → `resolve` →
+//! `AuthenticationFailed` chain through real IPC frames.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_peers_revoke -- --ignored live_`.
@@ -182,8 +180,7 @@ async fn live_covenantd_peers_revoke_terminates_authentication() {
     // ── Phase 3: a fresh connection with the now-revoked guest token
     //     must be rejected. The reason names the token state and the
     //     daemon closes the connection (matches the
-    //     `live_covenantd_rejects_unauthenticated_connection` shape
-    //     from Sprint 47).
+    //     `live_covenantd_rejects_unauthenticated_connection` shape).
     {
         let mut stream = UnixStream::connect(&sock).await.expect("connect");
         match authenticate(&mut stream, &guest_token_b58).await {

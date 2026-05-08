@@ -148,13 +148,12 @@ pub fn memory_write_credits(bytes: usize) -> u64 {
 }
 
 /// Credit cost of one intent dispatch — the unit `BudgetLedger::try_debit`
-/// charges in Sprint 58b's daemon wiring. Flat 1-credit-per-intent for v0
-/// per the Plan-gate decision: the spec phrase "budget credits" connotes a
-/// quota, not a meter; v0 is single-operator with no price-discrimination
-/// pressure; and a flat cost gives `BudgetError::Exhausted::refill_eta_ms`
-/// a deterministic value that Sprint 58c's pause-and-queue verb can size
-/// the resume around. A future per-agent `cost_per_intent` manifest field
-/// would land at this call site.
+/// charges in the daemon's pre-spawn budget gate. Flat 1-credit-per-intent
+/// for v0: the spec phrase "budget credits" connotes a quota, not a meter;
+/// v0 is single-operator with no price-discrimination pressure; and a flat
+/// cost gives `BudgetError::Exhausted::refill_eta_ms` a deterministic value
+/// that the pause-and-queue resume verb can size the wait around. A future
+/// per-agent `cost_per_intent` manifest field would land at this call site.
 pub const INTENT_DISPATCH_CREDITS: u64 = 1;
 
 /// Accessor mirror of [`INTENT_DISPATCH_CREDITS`]. Future variants that

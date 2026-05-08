@@ -2,24 +2,20 @@
 //! to an [`AgentId`] so the daemon's capability checks attribute the
 //! request to the actual caller, not to a self-asserted wire field.
 //!
-//! The threat this closes: Sprint 38/41 introduced
-//! `a2a.respond.<sender>` as a sender-scoped capability, and Sprint 45
-//! validated the shape of `<sender>`. Neither change verifies that the
-//! peer making the request *is* that sender. A malicious local
-//! process can connect to the daemon's Unix socket and claim to be
-//! agent X. The registry adds a random 32-byte token per registered
-//! peer; the daemon resolves `token → AgentId` at the start of every
-//! connection (or every HTTP request), and uses that resolved
-//! `AgentId` as the capability subject.
+//! The threat this closes: `a2a.respond.<sender>` is a sender-scoped
+//! capability whose `<sender>` shape is validated against the
+//! capability grammar, but neither check verifies that the peer
+//! making the request *is* that sender. A malicious local process
+//! can connect to the daemon's Unix socket and claim to be agent X.
+//! The registry adds a random 32-byte token per registered peer; the
+//! daemon resolves `token → AgentId` at the start of every connection
+//! (or every HTTP request), and uses that resolved `AgentId` as the
+//! capability subject.
 //!
 //! Two storage backends implement [`PeerRegistry`]:
 //! [`JsonlPeerRegistry`] for production (event log replays on
 //! `open()`), and [`InMemoryPeerRegistry`] for tests. Both honour
 //! revocation tombstones written via [`PeerRegistry::revoke`].
-//!
-//! Sprint 46 ships the registry and the wire types only — the daemon
-//! handshake (`Authenticate { token_b58 }`) and the
-//! `Server::respond(peer, req)` signature change land in Sprint 47.
 
 #![deny(unsafe_code)]
 
@@ -121,7 +117,7 @@ pub struct PeerEntry {
 /// debug logs without ever recovering the rest of the secret.
 /// `revoked_at` is `Some(ts)` for tombstoned entries — kept on purpose
 /// so post-incident triage can answer "is this audit-flagged peer still
-/// live?" in one look. Sprint 62.
+/// live?" in one look.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerSummary {
     pub agent_id: AgentId,
@@ -136,15 +132,15 @@ pub struct PeerSummary {
 /// prefix matches against `entry.token.to_b58().starts_with(prefix)`
 /// (the full base58 of the token, not just the redacted 6-char view) so
 /// supplying any number of leading characters works; longer is more
-/// specific. Sprint 65.
+/// specific.
 ///
 /// Carries [`PeerSummary`] (not [`PeerEntry`]) on the wire so token
 /// bytes never leak — same invariant as [`Response::PeerList`].
 ///
-/// Sprint 69 added [`SelfRevokeForbidden`] for the daemon-side guard
-/// against revoking the operator's own bootstrap token. The variant is
-/// produced by `Server::revoke_peer` (not the registry trait) so the
-/// storage layer stays peer-agnostic; the daemon peeks via
+/// [`SelfRevokeForbidden`] is the daemon-side guard against revoking
+/// the operator's own bootstrap token. The variant is produced by
+/// `Server::revoke_peer` (not the registry trait) so the storage
+/// layer stays peer-agnostic; the daemon peeks via
 /// [`PeerRegistry::find_unique_live_by_token_prefix`] before committing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -166,10 +162,11 @@ pub enum RevokeOutcome {
     Ambiguous { matches: Vec<PeerSummary> },
     /// The unique live match is the operator's own bootstrap row and
     /// the request did not pass `force: true`. The registry is unchanged.
-    /// Sprint 69 — defence-in-depth across IPC + HTTP + CLI against the
-    /// "fat-finger via web UI bypassed by curl" failure mode flagged in
-    /// Sprint 66's EFM #1; pairs with Sprint 67's UI-only guard.
-    /// `summary.revoked_at` is `None` (the entry remained live).
+    /// Defence-in-depth across IPC + HTTP + CLI against the
+    /// "fat-finger via web UI bypassed by curl" failure mode where a
+    /// UI-only confirmation guard is trivially circumvented by a
+    /// direct daemon API call; pairs with the UI-side confirmation
+    /// prompt. `summary.revoked_at` is `None` (the entry remained live).
     SelfRevokeForbidden(PeerSummary),
 }
 
@@ -193,7 +190,7 @@ pub trait PeerRegistry: Send + Sync {
     /// `bs58::encode(agent_id.pubkey)` — the same string that
     /// [`AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`]
     /// records, so an operator can paste the audit row's b58 directly.
-    /// Empty/`None` prefix means "no filter". Sprint 62.
+    /// Empty/`None` prefix means "no filter".
     async fn list_summaries(
         &self,
         limit: usize,
@@ -210,7 +207,6 @@ pub trait PeerRegistry: Send + Sync {
     /// `prefix`, then either tombstone it or report what stopped the
     /// revocation (no match, ambiguous, already revoked). Operator
     /// triage flow: paste the `token_prefix` from `peers list` output.
-    /// Sprint 65.
     ///
     /// Match semantics: `entry.token.to_b58().starts_with(prefix)`. A
     /// 6-char prefix matches what the operator copy-pastes from `peers
@@ -221,7 +217,7 @@ pub trait PeerRegistry: Send + Sync {
     /// `Ambiguous { matches: <every entry> }` if it did.
     async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError>;
 
-    /// Read-only peek used by the daemon's Sprint 69 self-revoke guard.
+    /// Read-only peek used by the daemon's self-revoke guard.
     /// Returns `Ok(Some(summary))` only when exactly one entry matches
     /// `prefix` AND that entry is currently live (not tombstoned).
     /// Returns `Ok(None)` for no-match, ambiguous-multi, or
@@ -241,7 +237,7 @@ pub trait PeerRegistry: Send + Sync {
     /// are benign — the subsequent `revoke_by_token_prefix` will return
     /// `AlreadyRevoked` or `Ambiguous` accordingly, and the operator's
     /// authoritative pubkey (`Server::identity`) does not change across
-    /// token rotation (Sprint 60 rotates the token, not the keypair).
+    /// token rotation (the rotation rotates the token, not the keypair).
     async fn find_unique_live_by_token_prefix(
         &self,
         prefix: &str,
@@ -954,13 +950,13 @@ mod tests {
 
     #[tokio::test]
     async fn jsonl_purge_concurrent_resolve_never_returns_purged_token() {
-        // Regression test for the Sprint 55 mid-sprint security-review
-        // MEDIUM finding: between the two in-memory mutation blocks of
-        // `purge_revoked_older_than`, a concurrent `resolve()` of a
-        // recently-purged token used to observe `not in revoked` AND
-        // `entry in entries` simultaneously — authenticating a token
-        // whose tombstone was just dropped. Fix: mutate `entries` first
-        // so the intermediate state keeps the tombstone visible.
+        // Regression test for the in-memory mutation ordering inside
+        // `purge_revoked_older_than`: between its two mutation blocks,
+        // a concurrent `resolve()` of a recently-purged token used to
+        // observe `not in revoked` AND `entry in entries`
+        // simultaneously — authenticating a token whose tombstone was
+        // just dropped. Fix: mutate `entries` first so the
+        // intermediate state keeps the tombstone visible.
         //
         // This stress test fires many concurrent resolves while the
         // purge runs; with the fix, every resolve must return None.

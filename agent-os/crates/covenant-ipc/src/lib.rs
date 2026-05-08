@@ -137,12 +137,12 @@ pub enum Request {
     },
     /// Re-dispatch the intent that the audit log's most recent
     /// `BudgetExhausted` row records under `intent_id`. The audit row
-    /// carries `intent_text` (Sprint 58c — closure of the §11 pin's
-    /// "queue a resume" semantic for Phase-0 single-shot agents);
-    /// the resume verb scans the audit, extracts the text, and runs
-    /// it through `dispatch_intent` like any fresh `SubmitIntent`.
-    /// Caller's responsibility to wait until the bucket has refilled
-    /// — `BudgetExhausted.refill_eta_ms` is the wait floor.
+    /// carries `intent_text`, satisfying the §11 pin's "queue a resume"
+    /// semantic for Phase-0 single-shot agents: the resume verb scans
+    /// the audit, extracts the text, and runs it through
+    /// `dispatch_intent` like any fresh `SubmitIntent`. Caller's
+    /// responsibility to wait until the bucket has refilled —
+    /// `BudgetExhausted.refill_eta_ms` is the wait floor.
     ResumeIntent {
         intent_id: Uuid,
     },
@@ -161,20 +161,19 @@ pub enum Request {
     /// rewrite `$COVENANT_HOME/peers/operator.token` with mode 0600, and
     /// revoke the old token — all in that order so a crash mid-rotation
     /// leaves a working setup behind. Gated to `peer.pubkey ==
-    /// self.identity.pubkey` (Sprint 60); a guest peer cannot rotate the
-    /// operator's own token. The new token is delivered in the response
-    /// because HTTP callers (the web UI) cannot read the on-disk file.
-    /// Live IPC connections authenticated under the old token survive
-    /// until they drop; HTTP rejects the old token immediately.
+    /// self.identity.pubkey`; a guest peer cannot rotate the operator's
+    /// own token. The new token is delivered in the response because
+    /// HTTP callers (the web UI) cannot read the on-disk file. Live IPC
+    /// connections authenticated under the old token survive until they
+    /// drop; HTTP rejects the old token immediately.
     RotateOperatorToken,
     /// Operator-triage view of the peer registry. Returns redacted
     /// [`PeerSummary`] rows newest-first, including revoked entries
     /// (with `revoked_at: Some(_)`). `pubkey_prefix` filters server-side
     /// on `bs58::encode(agent_id.pubkey)` — paste the b58 from an
     /// `OperatorTokenRotationRejected` audit row to find the matching
-    /// registry entry. Operator-only (Sprint 60 C3 gate); a non-operator
-    /// peer is rejected with an `OperatorPeersListRejected` audit row.
-    /// Sprint 62.
+    /// registry entry. Operator-only; a non-operator peer is rejected
+    /// with an `OperatorPeersListRejected` audit row.
     ListPeers {
         #[serde(default = "default_recent_limit")]
         limit: usize,
@@ -184,21 +183,19 @@ pub enum Request {
     /// Revoke a single peer registry entry by token-prefix. The
     /// operator pastes the 6-char `token_prefix` they see in `peers
     /// list` output (or any longer leading substring of the full
-    /// base58 token). Operator-only (Sprint 60 C3 gate); a non-operator
-    /// peer is rejected with an `OperatorPeerRevokeRejected` audit row.
-    /// Closes the post-incident response loop opened by Sprint 62 +
-    /// Sprint 64. Sprint 65.
+    /// base58 token). Operator-only; a non-operator peer is rejected
+    /// with an `OperatorPeerRevokeRejected` audit row. Closes the
+    /// post-incident response loop alongside `ListPeers`.
     ///
-    /// Sprint 69 added `force` for the daemon-side self-revoke guard.
-    /// When `false` (the default), a unique live match against the
-    /// operator's own bootstrap token returns
-    /// `RevokeOutcome::SelfRevokeForbidden` without mutating the
-    /// registry; the operator must `peers rotate` (Sprint 60) for the
-    /// no-downtime token rotation, or pass `force: true` to deliberately
-    /// brick auth for the recovery-flow test.
-    /// `#[serde(default)]` lets a stale CLI built before Sprint 69 send
-    /// frames without the field; the new daemon parses them as
-    /// `force: false`, the safe default.
+    /// `force` gates the daemon-side self-revoke guard. When `false`
+    /// (the default), a unique live match against the operator's own
+    /// bootstrap token returns `RevokeOutcome::SelfRevokeForbidden`
+    /// without mutating the registry; the operator must `peers rotate`
+    /// for the no-downtime token rotation, or pass `force: true` to
+    /// deliberately brick auth for the recovery-flow test.
+    /// `#[serde(default)]` lets a stale CLI built before the guard
+    /// landed send frames without the field; the new daemon parses
+    /// them as `force: false`, the safe default.
     RevokePeer {
         token_prefix: String,
         #[serde(default)]
@@ -320,18 +317,18 @@ pub enum Response {
         token_b58: String,
     },
     /// Successful response to [`Request::ListPeers`]. Token bytes are
-    /// **never** carried — only the 6-char `token_prefix`. Sprint 62.
+    /// **never** carried — only the 6-char `token_prefix`.
     ///
     /// `operator_pubkey_b58` is the daemon's own identity pubkey
     /// (base58 of `self.identity.pubkey`) so callers can identify which
     /// row is the operator's bootstrap peer without a second round-trip.
     /// Web UI uses it to hide the revoke button on the operator's own
-    /// row (Sprint 67) — clicking revoke there would brick auth in v0
-    /// single-peer. `#[serde(default)]` so a stale CLI built before
-    /// Sprint 67 still deserialises a new daemon's response (the field
-    /// reads as `String::new()`, which never matches a real pubkey b58
-    /// — the consumer's predicate falls through to the pre-Sprint-67
-    /// behaviour). Sprint 67.
+    /// row — clicking revoke there would brick auth in v0 single-peer.
+    /// `#[serde(default)]` so a stale CLI built before the field landed
+    /// still deserialises a new daemon's response (the field reads as
+    /// `String::new()`, which never matches a real pubkey b58 — the
+    /// consumer's predicate falls through to the legacy behaviour, which
+    /// surfaces the revoke button on every row).
     PeerList {
         peers: Vec<PeerSummary>,
         #[serde(default)]
@@ -342,7 +339,7 @@ pub enum Response {
     /// distinct on the wire so the CLI can render each case clearly.
     /// Token bytes are **never** carried — `RevokeOutcome` carries
     /// `PeerSummary` (or `Vec<PeerSummary>` for ambiguous), which by
-    /// the Sprint 62 invariant excludes `PeerToken`. Sprint 65.
+    /// the registry's redaction invariant excludes `PeerToken`.
     PeerRevoked {
         outcome: RevokeOutcome,
     },

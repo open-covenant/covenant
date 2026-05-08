@@ -56,8 +56,8 @@ async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
 }
 
 /// Reads the daemon's on-disk ed25519 public key bytes — same value the
-/// operator peer was registered with. Required because Sprint 49's spoof
-/// check compares the full `AgentId` (display + pubkey) on every A2A send.
+/// operator peer was registered with. Required because the spoof check
+/// compares the full `AgentId` (display + pubkey) on every A2A send.
 fn read_peer_pubkey(home: &std::path::Path) -> [u8; 32] {
     let path = home.join("identity").join("local.key");
     let id = covenant_identity::LocalIdentity::load_or_create(&path, "user@local")
@@ -97,10 +97,10 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    // Sprint 49: `task.sender` must match the authenticated peer; the
-    // operator authenticates as `user@local` so that's the sender we use.
-    // Sprint 50: `try_recv` filters by `recipient`, so v0 round-trips have
-    // to address the task to the same peer that drains it.
+    // `task.sender` must match the authenticated peer; the operator
+    // authenticates as `user@local` so that's the sender we use.
+    // `try_recv` filters by `recipient`, so v0 round-trips have to
+    // address the task to the same peer that drains it.
     let pubkey = read_peer_pubkey(home.path());
     let peer = AgentId::new("user@local", pubkey);
     let task = A2ATask {
@@ -269,10 +269,10 @@ async fn live_covenantd_a2a_recipient_admission_gate_rejects_unallowed() {
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    // Sprint 59 recv gate: foreign recipient pubkey ≠ peer pubkey, so
-    // the gate fires. v0 has no IPC verb to grant a cap on a foreign
-    // subject, so this test verifies only the rejection path; the pass
-    // path is mock-tested with direct store injection.
+    // Recv gate: foreign recipient pubkey ≠ peer pubkey, so the gate
+    // fires. v0 has no IPC verb to grant a cap on a foreign subject,
+    // so this test verifies only the rejection path; the pass path is
+    // mock-tested with direct store injection.
     let pubkey = read_peer_pubkey(home.path());
     let peer = AgentId::new("user@local", pubkey);
     let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);

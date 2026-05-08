@@ -1,8 +1,6 @@
-# Covenant — Build Spec v0
+# Covenant — Build Spec
 
-**Status:** pre-scaffold. Pins the cross-cutting decisions needed before week 1 of code.
-
-**Source:** `projects/research-agent/research/Agentic OS/` (`Agentic-OS.pdf`, `agentic-os-plan.pdf`, April 2026). This spec supersedes them where they conflict and pins choices they left open. Marketing copy lives elsewhere; this file is for builders.
+The authoritative product spec. Pins the cross-cutting architectural decisions that govern the implementation: primitives, phase map, on-disk layouts, settlement model, audit shape. Marketing copy lives elsewhere; this file is for builders.
 
 ---
 
@@ -38,7 +36,6 @@ Six phases, 36 weeks. Settlement appears at both ends: interface stub in Phase 0
 | 4 — Compositor & Interface | 23–30 | TUI (Ratatui), intent bar, agent panel, memory browser, web UI (Next.js) |
 | 5 — Settlement-on-chain & Ecosystem | 31–36 | Settlement program (credits + buyback), SDKs, marketplace, installer |
 
-Sum: 4 + 6 + 7 + 5 + 8 + 6 = 36.
 
 ## 4. Core Data Shapes (v0)
 
@@ -207,13 +204,13 @@ Specified during the phase that consumes them. Listed explicitly so they don't d
 | First-5-minutes UX flow | Phase 4 |
 | Existing-framework interop (LangGraph, CrewAI wrap-and-run) | Phase 5 |
 
-### Pins from external review (2026-05-05)
+### Pins from external review
 
-Surfaced while reading `thewaltero/mythos-router` for build-process and runtime ideas. Deferred but enumerated so the relevant phase doesn't rediscover them mid-sprint.
+Enumerated so the relevant phase decides them deliberately rather than ad-hoc.
 
 | Item | Decided in |
 |---|---|
 | Memory compaction policy — when working/episodic/long-term tiers compress, and on what signal (count, age, access-frequency, semantic clustering) | Phase 1 |
-| ~~`.covenantignore` — per-project allow/deny list for memory auto-ingestion and tool scans~~ | **Sprint 21 (closed)** — gitignore-style; daemon loads `$COVENANT_HOME/.covenantignore`; ignored intents skip memory + receipt and emit `IntentIgnored` audit. |
+| `.covenantignore` — per-project allow/deny list for memory auto-ingestion and tool scans. Closed: gitignore-style matcher; daemon loads `$COVENANT_HOME/.covenantignore`; ignored intents skip memory + receipt and emit `IntentIgnored` audit. | Phase 1 |
 | Per-resource budget mid-task graceful save — when an agent hits `budget_credits_per_hour`, the runtime pauses, persists partial state, settles consumed credits, and queues a resume | Phase 1 |
-| ~~`covenant verify` command — codebase ↔ memory drift scan that flags stale memory references, missing files, and orphaned records~~ | **Sprint 20 (closed)** — `covenant verify` runs three drift checks (memory↔audit, capability↔audit, memory↔receipts). |
+| `covenant verify` command — codebase ↔ memory drift scan that flags stale memory references, missing files, and orphaned records. Closed: `covenant verify` runs three drift checks (memory↔audit, capability↔audit, memory↔receipts). | Phase 1 |

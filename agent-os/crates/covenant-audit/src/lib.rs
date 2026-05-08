@@ -76,17 +76,19 @@ pub enum AuditKind {
     AuthenticationFailed { transport: String, reason: String },
     /// Logged when `SendA2ATask` is rejected because the supplied
     /// `task.sender` does not match the authenticated peer on the
-    /// connection. Closes the spoof attack class flagged in the
-    /// Sprint 47 security review.
+    /// connection. Closes the sender-spoof attack class where a
+    /// malicious local process claims to be a different agent on the
+    /// wire than the one bound to its authenticated peer token.
     A2ASenderMismatch {
         peer_display: String,
         claimed_sender_display: String,
     },
     /// Logged when `SendA2ATask` is rejected because the recipient
     /// peer has not granted `a2a.recv.<sender>` to themselves. Closes
-    /// the recipient inbox spam vector flagged in Sprint 58g's
-    /// "Expected production failure modes": a Phase-1+ malicious peer
-    /// could otherwise route arbitrary `intent_text` into the
+    /// the recipient inbox spam vector that becomes exploitable when a
+    /// peer with a granted send-cap pushes tasks at a recipient that
+    /// has not granted matching recv-caps: without this gate a
+    /// malicious peer could route arbitrary `intent_text` into the
     /// recipient's `RecentA2ATasks` view via the bidirectional filter.
     /// Distinct from [`AuditKind::CapabilityCheck`] because the missing
     /// cap belongs to a *different subject* than the issuer of the
@@ -99,8 +101,10 @@ pub enum AuditKind {
     },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
-    /// asked to revoke. Closes the cross-peer-revoke gap flagged in
-    /// the Sprint 49 mid-sprint security review.
+    /// asked to revoke. Enforces the subject-ownership invariant on
+    /// the revoking peer's pubkey, closing the cross-peer-revoke gap
+    /// where any authenticated peer could otherwise tombstone another
+    /// peer's capability grants.
     CapabilityRevokeRejected {
         signature_b58: String,
         reason: String,
@@ -111,7 +115,8 @@ pub enum AuditKind {
     /// `research@agent`); `requested` is the credit cost the daemon
     /// tried to debit; `tokens_remaining` is what the bucket actually
     /// had at the moment of the check (precise `u64`; the wire response
-    /// rounds to a coarse bucket per the Sprint 58c L3 closure);
+    /// rounds to a coarse bucket so token-bucket state never leaks at
+    /// per-credit resolution to unauthenticated callers);
     /// `refill_eta_ms` is the wall time until the bucket can satisfy
     /// `requested` again; `intent_text` carries the rejected intent so
     /// `covenant intents resume <intent-id>` can re-dispatch from this
@@ -144,7 +149,7 @@ pub enum AuditKind {
     /// (which is also what `PeerToken::Debug` redacts to). The new
     /// token's prefix lets the operator verify, after a rotation
     /// they did or did not initiate, that the file on disk came
-    /// from this row. Sprint 60.
+    /// from this row.
     OperatorTokenRotated {
         peer_display: String,
         old_token_prefix: String,
@@ -152,14 +157,14 @@ pub enum AuditKind {
     },
     /// Logged when `RotateOperatorToken` is rejected because the
     /// authenticated peer's pubkey does not match the operator
-    /// identity. Sprint 60's C3 gate is silent in v0 single-peer
-    /// (only the operator can authenticate, so the rejection branch
-    /// is dead code); becomes load-bearing at Phase-1 multi-peer
-    /// where a guest peer reaching this path is a probe worth
-    /// surfacing in `/audit`.
+    /// identity. The gate is silent in v0 single-peer (only the
+    /// operator can authenticate, so the rejection branch is dead
+    /// code); becomes load-bearing at Phase-1 multi-peer where a
+    /// guest peer reaching this path is a probe worth surfacing in
+    /// `/audit`.
     ///
     /// Issuer is the daemon identity (not the rejected peer) so the
-    /// row passes the Sprint 58d operator-feed filter and the
+    /// row passes the cross-peer audit-feed isolation filter and the
     /// operator can see probes on their own `/audit` — mirrors the
     /// [`AuditKind::AuthenticationFailed`] audience model. The
     /// rejected peer's identity lives entirely in the kind payload.
@@ -174,7 +179,7 @@ pub enum AuditKind {
     /// capability is checked (the gate is identity-pubkey equality)
     /// and from [`AuditKind::AuthenticationFailed`] because the
     /// peer authenticated successfully — they failed an
-    /// authorization check, not authentication. Sprint 61.
+    /// authorization check, not authentication.
     OperatorTokenRotationRejected {
         peer_display: String,
         peer_pubkey_b58: String,
@@ -182,9 +187,9 @@ pub enum AuditKind {
     /// Logged when `ListPeers` is rejected because the authenticated
     /// peer is not the operator (`peer.pubkey != self.identity.pubkey`).
     /// Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s daemon-as-issuer
-    /// audience model so the row passes the Sprint 58d operator-feed
-    /// filter and the rejected peer's `/audit` does not double as a
-    /// probe-was-logged oracle. Sprint 62.
+    /// audience model so the row passes the cross-peer audit-feed
+    /// isolation filter and the rejected peer's `/audit` does not
+    /// double as a probe-was-logged oracle.
     ///
     /// Distinct from [`AuditKind::CapabilityCheck`] because no
     /// capability is checked (the gate is identity-pubkey equality)
@@ -196,11 +201,12 @@ pub enum AuditKind {
     },
     /// Logged when the operator successfully revokes a peer registry
     /// entry via `RevokePeer`. Issuer is the operator (peer-event
-    /// audience per Sprint 58f) — the operator took the action.
-    /// `peer_display` and `peer_pubkey_b58` describe the *revoked*
-    /// peer (not the issuer). `token_prefix` is the same 6-char
-    /// redaction `OperatorTokenRotated` records — full token bytes
-    /// never enter the audit log. Sprint 65.
+    /// audience: `record_peer_event` panics in debug if the issuer's
+    /// pubkey does not match the acting peer's pubkey) — the operator
+    /// took the action. `peer_display` and `peer_pubkey_b58` describe
+    /// the *revoked* peer (not the issuer). `token_prefix` is the
+    /// same 6-char redaction `OperatorTokenRotated` records — full
+    /// token bytes never enter the audit log.
     PeerRevoked {
         peer_display: String,
         peer_pubkey_b58: String,
@@ -209,13 +215,12 @@ pub enum AuditKind {
     /// Logged when `RevokePeer` is rejected because the authenticated
     /// peer is not the operator. Daemon-as-issuer audience model
     /// matching [`AuditKind::OperatorTokenRotationRejected`] and
-    /// [`AuditKind::OperatorPeersListRejected`] — Sprint 61's mid-sprint
-    /// security review caught the inverted-audience bug; recording the
-    /// rejection under the rejected peer would (a) hide the probe from
-    /// the operator's `/audit` feed under the Sprint 58d filter and
-    /// (b) turn the rejected peer's own feed into a probe-was-logged
-    /// oracle. `peer_pubkey_b58` is the unforgeable identifier; the
-    /// `display` is wire-supplied. Sprint 65.
+    /// [`AuditKind::OperatorPeersListRejected`] — recording the
+    /// rejection under the rejected peer would (a) hide the probe
+    /// from the operator's `/audit` feed under the cross-peer
+    /// audit-feed isolation filter and (b) turn the rejected peer's
+    /// own feed into a probe-was-logged oracle. `peer_pubkey_b58` is
+    /// the unforgeable identifier; the `display` is wire-supplied.
     OperatorPeerRevokeRejected {
         peer_display: String,
         peer_pubkey_b58: String,
@@ -224,13 +229,14 @@ pub enum AuditKind {
     /// revoked their own bootstrap token but `force` was `false`. The
     /// daemon returns `RevokeOutcome::SelfRevokeForbidden` and the
     /// registry is unchanged. Issuer is the operator (peer-event
-    /// audience per Sprint 58f) — distinct from
-    /// [`AuditKind::OperatorPeerRevokeRejected`] which records a
+    /// audience: `record_peer_event` panics in debug if the issuer's
+    /// pubkey does not match the acting peer's pubkey) — distinct
+    /// from [`AuditKind::OperatorPeerRevokeRejected`] which records a
     /// non-operator's *probe* under the daemon-issuer audience. Here
     /// the operator IS the issuer and the audience; the row surfaces
     /// in their own `/audit` feed for triage of self-fat-fingers.
     /// `token_prefix` is the same 6-char redaction
-    /// [`AuditKind::PeerRevoked`] records. Sprint 69.
+    /// [`AuditKind::PeerRevoked`] records.
     PeerSelfRevokeBlocked {
         peer_display: String,
         peer_pubkey_b58: String,
@@ -245,7 +251,7 @@ pub trait AuditLog: Send + Sync {
     /// Drop every event with `timestamp_ms < before_ms`. Returns the
     /// count deleted. Operator-driven retention: with no purge call the
     /// log grows unbounded for the lifetime of the daemon. Mirrors the
-    /// `MemoryStore::purge_older_than` shape from Sprint 19.
+    /// `MemoryStore::purge_older_than` shape.
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError>;
 }
 

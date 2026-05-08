@@ -1,7 +1,7 @@
 //! Covenant daemon library — Phase 0/1/2 listener wired to router + runner +
 //! memory + settlement + audit + capabilities. Per-dispatch we write a
 //! working-tier memory record, a settlement receipt, an audit event, AND a
-//! capability check (audit-only — Sprint 12 doesn't reject, Sprint 13 will).
+//! capability check (audit-only — observe-then-enforce migration path).
 
 #![deny(unsafe_code)]
 
@@ -237,7 +237,7 @@ impl Server {
     /// in debug builds and warns in release builds; the row is recorded
     /// either way (dropping it would hide the very regression the
     /// invariant is here to surface). Compare on the 32-byte pubkey, not
-    /// the wire-supplied `display`. Sprint 58f.
+    /// the wire-supplied `display`.
     async fn record_peer_event(&self, peer: &AgentId, event: AuditEvent) {
         debug_assert_eq!(
             event.issuer.pubkey, peer.pubkey,
@@ -260,7 +260,7 @@ impl Server {
     /// `AuthenticationFailed`). Asserts the issuer matches
     /// `self.identity` to catch a future regression that routes a
     /// peer-action through this path. Same release-mode posture as
-    /// [`Self::record_peer_event`]. Sprint 58f.
+    /// [`Self::record_peer_event`].
     async fn record_daemon_event(&self, event: AuditEvent) {
         let identity_pubkey = self.identity.agent_id().pubkey;
         debug_assert_eq!(
@@ -375,13 +375,12 @@ impl Server {
                 ),
             };
         }
-        // Sprint 59 recipient admission gate: when sender ≠ recipient
-        // (cross-peer send), the recipient peer must have granted
-        // `a2a.recv.<sender>` to themselves. v0 single-peer is loopback
-        // (peer == recipient), so the gate is a no-op there. The
-        // pubkey-byte compare defeats display spoofing. Sprint 71: the
-        // grant satisfies the gate under either the sender's display or
-        // pubkey-b58 form.
+        // Recipient admission gate: when sender ≠ recipient (cross-peer
+        // send), the recipient peer must have granted `a2a.recv.<sender>`
+        // to themselves. v0 single-peer is loopback (peer == recipient),
+        // so the gate is a no-op there. The pubkey-byte compare defeats
+        // display spoofing. The grant satisfies the gate under either
+        // the sender's display or pubkey-b58 form.
         if peer.pubkey != task.recipient.pubkey {
             let recv_alternatives = peer.scoped_action_alternatives("a2a.recv");
             let recv_display_action = recv_alternatives[0].clone();
@@ -416,10 +415,10 @@ impl Server {
 
     /// Returns true iff the capability store has a non-revoked,
     /// non-expired grant for `a2a.recv.<sender>` (under either the
-    /// display or pubkey-b58 form, per Sprint 71's accept-both-shapes)
-    /// with `subject = recipient.pubkey`. Used by Sprint 59's recipient
-    /// admission gate. The subject lookup keys on the 32-byte pubkey,
-    /// not the wire-supplied display.
+    /// display or pubkey-b58 form — both equivalent action shapes are
+    /// accepted) with `subject = recipient.pubkey`. Used by the
+    /// recipient admission gate. The subject lookup keys on the 32-byte
+    /// pubkey, not the wire-supplied display.
     async fn recipient_has_recv_for(&self, recipient: &AgentId, sender: &AgentId) -> bool {
         let now = epoch_ms();
         let alternatives = sender.scoped_action_alternatives("a2a.recv");
@@ -512,11 +511,11 @@ impl Server {
     /// Returns A2A tasks where `peer` is either the sender or recipient.
     /// Bidirectional filter — a peer's natural view spans tasks they sent
     /// (their outbound queue) and tasks addressed to them (their inbox).
-    /// Sprint 49's hard `task.sender == peer` send-time invariant means
-    /// the sender direction is forge-resistant; recipient is wire-supplied
+    /// The hard `task.sender == peer` send-time invariant means the
+    /// sender direction is forge-resistant; recipient is wire-supplied
     /// at send time so an adversarial peer cannot craft a recipient match
     /// that wasn't already routed to them at send. Compared on the 32-byte
-    /// pubkey, not the display string. Sprint 58g per-peer filter.
+    /// pubkey, not the display string. Per-peer filter.
     async fn recent_a2a_tasks(&self, limit: usize, peer: &AgentId) -> Response {
         match self.mailbox.recent_tasks(limit).await {
             Ok(tasks) => {
@@ -534,12 +533,12 @@ impl Server {
 
     /// Returns A2A results whose original task sender matches `peer`.
     /// Joins each `result.task_id` against `Mailbox::lookup_task_sender`
-    /// (the post-Sprint-49 senders-map invariant: `senders[task_id] ==
+    /// (senders-map invariant: `senders[task_id] ==
     /// authenticated_peer_at_send`); rows whose lookup returns `None` (the
     /// task pre-dates the senders map, or was compacted) drop, matching
-    /// Sprint 50's `try_recv_a2a_result_for` posture. Lookup errors drop
-    /// the row and warn — the operator dashboard prefers a missing row
-    /// over a leaked one. Compared on the 32-byte pubkey. Sprint 58g.
+    /// `try_recv_a2a_result_for`'s posture. Lookup errors drop the row
+    /// and warn — the operator dashboard prefers a missing row over a
+    /// leaked one. Compared on the 32-byte pubkey.
     async fn recent_a2a_results(&self, limit: usize, peer: &AgentId) -> Response {
         let results = match self.mailbox.recent_results(limit).await {
             Ok(r) => r,
@@ -571,14 +570,14 @@ impl Server {
     /// truncate. Read-only; no capability gate, same posture as
     /// `RecentMemory` / `RecentReceipts` / `RecentAudit`.
     ///
-    /// **No per-peer filter (Sprint 58g punt):** `BudgetDebit.agent` is
-    /// the rate-limited *agent* (e.g. `research@agent`), not the
-    /// dispatcher peer. The budget belongs to the agent and is shared
-    /// across every peer that dispatches through it. Per-peer attribution
-    /// requires extending `BudgetDebit` with `dispatched_by:
-    /// Option<AgentId>` and threading it through `try_debit`; that lands
-    /// when the budget itself becomes per-peer (Phase-1 multi-tenant
-    /// migration). v0 single-peer makes the leak surface non-existent.
+    /// **No per-peer filter:** `BudgetDebit.agent` is the rate-limited
+    /// *agent* (e.g. `research@agent`), not the dispatcher peer. The
+    /// budget belongs to the agent and is shared across every peer that
+    /// dispatches through it. Per-peer attribution requires extending
+    /// `BudgetDebit` with `dispatched_by: Option<AgentId>` and threading
+    /// it through `try_debit`; that lands when the budget itself becomes
+    /// per-peer (Phase-1 multi-tenant migration). v0 single-peer makes
+    /// the leak surface non-existent.
     async fn recent_debits(&self, limit: usize) -> Response {
         let mut all: Vec<covenant_budget::BudgetDebit> = Vec::new();
         for card in self.router.agents() {
@@ -620,9 +619,9 @@ impl Server {
         }
     }
 
-    /// Rotate the operator's bootstrap token. Sprint 60.
+    /// Rotate the operator's bootstrap token.
     ///
-    /// Order is load-bearing — see Plan-gate A1 in SPRINT_LOG Sprint 60.
+    /// Order is load-bearing:
     /// 1. Mint a fresh `PeerToken`.
     /// 2. Read the current token off disk so we know which one to revoke.
     /// 3. Register the new entry under the operator's `AgentId`.
@@ -644,20 +643,18 @@ impl Server {
     async fn rotate_operator_token(&self, peer: &AgentId) -> Response {
         let identity_pubkey = self.identity.agent_id().pubkey;
         if peer.pubkey != identity_pubkey {
-            // Sprint 61: surface the rejected attempt in the audit log so
-            // probes are visible to the operator. Issuer is the daemon
-            // identity (matching `AuthenticationFailed` from Sprint 49)
-            // so the row passes the Sprint 58d operator-feed filter
-            // (`issuer.pubkey == peer.pubkey` where peer == operator on
-            // the operator's `/audit` call). The rejected peer's identity
-            // is preserved in the kind payload — `peer_pubkey_b58` is the
-            // unforgeable identifier because `.display` is wire-supplied
-            // and a colliding display string is exactly the kind of
-            // probe this row exists to surface. Mid-sprint security
-            // review (Sprint 61) caught this — the natural mirror of
-            // `A2ARecipientRejected` (Sprint 59) gets the audience
-            // wrong here: the operator is the security audience, not
-            // the rejected peer.
+            // Surface the rejected attempt in the audit log so probes
+            // are visible to the operator. Issuer is the daemon identity
+            // (matching `AuthenticationFailed`) so the row passes the
+            // operator-feed filter (`issuer.pubkey == peer.pubkey` where
+            // peer == operator on the operator's `/audit` call). The
+            // rejected peer's identity is preserved in the kind payload
+            // — `peer_pubkey_b58` is the unforgeable identifier because
+            // `.display` is wire-supplied and a colliding display string
+            // is exactly the kind of probe this row exists to surface.
+            // The natural mirror of `A2ARecipientRejected` gets the
+            // audience wrong here: the operator is the security audience,
+            // not the rejected peer.
             let event = AuditEvent {
                 id: Uuid::new_v4(),
                 timestamp_ms: epoch_ms(),
@@ -761,10 +758,10 @@ impl Server {
         }
     }
 
-    /// Operator-only triage view of the peer registry. Sprint 62.
+    /// Operator-only triage view of the peer registry.
     ///
-    /// Closes Sprint 61's "display-collision probe" post-incident
-    /// response gap: an `OperatorTokenRotationRejected` audit row carries
+    /// Closes the display-collision probe post-incident response gap:
+    /// an `OperatorTokenRotationRejected` audit row carries
     /// `peer_pubkey_b58`, and the operator pastes that prefix into
     /// `covenant peers list --prefix <b58>` to identify which registry
     /// entry to revoke (or confirm already-revoked).
@@ -778,11 +775,10 @@ impl Server {
     /// enumerate the registry.
     ///
     /// Rejection records `OperatorPeersListRejected` via
-    /// `record_daemon_event` (issuer = daemon identity), mirroring
-    /// Sprint 61's `OperatorTokenRotationRejected` audience model so
-    /// the row passes the Sprint 58d operator-feed filter and the
-    /// rejected peer's `/audit` does not double as a probe-was-logged
-    /// oracle.
+    /// `record_daemon_event` (issuer = daemon identity), mirroring the
+    /// `OperatorTokenRotationRejected` audience model so the row passes
+    /// the operator-feed filter and the rejected peer's `/audit` does
+    /// not double as a probe-was-logged oracle.
     async fn list_peers(
         &self,
         limit: usize,
@@ -819,10 +815,11 @@ impl Server {
         }
     }
 
-    /// Revoke a single peer registry entry by token-prefix. Sprint 65.
+    /// Revoke a single peer registry entry by token-prefix.
     ///
-    /// Closes the post-incident response loop opened by Sprint 62 + 64:
-    /// the operator pastes the 6-char `token_prefix` from `peers list`
+    /// Closes the post-incident response loop opened by `peers list` and
+    /// the registry triage views: the operator pastes the 6-char
+    /// `token_prefix` from `peers list`
     /// output (or any longer leading substring of the full base58 token)
     /// to tombstone exactly one entry. The five [`RevokeOutcome`] cases
     /// (Revoked / AlreadyRevoked / NotFound / Ambiguous /
@@ -839,9 +836,9 @@ impl Server {
     ///
     /// Rejection records `OperatorPeerRevokeRejected` via
     /// `record_daemon_event` (issuer = daemon identity), mirroring the
-    /// Sprint 61 audience model so the row passes the Sprint 58d
-    /// operator-feed filter and the rejected peer's `/audit` does not
-    /// double as a probe-was-logged oracle. Only the `Revoked` outcome
+    /// daemon-issuer audience model so the row passes the operator-feed
+    /// filter and the rejected peer's `/audit` does not double as a
+    /// probe-was-logged oracle. Only the `Revoked` outcome
     /// emits a `PeerRevoked` audit row (success); `NotFound`,
     /// `Ambiguous`, and `AlreadyRevoked` are operator-narrowing events,
     /// not security events, and the response itself is the operator's
@@ -851,8 +848,8 @@ impl Server {
     /// otherwise the registry would return `Ambiguous { matches: <every
     /// entry> }`, which is operationally a footgun.
     ///
-    /// Sprint 69 — daemon-side self-revoke guard. After the C3 gate and
-    /// empty-prefix check, the daemon peeks the registry via
+    /// Daemon-side self-revoke guard. After the C3 gate and empty-prefix
+    /// check, the daemon peeks the registry via
     /// [`PeerRegistry::find_unique_live_by_token_prefix`]; if the unique
     /// live match's `agent_id.pubkey` equals
     /// `self.identity.agent_id().pubkey` (operator-identity-centric, not
@@ -865,11 +862,10 @@ impl Server {
     /// here the operator IS both issuer and audience — a self-fat-finger,
     /// not a probe) and returns `RevokeOutcome::SelfRevokeForbidden`
     /// without mutating. The CLI's preferred recovery path is `peers
-    /// rotate` (Sprint 60); `--force` exists for the "deliberately brick
-    /// auth to test the recovery flow" use case the F1 carry-forward
-    /// preserved. The peek's TOCTOU is benign because
-    /// `self.identity.agent_id().pubkey` is stable across token rotation
-    /// (Sprint 60 rotates the token, not the keypair).
+    /// rotate`; `--force` exists for the "deliberately brick auth to
+    /// test the recovery flow" use case. The peek's TOCTOU is benign
+    /// because `self.identity.agent_id().pubkey` is stable across token
+    /// rotation (rotation rotates the token, not the keypair).
     async fn revoke_peer(&self, token_prefix: String, force: bool, peer: &AgentId) -> Response {
         if peer.pubkey != self.identity.agent_id().pubkey {
             let event = AuditEvent {
@@ -950,7 +946,7 @@ impl Server {
     /// `AuditLog` peer-agnostic and lets every read surface re-use the
     /// same predicate. Compared on the 32-byte pubkey, not the display
     /// string, because the display can be re-used across pubkeys at the
-    /// wire boundary even with `validate_agent_id_display` (Sprint 45).
+    /// wire boundary even with `validate_agent_id_display`.
     /// In v0 every authenticated caller is the operator and `peer.pubkey
     /// == identity.pubkey`, so the filter degenerates to a no-op — the
     /// behaviour change matters only once a second peer authenticates.
@@ -1132,7 +1128,7 @@ impl Server {
                         // manifest without re-seeding. v0 still passes
                         // (don't block dispatch on a misconfigured daemon)
                         // but the bypass now lands in /audit/recent so the
-                        // operator sees it. Sprint 58c M2 closure.
+                        // operator sees it.
                         warn!(
                             agent = %card.id,
                             "no budget capacity registered for agent; \
@@ -1170,7 +1166,8 @@ impl Server {
                         self.record_peer_event(peer, event).await;
                         // Wire response rounds tokens_remaining to a coarse
                         // bucket; the audit row above keeps the precise u64.
-                        // Sprint 58c L3 closure (multi-peer prep).
+                        // Coarsening the wire response avoids leaking precise
+                        // bucket levels across peers.
                         let coarse = round_tokens_remaining(tokens_remaining);
                         return Response::Error {
                             message: format!(
@@ -1280,9 +1277,9 @@ impl Server {
     /// `SubmitIntent` (capability check, ignore rules, and budget gate
     /// all re-run — the bucket may have refilled). Returns
     /// `Response::Error` if no `BudgetExhausted` row matches the supplied
-    /// `intent_id`. Sprint 58c — closes the §11 pin's "queue a resume"
-    /// half for Phase-0 single-shot agents (Phase-1 multi-step agents
-    /// will need an actual checkpoint/restart mechanism on top of this).
+    /// `intent_id`. Covers the "queue a resume" path for Phase-0
+    /// single-shot agents (Phase-1 multi-step agents will need an actual
+    /// checkpoint/restart mechanism on top of this).
     async fn resume_intent(&self, intent_id: Uuid, peer: &AgentId) -> Response {
         // Recent-audit window: 1024 events covers the typical operator
         // turnaround (a few minutes of feed) without scanning the whole
@@ -1301,7 +1298,7 @@ impl Server {
         // Filter to the resuming peer's own rows BEFORE the find_map.
         // Resuming someone else's `BudgetExhausted` would otherwise leak
         // their `intent_text` through `dispatch_intent`'s code path. Same
-        // pubkey-equality predicate as `recent_audit`. Sprint 58d.
+        // pubkey-equality predicate as `recent_audit`.
         let text = events
             .iter()
             .filter(|e| e.issuer.pubkey == peer.pubkey)
@@ -1339,10 +1336,10 @@ impl Server {
     }
 
     /// Capability check where each requirement is satisfied by **any**
-    /// of a list of equivalent action forms — used by Sprint 71's
-    /// accept-both-shapes for peer-scoped actions (`a2a.send.<display>`
-    /// is satisfied by either `a2a.send.<display>` or
-    /// `a2a.send.<pubkey_b58>` per [`AgentId::scoped_action_alternatives`]).
+    /// of a list of equivalent action forms — used for accept-both-shapes
+    /// on peer-scoped actions (`a2a.send.<display>` is satisfied by
+    /// either `a2a.send.<display>` or `a2a.send.<pubkey_b58>` per
+    /// [`AgentId::scoped_action_alternatives`]).
     ///
     /// Audit attribution: when an alternative group has a granted match,
     /// `required_actions` records the form that actually matched; on a
@@ -1453,7 +1450,7 @@ impl Server {
     /// Returns memory records owned by `peer`. `MemoryRecord.owner` is
     /// set to the authenticated peer in `dispatch_intent`, so the filter
     /// keys directly off the dispatch attribution. Compared on the
-    /// 32-byte pubkey. Sprint 58g per-peer filter.
+    /// 32-byte pubkey. Per-peer filter.
     async fn recent_memory(
         &self,
         tier: Option<MemoryTier>,
@@ -1477,7 +1474,7 @@ impl Server {
     /// Returns settlement receipts where `peer` is the payer.
     /// `SettlementReceipt.payer` is set to the authenticated peer in
     /// `dispatch_intent`, so the filter keys directly off the dispatch
-    /// attribution. Compared on the 32-byte pubkey. Sprint 58g.
+    /// attribution. Compared on the 32-byte pubkey.
     async fn recent_receipts(&self, limit: usize, peer: &AgentId) -> Response {
         match self.settlement.recent(limit).await {
             Ok(receipts) => {
@@ -1775,7 +1772,7 @@ fn read_operator_token_b58(path: &std::path::Path) -> std::io::Result<PeerToken>
 /// file already exists with a permissive mode, `O_CREAT|O_TRUNC` reuses
 /// the inode and our `0o600` is silently ignored. We `remove_file`
 /// first to force a fresh inode, then `set_permissions` after writing
-/// to defend against any umask-overlay surprises (Sprint 47 lesson).
+/// to defend against any umask-overlay surprises.
 pub fn write_operator_token_0600(path: &std::path::Path, token_b58: &str) -> std::io::Result<()> {
     use std::fs::Permissions;
     use std::io::Write;
@@ -1829,8 +1826,8 @@ fn token_b58_prefix(token: &PeerToken) -> String {
 /// Coarse-bucket rounding for the `tokens_remaining` value embedded in
 /// the wire `Response::Error` message of an exhausted dispatch.
 /// Powers-of-5 sequence — operator-readable and defeats fine-grained
-/// inference of peer state in the multi-peer build (post-58c). The
-/// audit row keeps the precise `u64`. Sprint 58c L3 closure.
+/// inference of peer state in the multi-peer build. The audit row keeps
+/// the precise `u64`.
 fn round_tokens_remaining(n: u64) -> u64 {
     const BUCKETS: &[u64] = &[
         0,
@@ -2264,13 +2261,13 @@ required = {caps:?}
     }
 
     /// Builds a task whose `sender` matches `s.identity.agent_id()` so it
-    /// passes the Sprint 49 spoof check. Tests that need a mismatched
-    /// sender construct the task inline.
+    /// passes the send-time sender-spoof check. Tests that need a
+    /// mismatched sender construct the task inline.
     fn dummy_a2a_task_for(s: &Server) -> covenant_a2a::A2ATask {
-        // Sprint 59 recv gate: loopback recipient (operator's pubkey)
-        // skips the gate (D2). The display stays "research@local" so
-        // pre-Sprint-59 assertions keying on the recipient display
-        // (e.g. `a2a.send.research@local`) still hold.
+        // Recv gate: loopback recipient (operator's pubkey) skips the
+        // recv-side admission gate. The display stays "research@local"
+        // so existing assertions keying on the recipient display (e.g.
+        // `a2a.send.research@local`) still hold.
         covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
             sender: s.identity.agent_id(),
@@ -2284,9 +2281,9 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_task_round_trips_through_server() {
         let s = server_with(vec![], "");
-        // Sprint 50: `try_recv` filters by recipient, so the round-trip
-        // test queues a task addressed *to* the operator peer and drains
-        // it from the same peer's perspective.
+        // `try_recv` filters by recipient, so the round-trip test queues
+        // a task addressed *to* the operator peer and drains it from the
+        // same peer's perspective.
         let peer = s.identity.agent_id();
         let task = covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
@@ -2438,9 +2435,9 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_recent_returns_queued_tasks_without_consuming() {
         let s = server_with(vec![], "");
-        // Sprint 50: per-peer recv requires the queued tasks to be
-        // addressed to the peer doing the drain. Loopback fits the v0
-        // single-peer test surface.
+        // Per-peer recv requires the queued tasks to be addressed to
+        // the peer doing the drain. Loopback fits the v0 single-peer
+        // test surface.
         let peer = s.identity.agent_id();
         let task = covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
@@ -2610,7 +2607,7 @@ required = {caps:?}
         }
     }
 
-    // Sprint 59 — recipient admission gate tests.
+    // Recipient admission gate tests.
 
     #[tokio::test]
     async fn recv_gate_skipped_when_peer_equals_recipient_loopback() {
@@ -2835,11 +2832,10 @@ required = {caps:?}
         }
     }
 
-    // Sprint 71 — accept-both-shapes: a2a.{send,recv,respond} caps are
-    // satisfied by either the peer's display form or its pubkey-b58 form.
-    // Display remains the v0 default; b58 is the unforgeable form that
-    // closes Sprint 59's display-collision failure mode going into
-    // Phase-1 multi-peer.
+    // Accept-both-shapes: a2a.{send,recv,respond} caps are satisfied by
+    // either the peer's display form or its pubkey-b58 form. Display
+    // remains the v0 default; b58 is the unforgeable form that closes
+    // the display-collision failure mode going into Phase-1 multi-peer.
 
     #[tokio::test]
     async fn a2a_send_accepts_pubkey_b58_grant() {
@@ -2972,8 +2968,8 @@ required = {caps:?}
         let s = server_with(vec![], "");
         let task = dummy_a2a_task_for(&s);
         // Compose a b58 form against a *different* pubkey. The check
-        // must NOT honour it — defeats the Sprint 59 display-collision
-        // attack a Phase-1 second peer would otherwise enable.
+        // must NOT honour it — defeats the display-collision attack a
+        // Phase-1 second peer would otherwise enable.
         let other = AgentId::new("research@local", [42u8; 32]);
         let other_alternatives = other.scoped_action_alternatives("a2a.send");
         assert_ne!(
@@ -3552,7 +3548,7 @@ required = {caps:?}
         }
     }
 
-    // -------- Sprint 58g: per-peer filter on the other RecentX surfaces --------
+    // -------- Per-peer filter on the other RecentX surfaces --------
 
     #[tokio::test]
     async fn recent_memory_scrubs_other_peers_records() {
@@ -4142,7 +4138,7 @@ budget_credits_per_hour = {credits}
                 assert_eq!(agent_display, "research@agent");
                 assert_eq!(*requested, 1);
                 assert_eq!(*tokens_remaining, 0);
-                // Sprint 58c: audit row carries the rejected text so
+                // The audit row carries the rejected text so
                 // `intents resume <id>` can re-dispatch from this row alone.
                 assert_eq!(intent_text, "find more recent papers");
             }
@@ -4157,10 +4153,10 @@ budget_credits_per_hour = {credits}
     /// and skips the debit. (Equivalent test: card with budget = 0 plus
     /// no register_agent_budgets call, exercising the NoCapacity warn-
     /// and-pass branch.)
-    /// Sprint 58c M2 closure — when the manifest opts in to budget but
-    /// `register_agent_budgets` was never called, dispatch falls into
-    /// the NoCapacity arm. v0 still passes the dispatch through but
-    /// records a `BudgetUnseeded` audit row so the bypass is visible.
+    /// When the manifest opts in to budget but `register_agent_budgets`
+    /// was never called, dispatch falls into the NoCapacity arm. v0
+    /// still passes the dispatch through but records a `BudgetUnseeded`
+    /// audit row so the bypass is visible.
     #[tokio::test]
     async fn dispatch_audits_unseeded_when_manifest_opts_in_but_bucket_missing() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
@@ -4215,8 +4211,8 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 58c L3 closure — wire response rounds tokens_remaining to
-    /// a powers-of-5 bucket. Sanity covers the bucket boundaries.
+    /// Wire response rounds tokens_remaining to a powers-of-5 bucket.
+    /// Sanity covers the bucket boundaries.
     #[test]
     fn round_tokens_remaining_collapses_to_powers_of_five() {
         assert_eq!(round_tokens_remaining(0), 0);
@@ -4236,12 +4232,12 @@ budget_credits_per_hour = {credits}
         assert_eq!(round_tokens_remaining(u64::MAX), 10_000_000_000);
     }
 
-    /// Sprint 58c — resume verb plumbing. A `BudgetExhausted` audit
-    /// row recorded for a given `intent_id` is the only state the
-    /// resume verb needs: it scans the audit, extracts `intent_text`,
-    /// and runs it through `dispatch_intent`. Synthesised audit row
-    /// here so the test doesn't have to actually exhaust then refill
-    /// (no clock-injection at the InMemoryLedger layer).
+    /// Resume verb plumbing. A `BudgetExhausted` audit row recorded for
+    /// a given `intent_id` is the only state the resume verb needs: it
+    /// scans the audit, extracts `intent_text`, and runs it through
+    /// `dispatch_intent`. Synthesised audit row here so the test doesn't
+    /// have to actually exhaust then refill (no clock-injection at the
+    /// InMemoryLedger layer).
     #[tokio::test]
     async fn resume_intent_re_dispatches_from_budget_exhausted_audit_row() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
@@ -4275,8 +4271,8 @@ budget_credits_per_hour = {credits}
         // Synthesise a BudgetExhausted row as if a previous dispatch had
         // been rejected. The resume verb scans recent audit, finds this
         // row by intent_id, and re-dispatches the captured text. Tag the
-        // synthesised row with the daemon's real pubkey so the Sprint 58d
-        // per-peer filter passes it through to the find_map.
+        // synthesised row with the daemon's real pubkey so the per-peer
+        // audit filter passes it through to the find_map.
         let exhausted_intent = Uuid::new_v4();
         audit
             .record(AuditEvent {
@@ -4306,8 +4302,8 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 58c — resume with no matching audit row returns Error,
-    /// not a fresh dispatch on an empty intent.
+    /// Resume with no matching audit row returns Error, not a fresh
+    /// dispatch on an empty intent.
     #[tokio::test]
     async fn resume_intent_returns_error_when_no_audit_row_matches() {
         let s = server_with(
@@ -4364,7 +4360,7 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    // ---- Sprint 58f: write-side audit invariant ----
+    // ---- Write-side audit invariant ----
     //
     // The peer-action sites in `Server::respond` build `AuditEvent`s with
     // `issuer = peer.clone()` and pass them to `record_peer_event`, which
@@ -4550,9 +4546,9 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 60. Constructs a Server with a tempdir-bound home and a
-    /// pre-seeded operator token (b58 written to `<home>/peers/operator.token`
-    /// at mode 0600 + registered to the daemon identity in the peer
+    /// Constructs a Server with a tempdir-bound home and a pre-seeded
+    /// operator token (b58 written to `<home>/peers/operator.token` at
+    /// mode 0600 + registered to the daemon identity in the peer
     /// registry). Returns the server, the tempdir handle (drop = teardown),
     /// the old token, and the operator's `AgentId` for assertions.
     async fn server_with_operator_token() -> (Server, tempfile::TempDir, PeerToken, AgentId) {
@@ -4593,9 +4589,9 @@ budget_credits_per_hour = {credits}
         (s, dir, old_token, operator)
     }
 
-    /// Sprint 60 happy path: rotation under the operator identity returns
-    /// the new token, the registry resolves it to the operator, the old
-    /// token no longer resolves, and the on-disk file holds the new b58.
+    /// Happy path: rotation under the operator identity returns the new
+    /// token, the registry resolves it to the operator, the old token
+    /// no longer resolves, and the on-disk file holds the new b58.
     #[tokio::test]
     async fn rotate_token_succeeds_under_operator_identity() {
         let (s, dir, old_token, operator) = server_with_operator_token().await;
@@ -4625,12 +4621,12 @@ budget_credits_per_hour = {credits}
         require_operator_token_mode_0600(&token_path).expect("0600 enforced post-rotate");
     }
 
-    /// Sprint 60 — Plan-gate C3 enforcement. A non-operator peer (whose
-    /// pubkey doesn't match `self.identity.pubkey`) must be rejected
-    /// regardless of authentication state. The C2 "any authenticated peer
-    /// can rotate" alternative was rejected for exactly this reason — in
-    /// Phase-1 multi-peer a guest peer would inherit operator-rotation
-    /// capability via authentication alone.
+    /// C3 gate enforcement. A non-operator peer (whose pubkey doesn't
+    /// match `self.identity.pubkey`) must be rejected regardless of
+    /// authentication state. The "any authenticated peer can rotate"
+    /// alternative was rejected for exactly this reason — in Phase-1
+    /// multi-peer a guest peer would inherit operator-rotation capability
+    /// via authentication alone.
     #[tokio::test]
     async fn rotate_token_rejects_when_peer_is_not_operator_identity() {
         let (s, _dir, old_token, _operator) = server_with_operator_token().await;
@@ -4654,9 +4650,9 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 60 — verifies the audit row layout: issuer is the operator
-    /// peer (Sprint 58f invariant), kind is `OperatorTokenRotated`, and
-    /// the embedded prefixes are the 6-char base58 prefixes of the
+    /// Verifies the audit row layout: issuer is the operator peer
+    /// (peer-event invariant), kind is `OperatorTokenRotated`, and the
+    /// embedded prefixes are the 6-char base58 prefixes of the
     /// before/after tokens (no full token bytes in the audit log).
     #[tokio::test]
     async fn rotate_token_records_audit_event_with_token_prefixes() {
@@ -4707,7 +4703,7 @@ budget_credits_per_hour = {credits}
             .iter()
             .find(|e| matches!(e.kind, AuditKind::OperatorTokenRotated { .. }))
             .expect("OperatorTokenRotated row");
-        assert_eq!(row.issuer.pubkey, operator.pubkey, "Sprint 58f invariant");
+        assert_eq!(row.issuer.pubkey, operator.pubkey, "peer-event invariant");
         match &row.kind {
             AuditKind::OperatorTokenRotated {
                 peer_display,
@@ -4730,11 +4726,11 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 60 — guard against the `with_home` builder being skipped.
-    /// Without a configured home, the rotation can't read or write the
-    /// on-disk token, so the verb returns `Error` with a message naming
-    /// the missing home. Tests that don't construct a tempdir-bound
-    /// server (most of them) shouldn't accidentally rotate either.
+    /// Guards against the `with_home` builder being skipped. Without a
+    /// configured home, the rotation can't read or write the on-disk
+    /// token, so the verb returns `Error` with a message naming the
+    /// missing home. Tests that don't construct a tempdir-bound server
+    /// (most of them) shouldn't accidentally rotate either.
     #[tokio::test]
     async fn rotate_token_errors_when_server_has_no_home() {
         let s = server_with(vec![], "ignored");
@@ -4749,10 +4745,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 60 — the rotation must short-circuit on the C3 gate before
-    /// touching the registry. A foreign peer with no on-disk token
-    /// available should still be rejected on the identity check, not on
-    /// a downstream "read operator token" io-error. Tests that the gate
+    /// The rotation must short-circuit on the C3 gate before touching
+    /// the registry. A foreign peer with no on-disk token available
+    /// should still be rejected on the identity check, not on a
+    /// downstream "read operator token" io-error. Tests that the gate
     /// orderings match the docstring's enumerated steps.
     #[tokio::test]
     async fn rotate_token_identity_gate_runs_before_disk_read() {
@@ -4777,10 +4773,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 61 — a foreign peer's RotateOperatorToken attempt records
-    /// an `OperatorTokenRotationRejected` audit row. Issuer is the
-    /// daemon identity (Sprint 58d audience model — see also Sprint
-    /// 49's `AuthenticationFailed`); the rejected peer's identity is
+    /// A foreign peer's RotateOperatorToken attempt records an
+    /// `OperatorTokenRotationRejected` audit row. Issuer is the daemon
+    /// identity (matching the operator-feed audience model used by
+    /// `AuthenticationFailed`); the rejected peer's identity is
     /// preserved in the kind payload (`peer_display` +
     /// `peer_pubkey_b58`). No `OperatorTokenRotated` row appears (the
     /// rotation didn't run).
@@ -4839,7 +4835,7 @@ budget_credits_per_hour = {credits}
             .expect("OperatorTokenRotationRejected row");
         assert_eq!(
             row.issuer.pubkey, operator.pubkey,
-            "issuer is the daemon identity (Sprint 58d operator-feed audience)"
+            "issuer is the daemon identity (operator-feed audience)"
         );
         match &row.kind {
             AuditKind::OperatorTokenRotationRejected {
@@ -4860,13 +4856,13 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 61 — the rejection row is visible to the operator's
-    /// `/audit` feed under the Sprint 58d filter (`issuer.pubkey ==
-    /// peer.pubkey`). Regression test for the mid-sprint security
-    /// review finding: the natural `issuer = peer` shape (mirror of
-    /// `A2ARecipientRejected`) hid probes from the operator. Setting
-    /// `issuer = self.identity.agent_id()` matches the
-    /// `AuthenticationFailed` audience model.
+    /// The rejection row is visible to the operator's `/audit` feed
+    /// under the per-peer filter (`issuer.pubkey == peer.pubkey`).
+    /// Regression test for a security finding: the natural
+    /// `issuer = peer` shape (mirror of `A2ARecipientRejected`) hid
+    /// probes from the operator. Setting `issuer =
+    /// self.identity.agent_id()` matches the `AuthenticationFailed`
+    /// audience model.
     #[tokio::test]
     async fn rotate_token_rejection_visible_to_operator_audit_feed() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
@@ -4913,7 +4909,7 @@ budget_credits_per_hour = {credits}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        // Operator opens /audit. The Sprint 58d filter
+        // Operator opens /audit. The per-peer filter
         // (`issuer.pubkey == peer.pubkey`) keeps only rows where
         // issuer == operator. The rejection row's issuer is the
         // daemon identity == operator, so it must appear.
@@ -4949,10 +4945,10 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 61 — the operator's own rotation must not produce a
-    /// rejection row. v0 single-peer regression: the rejection arm is
-    /// dead code under `peer == operator`, so the audit log only carries
-    /// the success row.
+    /// The operator's own rotation must not produce a rejection row.
+    /// v0 single-peer regression: the rejection arm is dead code under
+    /// `peer == operator`, so the audit log only carries the success
+    /// row.
     #[tokio::test]
     async fn rotate_token_operator_does_not_record_rejection() {
         let (s, _dir, _old_token, operator) = server_with_operator_token().await;
@@ -4969,12 +4965,12 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 61 — the rejection audit row records before the
-    /// `Response::Error` returns. Catches the regression where someone
-    /// later moves the audit call after the early-return for "tidiness."
-    /// Done here by asserting two foreign-peer attempts produce two
-    /// distinct audit rows (the audit must persist even on the rejection
-    /// path for both attempts to surface).
+    /// The rejection audit row records before the `Response::Error`
+    /// returns. Catches the regression where someone later moves the
+    /// audit call after the early-return for "tidiness." Done here by
+    /// asserting two foreign-peer attempts produce two distinct audit
+    /// rows (the audit must persist even on the rejection path for both
+    /// attempts to surface).
     #[tokio::test]
     async fn rotate_token_rejection_audit_persists_per_attempt() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
@@ -5056,12 +5052,12 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 61 — display-collision probe: a foreign peer registers
-    /// against `user@local` (the operator's display) but their pubkey
-    /// differs. The audit row's `peer_pubkey_b58` carries the
-    /// unforgeable identifier; without it, an operator scanning the
-    /// audit log by `peer_display` alone would miss the attack class
-    /// the C3 gate exists to surface.
+    /// Display-collision probe: a foreign peer registers against
+    /// `user@local` (the operator's display) but their pubkey differs.
+    /// The audit row's `peer_pubkey_b58` carries the unforgeable
+    /// identifier; without it, an operator scanning the audit log by
+    /// `peer_display` alone would miss the attack class the C3 gate
+    /// exists to surface.
     #[tokio::test]
     async fn rotate_token_rejection_records_distinct_pubkey_under_display_collision() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
@@ -5138,9 +5134,9 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 62 — operator-only peers list returns redacted summaries
-    /// for both live and revoked entries. Closes Sprint 61's
-    /// "display-collision probe" post-incident response gap.
+    /// Operator-only peers list returns redacted summaries for both
+    /// live and revoked entries. Closes the display-collision probe
+    /// post-incident response gap.
     #[tokio::test]
     async fn list_peers_returns_summaries_for_operator() {
         let s = server_with(vec![], "");
@@ -5189,11 +5185,11 @@ budget_credits_per_hour = {credits}
         assert!(live.revoked_at.is_none());
     }
 
-    /// Sprint 62 — C3 gate enforcement. A non-operator peer is rejected
-    /// with `Response::Error` and an `OperatorPeersListRejected` audit
-    /// row whose issuer is the daemon identity (Sprint 61 audience model
-    /// — operator is the security audience). The peer's identity is
-    /// preserved in the kind payload (`peer_display` + `peer_pubkey_b58`).
+    /// C3 gate enforcement. A non-operator peer is rejected with
+    /// `Response::Error` and an `OperatorPeersListRejected` audit row
+    /// whose issuer is the daemon identity (operator is the security
+    /// audience). The peer's identity is preserved in the kind payload
+    /// (`peer_display` + `peer_pubkey_b58`).
     #[tokio::test]
     async fn list_peers_rejects_non_operator_with_audit_row() {
         let s = server_with(vec![], "");
@@ -5239,10 +5235,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 62 — regression test for the Sprint 58d filter audience.
-    /// The rejection row must reach the operator's `/audit` feed and
-    /// must NOT reach the rejected peer's `/audit` feed (no oracle for
-    /// the probing attacker). Mirrors the
+    /// Regression test for the per-peer audit-filter audience. The
+    /// rejection row must reach the operator's `/audit` feed and must
+    /// NOT reach the rejected peer's `/audit` feed (no oracle for the
+    /// probing attacker). Mirrors the
     /// `rotate_token_rejection_visible_to_operator_audit_feed` test.
     #[tokio::test]
     async fn list_peers_rejection_visible_to_operator_audit_feed() {
@@ -5292,9 +5288,9 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 62 — server-side `pubkey_prefix` filter. Paste the b58 of
-    /// an audit row's `peer_pubkey_b58` and the daemon returns only
-    /// matching registry entries.
+    /// Server-side `pubkey_prefix` filter. Paste the b58 of an audit
+    /// row's `peer_pubkey_b58` and the daemon returns only matching
+    /// registry entries.
     #[tokio::test]
     async fn list_peers_filters_by_pubkey_prefix() {
         let s = server_with(vec![], "");
@@ -5332,10 +5328,10 @@ budget_credits_per_hour = {credits}
         assert_eq!(peers[0].agent_id.display, "target@local");
     }
 
-    /// Sprint 62 — wire-format security: a `Response::PeerList` must
-    /// never carry a peer's full token b58. Catches a regression where
-    /// someone reuses `PeerEntry` (which serializes the full token) as
-    /// the response shape instead of `PeerSummary`.
+    /// Wire-format security: a `Response::PeerList` must never carry a
+    /// peer's full token b58. Catches a regression where someone reuses
+    /// `PeerEntry` (which serializes the full token) as the response
+    /// shape instead of `PeerSummary`.
     #[tokio::test]
     async fn list_peers_response_never_contains_full_token_b58() {
         let s = server_with(vec![], "");
@@ -5367,10 +5363,10 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 67 — `Response::PeerList` carries the daemon's own
-    /// identity pubkey as `operator_pubkey_b58` so the web UI can hide
-    /// the revoke button on the operator's own row (clicking it would
-    /// brick auth in v0 single-peer). The value is the b58 encoding of
+    /// `Response::PeerList` carries the daemon's own identity pubkey
+    /// as `operator_pubkey_b58` so the web UI can hide the revoke
+    /// button on the operator's own row (clicking it would brick auth
+    /// in v0 single-peer). The value is the b58 encoding of
     /// `self.identity.pubkey` — exactly the encoding used by the
     /// `peer_pubkey_b58` audit-row field, so existing redaction rules
     /// apply.
@@ -5405,12 +5401,12 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 67 — `operator_pubkey_b58` is consumer-stable across
-    /// every successful `list_peers` response: it does not depend on
-    /// the prefix filter, the registry contents, or whether the
-    /// operator's bootstrap entry happens to be in the registry. Web
-    /// UI's self-row predicate is therefore safe to apply on every
-    /// poll without recomputing the comparator.
+    /// `operator_pubkey_b58` is consumer-stable across every successful
+    /// `list_peers` response: it does not depend on the prefix filter,
+    /// the registry contents, or whether the operator's bootstrap entry
+    /// happens to be in the registry. Web UI's self-row predicate is
+    /// therefore safe to apply on every poll without recomputing the
+    /// comparator.
     #[tokio::test]
     async fn list_peers_operator_pubkey_b58_is_stable_across_filters() {
         let s = server_with(vec![], "");
@@ -5454,12 +5450,12 @@ budget_credits_per_hour = {credits}
         assert_eq!(a, b);
     }
 
-    /// Sprint 67 — wire-format invariant: `Response::PeerList` JSON
-    /// has a top-level `operator_pubkey_b58` field whose value matches
-    /// the b58 encoding of `self.identity.pubkey`. Catches a
-    /// regression where someone removes the field thinking the web
-    /// UI's per-row pubkey already suffices (it doesn't — without the
-    /// comparator, the UI cannot distinguish the operator's own row).
+    /// Wire-format invariant: `Response::PeerList` JSON has a top-level
+    /// `operator_pubkey_b58` field whose value matches the b58 encoding
+    /// of `self.identity.pubkey`. Catches a regression where someone
+    /// removes the field thinking the web UI's per-row pubkey already
+    /// suffices (it doesn't — without the comparator, the UI cannot
+    /// distinguish the operator's own row).
     #[tokio::test]
     async fn list_peers_response_serialises_operator_pubkey_b58_field() {
         let s = server_with(vec![], "");
@@ -5477,12 +5473,12 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 67 — `#[serde(default)]` lets a stale CLI built before
-    /// Sprint 67 deserialise a new daemon's `PeerList` response and
+    /// `#[serde(default)]` lets a stale CLI built before the field
+    /// landed deserialise a new daemon's `PeerList` response and
     /// receive `operator_pubkey_b58: ""`. The empty string never
     /// matches a real pubkey b58, so the consumer's self-row predicate
-    /// falls through to the pre-Sprint-67 behaviour (no false-self
-    /// hides) — strictly safer than a hard deserialize error.
+    /// falls through to the pre-field behaviour (no false-self hides)
+    /// — strictly safer than a hard deserialize error.
     #[test]
     fn list_peers_response_deserialises_without_operator_pubkey_b58_field() {
         let json = r#"{"kind":"peer_list","peers":[]}"#;
@@ -5499,11 +5495,11 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 65 — operator-only `peers revoke` succeeds under the C3
-    /// gate and emits a `PeerRevoked` audit row whose issuer is the
-    /// operator (peer-event audience per Sprint 58f). The kind payload
-    /// names the revoked peer (display + pubkey-b58 + token-prefix);
-    /// the operator is the issuer because they took the action.
+    /// Operator-only `peers revoke` succeeds under the C3 gate and
+    /// emits a `PeerRevoked` audit row whose issuer is the operator
+    /// (peer-event audience). The kind payload names the revoked peer
+    /// (display + pubkey-b58 + token-prefix); the operator is the
+    /// issuer because they took the action.
     #[tokio::test]
     async fn revoke_peer_succeeds_under_operator_identity_with_audit_row() {
         let s = server_with(vec![], "");
@@ -5547,7 +5543,7 @@ budget_credits_per_hour = {credits}
         assert_eq!(
             row.issuer.pubkey,
             s.identity.agent_id().pubkey,
-            "issuer is the operator (peer-event audience per Sprint 58f)"
+            "issuer is the operator (peer-event audience)"
         );
         match &row.kind {
             AuditKind::PeerRevoked {
@@ -5563,10 +5559,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 65 — C3 gate enforcement. A non-operator peer is rejected
-    /// with `Response::Error` and an `OperatorPeerRevokeRejected` audit
-    /// row whose issuer is the daemon identity (Sprint 61 audience model
-    /// — operator is the security audience, not the rejected peer).
+    /// C3 gate enforcement. A non-operator peer is rejected with
+    /// `Response::Error` and an `OperatorPeerRevokeRejected` audit row
+    /// whose issuer is the daemon identity (operator is the security
+    /// audience, not the rejected peer).
     #[tokio::test]
     async fn revoke_peer_rejects_non_operator_with_audit_row() {
         let s = server_with(vec![], "");
@@ -5612,10 +5608,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 65 — Sprint 58d audience-filter regression. The rejection
-    /// row must reach the operator's `/audit` feed and must NOT reach
-    /// the rejected peer's feed (no oracle for the probing attacker).
-    /// Mirrors `list_peers_rejection_visible_to_operator_audit_feed`.
+    /// Audience-filter regression. The rejection row must reach the
+    /// operator's `/audit` feed and must NOT reach the rejected peer's
+    /// feed (no oracle for the probing attacker). Mirrors
+    /// `list_peers_rejection_visible_to_operator_audit_feed`.
     #[tokio::test]
     async fn revoke_peer_rejection_visible_to_operator_audit_feed() {
         let s = server_with(vec![], "");
@@ -5663,11 +5659,11 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 65 — ambiguous outcome. Two peers whose tokens share a
-    /// 1-char b58 prefix; the operator's revoke matches both and the
-    /// daemon returns `Ambiguous { matches }`. The registry is unchanged
-    /// (both still resolve) and NO audit row is recorded — non-rejection
-    /// failures are not security events (E1 plan-gate decision).
+    /// Ambiguous outcome. Two peers whose tokens share a 1-char b58
+    /// prefix; the operator's revoke matches both and the daemon
+    /// returns `Ambiguous { matches }`. The registry is unchanged (both
+    /// still resolve) and NO audit row is recorded — non-rejection
+    /// failures are not security events.
     #[tokio::test]
     async fn revoke_peer_returns_ambiguous_when_prefix_matches_multiple() {
         let s = server_with(vec![], "");
@@ -5703,8 +5699,8 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 65 — wire-format regression: a `Response::PeerRevoked`
-    /// must never carry a peer's full token b58. Mirrors
+    /// Wire-format regression: a `Response::PeerRevoked` must never
+    /// carry a peer's full token b58. Mirrors
     /// `list_peers_response_never_contains_full_token_b58`.
     #[tokio::test]
     async fn revoke_peer_response_never_contains_full_token_b58() {
@@ -5737,9 +5733,9 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 65 — empty prefix is rejected at the daemon boundary.
-    /// Without this guard the registry would return `Ambiguous {
-    /// matches: <every entry> }`, which is operationally a footgun.
+    /// Empty prefix is rejected at the daemon boundary. Without this
+    /// guard the registry would return `Ambiguous { matches: <every
+    /// entry> }`, which is operationally a footgun.
     #[tokio::test]
     async fn revoke_peer_rejects_empty_prefix() {
         let s = server_with(vec![], "");
@@ -5768,8 +5764,8 @@ budget_credits_per_hour = {credits}
     /// daemon's `bootstrap_operator_token` would write it. The seeded
     /// entry's `agent_id.display` is `"operator@local"` to mirror the
     /// `boot_identity()` shape; for the self-revoke guard the predicate
-    /// is identity-pubkey-centric (G1) so the display is irrelevant to
-    /// the guard's decision but informative for the audit row payload.
+    /// is identity-pubkey-centric so the display is irrelevant to the
+    /// guard's decision but informative for the audit row payload.
     async fn seed_operator_self_entry(s: &Server) -> (PeerToken, [u8; 32]) {
         let token = PeerToken::generate();
         let op_pubkey = s.identity.agent_id().pubkey;
@@ -5784,10 +5780,9 @@ budget_credits_per_hour = {credits}
         (token, op_pubkey)
     }
 
-    /// Sprint 69 — self-revoke without `--force` returns
-    /// `SelfRevokeForbidden`, leaves the registry unchanged, and emits
-    /// a `PeerSelfRevokeBlocked` audit row whose issuer is the operator
-    /// (peer-event audience per Sprint 58f).
+    /// Self-revoke without `--force` returns `SelfRevokeForbidden`,
+    /// leaves the registry unchanged, and emits a `PeerSelfRevokeBlocked`
+    /// audit row whose issuer is the operator (peer-event audience).
     #[tokio::test]
     async fn revoke_peer_self_target_without_force_is_blocked() {
         let s = server_with(vec![], "");
@@ -5822,7 +5817,7 @@ budget_credits_per_hour = {credits}
         assert_eq!(
             row.issuer.pubkey,
             s.identity.agent_id().pubkey,
-            "issuer is the operator (peer-event audience per Sprint 58f, not the daemon-issuer Sprint 61 model)"
+            "issuer is the operator (peer-event audience, not the daemon-issuer rejection model)"
         );
         match &row.kind {
             AuditKind::PeerSelfRevokeBlocked {
@@ -5838,12 +5833,12 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 69 — `--force` overrides the self-revoke guard. Used by
-    /// the operator's recovery-flow test (deliberately brick auth, then
+    /// `--force` overrides the self-revoke guard. Used by the
+    /// operator's recovery-flow test (deliberately brick auth, then
     /// recover by deleting `peers/operator.token` and restarting the
-    /// daemon). Emits the existing `PeerRevoked` audit row (E1 — no
-    /// special "OperatorSelfRevokeForced" variant; correlation comes
-    /// from `issuer.pubkey == peer_pubkey_b58` in the row payload).
+    /// daemon). Emits the existing `PeerRevoked` audit row — no special
+    /// "OperatorSelfRevokeForced" variant; correlation comes from
+    /// `issuer.pubkey == peer_pubkey_b58` in the row payload.
     #[tokio::test]
     async fn revoke_peer_self_target_with_force_succeeds() {
         let s = server_with(vec![], "");
@@ -5885,9 +5880,9 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 69 — non-self targets are unaffected by the guard. A
-    /// guest peer revoke with `force=false` proceeds normally — Sprint
-    /// 65's path is unchanged.
+    /// Non-self targets are unaffected by the guard. A guest peer
+    /// revoke with `force=false` proceeds normally — the standard
+    /// revoke path is unchanged.
     #[tokio::test]
     async fn revoke_peer_non_self_target_unaffected_by_force_flag() {
         let s = server_with(vec![], "");
@@ -5917,10 +5912,10 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 69 — `#[serde(default)]` regression: a `Request::RevokePeer`
-    /// JSON without the `force` field deserialises with `force == false`
+    /// `#[serde(default)]` regression: a `Request::RevokePeer` JSON
+    /// without the `force` field deserialises with `force == false`
     /// (the safe default — guard fires). This is what a stale CLI built
-    /// before Sprint 69 produces; the new daemon must accept it.
+    /// before the field landed produces; the new daemon must accept it.
     #[tokio::test]
     async fn revoke_peer_force_field_defaults_to_false_on_deserialize() {
         let json = r#"{"kind":"revoke_peer","token_prefix":"abcdef"}"#;
@@ -5937,11 +5932,11 @@ budget_credits_per_hour = {credits}
         }
     }
 
-    /// Sprint 69 — Phase-1 forward-compat. The self-revoke guard's
-    /// pubkey comparison MUST be operator-identity-centric (G1), not
-    /// caller-centric (G2). In v0 these are equivalent because the
-    /// only authenticated peer is the operator and its `peer.pubkey`
-    /// always equals `self.identity.pubkey`. This test simulates the
+    /// Phase-1 forward-compat. The self-revoke guard's pubkey
+    /// comparison MUST be operator-identity-centric, not caller-centric.
+    /// In v0 these are equivalent because the only authenticated peer
+    /// is the operator and its `peer.pubkey` always equals
+    /// `self.identity.pubkey`. This test simulates the
     /// (impossible-in-v0) scenario where a non-operator caller's
     /// pubkey accidentally matches the matched-entry's pubkey: the
     /// guard must NOT fire for such a caller, because the rule is
@@ -5984,11 +5979,12 @@ budget_credits_per_hour = {credits}
             }
             other => panic!("expected C3 Error, got {other:?}"),
         }
-        // The C3 rejection records `OperatorPeerRevokeRejected` (Sprint 61
-        // daemon-issuer audience), NOT `PeerSelfRevokeBlocked` — the
-        // ordering is what makes G2 and G1 indistinguishable in v0 from
-        // the caller's perspective, but G1 is what the next-sprint
-        // multi-peer rewrite reads correctly without re-interpretation.
+        // The C3 rejection records `OperatorPeerRevokeRejected`
+        // (daemon-issuer audience), NOT `PeerSelfRevokeBlocked` — the
+        // ordering is what makes caller-centric and identity-centric
+        // semantics indistinguishable in v0 from the caller's
+        // perspective, but identity-centric is what the multi-peer
+        // rewrite reads correctly without re-interpretation.
         let events = s.audit.recent(50).await.unwrap();
         assert!(
             events
@@ -6004,9 +6000,9 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    /// Sprint 69 — wire-format regression: `RevokeOutcome::SelfRevokeForbidden`
+    /// Wire-format regression: `RevokeOutcome::SelfRevokeForbidden`
     /// carries a `PeerSummary` (token_prefix only, 6 chars), never the
-    /// full base58 token. Mirrors the Sprint 65
+    /// full base58 token. Mirrors the
     /// `revoke_peer_response_never_contains_full_token_b58` invariant.
     #[tokio::test]
     async fn self_revoke_forbidden_response_never_contains_full_token_b58() {

@@ -1,8 +1,8 @@
-//! Live integration test for Sprint 73: spawns covenantd against a
-//! tempdir HOME with a guest peer pre-seeded in `peers/registry.jsonl`,
-//! then runs the real `covenant capabilities grant a2a.send.<prefix>`
-//! CLI as a subprocess and verifies that Sprint 72's auto-expand
-//! lands as the full b58 form on disk.
+//! Live integration test: spawns covenantd against a tempdir HOME
+//! with a guest peer pre-seeded in `peers/registry.jsonl`, then runs
+//! the real `covenant capabilities grant a2a.send.<prefix>` CLI as a
+//! subprocess and verifies that the pubkey-prefix auto-expand lands
+//! as the full b58 form on disk.
 //!
 //! Three assertions:
 //!
@@ -17,13 +17,12 @@
 //!     full form to stdout but persists the prefix would pass (b)
 //!     and silently break enforcement in production.
 //!
-//! Closes Sprint 72's "no live test for the CLI-side rewrite"
-//! carry-forward. The 16 mock tests in `crates/covenant/src/main.rs`
-//! cover the `expand_a2a_action` helper in isolation; this test
-//! covers the full process boundary — IPC handshake, ListPeers
-//! round-trip, GrantCapability round-trip, and JSONL persistence —
-//! when the operator runs the Sprint 72 ergonomic shorthand against
-//! the binary they actually invoke.
+//! The 16 mock tests in `crates/covenant/src/main.rs` cover the
+//! `expand_a2a_action` helper in isolation; this test covers the
+//! full process boundary — IPC handshake, ListPeers round-trip,
+//! GrantCapability round-trip, and JSONL persistence — when the
+//! operator runs the ergonomic shorthand against the binary they
+//! actually invoke.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Build prereq:
 //! `cargo build -p covenant` (the test panics with a clear message

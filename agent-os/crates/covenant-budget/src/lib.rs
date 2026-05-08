@@ -1,12 +1,12 @@
 //! Per-agent token-bucket ledger backing `Settlement.budget_credits_per_hour`
 //! (manifest §5).
 //!
-//! Closes scaffolding for the last `00_spec.md` §11 pin: *when an agent
-//! hits `budget_credits_per_hour`, the runtime pauses, persists partial
-//! state, settles consumed credits, and queues a resume*. Sprint 58a
-//! ships types + storage backends. Sprint 58b wires `dispatch_intent`
-//! to call [`BudgetLedger::try_debit`] before spawning. Sprint 58c
-//! tackles the actual mid-task pause/resume.
+//! Backs the `00_spec.md` §11 pin: *when an agent hits
+//! `budget_credits_per_hour`, the runtime pauses, persists partial state,
+//! settles consumed credits, and queues a resume*. This crate ships the
+//! types and storage backends; `dispatch_intent` calls
+//! [`BudgetLedger::try_debit`] before spawning, and the resume verb
+//! handles the mid-task pause/resume.
 //!
 //! ## Token-bucket model
 //!
@@ -28,15 +28,15 @@
 //! Both serialize concurrent mutations through a `Mutex` so two
 //! debits can't race past the same `tokens_remaining` snapshot.
 //!
-//! ## Compaction (Sprint 58c)
+//! ## Compaction
 //!
 //! [`BudgetLedger::compact_older_than`] drops [`BudgetEvent::Debit`]
 //! events older than the cutoff and emits one per-agent
 //! [`BudgetEvent::Snapshot`] capturing the bucket's `(capacity,
 //! tokens_remaining, last_refill_ms)` at the cutoff. Replay treats
 //! Snapshot as authoritative for that agent, so reopening a compacted
-//! ledger reconstructs the same bucket state as before the rewrite.
-//! Sprint 58a's destructive-compact note is closed.
+//! ledger reconstructs the same bucket state as before the rewrite —
+//! compaction is non-destructive of bucket state.
 //!
 //! [`tokens_remaining`]: BudgetLedger::tokens_remaining
 //! [`would_exceed`]: BudgetLedger::would_exceed
@@ -70,8 +70,8 @@ pub enum BudgetError {
     /// Debit would drop `tokens_remaining` negative. `tokens_remaining`
     /// is what was available when the call was made; `refill_eta_ms`
     /// is the absolute `epoch_ms` at which the bucket will hold enough
-    /// tokens to cover the requested debit (returned for the
-    /// pause-and-queue logic in Sprint 58c).
+    /// tokens to cover the requested debit — the wait floor for the
+    /// pause-and-queue resume logic.
     #[error(
         "budget exhausted: {tokens_remaining} tokens remaining, refill eta {refill_eta_ms} ms"
     )]
@@ -89,9 +89,8 @@ pub struct BudgetDebit {
     pub agent: AgentId,
     pub credits: u64,
     /// The [`uuid::Uuid`] of the [`covenant_types::SettlementReceipt`]
-    /// this debit pairs with. Sprint 58b/c will settle this pair on the
-    /// runtime's settlement flush, so the budget log and the receipt
-    /// log can be joined.
+    /// this debit pairs with. The runtime's settlement flush settles
+    /// the pair, so the budget log and the receipt log can be joined.
     pub paired_receipt: Uuid,
     pub at_ms: u64,
 }
@@ -155,7 +154,7 @@ pub trait BudgetLedger: Send + Sync {
     ) -> Result<Vec<BudgetDebit>, BudgetError>;
 
     /// Drop debit events with `at_ms < before_ms`. See module docs for
-    /// the Sprint-58a compaction trade-off.
+    /// the snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
 }
 
@@ -1038,10 +1037,9 @@ mod tests {
         assert_eq!(l.recent_debits(&a, 10).await.unwrap().len(), 1);
     }
 
-    /// Sprint 58c — non-destructive compact. Pre-cutoff Debits are
-    /// dropped but a per-agent Snapshot captures the state at cutoff,
-    /// so reopening reconstructs the same `tokens_remaining` as before
-    /// the rewrite.
+    /// Non-destructive compact: pre-cutoff Debits are dropped but a
+    /// per-agent Snapshot captures the state at cutoff, so reopening
+    /// reconstructs the same `tokens_remaining` as before the rewrite.
     #[tokio::test]
     async fn jsonl_compact_replay_yields_same_state_as_pre_compact() {
         let dir = tempfile::tempdir().unwrap();
@@ -1091,10 +1089,9 @@ mod tests {
         assert!(l3.recent_debits(&a, 10).await.unwrap().is_empty());
     }
 
-    /// Sprint 58c L2 closure — `set_capacity` is idempotent on capacity
-    /// match. A re-stamp of `last_refill_ms = now` every boot would
-    /// prevent slow-rate buckets from refilling on restart-heavy
-    /// deployments.
+    /// `set_capacity` is idempotent on capacity match. A re-stamp of
+    /// `last_refill_ms = now` every boot would prevent slow-rate buckets
+    /// from refilling on restart-heavy deployments.
     #[tokio::test]
     async fn in_memory_set_capacity_idempotent_when_unchanged() {
         let l = InMemoryLedger::new();

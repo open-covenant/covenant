@@ -1,10 +1,10 @@
 const BASE = process.env.NEXT_PUBLIC_COVENANT_HTTP || "http://127.0.0.1:8421";
 const BUILD_TOKEN = process.env.NEXT_PUBLIC_COVENANT_TOKEN || "";
 
-// Sprint 60: the bootstrap token is build-time-baked, but `RotateOperatorToken`
-// can mint a fresh one at runtime. Persist the rotated token in localStorage
-// so the live tab keeps working without a dev-server restart; fall back to
-// the build-time value when localStorage is empty (or unavailable, e.g. SSR).
+// The bootstrap token is build-time-baked, but `RotateOperatorToken` can mint
+// a fresh one at runtime. Persist the rotated token in localStorage so the
+// live tab keeps working without a dev-server restart; fall back to the
+// build-time value when localStorage is empty (or unavailable, e.g. SSR).
 const TOKEN_KEY = "covnt_token";
 
 function readToken(): string {
@@ -214,11 +214,10 @@ export type BudgetDebit = {
   at_ms: number;
 };
 
-// Sprint 62 wire shape: full token bytes never appear; `token_prefix` is
-// 6 chars matching the audit log's `*_token_prefix` redaction. `revoked_at`
-// is `Some(ts)` for tombstoned entries — kept on purpose so post-incident
-// triage can answer "is this audit-flagged peer already revoked?" in one
-// look. Newest-first.
+// Full token bytes never appear; `token_prefix` is 6 chars matching the
+// audit log's `*_token_prefix` redaction. `revoked_at` is `Some(ts)` for
+// tombstoned entries — kept on purpose so post-incident triage can answer
+// "is this audit-flagged peer already revoked?" in one look. Newest-first.
 export type PeerSummary = {
   agent_id: AgentId;
   token_prefix: string;
@@ -226,10 +225,9 @@ export type PeerSummary = {
   revoked_at: number | null;
 };
 
-// Sprint 65 wire shape. Internally tagged on `type`; newtype variants
-// flatten `PeerSummary`'s fields into the wrapper. Token bytes never
-// carried — only `PeerSummary` (excludes `PeerToken` by Sprint 62
-// invariant).
+// Internally tagged on `type`; newtype variants flatten `PeerSummary`'s
+// fields into the wrapper. Token bytes never carried — only `PeerSummary`,
+// which excludes `PeerToken` by the registry's redaction invariant.
 export type RevokeOutcome =
   | ({ type: "revoked" } & PeerSummary)
   | ({ type: "already_revoked" } & PeerSummary)

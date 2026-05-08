@@ -71,7 +71,7 @@ async fn authenticate(stream: &mut UnixStream, home: &Path) {
 }
 
 /// Reads the daemon's on-disk ed25519 pubkey — the operator-peer's pubkey,
-/// which Sprint 49's spoof check requires `task.sender.pubkey` to match.
+/// which the spoof check requires `task.sender.pubkey` to match.
 fn read_peer_pubkey(home: &Path) -> [u8; 32] {
     let id = covenant_identity::LocalIdentity::load_or_create(
         &home.join("identity").join("local.key"),
@@ -105,11 +105,11 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
     //     process abruptly so the test exercises the on-disk replay path
     //     rather than any clean-shutdown drain logic.
 
-    // Sprint 49 spoof check: `task.sender` must match the authenticated
-    // peer. Sprint 50 per-peer recv: `task.recipient` must also equal
-    // the peer that drains. Pre-create the on-disk identity so we can
-    // build the task's sender + recipient with the right pubkey before
-    // either daemon run touches it.
+    // Spoof check: `task.sender` must match the authenticated peer.
+    // Per-peer recv: `task.recipient` must also equal the peer that
+    // drains. Pre-create the on-disk identity so we can build the
+    // task's sender + recipient with the right pubkey before either
+    // daemon run touches it.
     let _ = covenant_identity::LocalIdentity::load_or_create(
         &home.path().join("identity").join("local.key"),
         "user@local",

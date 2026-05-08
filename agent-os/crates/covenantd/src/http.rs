@@ -748,11 +748,10 @@ mod tests {
 
     #[test]
     fn cors_origins_falls_back_to_default_when_all_entries_invalid() {
-        // Sprint 56 LOW carry-forward: an env value where every entry
-        // fails `HeaderValue::from_str` would otherwise produce an
-        // empty allow-list; combined with `allow_credentials(true)`
-        // that rejects every cross-origin request. \n and \r are both
-        // rejected by `HeaderValue::from_str`.
+        // An env value where every entry fails `HeaderValue::from_str`
+        // would otherwise produce an empty allow-list; combined with
+        // `allow_credentials(true)` that rejects every cross-origin
+        // request. \n and \r are both rejected by `HeaderValue::from_str`.
         let v = cors_origins_from_value(Some("bad\norigin,also\rbad"));
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);

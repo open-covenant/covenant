@@ -2,8 +2,7 @@
 //! research-agent manifest pinned to `budget_credits_per_hour = 1`,
 //! dispatches the same matching intent twice, and asserts the second
 //! dispatch is rejected with `Response::Error` while the audit log gains
-//! a `BudgetExhausted` row carrying the rejected text. Closes the
-//! "live test for enforcement" carry-forward Sprint 58b named.
+//! a `BudgetExhausted` row carrying the rejected text.
 //!
 //! `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_budget_enforcement -- --ignored live_`.

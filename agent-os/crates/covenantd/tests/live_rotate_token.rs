@@ -1,5 +1,5 @@
-//! Live integration test for Sprint 60: spawns covenantd against a
-//! tempdir HOME, authenticates with the bootstrap operator token,
+//! Live integration test: spawns covenantd against a tempdir HOME,
+//! authenticates with the bootstrap operator token,
 //! issues `RotateOperatorToken` over real IPC, then opens a fresh
 //! connection and verifies that (a) the new token authenticates,
 //! (b) the old token does NOT authenticate, and (c) the on-disk

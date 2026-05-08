@@ -33,6 +33,15 @@ backlog/
 # hooks/pre-commit to enforce one-autonomous-session-per-checkout.
 .covenant-session-id
 
+# Engineering-loop bookkeeping. Kept on local disk so the autonomous loop
+# can read/write across sessions, never tracked publicly.
+agent-os/HANDOVER.md
+agent-os/SPRINT_LOG.md
+agent-os/PROJECT_STATE.md
+agent-os/BLOCKERS.md
+agent-os/PRODUCTION_READINESS.md
+agent-os/WORKFLOW.md
+
 playwright-report/
 test-results/
 

@@ -1,9 +1,9 @@
 //! Live integration test: peers-revoke survives daemon restart.
 //!
-//! Closes Sprint 68's "crash-mid-revoke" expected production failure
-//! mode. Spawns covenantd against a tempdir HOME pre-seeded with a
-//! guest peer, has the operator revoke the guest, then SIGKILLs the
-//! daemon, respawns against the same HOME, and verifies that
+//! Exercises the crash-mid-revoke production failure mode. Spawns
+//! covenantd against a tempdir HOME pre-seeded with a guest peer,
+//! has the operator revoke the guest, then SIGKILLs the daemon,
+//! respawns against the same HOME, and verifies that
 //!
 //! 1. the on-disk `peers/registry.jsonl` carries the `revoked` event
 //!    (the `JsonlPeerRegistry`'s persist-then-mutate ordering means
@@ -16,8 +16,8 @@
 //!    scoped to the guest's token-prefix, not a global reset that
 //!    `bootstrap_operator_token` would have to re-mint).
 //!
-//! Mirrors `live_restart_a2a`'s two-phase shape (Sprint 44) and
-//! `live_peers_revoke`'s pre-seed flow (Sprint 68).
+//! Uses the two-phase kill+respawn shape from `live_restart_a2a.rs`
+//! and the pre-seed flow from `live_peers_revoke.rs`.
 //!
 //! `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_restart_peers_revoke -- --ignored live_`.
@@ -97,10 +97,10 @@ async fn live_covenantd_peers_revoke_survives_daemon_restart() {
     let sock = home.path().join("sock");
 
     // Pre-seed `peers/registry.jsonl` with a guest before either
-    // daemon starts. Same shape as Sprint 68's live_peers_revoke;
-    // the daemon's own `JsonlPeerRegistry::open()` replays this on
-    // boot, then `bootstrap_operator_token` appends the operator
-    // entry alongside.
+    // daemon starts. Same shape as `live_peers_revoke.rs`; the
+    // daemon's own `JsonlPeerRegistry::open()` replays this on boot,
+    // then `bootstrap_operator_token` appends the operator entry
+    // alongside.
     let guest_token = PeerToken::generate();
     let guest_token_b58 = guest_token.to_b58();
     let guest_pubkey = [42u8; 32];
@@ -150,8 +150,7 @@ async fn live_covenantd_peers_revoke_survives_daemon_restart() {
 
         // Operator authenticates and revokes the guest by full b58
         // prefix (collision with the daemon-minted operator token's
-        // prefix is 1/58^44, effectively zero — same argument
-        // Sprint 68 makes).
+        // prefix is 1/58^44, effectively zero).
         {
             let mut stream = UnixStream::connect(&sock).await.expect("connect operator");
             match authenticate(&mut stream, &operator_token).await {
@@ -213,7 +212,7 @@ async fn live_covenantd_peers_revoke_survives_daemon_restart() {
 
         // Replay assertion #1: guest auth fails. Reason names the
         // token state and the daemon closes the connection (matches
-        // Sprint 47's `live_covenantd_rejects_unauthenticated_connection`).
+        // the `live_covenantd_rejects_unauthenticated_connection` shape).
         {
             let mut stream = UnixStream::connect(&sock).await.expect("connect guest #2");
             match authenticate(&mut stream, &guest_token_b58).await {

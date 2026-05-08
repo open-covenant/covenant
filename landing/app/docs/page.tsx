@@ -8,47 +8,47 @@ export const metadata = {
 
 const TILES = [
   {
-    href: "/docs/getting-started",
+    href: "/getting-started",
     title: "Getting started",
     body: "Install the daemon, run your first agent, and submit an intent.",
   },
   {
-    href: "/docs/concepts",
+    href: "/concepts",
     title: "Concepts",
     body: "Intents, agents, capabilities, memory, audit, settlement.",
   },
   {
-    href: "/docs/architecture",
+    href: "/architecture",
     title: "Architecture",
     body: "How the daemon, the runtime, and the on-chain settlement program fit together.",
   },
   {
-    href: "/docs/cli",
+    href: "/cli",
     title: "Command-line interface",
     body: "Every covenant subcommand, with arguments and exit codes.",
   },
   {
-    href: "/docs/http-api",
+    href: "/http-api",
     title: "HTTP API",
     body: "Routes, request bodies, and responses on the local HTTP gateway.",
   },
   {
-    href: "/docs/agent-manifest",
+    href: "/agent-manifest",
     title: "Agent manifest",
     body: "agent.toml schema, runtime contract, and validation rules.",
   },
   {
-    href: "/docs/capabilities",
+    href: "/capabilities",
     title: "Capability tokens",
     body: "ed25519-signed permissions: shape, canonical encoding, verification, revocation.",
   },
   {
-    href: "/docs/mcp",
+    href: "/mcp",
     title: "MCP integration",
     body: "Tool trait, native tools, and external MCP servers over JSON-RPC.",
   },
   {
-    href: "/docs/security",
+    href: "/security",
     title: "Security model",
     body: "Trust boundaries, threat model, defaults, and operator responsibilities.",
   },
@@ -69,8 +69,8 @@ export default function DocsIndexPage() {
       <p>
         These docs cover concepts, architecture, reference, protocols, and
         operations. New here? Start with{" "}
-        <Link href="/docs/getting-started">Getting started</Link>, then read{" "}
-        <Link href="/docs/concepts">Concepts</Link> for the mental model.
+        <Link href="/getting-started">Getting started</Link>, then read{" "}
+        <Link href="/concepts">Concepts</Link> for the mental model.
       </p>
 
       <h2>Browse by area</h2>

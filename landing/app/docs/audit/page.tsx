@@ -165,15 +165,15 @@ curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           where grants and checks originate.
         </li>
         <li>
-          <Link href="/docs/cli">CLI</Link> — <code>verify</code> and
+          <Link href="/cli">CLI</Link> — <code>verify</code> and
           its drift-check rules.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link> — what the
           local-trust assumption costs you.
         </li>
       </ul>

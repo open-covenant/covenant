@@ -201,15 +201,15 @@ hello`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/http-api">HTTP API</Link> — same surface
+          <Link href="/http-api">HTTP API</Link> — same surface
           over HTTP, suitable for browser-facing UIs.
         </li>
         <li>
-          <Link href="/docs/ipc">Local IPC</Link> — the wire protocol
+          <Link href="/ipc">Local IPC</Link> — the wire protocol
           underneath the CLI.
         </li>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           what <code>capabilities grant</code>/<code>revoke</code>{" "}
           actually mints.
         </li>

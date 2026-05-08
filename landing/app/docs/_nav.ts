@@ -5,43 +5,43 @@ export const DOCS_NAV: DocsSection[] = [
   {
     title: "Introduction",
     items: [
-      { href: "/docs", label: "Overview" },
-      { href: "/docs/getting-started", label: "Getting started" },
-      { href: "/docs/concepts", label: "Concepts" },
+      { href: "/", label: "Overview" },
+      { href: "/getting-started", label: "Getting started" },
+      { href: "/concepts", label: "Concepts" },
     ],
   },
   {
     title: "Architecture",
     items: [
-      { href: "/docs/architecture", label: "System architecture" },
-      { href: "/docs/primitives", label: "The eight primitives" },
+      { href: "/architecture", label: "System architecture" },
+      { href: "/primitives", label: "The eight primitives" },
     ],
   },
   {
     title: "Reference",
     items: [
-      { href: "/docs/cli", label: "Command-line interface" },
-      { href: "/docs/http-api", label: "HTTP API" },
-      { href: "/docs/ipc", label: "Local IPC" },
-      { href: "/docs/agent-manifest", label: "Agent manifest" },
+      { href: "/cli", label: "Command-line interface" },
+      { href: "/http-api", label: "HTTP API" },
+      { href: "/ipc", label: "Local IPC" },
+      { href: "/agent-manifest", label: "Agent manifest" },
     ],
   },
   {
     title: "Protocols",
     items: [
-      { href: "/docs/capabilities", label: "Capability tokens" },
-      { href: "/docs/mcp", label: "MCP integration" },
-      { href: "/docs/a2a", label: "Agent-to-agent" },
-      { href: "/docs/audit", label: "Audit log" },
-      { href: "/docs/settlement", label: "Settlement" },
+      { href: "/capabilities", label: "Capability tokens" },
+      { href: "/mcp", label: "MCP integration" },
+      { href: "/a2a", label: "Agent-to-agent" },
+      { href: "/audit", label: "Audit log" },
+      { href: "/settlement", label: "Settlement" },
     ],
   },
   {
     title: "Operations",
     items: [
-      { href: "/docs/security", label: "Security model" },
-      { href: "/docs/identity", label: "Identity and keys" },
-      { href: "/docs/memory", label: "Memory tiers" },
+      { href: "/security", label: "Security model" },
+      { href: "/identity", label: "Identity and keys" },
+      { href: "/memory", label: "Memory tiers" },
     ],
   },
 ];

@@ -155,15 +155,15 @@ export default function IdentityPage() {
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           everything that depends on the signing helpers.
         </li>
         <li>
-          <Link href="/docs/settlement">Settlement</Link> — the
+          <Link href="/settlement">Settlement</Link> — the
           on-chain side that signs with the same key.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — the
+          <Link href="/security">Security model</Link> — the
           file-permissions, threat-model context.
         </li>
       </ul>

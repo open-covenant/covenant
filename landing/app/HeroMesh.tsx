@@ -22,6 +22,7 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
     const container = canvas.parentElement;
     if (!container) return;
     const host = container;
+    const interactionRoot = host.parentElement ?? host;
 
     const context = canvasEl.getContext("2d");
     if (!context) return;
@@ -57,15 +58,12 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       mouseY = -9999;
     };
 
-    const onDocOut = (e: MouseEvent) => {
-      if (!e.relatedTarget) onMouseLeave();
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseout", onDocOut);
-    window.addEventListener("touchstart", onTouch, { passive: true });
-    window.addEventListener("touchmove", onTouch, { passive: true });
-    window.addEventListener("touchend", onTouchEnd, { passive: true });
-    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    interactionRoot.addEventListener("mousemove", onMouseMove);
+    interactionRoot.addEventListener("mouseleave", onMouseLeave);
+    interactionRoot.addEventListener("touchstart", onTouch, { passive: true });
+    interactionRoot.addEventListener("touchmove", onTouch, { passive: true });
+    interactionRoot.addEventListener("touchend", onTouchEnd, { passive: true });
+    interactionRoot.addEventListener("touchcancel", onTouchEnd, { passive: true });
 
     let glyphs: Array<{
       char: string;
@@ -480,12 +478,12 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", resizeCanvas);
-      window.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseout", onDocOut);
-      window.removeEventListener("touchstart", onTouch);
-      window.removeEventListener("touchmove", onTouch);
-      window.removeEventListener("touchend", onTouchEnd);
-      window.removeEventListener("touchcancel", onTouchEnd);
+      interactionRoot.removeEventListener("mousemove", onMouseMove);
+      interactionRoot.removeEventListener("mouseleave", onMouseLeave);
+      interactionRoot.removeEventListener("touchstart", onTouch);
+      interactionRoot.removeEventListener("touchmove", onTouch);
+      interactionRoot.removeEventListener("touchend", onTouchEnd);
+      interactionRoot.removeEventListener("touchcancel", onTouchEnd);
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }

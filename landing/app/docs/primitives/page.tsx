@@ -27,7 +27,7 @@ export default function PrimitivesPage() {
       <p>
         Stable UUID, issuer (an <code>AgentId</code>), issuing
         timestamp, priority, optional parent. Routed by the{" "}
-        <Link href="/docs/architecture">router</Link> via keyword
+        <Link href="/architecture">router</Link> via keyword
         overlap; falls back to a deterministic echo response when no
         agent matches.
       </p>
@@ -64,7 +64,7 @@ export default function PrimitivesPage() {
         by tier or unioned across all tiers.
       </p>
       <p>
-        See <Link href="/docs/memory">Memory tiers</Link>.
+        See <Link href="/memory">Memory tiers</Link>.
       </p>
 
       <h2>Identity</h2>
@@ -78,7 +78,7 @@ export default function PrimitivesPage() {
       </p>
       <p>
         There is no second key system. See{" "}
-        <Link href="/docs/identity">Identity and keys</Link>.
+        <Link href="/identity">Identity and keys</Link>.
       </p>
 
       <h2>Permissions</h2>
@@ -99,7 +99,7 @@ export default function PrimitivesPage() {
         outcome.
       </p>
       <p>
-        See <Link href="/docs/capabilities">Capability tokens</Link>.
+        See <Link href="/capabilities">Capability tokens</Link>.
       </p>
 
       <h2>Comms</h2>
@@ -111,19 +111,19 @@ export default function PrimitivesPage() {
         <li>
           <strong>Local IPC</strong> — length-prefixed JSON over a Unix
           socket. The CLI uses this. Documented in{" "}
-          <Link href="/docs/ipc">Local IPC</Link>.
+          <Link href="/ipc">Local IPC</Link>.
         </li>
         <li>
           <strong>HTTP gateway</strong> — JSON over HTTP on{" "}
           <code>127.0.0.1:8421</code>. Same surface as the IPC, for
           browser-facing UIs. Documented in{" "}
-          <Link href="/docs/http-api">HTTP API</Link>.
+          <Link href="/http-api">HTTP API</Link>.
         </li>
         <li>
           <strong>MCP and A2A adapters</strong> — protocol-grade
           surfaces for tool integration and agent-to-agent traffic.
-          Documented in <Link href="/docs/mcp">MCP integration</Link>{" "}
-          and <Link href="/docs/a2a">Agent-to-agent</Link>.
+          Documented in <Link href="/mcp">MCP integration</Link>{" "}
+          and <Link href="/a2a">Agent-to-agent</Link>.
         </li>
       </ul>
 
@@ -146,7 +146,7 @@ export default function PrimitivesPage() {
         and the receipt is reconcilable from chain state alone.
       </p>
       <p>
-        See <Link href="/docs/settlement">Settlement</Link>.
+        See <Link href="/settlement">Settlement</Link>.
       </p>
 
       <h2>Why these eight</h2>

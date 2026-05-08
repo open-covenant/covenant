@@ -385,7 +385,7 @@ export default function ArchitecturePage() {
         The on-chain side of Covenant is a single Anchor program for
         Solana, deployed under the operator&apos;s authority. It implements
         the credit-mint, consumption, and buyback shape described in{" "}
-        <Link href="/docs/settlement">Settlement</Link>. The daemon
+        <Link href="/settlement">Settlement</Link>. The daemon
         batches off-chain receipts and flushes them to the program; once
         flushed, the receipt&apos;s <code>onchain_sig</code> is populated
         and the receipt is reconcilable from chain state alone.

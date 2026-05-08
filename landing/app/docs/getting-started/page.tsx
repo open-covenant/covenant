@@ -112,8 +112,8 @@ model    = "nomic-embed-text"
         Without this file, Covenant falls back to a mock LLM and a mock
         search provider — useful for sandboxing, but the research agent will
         return canned text. See{" "}
-        <Link href="/docs/concepts">Concepts</Link> and{" "}
-        <Link href="/docs/agent-manifest">Agent manifest</Link> for the full
+        <Link href="/concepts">Concepts</Link> and{" "}
+        <Link href="/agent-manifest">Agent manifest</Link> for the full
         configuration surface.
       </p>
 
@@ -239,22 +239,22 @@ covenant verify --window 100`}</code>
 
       <ul>
         <li>
-          <Link href="/docs/concepts">Concepts</Link> — the mental model:
+          <Link href="/concepts">Concepts</Link> — the mental model:
           intents, agents, capabilities, memory, audit, settlement.
         </li>
         <li>
-          <Link href="/docs/cli">CLI reference</Link> — every subcommand.
+          <Link href="/cli">CLI reference</Link> — every subcommand.
         </li>
         <li>
-          <Link href="/docs/http-api">HTTP API</Link> — the gateway routes,
+          <Link href="/http-api">HTTP API</Link> — the gateway routes,
           for browser-facing UIs and third-party tooling.
         </li>
         <li>
-          <Link href="/docs/agent-manifest">Agent manifest</Link> — the full{" "}
+          <Link href="/agent-manifest">Agent manifest</Link> — the full{" "}
           <code>agent.toml</code> schema.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — what Covenant
+          <Link href="/security">Security model</Link> — what Covenant
           protects, and what it does not.
         </li>
       </ul>

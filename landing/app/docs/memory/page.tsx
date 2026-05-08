@@ -219,14 +219,14 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/cli">CLI</Link> — every memory subcommand.
+          <Link href="/cli">CLI</Link> — every memory subcommand.
         </li>
         <li>
-          <Link href="/docs/audit">Audit log</Link> — where{" "}
+          <Link href="/audit">Audit log</Link> — where{" "}
           <code>IntentIgnored</code> lands.
         </li>
         <li>
-          <Link href="/docs/settlement">Settlement</Link> — memory
+          <Link href="/settlement">Settlement</Link> — memory
           writes pair 1:1 with receipts.
         </li>
       </ul>

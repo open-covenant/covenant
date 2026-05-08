@@ -1,10 +1,16 @@
 import Image from "next/image";
 import Link from "next/link";
 import { HeroMesh } from "./HeroMesh";
+import { MobileMenu } from "./MobileMenu";
 
-const RELEASE_DATE = "13.05.2026";
+const RELEASE_DATE = "ALPHA: 13.05.2026";
 const X_URL = "https://x.com/OpenCovenant";
 const GITHUB_URL = "https://github.com/open-covenant/covenant";
+
+const NAV_LINKS = [
+  { label: "docs", href: "https://docs.opencovenant.org" },
+  { label: "roadmap", href: "/roadmap" },
+];
 
 function XIcon({ className }: { className?: string }) {
   return (
@@ -42,8 +48,7 @@ export default function Page() {
       <HeroMesh src="/hero-bg.png" />
 
       <header
-        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center sm:pt-14"
-        style={{ paddingTop: "max(2.5rem, env(safe-area-inset-top))" }}
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-[max(35px,env(safe-area-inset-top))] sm:pt-[max(59px,env(safe-area-inset-top))]"
       >
         <Image
           src="/logo.svg"
@@ -55,16 +60,30 @@ export default function Page() {
         />
       </header>
 
+      <div
+        className="absolute left-2 z-20 sm:left-8 sm:top-10"
+        style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
+      >
+        <div className="sm:hidden">
+          <MobileMenu items={NAV_LINKS} />
+        </div>
+        <nav className="hidden items-center gap-3 sm:flex">
+          {NAV_LINKS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      </div>
+
       <nav
         className="absolute right-2 z-20 flex items-center gap-1 sm:right-8 sm:top-10 sm:gap-3"
         style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
       >
-        <Link
-          href="/docs"
-          className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
-        >
-          docs
-        </Link>
         <a
           href={X_URL}
           target="_blank"

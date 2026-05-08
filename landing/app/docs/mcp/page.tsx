@@ -142,15 +142,15 @@ env     = { LOG_LEVEL = "info" }`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           the gate on every <code>tools/call</code>.
         </li>
         <li>
-          <Link href="/docs/audit">Audit log</Link> — where every
+          <Link href="/audit">Audit log</Link> — where every
           capability check and every tool call lands.
         </li>
         <li>
-          <Link href="/docs/cli">CLI</Link> — <code>tools list</code>{" "}
+          <Link href="/cli">CLI</Link> — <code>tools list</code>{" "}
           and <code>tools call</code>.
         </li>
       </ul>

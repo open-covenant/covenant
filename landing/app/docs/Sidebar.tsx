@@ -25,12 +25,12 @@ export function Sidebar() {
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <Link
-          href="/"
+        <a
+          href="https://opencovenant.org"
           className="mb-10 block text-xs uppercase tracking-[0.4em] text-neutral-500 hover:text-neutral-300"
         >
           ← covenant
-        </Link>
+        </a>
 
         <nav className="space-y-8 pb-20">
           {DOCS_NAV.map((section) => (

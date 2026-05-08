@@ -223,15 +223,15 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/identity">Identity and keys</Link> — the
+          <Link href="/identity">Identity and keys</Link> — the
           ed25519 keypair behind every signature.
         </li>
         <li>
-          <Link href="/docs/audit">Audit log</Link> — where grants,
+          <Link href="/audit">Audit log</Link> — where grants,
           revocations, and capability checks are recorded.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — the
+          <Link href="/security">Security model</Link> — the
           assumptions the capability layer rests on.
         </li>
       </ul>

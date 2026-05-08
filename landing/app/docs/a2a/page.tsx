@@ -99,7 +99,7 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
         <code>TryRecvA2ATask</code>, <code>RecentA2ATasks</code>,{" "}
         <code>PostA2AResult</code>, <code>TryRecvA2AResult</code>,{" "}
         <code>RecentA2AResults</code>. See{" "}
-        <Link href="/docs/ipc">Local IPC</Link> for the full request/
+        <Link href="/ipc">Local IPC</Link> for the full request/
         response shapes.
       </p>
 
@@ -188,11 +188,11 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/concepts">Concepts</Link> — agents in
+          <Link href="/concepts">Concepts</Link> — agents in
           context.
         </li>
         <li>
-          <Link href="/docs/mcp">MCP integration</Link> — the
+          <Link href="/mcp">MCP integration</Link> — the
           companion surface for tools.
         </li>
       </ul>

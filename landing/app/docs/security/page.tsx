@@ -210,15 +210,15 @@ export default function SecurityPage() {
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/identity">Identity and keys</Link> — the
+          <Link href="/identity">Identity and keys</Link> — the
           ed25519 keypair behind every capability.
         </li>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           how dispatch is gated.
         </li>
         <li>
-          <Link href="/docs/audit">Audit log</Link> — the system&apos;s
+          <Link href="/audit">Audit log</Link> — the system&apos;s
           ground truth and how to read it.
         </li>
       </ul>

@@ -181,18 +181,18 @@ export default function IpcPage() {
         The <code>covenant-ipc</code> Rust crate provides{" "}
         <code>read_frame</code> and <code>write_frame</code> helpers
         plus the <code>Request</code> and <code>Response</code> enums.
-        See <Link href="/docs/cli">CLI</Link> for an end-to-end
+        See <Link href="/cli">CLI</Link> for an end-to-end
         example using both.
       </p>
 
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/http-api">HTTP API</Link> — the same
+          <Link href="/http-api">HTTP API</Link> — the same
           surface for clients that prefer JSON over HTTP.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link> — what the
           socket-as-credential design costs you.
         </li>
       </ul>

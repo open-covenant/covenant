@@ -148,7 +148,7 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot`}</code>
       </pre>
       <p>
         Write paths (<code>POST</code>) require capability tokens —
-        see <Link href="/docs/a2a">Agent-to-agent</Link> for the
+        see <Link href="/a2a">Agent-to-agent</Link> for the
         exact actions.
       </p>
 
@@ -166,15 +166,15 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/cli">CLI</Link> — same surface, but talking
+          <Link href="/cli">CLI</Link> — same surface, but talking
           to the Unix socket.
         </li>
         <li>
-          <Link href="/docs/ipc">Local IPC</Link> — the wire protocol
+          <Link href="/ipc">Local IPC</Link> — the wire protocol
           on the Unix socket.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link> — what the
           loopback-only assumption costs you.
         </li>
       </ul>

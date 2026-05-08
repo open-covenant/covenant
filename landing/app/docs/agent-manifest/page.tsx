@@ -350,15 +350,15 @@ runtime = "node"       →   exec node    entry`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/concepts">Concepts</Link> — agents in
+          <Link href="/concepts">Concepts</Link> — agents in
           context.
         </li>
         <li>
-          <Link href="/docs/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link> —
           what the <code>required</code> list refers to.
         </li>
         <li>
-          <Link href="/docs/security">Security model</Link> — what
+          <Link href="/security">Security model</Link> — what
           the resource budget protects.
         </li>
       </ul>

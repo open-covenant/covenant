@@ -68,7 +68,7 @@ export default function ConceptsPage() {
 
       <p>
         See{" "}
-        <Link href="/docs/agent-manifest">Agent manifest</Link> for the full
+        <Link href="/agent-manifest">Agent manifest</Link> for the full
         schema and validation rules.
       </p>
 
@@ -110,7 +110,7 @@ export default function ConceptsPage() {
       <p>
         The full token shape, the deterministic encoding, and the
         verification path are documented in{" "}
-        <Link href="/docs/capabilities">Capability tokens</Link>.
+        <Link href="/capabilities">Capability tokens</Link>.
       </p>
 
       <h2>Memory</h2>
@@ -148,7 +148,7 @@ export default function ConceptsPage() {
       <p>
         Searches are cosine-similarity over the stored embedding vectors,
         scoped to a tier or unioned across all tiers. See{" "}
-        <Link href="/docs/memory">Memory tiers</Link> for details.
+        <Link href="/memory">Memory tiers</Link> for details.
       </p>
 
       <h2>Identity</h2>
@@ -169,8 +169,8 @@ export default function ConceptsPage() {
 
       <p>
         There is no second key system. Operator key hygiene matters
-        accordingly — see <Link href="/docs/identity">Identity and keys</Link>{" "}
-        and <Link href="/docs/security">Security model</Link>.
+        accordingly — see <Link href="/identity">Identity and keys</Link>{" "}
+        and <Link href="/security">Security model</Link>.
       </p>
 
       <h2>Audit</h2>
@@ -185,7 +185,7 @@ export default function ConceptsPage() {
       </p>
 
       <p>
-        See <Link href="/docs/audit">Audit log</Link> for the event
+        See <Link href="/audit">Audit log</Link> for the event
         schema.
       </p>
 
@@ -204,13 +204,13 @@ export default function ConceptsPage() {
           <strong>HTTP gateway</strong> at <code>127.0.0.1:8421</code> —
           for browser-facing UIs and third-party tooling. Same surface,
           JSON over HTTP. See{" "}
-          <Link href="/docs/http-api">HTTP API</Link>.
+          <Link href="/http-api">HTTP API</Link>.
         </li>
         <li>
           <strong>MCP and A2A adapters</strong> for protocol-grade tool
           and agent-to-agent communication. See{" "}
-          <Link href="/docs/mcp">MCP integration</Link> and{" "}
-          <Link href="/docs/a2a">Agent-to-agent</Link>.
+          <Link href="/mcp">MCP integration</Link> and{" "}
+          <Link href="/a2a">Agent-to-agent</Link>.
         </li>
       </ul>
 
@@ -228,7 +228,7 @@ export default function ConceptsPage() {
       </p>
 
       <p>
-        See <Link href="/docs/settlement">Settlement</Link> for the credit
+        See <Link href="/settlement">Settlement</Link> for the credit
         model and the buyback shape.
       </p>
 

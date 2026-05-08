@@ -148,16 +148,16 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/docs/architecture">Architecture</Link> — the
+          <Link href="/architecture">Architecture</Link> — the
           on-chain program in the broader system map.
         </li>
         <li>
-          <Link href="/docs/identity">Identity and keys</Link> — the
+          <Link href="/identity">Identity and keys</Link> — the
           same key signs settlement transactions and capability
           grants.
         </li>
         <li>
-          <Link href="/docs/audit">Audit log</Link> — settlement
+          <Link href="/audit">Audit log</Link> — settlement
           receipts pair 1:1 with memory writes; drift shows up here.
         </li>
       </ul>

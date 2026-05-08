@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import { Sidebar } from "./Sidebar";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://docs.opencovenant.org"),
   title: {
     default: "Documentation — Covenant",
     template: "%s — Covenant docs",
   },
   description:
     "Reference, concepts, and operational guides for Covenant — the open, agent-native operating layer.",
+  alternates: { canonical: "/" },
 };
 
 export default function DocsLayout({

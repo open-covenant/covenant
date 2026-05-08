@@ -6,6 +6,7 @@ import {
   type A2ATask,
   type A2ATaskResult,
   type AuditEvent,
+  type BudgetDebit,
   type ContentBlock,
   type Memory,
   type SettlementReceipt,
@@ -32,6 +33,8 @@ export default function Home() {
   const [receipts, setReceipts] = useState<SettlementReceipt[]>([]);
   const [a2aTasks, setA2aTasks] = useState<A2ATask[]>([]);
   const [a2aResults, setA2aResults] = useState<A2ATaskResult[]>([]);
+  const [debits, setDebits] = useState<BudgetDebit[]>([]);
+  const [resuming, setResuming] = useState<string | null>(null);
   const [memoryTier, setMemoryTier] = useState<
     "" | "working" | "episodic" | "longterm"
   >("");
@@ -45,7 +48,7 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const [m, c, t, a, r, at, ar] = await Promise.all([
+      const [m, c, t, a, r, at, ar, d] = await Promise.all([
         api.recentMemory(20, memoryTier || undefined),
         api.recentCapabilities(20),
         api.listTools(),
@@ -53,6 +56,7 @@ export default function Home() {
         api.recentReceipts(20),
         api.recentA2ATasks(20),
         api.recentA2AResults(20),
+        api.recentDebits(20),
       ]);
       setMemories(m.records);
       setCapabilities(c.capabilities);
@@ -61,6 +65,7 @@ export default function Home() {
       setReceipts(r.receipts);
       setA2aTasks(at.tasks);
       setA2aResults(ar.results);
+      setDebits(d.debits);
       if (!toolName && t.tools.length > 0) setToolName(t.tools[0].name);
       setLastError(null);
     } catch (e) {
@@ -172,6 +177,24 @@ export default function Home() {
       refresh();
     } catch (e) {
       setLastError(String(e));
+    }
+  }
+
+  async function onResume(intent_id: string) {
+    setResuming(intent_id);
+    setLastError(null);
+    try {
+      const r = await api.resumeIntent(intent_id);
+      if (r.kind === "intent_result") {
+        setLastResult(r.text);
+      } else {
+        setLastError(r.message);
+      }
+      refresh();
+    } catch (e) {
+      setLastError(String(e));
+    } finally {
+      setResuming(null);
     }
   }
 
@@ -374,8 +397,61 @@ export default function Home() {
                       task={e.kind.task_id.slice(0, 8)}… · {e.kind.reason}
                     </span>
                   )}
+                  {e.kind.type === "budget_exhausted" &&
+                    (() => {
+                      const k = e.kind;
+                      return (
+                        <>
+                          <span className="dim">
+                            {" "}
+                            {k.agent_display} · {k.tokens_remaining}/
+                            {k.requested} credits ·{" "}
+                            {k.intent_text.length > 60
+                              ? `${k.intent_text.slice(0, 60)}…`
+                              : k.intent_text}
+                          </span>
+                          <button
+                            type="button"
+                            className="link"
+                            onClick={() => onResume(k.intent_id)}
+                            disabled={resuming === k.intent_id}
+                          >
+                            {resuming === k.intent_id ? "resuming…" : "resume"}
+                          </button>
+                        </>
+                      );
+                    })()}
+                  {e.kind.type === "budget_unseeded" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.agent_display} · {e.kind.requested} credits
+                      requested · bucket unseeded (operator misconfig)
+                    </span>
+                  )}
                 </li>
               ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2>budget debits</h2>
+        {debits.length === 0 ? (
+          <p className="dim">(no debits yet)</p>
+        ) : (
+          <ul>
+            {debits.map((d) => (
+              <li key={d.paired_receipt}>
+                <span className="dim">
+                  [{new Date(d.at_ms).toLocaleTimeString()}]{" "}
+                </span>
+                <span className="accent">{d.agent.display}</span>{" "}
+                <span>{d.credits} credits</span>{" "}
+                <span className="dim">
+                  · receipt={d.paired_receipt.slice(0, 8)}…
+                </span>
+              </li>
+            ))}
           </ul>
         )}
       </section>

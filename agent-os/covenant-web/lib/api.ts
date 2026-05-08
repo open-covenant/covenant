@@ -81,6 +81,21 @@ export type AuditKind =
       type: "a2a_result_rejected";
       task_id: string;
       reason: string;
+    }
+  | {
+      type: "budget_exhausted";
+      agent_display: string;
+      intent_id: string;
+      intent_text: string;
+      requested: number;
+      tokens_remaining: number;
+      refill_eta_ms: number;
+    }
+  | {
+      type: "budget_unseeded";
+      agent_display: string;
+      intent_id: string;
+      requested: number;
     };
 
 export type AuditEvent = {
@@ -115,6 +130,13 @@ export type A2ATaskResult = {
   status: "ok" | "error" | "partial";
   content: ContentBlock[];
   error_message: string | null;
+};
+
+export type BudgetDebit = {
+  agent: AgentId;
+  credits: number;
+  paired_receipt: string;
+  at_ms: number;
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -205,4 +227,15 @@ export const api = {
     call<{ kind: "a2a_results"; results: A2ATaskResult[] }>(
       `/a2a/results/recent?limit=${limit}`,
     ),
+
+  recentDebits: (limit = 20) =>
+    call<{ kind: "debits"; debits: BudgetDebit[] }>(
+      `/budget/debits?limit=${limit}`,
+    ),
+
+  resumeIntent: (intent_id: string) =>
+    call<IntentResult>("/intents/resume", {
+      method: "POST",
+      body: JSON.stringify({ intent_id }),
+    }),
 };

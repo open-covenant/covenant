@@ -8,13 +8,24 @@
 //! [`covenant_peer_auth::PeerRegistry`] the daemon was constructed
 //! with — same registry that gates the Unix-socket `Authenticate`
 //! handshake.
+//!
+//! CORS: explicit origin allow-list, default `http://localhost:3000`.
+//! Override via `COVENANT_HTTP_ORIGINS` (comma-separated list of
+//! origins). The bearer-auth check still gates every request, so a
+//! permissive CORS would not by itself authorise a malicious site —
+//! but tightening defends against browser-side attacks where the
+//! malicious site already holds a leaked bearer token (e.g., XSS in
+//! the operator's web UI).
 
 #![allow(clippy::needless_pass_by_value)]
 
 use crate::Server;
 use axum::{
     extract::{Extension, Query, Request as AxumRequest, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderValue, Method, StatusCode,
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
@@ -24,13 +35,51 @@ use covenant_ipc::{Request, Response};
 use covenant_peer_auth::PeerToken;
 use covenant_types::{AgentId, MemoryTier};
 use serde::Deserialize;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[derive(Clone)]
 pub struct HttpState {
     pub server: Server,
 }
 
+/// Default CORS origin when `COVENANT_HTTP_ORIGINS` is unset. Matches
+/// the Next.js `pnpm dev` default port; operators with a different web
+/// UI deployment override via env.
+const DEFAULT_CORS_ORIGIN: &str = "http://localhost:3000";
+
+/// Parse `COVENANT_HTTP_ORIGINS` (comma-separated) or fall back to
+/// [`DEFAULT_CORS_ORIGIN`]. Invalid origins are skipped — origins that
+/// fail to parse as `HeaderValue`s would never be sent by a real
+/// browser anyway, so erroring would just trade an ignored config typo
+/// for a daemon that fails to start.
+fn cors_origins_from_env() -> Vec<HeaderValue> {
+    match std::env::var("COVENANT_HTTP_ORIGINS") {
+        Ok(s) if !s.trim().is_empty() => s
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| HeaderValue::from_str(s).ok())
+            .collect(),
+        _ => vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)],
+    }
+}
+
+fn cors_layer(origins: Vec<HeaderValue>) -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .allow_credentials(true)
+}
+
 pub fn router(state: HttpState) -> Router {
+    router_with_origins(state, cors_origins_from_env())
+}
+
+/// Like [`router`] but takes the CORS origin allow-list explicitly.
+/// Tests use this to inject deterministic origins without env-var
+/// gymnastics.
+pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Router {
     let protected = Router::new()
         .route("/intent", post(submit_intent))
         .route("/memory/recent", get(memory_recent))
@@ -63,7 +112,7 @@ pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(protected)
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(cors_layer(origins))
 }
 
 async fn require_bearer(

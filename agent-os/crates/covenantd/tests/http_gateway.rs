@@ -12,7 +12,7 @@ use covenant_permissions::InMemoryCapabilityStore;
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::MockRunner;
 use covenant_settlement::InMemorySettlement;
-use covenantd::http::{router, HttpState};
+use covenantd::http::{router, router_with_origins, HttpState};
 use covenantd::Server;
 use serde_json::json;
 use std::path::PathBuf;
@@ -365,4 +365,111 @@ async fn tools_list_and_call_round_trip() {
     assert_eq!(call["is_error"], false);
     assert_eq!(call["content"][0]["type"], "text");
     assert_eq!(call["content"][0]["text"], "hi from http");
+}
+
+async fn spawn_test_server_with_origins(origins: Vec<&'static str>) -> TestServer {
+    use axum::http::HeaderValue;
+    let identity = Arc::new(LocalIdentity::generate("user@local"));
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+    let token = covenant_peer_auth::PeerToken::generate();
+    let token_b58 = token.to_b58();
+    peers
+        .register(covenant_peer_auth::PeerEntry {
+            token,
+            agent_id: covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes()),
+            registered_at: 0,
+        })
+        .await
+        .unwrap();
+    let audit = Arc::new(InMemoryAuditLog::new());
+    let server = Server::new(
+        Arc::new(Router::from_cards(vec![stub_card()])),
+        Arc::new(MockRunner::new("mocked summary")),
+        Arc::new(InMemoryStore::new()),
+        Arc::new(InMemorySettlement::new()),
+        audit.clone(),
+        Arc::new(InMemoryCapabilityStore::new()),
+        Arc::new(MockEmbedder::new(64)),
+        identity,
+        Arc::new(covenant_memory::IgnoreSet::default()),
+        Arc::new(covenant_mcp::ToolRegistry::from_tools(vec![Arc::new(
+            covenant_mcp::native::EchoTool,
+        )])),
+        Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        peers,
+    );
+    let origins_hv: Vec<HeaderValue> = origins.into_iter().map(HeaderValue::from_static).collect();
+    let app = router_with_origins(HttpState { server }, origins_hv);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let _handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    TestServer {
+        base: format!("http://{addr}"),
+        token: token_b58,
+        audit,
+        _handle,
+    }
+}
+
+#[tokio::test]
+async fn cors_preflight_allows_configured_origin() {
+    let s = spawn_test_server_with_origins(vec!["http://localhost:3000"]).await;
+    let r = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, format!("{}/health", s.base))
+        .header("Origin", "http://localhost:3000")
+        .header("Access-Control-Request-Method", "GET")
+        .send()
+        .await
+        .unwrap();
+    let allow_origin = r
+        .headers()
+        .get("access-control-allow-origin")
+        .map(|v| v.to_str().unwrap().to_string());
+    assert_eq!(
+        allow_origin.as_deref(),
+        Some("http://localhost:3000"),
+        "configured origin must be reflected in the preflight response"
+    );
+}
+
+#[tokio::test]
+async fn cors_preflight_rejects_unconfigured_origin() {
+    let s = spawn_test_server_with_origins(vec!["http://localhost:3000"]).await;
+    let r = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, format!("{}/health", s.base))
+        .header("Origin", "http://evil.example.com")
+        .header("Access-Control-Request-Method", "GET")
+        .send()
+        .await
+        .unwrap();
+    // tower-http's CORS layer omits the Allow-Origin header when the
+    // request origin isn't in the allow-list. The browser treats that
+    // as a CORS failure and refuses to expose the response to JS.
+    assert!(
+        r.headers().get("access-control-allow-origin").is_none(),
+        "unconfigured origin must not be reflected"
+    );
+}
+
+#[tokio::test]
+async fn cors_actual_request_carries_allow_origin_for_configured_origin() {
+    // Defence-in-depth: the preflight test alone doesn't prove the
+    // simple-request path also tags responses correctly. A `GET
+    // /health` from an allowed origin must include
+    // `Access-Control-Allow-Origin` in its response headers.
+    let s = spawn_test_server_with_origins(vec!["http://localhost:3000"]).await;
+    let r = reqwest::Client::new()
+        .get(format!("{}/health", s.base))
+        .header("Origin", "http://localhost:3000")
+        .send()
+        .await
+        .unwrap();
+    let allow_origin = r
+        .headers()
+        .get("access-control-allow-origin")
+        .map(|v| v.to_str().unwrap().to_string());
+    assert_eq!(allow_origin.as_deref(), Some("http://localhost:3000"));
 }

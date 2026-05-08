@@ -4,53 +4,28 @@ import { useEffect, useRef } from "react";
 
 const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ?#@$%&*+-=/<>";
 
-function MeshCanvas({
-  backgroundImageSrc,
-  onReady,
-}: {
-  backgroundImageSrc: string;
-  onReady?: () => void;
-}) {
+function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
-  const onReadyRef = useRef(onReady);
-  onReadyRef.current = onReady;
 
   useEffect(() => {
-    let readyFired = false;
-    const fireReady = () => {
-      if (readyFired) return;
-      readyFired = true;
-      onReadyRef.current?.();
-    };
-
     if (
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
     ) {
-      fireReady();
       return;
     }
 
     const canvas = canvasRef.current;
-    if (!canvas) {
-      fireReady();
-      return;
-    }
+    if (!canvas) return;
     const canvasEl = canvas;
     const container = canvas.parentElement;
-    if (!container) {
-      fireReady();
-      return;
-    }
+    if (!container) return;
     const host = container;
     const interactionRoot = host.parentElement ?? host;
 
     const context = canvasEl.getContext("2d");
-    if (!context) {
-      fireReady();
-      return;
-    }
+    if (!context) return;
     const ctx: CanvasRenderingContext2D = context;
 
     const MOUSE_RADIUS = 200;
@@ -495,10 +470,6 @@ function MeshCanvas({
       }
       ctx.globalAlpha = 1;
 
-      if (glyphs.length > 0) {
-        fireReady();
-      }
-
       animFrameRef.current = requestAnimationFrame(render);
     }
 
@@ -535,16 +506,10 @@ function MeshCanvas({
   );
 }
 
-export function HeroMesh({
-  src,
-  onReady,
-}: {
-  src: string;
-  onReady?: () => void;
-}) {
+export function HeroMesh({ src }: { src: string }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-      <MeshCanvas backgroundImageSrc={src} onReady={onReady} />
+      <MeshCanvas backgroundImageSrc={src} />
       <div
         aria-hidden
         className="absolute inset-0"

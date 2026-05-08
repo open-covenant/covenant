@@ -510,6 +510,14 @@ export default function Home() {
                       {e.kind.new_token_prefix}…
                     </span>
                   )}
+                  {e.kind.type === "operator_token_rotation_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.peer_display} · pubkey{" "}
+                      {e.kind.peer_pubkey_b58.slice(0, 8)}… · rejected
+                      (non-operator)
+                    </span>
+                  )}
                 </li>
               ))}
           </ul>

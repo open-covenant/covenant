@@ -129,6 +129,11 @@ export type AuditKind =
       peer_display: string;
       old_token_prefix: string;
       new_token_prefix: string;
+    }
+  | {
+      type: "operator_token_rotation_rejected";
+      peer_display: string;
+      peer_pubkey_b58: string;
     };
 
 export type AuditEvent = {

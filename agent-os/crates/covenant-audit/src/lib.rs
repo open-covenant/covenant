@@ -82,6 +82,21 @@ pub enum AuditKind {
         peer_display: String,
         claimed_sender_display: String,
     },
+    /// Logged when `SendA2ATask` is rejected because the recipient
+    /// peer has not granted `a2a.recv.<sender>` to themselves. Closes
+    /// the recipient inbox spam vector flagged in Sprint 58g's
+    /// "Expected production failure modes": a Phase-1+ malicious peer
+    /// could otherwise route arbitrary `intent_text` into the
+    /// recipient's `RecentA2ATasks` view via the bidirectional filter.
+    /// Distinct from [`AuditKind::CapabilityCheck`] because the missing
+    /// cap belongs to a *different subject* than the issuer of the
+    /// audit row — keeping it as a `CapabilityCheck` would lie about
+    /// which peer's caps were short.
+    A2ARecipientRejected {
+        sender_display: String,
+        recipient_display: String,
+        action: String,
+    },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
     /// asked to revoke. Closes the cross-peer-revoke gap flagged in

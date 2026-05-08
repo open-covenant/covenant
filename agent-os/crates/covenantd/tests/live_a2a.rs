@@ -241,3 +241,88 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     drop(stream);
     let _ = child.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + drives the recipient admission gate through real IPC"]
+async fn live_covenantd_a2a_recipient_admission_gate_rejects_unallowed() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let port = pick_free_port();
+
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+
+    let mut stream = UnixStream::connect(&sock).await.expect("connect");
+    authenticate(&mut stream, home.path()).await;
+
+    // Sprint 59 recv gate: foreign recipient pubkey ≠ peer pubkey, so
+    // the gate fires. v0 has no IPC verb to grant a cap on a foreign
+    // subject, so this test verifies only the rejection path; the pass
+    // path is mock-tested with direct store injection.
+    let pubkey = read_peer_pubkey(home.path());
+    let peer = AgentId::new("user@local", pubkey);
+    let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+    let task = A2ATask {
+        id: Uuid::new_v4(),
+        sender: peer.clone(),
+        recipient: foreign_recipient.clone(),
+        intent_text: "spam".into(),
+        parent: None,
+        deadline_ms: None,
+    };
+
+    // Grant the sender-side cap so the recv gate is the *only* thing
+    // standing in the way. This makes the test discriminate the recv
+    // gate from the send-cap gate.
+    match req(
+        &mut stream,
+        Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        },
+    )
+    .await
+    {
+        Response::CapabilityGranted { .. } => {}
+        other => panic!("grant failed: {other:?}"),
+    }
+
+    match req(&mut stream, Request::SendA2ATask { task: task.clone() }).await {
+        Response::Error { message } => {
+            assert!(
+                message.contains("recipient has not granted"),
+                "rejection should name the recv gate: {message}"
+            );
+            assert!(
+                message.contains(&format!("a2a.recv.{}", peer.display)),
+                "rejection should name the missing cap: {message}"
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    // Mailbox stays empty after the rejection — the gate fires before
+    // `mailbox.send_task`.
+    match req(&mut stream, Request::TryRecvA2ATask).await {
+        Response::A2ATaskOpt { task: None } => {}
+        other => panic!("rejected task must not enqueue: {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+}

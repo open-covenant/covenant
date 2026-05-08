@@ -343,12 +343,59 @@ impl Server {
                 ),
             };
         }
+        // Sprint 59 recipient admission gate: when sender ≠ recipient
+        // (cross-peer send), the recipient peer must have granted
+        // `a2a.recv.<sender>` to themselves. v0 single-peer is loopback
+        // (peer == recipient), so the gate is a no-op there. The
+        // pubkey-byte compare defeats display spoofing.
+        if peer.pubkey != task.recipient.pubkey {
+            let recv_action = format!("a2a.recv.{}", peer.display);
+            if !self
+                .recipient_has_recv_action(&task.recipient, &recv_action)
+                .await
+            {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::A2ARecipientRejected {
+                        sender_display: peer.display.clone(),
+                        recipient_display: task.recipient.display.clone(),
+                        action: recv_action.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!(
+                        "a2a send to {} rejected: recipient has not granted \
+                         capability {recv_action:?}",
+                        task.recipient.display
+                    ),
+                };
+            }
+        }
         match self.mailbox.send_task(task).await {
             Ok(()) => Response::A2ATaskQueued { task_id },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
             },
         }
+    }
+
+    /// Returns true iff the capability store has a non-revoked,
+    /// non-expired grant for `action` with `subject = recipient.pubkey`.
+    /// Used by Sprint 59's recipient admission gate. The lookup keys on
+    /// the 32-byte pubkey, not the wire-supplied display.
+    async fn recipient_has_recv_action(&self, recipient: &AgentId, action: &str) -> bool {
+        let now = epoch_ms();
+        let caps = self
+            .capabilities
+            .list_for_subject(recipient.pubkey)
+            .await
+            .unwrap_or_default();
+        caps.iter()
+            .filter(|c| verify_with_clock(c, now).is_ok())
+            .any(|c| c.capability.action == action)
     }
 
     async fn try_recv_a2a_task(&self, peer: &AgentId) -> Response {
@@ -1775,10 +1822,14 @@ required = {caps:?}
     /// passes the Sprint 49 spoof check. Tests that need a mismatched
     /// sender construct the task inline.
     fn dummy_a2a_task_for(s: &Server) -> covenant_a2a::A2ATask {
+        // Sprint 59 recv gate: loopback recipient (operator's pubkey)
+        // skips the gate (D2). The display stays "research@local" so
+        // pre-Sprint-59 assertions keying on the recipient display
+        // (e.g. `a2a.send.research@local`) still hold.
         covenant_a2a::A2ATask {
             id: Uuid::new_v4(),
             sender: s.identity.agent_id(),
-            recipient: covenant_types::AgentId::new("research@local", [0u8; 32]),
+            recipient: covenant_types::AgentId::new("research@local", s.identity.pubkey_bytes()),
             intent_text: "find recent papers".into(),
             parent: None,
             deadline_ms: None,
@@ -2111,6 +2162,231 @@ required = {caps:?}
                 assert_eq!(claimed_sender_display, "evil@local");
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // Sprint 59 — recipient admission gate tests.
+
+    #[tokio::test]
+    async fn recv_gate_skipped_when_peer_equals_recipient_loopback() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: peer.clone(),
+            intent_text: "loopback".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        match resp {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("v0 loopback must skip recv gate, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_gate_rejects_when_recipient_lacks_cap() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient.clone(),
+            intent_text: "spam".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("recipient has not granted"));
+                assert!(message.contains(&format!("a2a.recv.{}", peer.display)));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: None }),
+            "rejected task must not enqueue: {drained:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_gate_passes_when_recipient_has_cap() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        // Inject the recv cap directly with subject = recipient.pubkey.
+        // v0 has no IPC verb to grant on a foreign subject; tests bypass
+        // via the store API to exercise the gate's pass path. Sign with
+        // an alien identity — verification keys on subject pubkey, not
+        // signature provenance.
+        let alien_grantor = LocalIdentity::generate("granter@local");
+        let recv_cap = covenant_types::Capability {
+            subject: foreign_recipient.clone(),
+            action: format!("a2a.recv.{}", peer.display),
+            scope: serde_json::json!({}),
+            granted_by: alien_grantor.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(recv_cap, alien_grantor.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient,
+            intent_text: "authorised".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        match resp {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("recv gate must pass with cap granted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_gate_audits_recipient_rejected_with_attribution() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient.clone(),
+            intent_text: "spam".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.op_respond(Request::SendA2ATask { task }).await;
+
+        let events = audit.recent(20).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::A2ARecipientRejected { .. }))
+            .expect("expected an A2ARecipientRejected audit event");
+        assert_eq!(
+            row.issuer.pubkey, peer.pubkey,
+            "issuer must be the sender peer (record_peer_event invariant)"
+        );
+        match &row.kind {
+            AuditKind::A2ARecipientRejected {
+                sender_display,
+                recipient_display,
+                action,
+            } => {
+                assert_eq!(sender_display, &peer.display);
+                assert_eq!(recipient_display, &foreign_recipient.display);
+                assert_eq!(action, &format!("a2a.recv.{}", peer.display));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_gate_does_not_short_circuit_send_cap_check() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        // No `a2a.send.<recipient>` granted. The send-cap check fires
+        // first and short-circuits before the recv gate runs.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient.clone(),
+            intent_text: "no send cap".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains(&format!("a2a.send.{}", foreign_recipient.display)));
+                assert!(
+                    !message.contains("recipient has not granted"),
+                    "send-cap check must short-circuit before recv gate: {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_gate_keys_on_pubkey_not_display() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        // Recipient with the operator's *display* but a different
+        // pubkey: the gate must still trip because subject keying is on
+        // the 32-byte pubkey.
+        let spoofed_recipient = AgentId::new(peer.display.clone(), [9u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", spoofed_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: spoofed_recipient,
+            intent_text: "display spoof".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let resp = s.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("recipient has not granted"));
+            }
+            other => panic!("expected Error, got {other:?}"),
         }
     }
 

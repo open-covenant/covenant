@@ -47,32 +47,56 @@ pub struct HttpState {
 /// UI deployment override via env.
 const DEFAULT_CORS_ORIGIN: &str = "http://localhost:3000";
 
-/// Parse `COVENANT_HTTP_ORIGINS` (comma-separated) or fall back to
-/// [`DEFAULT_CORS_ORIGIN`]. Invalid origins are skipped — origins that
-/// fail to parse as `HeaderValue`s would never be sent by a real
-/// browser anyway, so erroring would just trade an ignored config typo
-/// for a daemon that fails to start. If *every* entry fails to parse
-/// (e.g. `COVENANT_HTTP_ORIGINS=garbage,invalid`), fall back to the
-/// default rather than constructing an empty allow-list — an empty
-/// list with `allow_credentials(true)` would reject every cross-origin
-/// request, which is worse than the typo's consequence.
-fn cors_origins_from_env() -> Vec<HeaderValue> {
-    match std::env::var("COVENANT_HTTP_ORIGINS") {
-        Ok(s) if !s.trim().is_empty() => {
-            let parsed: Vec<HeaderValue> = s
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| HeaderValue::from_str(s).ok())
-                .collect();
-            if parsed.is_empty() {
-                vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)]
-            } else {
-                parsed
-            }
-        }
-        _ => vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)],
+/// Parse a comma-separated origin list into `Vec<HeaderValue>`. Pure
+/// over the input string — no env reads — so tests can drive every
+/// branch without touching process-global state.
+///
+/// Behaviour:
+/// - `None` or whitespace-only `Some(_)` → fall back to
+///   [`DEFAULT_CORS_ORIGIN`].
+/// - Mixed valid/invalid entries → keep the valid ones; an invalid
+///   origin that a real browser couldn't send anyway shouldn't kill
+///   the daemon. A `tracing::warn!` names the dropped count so the
+///   operator notices a typo.
+/// - Every entry invalid → fall back to [`DEFAULT_CORS_ORIGIN`] with a
+///   distinct warn. An empty allow-list combined with
+///   `allow_credentials(true)` would reject every cross-origin request.
+fn cors_origins_from_value(value: Option<&str>) -> Vec<HeaderValue> {
+    let Some(raw) = value.map(str::trim).filter(|s| !s.is_empty()) else {
+        return vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)];
+    };
+    let entries: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let parsed: Vec<HeaderValue> = entries
+        .iter()
+        .filter_map(|s| HeaderValue::from_str(s).ok())
+        .collect();
+    if parsed.is_empty() {
+        tracing::warn!(
+            env = "COVENANT_HTTP_ORIGINS",
+            value = raw,
+            "every entry in COVENANT_HTTP_ORIGINS failed to parse as a valid Origin header; falling back to {}",
+            DEFAULT_CORS_ORIGIN
+        );
+        return vec![HeaderValue::from_static(DEFAULT_CORS_ORIGIN)];
     }
+    let dropped = entries.len() - parsed.len();
+    if dropped > 0 {
+        tracing::warn!(
+            env = "COVENANT_HTTP_ORIGINS",
+            kept = parsed.len(),
+            dropped,
+            "dropped {dropped} invalid entries from COVENANT_HTTP_ORIGINS"
+        );
+    }
+    parsed
+}
+
+fn cors_origins_from_env() -> Vec<HeaderValue> {
+    cors_origins_from_value(std::env::var("COVENANT_HTTP_ORIGINS").ok().as_deref())
 }
 
 fn cors_layer(origins: Vec<HeaderValue>) -> CorsLayer {
@@ -595,74 +619,47 @@ impl From<anyhow::Error> for ApiError {
 mod tests {
     use super::*;
 
-    fn with_env<F: FnOnce()>(key: &str, value: Option<&str>, f: F) {
-        // Env-var manipulation is process-global; tests that touch it
-        // need to be serialised. We don't run multiple of these in
-        // parallel, but we still restore the prior value defensively.
-        let prior = std::env::var(key).ok();
-        match value {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-        f();
-        match prior {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
+    #[test]
+    fn cors_origins_default_when_value_is_none() {
+        let v = cors_origins_from_value(None);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
     }
 
     #[test]
-    fn cors_origins_default_when_env_unset() {
-        with_env("COVENANT_HTTP_ORIGINS", None, || {
-            let v = cors_origins_from_env();
-            assert_eq!(v.len(), 1);
-            assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
-        });
+    fn cors_origins_default_when_value_is_empty_or_whitespace() {
+        let empty = cors_origins_from_value(Some(""));
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
+        let blank = cors_origins_from_value(Some("   "));
+        assert_eq!(blank.len(), 1);
+        assert_eq!(blank[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
     }
 
     #[test]
     fn cors_origins_parses_comma_separated() {
-        with_env(
-            "COVENANT_HTTP_ORIGINS",
-            Some("http://localhost:3000,https://app.example.com"),
-            || {
-                let v = cors_origins_from_env();
-                assert_eq!(v.len(), 2);
-                assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
-                assert_eq!(v[1].to_str().unwrap(), "https://app.example.com");
-            },
-        );
+        let v = cors_origins_from_value(Some("http://localhost:3000,https://app.example.com"));
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
+        assert_eq!(v[1].to_str().unwrap(), "https://app.example.com");
     }
 
     #[test]
     fn cors_origins_falls_back_to_default_when_all_entries_invalid() {
-        // Sprint 56 LOW carry-forward: previously, an env var whose
-        // entries all fail `HeaderValue::from_str` would produce an
+        // Sprint 56 LOW carry-forward: an env value where every entry
+        // fails `HeaderValue::from_str` would otherwise produce an
         // empty allow-list; combined with `allow_credentials(true)`
-        // this rejects every cross-origin request. Falling back to the
-        // default keeps the daemon functional under operator typos.
-        with_env(
-            "COVENANT_HTTP_ORIGINS",
-            // \n is rejected by HeaderValue::from_str.
-            Some("bad\norigin,also\rbad"),
-            || {
-                let v = cors_origins_from_env();
-                assert_eq!(v.len(), 1);
-                assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
-            },
-        );
+        // that rejects every cross-origin request. \n and \r are both
+        // rejected by `HeaderValue::from_str`.
+        let v = cors_origins_from_value(Some("bad\norigin,also\rbad"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
     }
 
     #[test]
     fn cors_origins_skips_invalid_but_keeps_valid_entries() {
-        with_env(
-            "COVENANT_HTTP_ORIGINS",
-            Some("http://localhost:3000,bad\norigin"),
-            || {
-                let v = cors_origins_from_env();
-                assert_eq!(v.len(), 1, "the invalid entry is dropped");
-                assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
-            },
-        );
+        let v = cors_origins_from_value(Some("http://localhost:3000,bad\norigin"));
+        assert_eq!(v.len(), 1, "the invalid entry is dropped");
+        assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
     }
 }

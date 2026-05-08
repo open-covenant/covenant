@@ -211,8 +211,52 @@ impl Server {
                 reason: reason.to_string(),
             },
         };
+        self.record_daemon_event(event).await;
+    }
+
+    /// Record an audit event that represents an action by the
+    /// authenticated `peer`. Asserts `event.issuer.pubkey == peer.pubkey`
+    /// in debug builds and warns in release builds; the row is recorded
+    /// either way (dropping it would hide the very regression the
+    /// invariant is here to surface). Compare on the 32-byte pubkey, not
+    /// the wire-supplied `display`. Sprint 58f.
+    async fn record_peer_event(&self, peer: &AgentId, event: AuditEvent) {
+        debug_assert_eq!(
+            event.issuer.pubkey, peer.pubkey,
+            "audit invariant: peer-action event.issuer.pubkey must equal authenticated peer.pubkey"
+        );
+        if event.issuer.pubkey != peer.pubkey {
+            warn!(
+                expected = %peer.display,
+                got = %event.issuer.display,
+                "audit invariant violated: peer-action event.issuer != peer"
+            );
+        }
         if let Err(e) = self.audit.record(event).await {
-            warn!(error = %e, "audit record (auth failure) failed");
+            warn!(error = %e, "audit record failed");
+        }
+    }
+
+    /// Record an audit event the daemon emits on its own behalf — i.e.
+    /// when no peer is authenticated (currently only
+    /// `AuthenticationFailed`). Asserts the issuer matches
+    /// `self.identity` to catch a future regression that routes a
+    /// peer-action through this path. Same release-mode posture as
+    /// [`Self::record_peer_event`]. Sprint 58f.
+    async fn record_daemon_event(&self, event: AuditEvent) {
+        let identity_pubkey = self.identity.agent_id().pubkey;
+        debug_assert_eq!(
+            event.issuer.pubkey, identity_pubkey,
+            "audit invariant: daemon-internal event.issuer.pubkey must equal self.identity.pubkey"
+        );
+        if event.issuer.pubkey != identity_pubkey {
+            warn!(
+                got = %event.issuer.display,
+                "audit invariant violated: daemon event.issuer != daemon identity"
+            );
+        }
+        if let Err(e) = self.audit.record(event).await {
+            warn!(error = %e, "audit record failed");
         }
     }
 
@@ -275,9 +319,7 @@ impl Server {
                     claimed_sender_display: task.sender.display.clone(),
                 },
             };
-            if let Err(e) = self.audit.record(event).await {
-                warn!(error = %e, "audit record (a2a sender mismatch) failed");
-            }
+            self.record_peer_event(peer, event).await;
             return Response::Error {
                 message: format!(
                     "a2a send rejected: task.sender {:?} does not match \
@@ -335,9 +377,7 @@ impl Server {
                         reason: "unknown_task".into(),
                     },
                 };
-                if let Err(e) = self.audit.record(event).await {
-                    warn!(error = %e, "audit record (a2a result rejected) failed");
-                }
+                self.record_peer_event(peer, event).await;
                 return Response::Error {
                     message: format!(
                         "a2a respond rejected: task_id {task_id} was never \
@@ -578,9 +618,7 @@ impl Server {
                     matched_pattern: matched_pattern.clone(),
                 },
             };
-            if let Err(e) = self.audit.record(event).await {
-                warn!(error = %e, "audit record (intent ignored) failed");
-            }
+            self.record_peer_event(peer, event).await;
             return Response::IntentResult {
                 intent_id,
                 status: "ignored".into(),
@@ -644,9 +682,7 @@ impl Server {
                                 requested,
                             },
                         };
-                        if let Err(e) = self.audit.record(event).await {
-                            warn!(error = %e, "audit record (budget unseeded) failed");
-                        }
+                        self.record_peer_event(peer, event).await;
                     }
                     Err(BudgetError::Exhausted {
                         tokens_remaining,
@@ -665,9 +701,7 @@ impl Server {
                                 refill_eta_ms,
                             },
                         };
-                        if let Err(e) = self.audit.record(event).await {
-                            warn!(error = %e, "audit record (budget exhausted) failed");
-                        }
+                        self.record_peer_event(peer, event).await;
                         // Wire response rounds tokens_remaining to a coarse
                         // bucket; the audit row above keeps the precise u64.
                         // Sprint 58c L3 closure (multi-peer prep).
@@ -762,9 +796,7 @@ impl Server {
                 status: "ok".into(),
             },
         };
-        if let Err(e) = self.audit.record(audit_event).await {
-            warn!(error = %e, "audit record failed");
-        }
+        self.record_peer_event(peer, audit_event).await;
 
         Response::IntentResult {
             intent_id,
@@ -875,9 +907,7 @@ impl Server {
                 passed,
             },
         };
-        if let Err(e) = self.audit.record(event).await {
-            warn!(error = %e, "audit record (capability check) failed");
-        }
+        self.record_peer_event(peer, event).await;
         CapabilityCheckOutcome {
             passed,
             required,
@@ -920,7 +950,7 @@ impl Server {
                 signature_b58: signature_b58.clone(),
             },
         };
-        let _ = self.audit.record(event).await;
+        self.record_peer_event(peer, event).await;
 
         Response::CapabilityGranted {
             signature_b58,
@@ -1119,9 +1149,7 @@ impl Server {
                     reason: "peer is not the subject of this capability".into(),
                 },
             };
-            if let Err(e) = self.audit.record(event).await {
-                warn!(error = %e, "audit record (revoke rejected) failed");
-            }
+            self.record_peer_event(peer, event).await;
             return Response::Error {
                 message: "revoke rejected: capability subject does not match authenticated peer"
                     .into(),
@@ -2735,5 +2763,96 @@ budget_credits_per_hour = {credits}
             Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
             other => panic!("expected IntentResult for zero-budget agent, got {other:?}"),
         }
+    }
+
+    // ---- Sprint 58f: write-side audit invariant ----
+    //
+    // The peer-action sites in `Server::respond` build `AuditEvent`s with
+    // `issuer = peer.clone()` and pass them to `record_peer_event`, which
+    // asserts the issuer matches the authenticated peer. The forward-
+    // looking goal is to catch the next regression that builds an event
+    // for one peer's action and accidentally signs it as another (or as
+    // the daemon). `cargo test` runs with `debug_assertions = on`, so
+    // `debug_assert_eq!` panics — `#[should_panic]` is the natural test
+    // shape.
+
+    fn forged_event_with_pubkey(pubkey: [u8; 32], display: &str) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: AgentId::new(display.to_string(), pubkey),
+            kind: AuditKind::CapabilityCheck {
+                agent_id: "tool:test".into(),
+                required_actions: vec!["tool.call.test".into()],
+                missing_actions: vec![],
+                passed: true,
+            },
+        }
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "audit invariant")]
+    async fn record_peer_event_panics_when_issuer_does_not_match_peer() {
+        let s = server_with(vec![], "");
+        let honest_peer = s.identity.agent_id();
+        let forged = forged_event_with_pubkey([9u8; 32], "evil@local");
+        s.record_peer_event(&honest_peer, forged).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "audit invariant")]
+    async fn record_daemon_event_panics_when_issuer_is_not_self_identity() {
+        let s = server_with(vec![], "");
+        let forged = forged_event_with_pubkey([9u8; 32], "evil@local");
+        s.record_daemon_event(forged).await;
+    }
+
+    #[tokio::test]
+    async fn record_peer_event_records_when_issuer_matches_peer() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::CapabilityCheck {
+                agent_id: "tool:positive".into(),
+                required_actions: vec!["tool.call.positive".into()],
+                missing_actions: vec![],
+                passed: true,
+            },
+        };
+        let event_id = event.id;
+        s.record_peer_event(&peer, event).await;
+        let recent = s.audit.recent(16).await.expect("audit.recent");
+        assert!(
+            recent.iter().any(|e| e.id == event_id),
+            "expected event {event_id} to land in audit.recent"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_daemon_event_records_when_issuer_is_self_identity() {
+        // Sanity-pin the existing `record_auth_failure` path through the
+        // helper. The test exercises the helper directly so the assertion
+        // covers any future daemon-internal call site that doesn't go
+        // through `record_auth_failure`.
+        let s = server_with(vec![], "");
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: s.identity.agent_id(),
+            kind: AuditKind::AuthenticationFailed {
+                transport: "test".into(),
+                reason: "synthetic".into(),
+            },
+        };
+        let event_id = event.id;
+        s.record_daemon_event(event).await;
+        let recent = s.audit.recent(16).await.expect("audit.recent");
+        assert!(
+            recent.iter().any(|e| e.id == event_id),
+            "expected daemon event {event_id} to land in audit.recent"
+        );
     }
 }

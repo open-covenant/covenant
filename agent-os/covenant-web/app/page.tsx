@@ -44,6 +44,7 @@ export default function Home() {
   >("");
   const [peers, setPeers] = useState<PeerSummary[]>([]);
   const [peerPrefix, setPeerPrefix] = useState("");
+  const [revoking, setRevoking] = useState<string | null>(null);
 
   const [tools, setTools] = useState<ToolSpec[]>([]);
   const [toolName, setToolName] = useState("");
@@ -234,6 +235,40 @@ export default function Home() {
     }
   }
 
+  async function onRevokePeer(tokenPrefix: string, peerDisplay: string) {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Revoke ${peerDisplay} (token ${tokenPrefix}…)? This is irreversible. ` +
+          "Future Authenticate frames presenting this token will be rejected.",
+      )
+    ) {
+      return;
+    }
+    setRevoking(tokenPrefix);
+    setLastError(null);
+    try {
+      const r = await api.revokePeer(tokenPrefix);
+      if (r.kind === "error") {
+        setLastError(r.message);
+      } else if (r.outcome.type === "ambiguous") {
+        setLastError(
+          `prefix ${tokenPrefix} matched ${r.outcome.matches.length} peers; ` +
+            "use a longer prefix via `covenant peers revoke <PREFIX>`.",
+        );
+      } else if (r.outcome.type === "not_found") {
+        setLastError(
+          `prefix ${tokenPrefix} matched no peers (concurrent revoke?)`,
+        );
+      }
+      refresh();
+    } catch (e) {
+      setLastError(String(e));
+    } finally {
+      setRevoking(null);
+    }
+  }
+
   async function onCopyToken(token: string) {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       try {
@@ -343,6 +378,18 @@ export default function Home() {
                     </>
                   )}
                 </span>
+                {p.revoked_at === null && (
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() =>
+                      onRevokePeer(p.token_prefix, p.agent_id.display)
+                    }
+                    disabled={revoking === p.token_prefix}
+                  >
+                    {revoking === p.token_prefix ? "revoking…" : "revoke"}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -574,6 +621,48 @@ export default function Home() {
                       {e.kind.peer_display} · pubkey{" "}
                       {e.kind.peer_pubkey_b58.slice(0, 8)}… · rejected
                       (non-operator)
+                    </span>
+                  )}
+                  {e.kind.type === "peer_revoked" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.peer_display} · pubkey{" "}
+                      {e.kind.peer_pubkey_b58.slice(0, 8)}… · token{" "}
+                      {e.kind.token_prefix}…
+                    </span>
+                  )}
+                  {e.kind.type === "operator_peer_revoke_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.peer_display} · pubkey{" "}
+                      {e.kind.peer_pubkey_b58.slice(0, 8)}… · rejected
+                      (non-operator)
+                    </span>
+                  )}
+                  {e.kind.type === "authentication_failed" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.transport} · {e.kind.reason}
+                    </span>
+                  )}
+                  {e.kind.type === "a2a_sender_mismatch" && (
+                    <span className="dim">
+                      {" "}
+                      peer={e.kind.peer_display} · claimed=
+                      {e.kind.claimed_sender_display}
+                    </span>
+                  )}
+                  {e.kind.type === "a2a_recipient_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.sender_display} → {e.kind.recipient_display} ·{" "}
+                      missing {e.kind.action}
+                    </span>
+                  )}
+                  {e.kind.type === "capability_revoke_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      sig={e.kind.signature_b58.slice(0, 8)}… · {e.kind.reason}
                     </span>
                   )}
                 </li>

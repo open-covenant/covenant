@@ -139,6 +139,38 @@ export type AuditKind =
       type: "operator_peers_list_rejected";
       peer_display: string;
       peer_pubkey_b58: string;
+    }
+  | {
+      type: "peer_revoked";
+      peer_display: string;
+      peer_pubkey_b58: string;
+      token_prefix: string;
+    }
+  | {
+      type: "operator_peer_revoke_rejected";
+      peer_display: string;
+      peer_pubkey_b58: string;
+    }
+  | {
+      type: "authentication_failed";
+      transport: string;
+      reason: string;
+    }
+  | {
+      type: "a2a_sender_mismatch";
+      peer_display: string;
+      claimed_sender_display: string;
+    }
+  | {
+      type: "a2a_recipient_rejected";
+      sender_display: string;
+      recipient_display: string;
+      action: string;
+    }
+  | {
+      type: "capability_revoke_rejected";
+      signature_b58: string;
+      reason: string;
     };
 
 export type AuditEvent = {
@@ -193,6 +225,16 @@ export type PeerSummary = {
   registered_at: number;
   revoked_at: number | null;
 };
+
+// Sprint 65 wire shape. Internally tagged on `type`; newtype variants
+// flatten `PeerSummary`'s fields into the wrapper. Token bytes never
+// carried — only `PeerSummary` (excludes `PeerToken` by Sprint 62
+// invariant).
+export type RevokeOutcome =
+  | ({ type: "revoked" } & PeerSummary)
+  | ({ type: "already_revoked" } & PeerSummary)
+  | { type: "not_found" }
+  | { type: "ambiguous"; matches: PeerSummary[] };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
@@ -311,4 +353,13 @@ export const api = {
       `/peers/list?${q.toString()}`,
     );
   },
+
+  revokePeer: (token_prefix: string) =>
+    call<
+      | { kind: "peer_revoked"; outcome: RevokeOutcome }
+      | { kind: "error"; message: string }
+    >("/peers/revoke", {
+      method: "POST",
+      body: JSON.stringify({ token_prefix }),
+    }),
 };

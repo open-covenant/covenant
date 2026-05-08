@@ -272,9 +272,9 @@ impl Server {
                 },
             },
             Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
-            Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit).await,
-            Request::RecentReceipts { limit } => self.recent_receipts(limit).await,
-            Request::RecentCapabilities { limit } => self.recent_capabilities(limit).await,
+            Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit, peer).await,
+            Request::RecentReceipts { limit } => self.recent_receipts(limit, peer).await,
+            Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
             Request::GrantCapability {
                 action,
                 scope,
@@ -300,8 +300,8 @@ impl Server {
             Request::TryRecvA2ATask => self.try_recv_a2a_task(peer).await,
             Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
             Request::TryRecvA2AResult => self.try_recv_a2a_result(peer).await,
-            Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
-            Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
+            Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit, peer).await,
+            Request::RecentA2AResults { limit } => self.recent_a2a_results(limit, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
@@ -422,22 +422,57 @@ impl Server {
         }
     }
 
-    async fn recent_a2a_tasks(&self, limit: usize) -> Response {
+    /// Returns A2A tasks where `peer` is either the sender or recipient.
+    /// Bidirectional filter — a peer's natural view spans tasks they sent
+    /// (their outbound queue) and tasks addressed to them (their inbox).
+    /// Sprint 49's hard `task.sender == peer` send-time invariant means
+    /// the sender direction is forge-resistant; recipient is wire-supplied
+    /// at send time so an adversarial peer cannot craft a recipient match
+    /// that wasn't already routed to them at send. Compared on the 32-byte
+    /// pubkey, not the display string. Sprint 58g per-peer filter.
+    async fn recent_a2a_tasks(&self, limit: usize, peer: &AgentId) -> Response {
         match self.mailbox.recent_tasks(limit).await {
-            Ok(tasks) => Response::A2ATasks { tasks },
+            Ok(tasks) => {
+                let tasks = tasks
+                    .into_iter()
+                    .filter(|t| t.sender.pubkey == peer.pubkey || t.recipient.pubkey == peer.pubkey)
+                    .collect();
+                Response::A2ATasks { tasks }
+            }
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
             },
         }
     }
 
-    async fn recent_a2a_results(&self, limit: usize) -> Response {
-        match self.mailbox.recent_results(limit).await {
-            Ok(results) => Response::A2AResults { results },
-            Err(e) => Response::Error {
-                message: format!("a2a: {e}"),
-            },
+    /// Returns A2A results whose original task sender matches `peer`.
+    /// Joins each `result.task_id` against `Mailbox::lookup_task_sender`
+    /// (the post-Sprint-49 senders-map invariant: `senders[task_id] ==
+    /// authenticated_peer_at_send`); rows whose lookup returns `None` (the
+    /// task pre-dates the senders map, or was compacted) drop, matching
+    /// Sprint 50's `try_recv_a2a_result_for` posture. Lookup errors drop
+    /// the row and warn — the operator dashboard prefers a missing row
+    /// over a leaked one. Compared on the 32-byte pubkey. Sprint 58g.
+    async fn recent_a2a_results(&self, limit: usize, peer: &AgentId) -> Response {
+        let results = match self.mailbox.recent_results(limit).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("a2a: {e}"),
+                };
+            }
+        };
+        let mut filtered = Vec::with_capacity(results.len());
+        for result in results {
+            match self.mailbox.lookup_task_sender(result.task_id).await {
+                Ok(Some(sender)) if sender.pubkey == peer.pubkey => filtered.push(result),
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(error = %e, task_id = %result.task_id, "a2a: lookup_task_sender failed; dropping row");
+                }
+            }
         }
+        Response::A2AResults { results: filtered }
     }
 
     /// Daemon-side fan-out across `router.agents()` for the operator
@@ -448,6 +483,15 @@ impl Server {
     /// pull `limit` debits per agent, merge, sort newest-first, and
     /// truncate. Read-only; no capability gate, same posture as
     /// `RecentMemory` / `RecentReceipts` / `RecentAudit`.
+    ///
+    /// **No per-peer filter (Sprint 58g punt):** `BudgetDebit.agent` is
+    /// the rate-limited *agent* (e.g. `research@agent`), not the
+    /// dispatcher peer. The budget belongs to the agent and is shared
+    /// across every peer that dispatches through it. Per-peer attribution
+    /// requires extending `BudgetDebit` with `dispatched_by:
+    /// Option<AgentId>` and threading it through `try_debit`; that lands
+    /// when the budget itself becomes per-peer (Phase-1 multi-tenant
+    /// migration). v0 single-peer makes the leak surface non-existent.
     async fn recent_debits(&self, limit: usize) -> Response {
         let mut all: Vec<covenant_budget::BudgetDebit> = Vec::new();
         for card in self.router.agents() {
@@ -989,18 +1033,43 @@ impl Server {
         }
     }
 
-    async fn recent_memory(&self, tier: Option<MemoryTier>, limit: usize) -> Response {
+    /// Returns memory records owned by `peer`. `MemoryRecord.owner` is
+    /// set to the authenticated peer in `dispatch_intent`, so the filter
+    /// keys directly off the dispatch attribution. Compared on the
+    /// 32-byte pubkey. Sprint 58g per-peer filter.
+    async fn recent_memory(
+        &self,
+        tier: Option<MemoryTier>,
+        limit: usize,
+        peer: &AgentId,
+    ) -> Response {
         match self.memory.recent(tier, limit).await {
-            Ok(records) => Response::Memories { records },
+            Ok(records) => {
+                let records = records
+                    .into_iter()
+                    .filter(|r| r.owner.pubkey == peer.pubkey)
+                    .collect();
+                Response::Memories { records }
+            }
             Err(e) => Response::Error {
                 message: format!("memory: {e}"),
             },
         }
     }
 
-    async fn recent_receipts(&self, limit: usize) -> Response {
+    /// Returns settlement receipts where `peer` is the payer.
+    /// `SettlementReceipt.payer` is set to the authenticated peer in
+    /// `dispatch_intent`, so the filter keys directly off the dispatch
+    /// attribution. Compared on the 32-byte pubkey. Sprint 58g.
+    async fn recent_receipts(&self, limit: usize, peer: &AgentId) -> Response {
         match self.settlement.recent(limit).await {
-            Ok(receipts) => Response::Receipts { receipts },
+            Ok(receipts) => {
+                let receipts = receipts
+                    .into_iter()
+                    .filter(|r| r.payer.pubkey == peer.pubkey)
+                    .collect();
+                Response::Receipts { receipts }
+            }
             Err(e) => Response::Error {
                 message: format!("settlement: {e}"),
             },
@@ -1133,9 +1202,25 @@ impl Server {
         }
     }
 
-    async fn recent_capabilities(&self, limit: usize) -> Response {
+    /// Returns capabilities where `peer` is either the subject (caps held
+    /// against them) or `granted_by` (caps they granted). Bidirectional
+    /// because both ends of a delegation are natural privacy boundaries —
+    /// a peer wants to see what they're authorised for AND what they
+    /// delegated out. v0 single-peer collapses to operator's own grants
+    /// (subject == granted_by). Compared on the 32-byte pubkey. Sprint
+    /// 58g per-peer filter.
+    async fn recent_capabilities(&self, limit: usize, peer: &AgentId) -> Response {
         match self.capabilities.recent(limit).await {
-            Ok(capabilities) => Response::Capabilities { capabilities },
+            Ok(capabilities) => {
+                let capabilities = capabilities
+                    .into_iter()
+                    .filter(|c| {
+                        c.capability.subject.pubkey == peer.pubkey
+                            || c.capability.granted_by.pubkey == peer.pubkey
+                    })
+                    .collect();
+                Response::Capabilities { capabilities }
+            }
             Err(e) => Response::Error {
                 message: format!("permissions: {e}"),
             },
@@ -2397,6 +2482,425 @@ required = {caps:?}
                     events.iter().all(|e| e.issuer.pubkey == me.pubkey),
                     "filter must keep operator's rows"
                 );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // -------- Sprint 58g: per-peer filter on the other RecentX surfaces --------
+
+    #[tokio::test]
+    async fn recent_memory_scrubs_other_peers_records() {
+        let s = server_with(vec![], "");
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        let alien_record = MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: alien,
+            text: "alice's secret memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: epoch_ms(),
+            parent: None,
+        };
+        s.memory.put(alien_record).await.unwrap();
+        let me = s.identity.agent_id();
+        let mine = MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: me.clone(),
+            text: "operator's own memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: epoch_ms(),
+            parent: None,
+        };
+        s.memory.put(mine).await.unwrap();
+        let resp = s
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 100,
+            })
+            .await;
+        match resp {
+            Response::Memories { records } => {
+                assert!(
+                    records.iter().all(|r| r.owner.pubkey == me.pubkey),
+                    "every returned row must be owned by the requesting peer"
+                );
+                assert!(
+                    !records.iter().any(|r| r.text == "alice's secret memory"),
+                    "alien memory record leaked through filter"
+                );
+                assert!(
+                    records.iter().any(|r| r.text == "operator's own memory"),
+                    "operator's own row should still be visible"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_memory_v0_operator_sees_own_records() {
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "summary",
+        );
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SubmitIntent {
+            text: "find recent papers on agent memory".into(),
+        })
+        .await;
+        let me = s.identity.agent_id();
+        let resp = s
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+            })
+            .await;
+        match resp {
+            Response::Memories { records } => {
+                assert!(!records.is_empty(), "operator should see their own rows");
+                assert!(
+                    records.iter().all(|r| r.owner.pubkey == me.pubkey),
+                    "filter must keep operator's rows"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_scrubs_other_peers_receipts() {
+        let s = server_with(vec![], "");
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: alien,
+                resource: ResourceKind::Memory,
+                credits_consumed: 7,
+                settled_at: epoch_ms(),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        let me = s.identity.agent_id();
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                credits_consumed: 3,
+                settled_at: epoch_ms(),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        let resp = s.op_respond(Request::RecentReceipts { limit: 100 }).await;
+        match resp {
+            Response::Receipts { receipts } => {
+                assert!(
+                    receipts.iter().all(|r| r.payer.pubkey == me.pubkey),
+                    "every returned receipt must have the requesting peer as payer"
+                );
+                assert!(
+                    !receipts.iter().any(|r| r.credits_consumed == 7),
+                    "alien receipt amount leaked through filter"
+                );
+                assert!(
+                    receipts.iter().any(|r| r.credits_consumed == 3),
+                    "operator's own receipt should still be visible"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_v0_operator_sees_own() {
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "summary",
+        );
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SubmitIntent {
+            text: "find recent papers on agent memory".into(),
+        })
+        .await;
+        let me = s.identity.agent_id();
+        let resp = s.op_respond(Request::RecentReceipts { limit: 10 }).await;
+        match resp {
+            Response::Receipts { receipts } => {
+                assert!(!receipts.is_empty(), "operator should see their own rows");
+                assert!(
+                    receipts.iter().all(|r| r.payer.pubkey == me.pubkey),
+                    "filter must keep operator's receipts"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_scrubs_when_neither_subject_nor_granted_by() {
+        let s = server_with(vec![], "");
+        // Alien grants alien — peer is on neither side. Sign with a separate
+        // identity so the wire-shape is realistic; the filter is on pubkeys,
+        // not signature validity, so a hand-built capability is enough.
+        let alien_grantor = LocalIdentity::generate("alice@local");
+        let alien_subject = AgentId::new("bob@local", [8u8; 32]);
+        let cap = covenant_types::Capability {
+            subject: alien_subject,
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({}),
+            granted_by: alien_grantor.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, alien_grantor.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::RecentCapabilities { limit: 100 })
+            .await;
+        match resp {
+            Response::Capabilities { capabilities } => {
+                assert!(
+                    capabilities.is_empty(),
+                    "alien-to-alien capability leaked through filter: {capabilities:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_visible_when_peer_is_subject() {
+        let s = server_with(vec![], "");
+        // Alien grants the operator: peer is the subject.
+        let alien_grantor = LocalIdentity::generate("alice@local");
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({}),
+            granted_by: alien_grantor.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, alien_grantor.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::RecentCapabilities { limit: 100 })
+            .await;
+        match resp {
+            Response::Capabilities { capabilities } => {
+                assert_eq!(capabilities.len(), 1);
+                assert_eq!(capabilities[0].capability.subject.pubkey, me.pubkey);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_visible_when_peer_is_granted_by() {
+        let s = server_with(vec![], "");
+        // Operator grants an alien: peer is `granted_by`. Sign with the
+        // operator's own key so the on-disk shape is the real grant path.
+        let alien_subject = AgentId::new("bob@local", [8u8; 32]);
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: alien_subject,
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::RecentCapabilities { limit: 100 })
+            .await;
+        match resp {
+            Response::Capabilities { capabilities } => {
+                assert_eq!(capabilities.len(), 1);
+                assert_eq!(capabilities[0].capability.granted_by.pubkey, me.pubkey);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_v0_operator_sees_own_grants() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let me = s.identity.agent_id();
+        let resp = s
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await;
+        match resp {
+            Response::Capabilities { capabilities } => {
+                assert_eq!(capabilities.len(), 1);
+                let c = &capabilities[0].capability;
+                assert_eq!(c.subject.pubkey, me.pubkey);
+                assert_eq!(c.granted_by.pubkey, me.pubkey);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_tasks_scrubs_when_peer_is_neither_side() {
+        let s = server_with(vec![], "");
+        let alien_a = AgentId::new("alice@local", [9u8; 32]);
+        let alien_b = AgentId::new("bob@local", [8u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: alien_a,
+            recipient: alien_b,
+            intent_text: "alien-to-alien".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task).await.unwrap();
+        let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
+        match resp {
+            Response::A2ATasks { tasks } => {
+                assert!(
+                    tasks.is_empty(),
+                    "task with neither sender nor recipient match leaked: {tasks:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_tasks_visible_when_peer_is_sender() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let alien_recipient = AgentId::new("bob@local", [8u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: me.clone(),
+            recipient: alien_recipient,
+            intent_text: "outbound".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task.clone()).await.unwrap();
+        let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
+        match resp {
+            Response::A2ATasks { tasks } => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].id, task.id);
+                assert_eq!(tasks[0].sender.pubkey, me.pubkey);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_tasks_visible_when_peer_is_recipient() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let alien_sender = AgentId::new("alice@local", [9u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: alien_sender,
+            recipient: me.clone(),
+            intent_text: "inbound".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task.clone()).await.unwrap();
+        let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
+        match resp {
+            Response::A2ATasks { tasks } => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].id, task.id);
+                assert_eq!(tasks[0].recipient.pubkey, me.pubkey);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_results_scrubs_when_lookup_returns_other_peer() {
+        let s = server_with(vec![], "");
+        // Alien-sent task; result posted against it. Operator must not see
+        // the result because `lookup_task_sender` returns the alien.
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        let alien_recipient = AgentId::new("bob@local", [8u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: alien,
+            recipient: alien_recipient,
+            intent_text: "alien-task".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task.clone()).await.unwrap();
+        let result = covenant_a2a::A2ATaskResult::ok(
+            task.id,
+            vec![covenant_mcp::Content::text("alien-result")],
+        );
+        s.mailbox.send_result(result).await.unwrap();
+
+        let resp = s.op_respond(Request::RecentA2AResults { limit: 100 }).await;
+        match resp {
+            Response::A2AResults { results } => {
+                assert!(
+                    results.is_empty(),
+                    "result for alien-sent task leaked: {results:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_results_visible_when_lookup_returns_peer() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let alien_recipient = AgentId::new("bob@local", [8u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: me.clone(),
+            recipient: alien_recipient,
+            intent_text: "operator-task".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task.clone()).await.unwrap();
+        let result = covenant_a2a::A2ATaskResult::ok(
+            task.id,
+            vec![covenant_mcp::Content::text("operator-result")],
+        );
+        s.mailbox.send_result(result.clone()).await.unwrap();
+
+        let resp = s.op_respond(Request::RecentA2AResults { limit: 100 }).await;
+        match resp {
+            Response::A2AResults { results } => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].task_id, task.id);
             }
             other => panic!("unexpected: {other:?}"),
         }

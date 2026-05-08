@@ -15,6 +15,12 @@ import {
   type SignedCapability,
   type ToolSpec,
 } from "@/lib/api";
+import {
+  PEER_LOOKUP_LIMIT,
+  expandA2aAction,
+  formatExpandError,
+  peerPrefixToLookup,
+} from "@/lib/expand";
 
 export default function Home() {
   const [intent, setIntent] = useState("");
@@ -30,6 +36,7 @@ export default function Home() {
   const [searching, setSearching] = useState(false);
 
   const [grantAction, setGrantAction] = useState("");
+  const [grantInfo, setGrantInfo] = useState<string | null>(null);
 
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [receipts, setReceipts] = useState<SettlementReceipt[]>([]);
@@ -133,12 +140,36 @@ export default function Home() {
   async function onGrant(e: React.FormEvent) {
     e.preventDefault();
     if (!grantAction) return;
+    setLastError(null);
+    setGrantInfo(null);
+
+    let actionToGrant = grantAction;
+    const prefix = peerPrefixToLookup(grantAction);
+    if (prefix !== null) {
+      let peersResp;
+      try {
+        peersResp = await api.listPeers(PEER_LOOKUP_LIMIT, prefix);
+      } catch (err) {
+        setLastError(String(err));
+        return;
+      }
+      const result = expandA2aAction(grantAction, peersResp.peers);
+      if (!result.ok) {
+        setLastError(formatExpandError(result.error));
+        return;
+      }
+      if (result.value.kind === "rewritten") {
+        actionToGrant = result.value.full;
+        setGrantInfo(`expanding \`${prefix}\` → ${result.value.full}`);
+      }
+    }
+
     try {
-      await api.grantCapability(grantAction);
+      await api.grantCapability(actionToGrant);
       setGrantAction("");
       refresh();
-    } catch (e) {
-      setLastError(String(e));
+    } catch (err) {
+      setLastError(String(err));
     }
   }
 
@@ -415,12 +446,13 @@ export default function Home() {
           <input
             value={grantAction}
             onChange={(e) => setGrantAction(e.target.value)}
-            placeholder="action (e.g. tool.web_search)"
+            placeholder="action (e.g. tool.web_search, a2a.send.<pubkey-prefix>)"
           />
           <button type="submit" disabled={!grantAction}>
             grant
           </button>
         </form>
+        {grantInfo && <pre className="result">{grantInfo}</pre>}
         {capabilities.length === 0 ? (
           <p className="dim">(none granted)</p>
         ) : (

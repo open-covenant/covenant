@@ -4,28 +4,53 @@ import { useEffect, useRef } from "react";
 
 const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ?#@$%&*+-=/<>";
 
-function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
+function MeshCanvas({
+  backgroundImageSrc,
+  onReady,
+}: {
+  backgroundImageSrc: string;
+  onReady?: () => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   useEffect(() => {
+    let readyFired = false;
+    const fireReady = () => {
+      if (readyFired) return;
+      readyFired = true;
+      onReadyRef.current?.();
+    };
+
     if (
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
     ) {
+      fireReady();
       return;
     }
 
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      fireReady();
+      return;
+    }
     const canvasEl = canvas;
     const container = canvas.parentElement;
-    if (!container) return;
+    if (!container) {
+      fireReady();
+      return;
+    }
     const host = container;
     const interactionRoot = host.parentElement ?? host;
 
     const context = canvasEl.getContext("2d");
-    if (!context) return;
+    if (!context) {
+      fireReady();
+      return;
+    }
     const ctx: CanvasRenderingContext2D = context;
 
     const MOUSE_RADIUS = 200;
@@ -470,6 +495,10 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       }
       ctx.globalAlpha = 1;
 
+      if (glyphs.length > 0) {
+        fireReady();
+      }
+
       animFrameRef.current = requestAnimationFrame(render);
     }
 
@@ -506,10 +535,16 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
   );
 }
 
-export function HeroMesh({ src }: { src: string }) {
+export function HeroMesh({
+  src,
+  onReady,
+}: {
+  src: string;
+  onReady?: () => void;
+}) {
   return (
     <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-      <MeshCanvas backgroundImageSrc={src} />
+      <MeshCanvas backgroundImageSrc={src} onReady={onReady} />
       <div
         aria-hidden
         className="absolute inset-0"

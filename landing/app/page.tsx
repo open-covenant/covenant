@@ -1,5 +1,8 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { HeroMesh } from "./HeroMesh";
 import { MobileMenu } from "./MobileMenu";
 
@@ -43,11 +46,28 @@ function GithubIcon({ className }: { className?: string }) {
 }
 
 export default function Page() {
+  const [meshReady, setMeshReady] = useState(false);
+  const [foreVisible, setForeVisible] = useState(false);
+
+  useEffect(() => {
+    if (!meshReady) return;
+    const id = window.setTimeout(() => setForeVisible(true), 140);
+    return () => window.clearTimeout(id);
+  }, [meshReady]);
+
+  useEffect(() => {
+    const fallback = window.setTimeout(() => setForeVisible(true), 2400);
+    return () => window.clearTimeout(fallback);
+  }, []);
+
   return (
     <main className="relative h-[100dvh] min-h-[100svh] overflow-hidden bg-[#030303]">
-      <HeroMesh src="/hero-bg.png" />
+      <HeroMesh src="/hero-bg.png" onReady={() => setMeshReady(true)} />
 
-      <header
+      <div
+        className={`transition-opacity duration-700 ease-out ${foreVisible ? "opacity-100" : "opacity-0"}`}
+      >
+        <header
         className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-[max(35px,env(safe-area-inset-top))] sm:pt-[max(59px,env(safe-area-inset-top))]"
       >
         <Image
@@ -126,6 +146,7 @@ export default function Page() {
       >
         open agent-native operating layer
       </footer>
+      </div>
     </main>
   );
 }

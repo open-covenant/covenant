@@ -179,6 +179,21 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// Logged when `ListPeers` is rejected because the authenticated
+    /// peer is not the operator (`peer.pubkey != self.identity.pubkey`).
+    /// Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s daemon-as-issuer
+    /// audience model so the row passes the Sprint 58d operator-feed
+    /// filter and the rejected peer's `/audit` does not double as a
+    /// probe-was-logged oracle. Sprint 62.
+    ///
+    /// Distinct from [`AuditKind::CapabilityCheck`] because no
+    /// capability is checked (the gate is identity-pubkey equality)
+    /// and from [`AuditKind::AuthenticationFailed`] because the peer
+    /// authenticated successfully — they failed an authorization check.
+    OperatorPeersListRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
 }
 
 #[async_trait]

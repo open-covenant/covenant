@@ -114,6 +114,22 @@ pub struct PeerEntry {
     pub registered_at: u64,
 }
 
+/// Read-only, redacted view of a registry record. Crosses IPC/HTTP
+/// wires; **never** carries the full `PeerToken` (a peer's secret).
+/// `token_prefix` is the 6-char base58 prefix matching `PeerToken::Debug`
+/// redaction so an operator can correlate a summary row with grep'd
+/// debug logs without ever recovering the rest of the secret.
+/// `revoked_at` is `Some(ts)` for tombstoned entries — kept on purpose
+/// so post-incident triage can answer "is this audit-flagged peer still
+/// live?" in one look. Sprint 62.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerSummary {
+    pub agent_id: AgentId,
+    pub token_prefix: String,
+    pub registered_at: u64,
+    pub revoked_at: Option<u64>,
+}
+
 #[async_trait]
 pub trait PeerRegistry: Send + Sync {
     async fn register(&self, entry: PeerEntry) -> Result<(), PeerError>;
@@ -127,6 +143,19 @@ pub trait PeerRegistry: Send + Sync {
     /// Returns only currently-live entries (revoked tokens excluded).
     /// Operator-facing.
     async fn recent(&self, limit: usize) -> Result<Vec<PeerEntry>, PeerError>;
+    /// Operator-triage view, newest-first up to `limit`. Includes both
+    /// live and revoked entries so the operator can answer "is this
+    /// pubkey already revoked?" from a single read; `revoked_at`
+    /// distinguishes them. `pubkey_prefix` filters server-side on
+    /// `bs58::encode(agent_id.pubkey)` — the same string that
+    /// [`AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`]
+    /// records, so an operator can paste the audit row's b58 directly.
+    /// Empty/`None` prefix means "no filter". Sprint 62.
+    async fn list_summaries(
+        &self,
+        limit: usize,
+        pubkey_prefix: Option<&str>,
+    ) -> Result<Vec<PeerSummary>, PeerError>;
     /// Drop revocation tombstones with `revoked_at < before_ms` along
     /// with their matching `Registered` entries. Returns the number of
     /// revocations dropped (= number of `Registered` entries also
@@ -134,6 +163,29 @@ pub trait PeerRegistry: Send + Sync {
     /// drop too). Live entries (registered but never revoked) are
     /// untouched. Mirrors `CapabilityStore::purge_revoked_older_than`.
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError>;
+}
+
+/// 6-char base58 prefix of `token`. Same redaction posture as
+/// `PeerToken::Debug` and the audit log's `*_token_prefix` fields.
+fn token_b58_prefix(token: &PeerToken) -> String {
+    let s = token.to_b58();
+    s.chars().take(6).collect()
+}
+
+fn summary_from(entry: &PeerEntry, revoked_at: Option<u64>) -> PeerSummary {
+    PeerSummary {
+        agent_id: entry.agent_id.clone(),
+        token_prefix: token_b58_prefix(&entry.token),
+        registered_at: entry.registered_at,
+        revoked_at,
+    }
+}
+
+fn summary_matches(s: &PeerSummary, prefix: Option<&str>) -> bool {
+    match prefix {
+        None | Some("") => true,
+        Some(p) => s.agent_id.pubkey_base58().starts_with(p),
+    }
 }
 
 /// In-process registry suitable for tests.
@@ -198,6 +250,22 @@ impl PeerRegistry for InMemoryPeerRegistry {
             .filter(|e| !revoked.contains_key(e.token.as_bytes()))
             .take(limit)
             .cloned()
+            .collect())
+    }
+
+    async fn list_summaries(
+        &self,
+        limit: usize,
+        pubkey_prefix: Option<&str>,
+    ) -> Result<Vec<PeerSummary>, PeerError> {
+        let entries = self.entries.lock().await;
+        let revoked = self.revoked.lock().await;
+        Ok(entries
+            .iter()
+            .rev()
+            .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
+            .filter(|s| summary_matches(s, pubkey_prefix))
+            .take(limit)
             .collect())
     }
 
@@ -347,6 +415,22 @@ impl PeerRegistry for JsonlPeerRegistry {
             .filter(|e| !revoked.contains_key(e.token.as_bytes()))
             .take(limit)
             .cloned()
+            .collect())
+    }
+
+    async fn list_summaries(
+        &self,
+        limit: usize,
+        pubkey_prefix: Option<&str>,
+    ) -> Result<Vec<PeerSummary>, PeerError> {
+        let entries = self.entries.lock().await;
+        let revoked = self.revoked.lock().await;
+        Ok(entries
+            .iter()
+            .rev()
+            .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
+            .filter(|s| summary_matches(s, pubkey_prefix))
+            .take(limit)
             .collect())
     }
 
@@ -769,5 +853,132 @@ mod tests {
             r_post.recent(10).await.unwrap().len(),
         );
         assert_eq!(snapshot_pre, snapshot_post);
+    }
+
+    fn entry_with_pubkey(name: &str, pubkey_byte0: u8) -> (PeerToken, PeerEntry) {
+        let mut pubkey = [0u8; 32];
+        pubkey[0] = pubkey_byte0;
+        let token = PeerToken::generate();
+        let entry = PeerEntry {
+            token,
+            agent_id: AgentId::new(name, pubkey),
+            registered_at: 1_700_000_000_000,
+        };
+        (token, entry)
+    }
+
+    #[tokio::test]
+    async fn list_summaries_includes_revoked_with_timestamp() {
+        let r = InMemoryPeerRegistry::new();
+        let (live_tok, live_ent) = entry("alice@local");
+        let (dead_tok, dead_ent) = entry("bob@local");
+        r.register(live_ent).await.unwrap();
+        r.register(dead_ent).await.unwrap();
+        r.revoke(&dead_tok).await.unwrap();
+
+        let s = r.list_summaries(10, None).await.unwrap();
+        assert_eq!(s.len(), 2, "live and revoked both surface");
+        let dead_summary = s
+            .iter()
+            .find(|x| x.agent_id.display == "bob@local")
+            .expect("revoked entry surfaces");
+        assert!(
+            dead_summary.revoked_at.is_some(),
+            "revoked entry carries timestamp"
+        );
+        assert_eq!(dead_summary.token_prefix.len(), 6);
+        assert_eq!(dead_summary.token_prefix, &dead_tok.to_b58()[..6]);
+        let live_summary = s
+            .iter()
+            .find(|x| x.agent_id.display == "alice@local")
+            .expect("live entry surfaces");
+        assert!(live_summary.revoked_at.is_none());
+        assert_eq!(live_summary.token_prefix, &live_tok.to_b58()[..6]);
+    }
+
+    #[tokio::test]
+    async fn list_summaries_orders_newest_first() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e_old) = entry("old@local");
+        let (_, e_mid) = entry("mid@local");
+        let (_, e_new) = entry("new@local");
+        r.register(e_old).await.unwrap();
+        r.register(e_mid).await.unwrap();
+        r.register(e_new).await.unwrap();
+
+        let s = r.list_summaries(10, None).await.unwrap();
+        let displays: Vec<&str> = s.iter().map(|x| x.agent_id.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["new@local", "mid@local", "old@local"],
+            "register order reversed: newest first"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_summaries_filters_on_pubkey_b58_prefix() {
+        // Pick a pubkey-byte0 such that the b58 encoding is fully
+        // determined by the byte (the rest are zero). bs58::encode
+        // of `[0xff, 0, 0, ..., 0]` starts with a stable prefix.
+        let r = InMemoryPeerRegistry::new();
+        let (_, e_match) = entry_with_pubkey("match@local", 0xff);
+        let (_, e_other) = entry_with_pubkey("other@local", 0x01);
+        r.register(e_match.clone()).await.unwrap();
+        r.register(e_other.clone()).await.unwrap();
+
+        let target_b58 = bs58::encode(e_match.agent_id.pubkey).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+        let s = r.list_summaries(10, Some(&prefix)).await.unwrap();
+        assert_eq!(s.len(), 1, "only the matching pubkey surfaces");
+        assert_eq!(s[0].agent_id.display, "match@local");
+
+        let none = r.list_summaries(10, Some("zzzzzz")).await.unwrap();
+        assert!(none.is_empty(), "non-matching prefix returns empty");
+
+        let all = r.list_summaries(10, Some("")).await.unwrap();
+        assert_eq!(all.len(), 2, "empty prefix is no filter");
+    }
+
+    #[tokio::test]
+    async fn list_summaries_never_emits_full_token_b58() {
+        let r = InMemoryPeerRegistry::new();
+        let (tok, ent) = entry("p@local");
+        r.register(ent).await.unwrap();
+        let s = r.list_summaries(10, None).await.unwrap();
+        let json = serde_json::to_string(&s).unwrap();
+        let full_b58 = tok.to_b58();
+        assert!(
+            !json.contains(&full_b58),
+            "wire form must never carry the full token"
+        );
+        assert!(json.contains(&full_b58[..6]), "6-char prefix is fine");
+    }
+
+    #[tokio::test]
+    async fn jsonl_list_summaries_replays_revoked_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let (live_tok, live_ent) = entry("live@local");
+        let (dead_tok, dead_ent) = entry("dead@local");
+        {
+            let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+            r.register(live_ent).await.unwrap();
+            r.register(dead_ent).await.unwrap();
+            r.revoke(&dead_tok).await.unwrap();
+        }
+
+        let r2 = JsonlPeerRegistry::open(path).await.unwrap();
+        let s = r2.list_summaries(10, None).await.unwrap();
+        assert_eq!(s.len(), 2);
+        let dead = s
+            .iter()
+            .find(|x| x.token_prefix == dead_tok.to_b58()[..6])
+            .expect("revoked entry replayed");
+        assert!(dead.revoked_at.is_some());
+        let live = s
+            .iter()
+            .find(|x| x.token_prefix == live_tok.to_b58()[..6])
+            .expect("live entry replayed");
+        assert!(live.revoked_at.is_none());
     }
 }

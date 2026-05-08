@@ -9,6 +9,7 @@ use covenant_a2a::{A2ATask, A2ATaskResult};
 use covenant_audit::AuditEvent;
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
+use covenant_peer_auth::PeerSummary;
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
 
@@ -166,6 +167,20 @@ pub enum Request {
     /// Live IPC connections authenticated under the old token survive
     /// until they drop; HTTP rejects the old token immediately.
     RotateOperatorToken,
+    /// Operator-triage view of the peer registry. Returns redacted
+    /// [`PeerSummary`] rows newest-first, including revoked entries
+    /// (with `revoked_at: Some(_)`). `pubkey_prefix` filters server-side
+    /// on `bs58::encode(agent_id.pubkey)` — paste the b58 from an
+    /// `OperatorTokenRotationRejected` audit row to find the matching
+    /// registry entry. Operator-only (Sprint 60 C3 gate); a non-operator
+    /// peer is rejected with an `OperatorPeersListRejected` audit row.
+    /// Sprint 62.
+    ListPeers {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+        #[serde(default)]
+        pubkey_prefix: Option<String>,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -280,6 +295,11 @@ pub enum Response {
     /// authenticate with `token_b58`.
     OperatorTokenRotated {
         token_b58: String,
+    },
+    /// Successful response to [`Request::ListPeers`]. Token bytes are
+    /// **never** carried — only the 6-char `token_prefix`. Sprint 62.
+    PeerList {
+        peers: Vec<PeerSummary>,
     },
     Error {
         message: String,

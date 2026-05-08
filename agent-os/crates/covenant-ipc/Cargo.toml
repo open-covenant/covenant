@@ -14,6 +14,7 @@ covenant-mcp = { path = "../covenant-mcp" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }
 covenant-budget = { path = "../covenant-budget" }
+covenant-peer-auth = { path = "../covenant-peer-auth" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

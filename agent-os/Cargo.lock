@@ -644,6 +644,7 @@ dependencies = [
  "covenant-audit",
  "covenant-budget",
  "covenant-mcp",
+ "covenant-peer-auth",
  "covenant-permissions",
  "covenant-types",
  "serde",

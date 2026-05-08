@@ -91,6 +91,9 @@ fn print_usage() {
         "  covenant peers rotate                   mint a fresh operator token and revoke the old one"
     );
     eprintln!(
+        "  covenant peers list [--limit N] [--prefix B58]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix"
+    );
+    eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
     );
 }
@@ -647,7 +650,7 @@ async fn main() -> Result<()> {
         }
         "peers" => {
             if args.len() < 2 {
-                eprintln!("covenant peers: expected `purge` or `rotate`");
+                eprintln!("covenant peers: expected `purge`, `rotate`, or `list`");
                 std::process::exit(2);
             }
             match args[1].as_str() {
@@ -702,6 +705,58 @@ async fn main() -> Result<()> {
                             // re-read the file.
                             println!("rotated. new token (also written to peers/operator.token):");
                             println!("{token_b58}");
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "list" => {
+                    let mut limit: usize = 20;
+                    let mut prefix: Option<String> = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            "--prefix" => {
+                                i += 1;
+                                let v = args.get(i).context("--prefix needs a value")?;
+                                prefix = Some(v.clone());
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::ListPeers {
+                            limit,
+                            pubkey_prefix: prefix,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::PeerList { peers } => {
+                            if peers.is_empty() {
+                                println!("(no matching peers)");
+                            } else {
+                                for p in peers {
+                                    let status = match p.revoked_at {
+                                        Some(ts) => format!("revoked@{ts}"),
+                                        None => "live".into(),
+                                    };
+                                    println!(
+                                        "{display}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
+                                        display = p.agent_id.display,
+                                        pubkey = p.agent_id.pubkey_base58(),
+                                        prefix = p.token_prefix,
+                                        registered = p.registered_at,
+                                    );
+                                }
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),

@@ -325,6 +325,10 @@ impl Server {
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
             Request::RecentDebits { limit } => self.recent_debits(limit).await,
             Request::RotateOperatorToken => self.rotate_operator_token(peer).await,
+            Request::ListPeers {
+                limit,
+                pubkey_prefix,
+            } => self.list_peers(limit, pubkey_prefix, peer).await,
         }
     }
 
@@ -734,6 +738,61 @@ impl Server {
         }
         match self.peers.purge_revoked_older_than(before_ms).await {
             Ok(purged) => Response::PeersPurged { purged },
+            Err(e) => Response::Error {
+                message: format!("peers: {e}"),
+            },
+        }
+    }
+
+    /// Operator-only triage view of the peer registry. Sprint 62.
+    ///
+    /// Closes Sprint 61's "display-collision probe" post-incident
+    /// response gap: an `OperatorTokenRotationRejected` audit row carries
+    /// `peer_pubkey_b58`, and the operator pastes that prefix into
+    /// `covenant peers list --prefix <b58>` to identify which registry
+    /// entry to revoke (or confirm already-revoked).
+    ///
+    /// Gated to the operator's own identity — `peer.pubkey ==
+    /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`.
+    /// A capability-based gate would collapse to "anyone authenticated
+    /// can list every peer" in v0 (no one but the operator can mint
+    /// caps); the identity gate is strictly stronger and reads correctly
+    /// going into Phase-1 multi-peer where a guest peer must not
+    /// enumerate the registry.
+    ///
+    /// Rejection records `OperatorPeersListRejected` via
+    /// `record_daemon_event` (issuer = daemon identity), mirroring
+    /// Sprint 61's `OperatorTokenRotationRejected` audience model so
+    /// the row passes the Sprint 58d operator-feed filter and the
+    /// rejected peer's `/audit` does not double as a probe-was-logged
+    /// oracle.
+    async fn list_peers(
+        &self,
+        limit: usize,
+        pubkey_prefix: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind: AuditKind::OperatorPeersListRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            self.record_daemon_event(event).await;
+            return Response::Error {
+                message: "peers list requires the operator identity".into(),
+            };
+        }
+        match self
+            .peers
+            .list_summaries(limit, pubkey_prefix.as_deref())
+            .await
+        {
+            Ok(peers) => Response::PeerList { peers },
             Err(e) => Response::Error {
                 message: format!("peers: {e}"),
             },
@@ -4562,5 +4621,234 @@ budget_credits_per_hour = {credits}
             }
             other => panic!("unexpected kind: {other:?}"),
         }
+    }
+
+    /// Sprint 62 — operator-only peers list returns redacted summaries
+    /// for both live and revoked entries. Closes Sprint 61's
+    /// "display-collision probe" post-incident response gap.
+    #[tokio::test]
+    async fn list_peers_returns_summaries_for_operator() {
+        let s = server_with(vec![], "");
+        // Seed three peers: operator (auto-registered? no — fresh
+        // server has empty registry), one live guest, one revoked.
+        let live_token = PeerToken::generate();
+        let dead_token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token: live_token,
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers
+            .register(PeerEntry {
+                token: dead_token,
+                agent_id: AgentId::new("ghost@local", [2u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers.revoke(&dead_token).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+            })
+            .await;
+        let peers = match resp {
+            Response::PeerList { peers } => peers,
+            other => panic!("expected PeerList, got {other:?}"),
+        };
+        assert_eq!(peers.len(), 2, "live + revoked both surface");
+        let dead = peers
+            .iter()
+            .find(|p| p.agent_id.display == "ghost@local")
+            .expect("revoked entry");
+        assert!(dead.revoked_at.is_some(), "revoked entry carries timestamp");
+        let live = peers
+            .iter()
+            .find(|p| p.agent_id.display == "guest@local")
+            .expect("live entry");
+        assert!(live.revoked_at.is_none());
+    }
+
+    /// Sprint 62 — C3 gate enforcement. A non-operator peer is rejected
+    /// with `Response::Error` and an `OperatorPeersListRejected` audit
+    /// row whose issuer is the daemon identity (Sprint 61 audience model
+    /// — operator is the security audience). The peer's identity is
+    /// preserved in the kind payload (`peer_display` + `peer_pubkey_b58`).
+    #[tokio::test]
+    async fn list_peers_rejects_non_operator_with_audit_row() {
+        let s = server_with(vec![], "");
+        let foreign_pubkey = [9u8; 32];
+        let foreign = AgentId::new("guest@local", foreign_pubkey);
+        match s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: None,
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "rejection message must name the gate; got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let events = s.audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::OperatorPeersListRejected { .. }))
+            .expect("OperatorPeersListRejected row");
+        assert_eq!(
+            row.issuer.pubkey,
+            s.identity.agent_id().pubkey,
+            "issuer is the daemon identity (operator-feed audience)"
+        );
+        match &row.kind {
+            AuditKind::OperatorPeersListRejected {
+                peer_display,
+                peer_pubkey_b58,
+            } => {
+                assert_eq!(peer_display, &foreign.display);
+                assert_eq!(peer_pubkey_b58, &bs58::encode(foreign_pubkey).into_string());
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+    }
+
+    /// Sprint 62 — regression test for the Sprint 58d filter audience.
+    /// The rejection row must reach the operator's `/audit` feed and
+    /// must NOT reach the rejected peer's `/audit` feed (no oracle for
+    /// the probing attacker). Mirrors the
+    /// `rotate_token_rejection_visible_to_operator_audit_feed` test.
+    #[tokio::test]
+    async fn list_peers_rejection_visible_to_operator_audit_feed() {
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+        match s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: None,
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        let resp_op = s
+            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .await;
+        let events_op = match resp_op {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            events_op
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorPeersListRejected { .. })),
+            "operator must see the rejection row in their filtered /audit feed"
+        );
+
+        let resp_foreign = s
+            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .await;
+        let events_foreign = match resp_foreign {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            !events_foreign
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorPeersListRejected { .. })),
+            "rejected peer must not see the row (no oracle)"
+        );
+    }
+
+    /// Sprint 62 — server-side `pubkey_prefix` filter. Paste the b58 of
+    /// an audit row's `peer_pubkey_b58` and the daemon returns only
+    /// matching registry entries.
+    #[tokio::test]
+    async fn list_peers_filters_by_pubkey_prefix() {
+        let s = server_with(vec![], "");
+        let target_pubkey = [0xfeu8; 32];
+        let other_pubkey = [0x01u8; 32];
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("target@local", target_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("other@local", other_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let target_b58 = bs58::encode(target_pubkey).into_string();
+        let prefix: String = target_b58.chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: Some(prefix),
+            })
+            .await;
+        let peers = match resp {
+            Response::PeerList { peers } => peers,
+            other => panic!("expected PeerList, got {other:?}"),
+        };
+        assert_eq!(peers.len(), 1, "only the matching pubkey surfaces");
+        assert_eq!(peers[0].agent_id.display, "target@local");
+    }
+
+    /// Sprint 62 — wire-format security: a `Response::PeerList` must
+    /// never carry a peer's full token b58. Catches a regression where
+    /// someone reuses `PeerEntry` (which serializes the full token) as
+    /// the response shape instead of `PeerSummary`.
+    #[tokio::test]
+    async fn list_peers_response_never_contains_full_token_b58() {
+        let s = server_with(vec![], "");
+        let token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+            })
+            .await;
+        let json = serde_json::to_string(&resp).expect("serialize PeerList");
+        let full_b58 = token.to_b58();
+        assert!(
+            !json.contains(&full_b58),
+            "response must not carry full token b58: {json}"
+        );
+        let prefix: String = full_b58.chars().take(6).collect();
+        assert!(
+            json.contains(&prefix),
+            "response should still expose the 6-char redacted prefix"
+        );
     }
 }

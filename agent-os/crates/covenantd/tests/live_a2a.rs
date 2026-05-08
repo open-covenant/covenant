@@ -99,11 +99,14 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
 
     // Sprint 49: `task.sender` must match the authenticated peer; the
     // operator authenticates as `user@local` so that's the sender we use.
-    let peer = read_peer_pubkey(home.path());
+    // Sprint 50: `try_recv` filters by `recipient`, so v0 round-trips have
+    // to address the task to the same peer that drains it.
+    let pubkey = read_peer_pubkey(home.path());
+    let peer = AgentId::new("user@local", pubkey);
     let task = A2ATask {
         id: Uuid::new_v4(),
-        sender: AgentId::new("user@local", peer),
-        recipient: AgentId::new("research@local", [0u8; 32]),
+        sender: peer.clone(),
+        recipient: peer.clone(),
         intent_text: "find recent papers".into(),
         parent: None,
         deadline_ms: None,
@@ -113,7 +116,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     match req(&mut stream, Request::SendA2ATask { task: task.clone() }).await {
         Response::Error { message } => {
             assert!(
-                message.contains("a2a.send.research@local"),
+                message.contains(&format!("a2a.send.{}", task.recipient.display)),
                 "rejection should name the missing cap: {message}"
             );
         }
@@ -149,7 +152,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
     match req(&mut stream, Request::TryRecvA2ATask).await {
         Response::A2ATaskOpt { task: Some(t) } => {
             assert_eq!(t.id, task.id);
-            assert_eq!(t.recipient.display, "research@local");
+            assert_eq!(t.recipient, peer);
         }
         other => panic!("expected queued task, got {other:?}"),
     }

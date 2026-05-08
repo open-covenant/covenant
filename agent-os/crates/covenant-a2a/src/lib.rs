@@ -91,12 +91,21 @@ pub enum A2AError {
 pub trait Mailbox: Send + Sync {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError>;
     async fn recv_task(&self) -> Result<A2ATask, A2AError>;
-    /// Non-blocking variant of `recv_task` for RPC-style callers (HTTP /
-    /// IPC) that want a single round-trip.
-    async fn try_recv_task(&self) -> Result<Option<A2ATask>, A2AError>;
+    /// Non-blocking, peer-scoped recv for the RPC-style daemon transports.
+    /// Returns the oldest queued task whose `recipient` equals `recipient`,
+    /// or `None` if no matching task is queued. Mailbox state is shared
+    /// across peers, but each peer only observes — and only consumes —
+    /// tasks addressed to it.
+    async fn try_recv_task_for(&self, recipient: &AgentId) -> Result<Option<A2ATask>, A2AError>;
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError>;
     async fn recv_result(&self) -> Result<A2ATaskResult, A2AError>;
-    async fn try_recv_result(&self) -> Result<Option<A2ATaskResult>, A2AError>;
+    /// Non-blocking, peer-scoped result recv. Returns the oldest queued
+    /// result whose underlying task's `sender` equals `peer` — i.e., the
+    /// peer that originally dispatched the task is the one that can drain
+    /// its response. Look up uses the senders map maintained by
+    /// `send_task`; results whose `task_id` is unknown to the senders map
+    /// are skipped (never returned to any peer).
+    async fn try_recv_result_for(&self, peer: &AgentId) -> Result<Option<A2ATaskResult>, A2AError>;
 
     /// Read-only snapshot of the most recent queued tasks, oldest first up
     /// to `limit`. Does not consume from the queue. Operator-facing.
@@ -166,8 +175,12 @@ impl Mailbox for InMemoryMailbox {
         }
     }
 
-    async fn try_recv_task(&self) -> Result<Option<A2ATask>, A2AError> {
-        Ok(self.tasks.lock().unwrap().pop_front())
+    async fn try_recv_task_for(&self, recipient: &AgentId) -> Result<Option<A2ATask>, A2AError> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let Some(pos) = tasks.iter().position(|t| t.recipient == *recipient) else {
+            return Ok(None);
+        };
+        Ok(tasks.remove(pos))
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
@@ -185,8 +198,13 @@ impl Mailbox for InMemoryMailbox {
         }
     }
 
-    async fn try_recv_result(&self) -> Result<Option<A2ATaskResult>, A2AError> {
-        Ok(self.results.lock().unwrap().pop_front())
+    async fn try_recv_result_for(&self, peer: &AgentId) -> Result<Option<A2ATaskResult>, A2AError> {
+        let senders = self.senders.lock().unwrap();
+        let mut results = self.results.lock().unwrap();
+        let pos = results
+            .iter()
+            .position(|r| senders.get(&r.task_id).map(|s| s == peer).unwrap_or(false));
+        Ok(pos.and_then(|p| results.remove(p)))
     }
 
     async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError> {
@@ -364,12 +382,20 @@ impl Mailbox for JsonlMailbox {
         }
     }
 
-    async fn try_recv_task(&self) -> Result<Option<A2ATask>, A2AError> {
+    async fn try_recv_task_for(&self, recipient: &AgentId) -> Result<Option<A2ATask>, A2AError> {
         let _g = self.file_lock.lock().await;
-        let front_id = self.state.lock().unwrap().tasks.front().map(|t| t.id);
-        let Some(id) = front_id else { return Ok(None) };
+        let target_id = {
+            let s = self.state.lock().unwrap();
+            s.tasks
+                .iter()
+                .find(|t| t.recipient == *recipient)
+                .map(|t| t.id)
+        };
+        let Some(id) = target_id else { return Ok(None) };
         self.append(&MailboxEvent::TaskRecv { task_id: id }).await?;
-        Ok(self.state.lock().unwrap().tasks.pop_front())
+        let mut s = self.state.lock().unwrap();
+        let pos = s.tasks.iter().position(|t| t.id == id);
+        Ok(pos.and_then(|p| s.tasks.remove(p)))
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
@@ -406,19 +432,24 @@ impl Mailbox for JsonlMailbox {
         }
     }
 
-    async fn try_recv_result(&self) -> Result<Option<A2ATaskResult>, A2AError> {
+    async fn try_recv_result_for(&self, peer: &AgentId) -> Result<Option<A2ATaskResult>, A2AError> {
         let _g = self.file_lock.lock().await;
-        let front_id = self
-            .state
-            .lock()
-            .unwrap()
-            .results
-            .front()
-            .map(|r| r.task_id);
-        let Some(id) = front_id else { return Ok(None) };
-        self.append(&MailboxEvent::ResultRecv { task_id: id })
-            .await?;
-        Ok(self.state.lock().unwrap().results.pop_front())
+        let target_task_id = {
+            let s = self.state.lock().unwrap();
+            s.results.iter().find_map(|r| {
+                s.senders
+                    .get(&r.task_id)
+                    .filter(|sender| *sender == peer)
+                    .map(|_| r.task_id)
+            })
+        };
+        let Some(task_id) = target_task_id else {
+            return Ok(None);
+        };
+        self.append(&MailboxEvent::ResultRecv { task_id }).await?;
+        let mut s = self.state.lock().unwrap();
+        let pos = s.results.iter().position(|r| r.task_id == task_id);
+        Ok(pos.and_then(|p| s.results.remove(p)))
     }
 
     async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError> {
@@ -525,12 +556,13 @@ mod tests {
     #[tokio::test]
     async fn try_recv_returns_none_when_empty_and_some_after_send() {
         let m = InMemoryMailbox::new();
-        assert!(m.try_recv_task().await.unwrap().is_none());
+        let recipient = dummy_agent("research@local");
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_none());
         m.send_task(dummy_task()).await.unwrap();
-        let got = m.try_recv_task().await.unwrap();
+        let got = m.try_recv_task_for(&recipient).await.unwrap();
         assert!(got.is_some());
         // After draining, empty again.
-        assert!(m.try_recv_task().await.unwrap().is_none());
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -578,10 +610,11 @@ mod tests {
         assert_eq!(recent[2].id, t3.id, "newest last");
 
         // recent_tasks must not drain.
-        assert!(m.try_recv_task().await.unwrap().is_some());
-        assert!(m.try_recv_task().await.unwrap().is_some());
-        assert!(m.try_recv_task().await.unwrap().is_some());
-        assert!(m.try_recv_task().await.unwrap().is_none());
+        let recipient = dummy_agent("research@local");
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_some());
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_some());
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_some());
+        assert!(m.try_recv_task_for(&recipient).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -651,7 +684,11 @@ mod tests {
             let m = JsonlMailbox::open(path.clone()).await.unwrap();
             m.send_task(t1.clone()).await.unwrap();
             m.send_task(t2.clone()).await.unwrap();
-            let drained = m.try_recv_task().await.unwrap().unwrap();
+            let drained = m
+                .try_recv_task_for(&dummy_agent("research@local"))
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(drained.id, t1.id);
         }
         let m2 = JsonlMailbox::open(path.clone()).await.unwrap();
@@ -694,9 +731,148 @@ mod tests {
             let m = JsonlMailbox::open(path.clone()).await.unwrap();
             m.send_task(t.clone()).await.unwrap();
             m.send_result(r.clone()).await.unwrap();
-            assert!(m.try_recv_result().await.unwrap().is_some());
+            assert!(m.try_recv_result_for(&t.sender).await.unwrap().is_some());
         }
         let m2 = JsonlMailbox::open(path).await.unwrap();
-        assert!(m2.try_recv_result().await.unwrap().is_none());
+        assert!(m2.try_recv_result_for(&t.sender).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn try_recv_task_for_returns_only_recipient_match() {
+        let m = InMemoryMailbox::new();
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let carol = dummy_agent("carol@local");
+        // Alice -> Bob, Alice -> Carol, Alice -> Bob
+        let to_bob_1 = A2ATask {
+            id: Uuid::new_v4(),
+            sender: alice.clone(),
+            recipient: bob.clone(),
+            intent_text: "1".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let to_carol = A2ATask {
+            id: Uuid::new_v4(),
+            sender: alice.clone(),
+            recipient: carol.clone(),
+            intent_text: "2".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let to_bob_2 = A2ATask {
+            id: Uuid::new_v4(),
+            sender: alice.clone(),
+            recipient: bob.clone(),
+            intent_text: "3".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        m.send_task(to_bob_1.clone()).await.unwrap();
+        m.send_task(to_carol.clone()).await.unwrap();
+        m.send_task(to_bob_2.clone()).await.unwrap();
+
+        // Bob drains: gets the two addressed to him, in the order they were sent.
+        let first = m.try_recv_task_for(&bob).await.unwrap().unwrap();
+        assert_eq!(first.id, to_bob_1.id, "oldest match first");
+        let second = m.try_recv_task_for(&bob).await.unwrap().unwrap();
+        assert_eq!(second.id, to_bob_2.id);
+        assert!(m.try_recv_task_for(&bob).await.unwrap().is_none());
+
+        // Carol's task is still queued — Bob's drain didn't touch it.
+        let carol_first = m.try_recv_task_for(&carol).await.unwrap().unwrap();
+        assert_eq!(carol_first.id, to_carol.id);
+    }
+
+    #[tokio::test]
+    async fn try_recv_task_for_skips_other_recipients() {
+        let m = InMemoryMailbox::new();
+        let bob = dummy_agent("bob@local");
+        let stranger = dummy_agent("stranger@local");
+        // Bob's task is queued; stranger tries to drain — gets nothing,
+        // task is still there for Bob.
+        let to_bob = A2ATask {
+            id: Uuid::new_v4(),
+            sender: dummy_agent("alice@local"),
+            recipient: bob.clone(),
+            intent_text: "for bob only".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        m.send_task(to_bob.clone()).await.unwrap();
+        assert!(m.try_recv_task_for(&stranger).await.unwrap().is_none());
+        let got = m.try_recv_task_for(&bob).await.unwrap().unwrap();
+        assert_eq!(got.id, to_bob.id);
+    }
+
+    #[tokio::test]
+    async fn try_recv_result_for_returns_only_results_for_peers_tasks() {
+        let m = InMemoryMailbox::new();
+        let alice = dummy_agent("alice@local");
+        let dan = dummy_agent("dan@local");
+        // Alice sends two tasks; Dan sends one.
+        let alice_task_1 = A2ATask {
+            id: Uuid::new_v4(),
+            sender: alice.clone(),
+            recipient: dummy_agent("research@local"),
+            intent_text: "alice's".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let alice_task_2 = A2ATask {
+            id: Uuid::new_v4(),
+            sender: alice.clone(),
+            recipient: dummy_agent("research@local"),
+            intent_text: "alice's other".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let dan_task = A2ATask {
+            id: Uuid::new_v4(),
+            sender: dan.clone(),
+            recipient: dummy_agent("research@local"),
+            intent_text: "dan's".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        m.send_task(alice_task_1.clone()).await.unwrap();
+        m.send_task(alice_task_2.clone()).await.unwrap();
+        m.send_task(dan_task.clone()).await.unwrap();
+
+        // Results land in interleaved order — alice, dan, alice.
+        m.send_result(A2ATaskResult::ok(alice_task_1.id, vec![]))
+            .await
+            .unwrap();
+        m.send_result(A2ATaskResult::ok(dan_task.id, vec![]))
+            .await
+            .unwrap();
+        m.send_result(A2ATaskResult::ok(alice_task_2.id, vec![]))
+            .await
+            .unwrap();
+
+        // Alice drains hers first-then-second; Dan's stays.
+        let first = m.try_recv_result_for(&alice).await.unwrap().unwrap();
+        assert_eq!(first.task_id, alice_task_1.id);
+        let second = m.try_recv_result_for(&alice).await.unwrap().unwrap();
+        assert_eq!(second.task_id, alice_task_2.id);
+        assert!(m.try_recv_result_for(&alice).await.unwrap().is_none());
+
+        // Dan drains his.
+        let dans = m.try_recv_result_for(&dan).await.unwrap().unwrap();
+        assert_eq!(dans.task_id, dan_task.id);
+    }
+
+    #[tokio::test]
+    async fn try_recv_result_for_skips_results_for_unknown_task_ids() {
+        // Defence-in-depth: a result whose `task_id` is not in the senders
+        // map (replay corruption / out-of-band write) is invisible to
+        // every peer. The Sprint-43 audit-and-reject path covers `post`;
+        // this covers `recv`.
+        let m = InMemoryMailbox::new();
+        let alice = dummy_agent("alice@local");
+        m.send_result(A2ATaskResult::ok(Uuid::new_v4(), vec![]))
+            .await
+            .unwrap();
+        assert!(m.try_recv_result_for(&alice).await.unwrap().is_none());
     }
 }

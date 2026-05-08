@@ -106,18 +106,20 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
     //     rather than any clean-shutdown drain logic.
 
     // Sprint 49 spoof check: `task.sender` must match the authenticated
-    // peer (display + pubkey). Pre-create the on-disk identity so we can
-    // build the task's sender with the right pubkey before either daemon
-    // run touches it.
+    // peer. Sprint 50 per-peer recv: `task.recipient` must also equal
+    // the peer that drains. Pre-create the on-disk identity so we can
+    // build the task's sender + recipient with the right pubkey before
+    // either daemon run touches it.
     let _ = covenant_identity::LocalIdentity::load_or_create(
         &home.path().join("identity").join("local.key"),
         "user@local",
     )
     .expect("seed identity");
+    let peer = AgentId::new("user@local", read_peer_pubkey(home.path()));
     let task = A2ATask {
         id: Uuid::new_v4(),
-        sender: AgentId::new("user@local", read_peer_pubkey(home.path())),
-        recipient: AgentId::new("research@local", [0u8; 32]),
+        sender: peer.clone(),
+        recipient: peer.clone(),
         intent_text: "find recent papers".into(),
         parent: None,
         deadline_ms: None,
@@ -215,8 +217,8 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         match req(&mut stream, Request::TryRecvA2ATask).await {
             Response::A2ATaskOpt { task: Some(t) } => {
                 assert_eq!(t.id, task.id, "replayed task id mismatch");
-                assert_eq!(t.sender.display, task.sender.display);
-                assert_eq!(t.recipient.display, "research@local");
+                assert_eq!(t.sender, task.sender);
+                assert_eq!(t.recipient, task.recipient);
                 assert_eq!(t.intent_text, "find recent papers");
             }
             other => panic!("expected replayed task, got {other:?}"),

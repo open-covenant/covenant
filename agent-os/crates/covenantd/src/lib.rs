@@ -217,9 +217,9 @@ impl Server {
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit).await,
             Request::SendA2ATask { task } => self.send_a2a_task(task, peer).await,
-            Request::TryRecvA2ATask => self.try_recv_a2a_task().await,
+            Request::TryRecvA2ATask => self.try_recv_a2a_task(peer).await,
             Request::PostA2AResult { result } => self.post_a2a_result(result, peer).await,
-            Request::TryRecvA2AResult => self.try_recv_a2a_result().await,
+            Request::TryRecvA2AResult => self.try_recv_a2a_result(peer).await,
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
         }
@@ -269,8 +269,8 @@ impl Server {
         }
     }
 
-    async fn try_recv_a2a_task(&self) -> Response {
-        match self.mailbox.try_recv_task().await {
+    async fn try_recv_a2a_task(&self, peer: &AgentId) -> Response {
+        match self.mailbox.try_recv_task_for(peer).await {
             Ok(task) => Response::A2ATaskOpt { task },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
@@ -333,8 +333,8 @@ impl Server {
         }
     }
 
-    async fn try_recv_a2a_result(&self) -> Response {
-        match self.mailbox.try_recv_result().await {
+    async fn try_recv_a2a_result(&self, peer: &AgentId) -> Response {
+        match self.mailbox.try_recv_result_for(peer).await {
             Ok(result) => Response::A2AResultOpt { result },
             Err(e) => Response::Error {
                 message: format!("a2a: {e}"),
@@ -1294,7 +1294,18 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_task_round_trips_through_server() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task_for(&s);
+        // Sprint 50: `try_recv` filters by recipient, so the round-trip
+        // test queues a task addressed *to* the operator peer and drains
+        // it from the same peer's perspective.
+        let peer = s.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: peer.clone(),
+            intent_text: "loopback".into(),
+            parent: None,
+            deadline_ms: None,
+        };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,
@@ -1436,7 +1447,18 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_recent_returns_queued_tasks_without_consuming() {
         let s = server_with(vec![], "");
-        let task = dummy_a2a_task_for(&s);
+        // Sprint 50: per-peer recv requires the queued tasks to be
+        // addressed to the peer doing the drain. Loopback fits the v0
+        // single-peer test surface.
+        let peer = s.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: peer.clone(),
+            intent_text: "loopback".into(),
+            parent: None,
+            deadline_ms: None,
+        };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
             scope: None,

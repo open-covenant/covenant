@@ -10,6 +10,7 @@ import {
   type BudgetDebit,
   type ContentBlock,
   type Memory,
+  type PeerSummary,
   type SettlementReceipt,
   type SignedCapability,
   type ToolSpec,
@@ -41,6 +42,8 @@ export default function Home() {
   const [memoryTier, setMemoryTier] = useState<
     "" | "working" | "episodic" | "longterm"
   >("");
+  const [peers, setPeers] = useState<PeerSummary[]>([]);
+  const [peerPrefix, setPeerPrefix] = useState("");
 
   const [tools, setTools] = useState<ToolSpec[]>([]);
   const [toolName, setToolName] = useState("");
@@ -51,7 +54,7 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const [m, c, t, a, r, at, ar, d] = await Promise.all([
+      const [m, c, t, a, r, at, ar, d, p] = await Promise.all([
         api.recentMemory(20, memoryTier || undefined),
         api.recentCapabilities(20),
         api.listTools(),
@@ -60,6 +63,7 @@ export default function Home() {
         api.recentA2ATasks(20),
         api.recentA2AResults(20),
         api.recentDebits(20),
+        api.listPeers(20, peerPrefix || undefined),
       ]);
       setMemories(m.records);
       setCapabilities(c.capabilities);
@@ -69,12 +73,13 @@ export default function Home() {
       setA2aTasks(at.tasks);
       setA2aResults(ar.results);
       setDebits(d.debits);
+      setPeers(p.peers);
       if (!toolName && t.tools.length > 0) setToolName(t.tools[0].name);
       setLastError(null);
     } catch (e) {
       setLastError(String(e));
     }
-  }, [toolName, memoryTier]);
+  }, [toolName, memoryTier, peerPrefix]);
 
   useEffect(() => {
     // Initial fetch + 3s polling. The lint rule against calling
@@ -300,6 +305,51 @@ export default function Home() {
       </section>
 
       <section>
+        <h2>registered peers</h2>
+        <p className="dim">
+          newest-first; revoked entries kept so a post-incident pubkey from
+          the audit feed resolves to a live or tombstoned row in one read.
+          paste a pubkey b58 prefix below to filter — same encoding as the
+          audit row&apos;s peer_pubkey_b58.
+        </p>
+        <form onSubmit={(e) => e.preventDefault()}>
+          <input
+            value={peerPrefix}
+            onChange={(e) => setPeerPrefix(e.target.value)}
+            placeholder="pubkey b58 prefix (paste from audit row)"
+          />
+        </form>
+        {peers.length === 0 ? (
+          <p className="dim">
+            {peerPrefix ? "(no peers match prefix)" : "(no peers registered)"}
+          </p>
+        ) : (
+          <ul>
+            {peers.map((p) => (
+              <li key={p.token_prefix + ":" + p.registered_at}>
+                <span className="dim">
+                  [{new Date(p.registered_at).toLocaleTimeString()}]{" "}
+                </span>
+                <span className={p.revoked_at !== null ? "dim" : "accent"}>
+                  {p.agent_id.display}
+                </span>{" "}
+                <span className="dim">
+                  · token {p.token_prefix}… · pubkey{" "}
+                  {p.agent_id.pubkey.slice(0, 8)}…
+                  {p.revoked_at !== null && (
+                    <>
+                      {" "}
+                      · revoked {new Date(p.revoked_at).toLocaleTimeString()}
+                    </>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
         <h2>capabilities</h2>
         <form onSubmit={onGrant}>
           <input
@@ -511,6 +561,14 @@ export default function Home() {
                     </span>
                   )}
                   {e.kind.type === "operator_token_rotation_rejected" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.peer_display} · pubkey{" "}
+                      {e.kind.peer_pubkey_b58.slice(0, 8)}… · rejected
+                      (non-operator)
+                    </span>
+                  )}
+                  {e.kind.type === "operator_peers_list_rejected" && (
                     <span className="dim">
                       {" "}
                       {e.kind.peer_display} · pubkey{" "}

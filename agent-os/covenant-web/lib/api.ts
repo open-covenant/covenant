@@ -134,6 +134,11 @@ export type AuditKind =
       type: "operator_token_rotation_rejected";
       peer_display: string;
       peer_pubkey_b58: string;
+    }
+  | {
+      type: "operator_peers_list_rejected";
+      peer_display: string;
+      peer_pubkey_b58: string;
     };
 
 export type AuditEvent = {
@@ -175,6 +180,18 @@ export type BudgetDebit = {
   credits: number;
   paired_receipt: string;
   at_ms: number;
+};
+
+// Sprint 62 wire shape: full token bytes never appear; `token_prefix` is
+// 6 chars matching the audit log's `*_token_prefix` redaction. `revoked_at`
+// is `Some(ts)` for tombstoned entries — kept on purpose so post-incident
+// triage can answer "is this audit-flagged peer already revoked?" in one
+// look. Newest-first.
+export type PeerSummary = {
+  agent_id: AgentId;
+  token_prefix: string;
+  registered_at: number;
+  revoked_at: number | null;
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -286,4 +303,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+
+  listPeers: (limit = 20, prefix?: string) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (prefix) q.set("prefix", prefix);
+    return call<{ kind: "peer_list"; peers: PeerSummary[] }>(
+      `/peers/list?${q.toString()}`,
+    );
+  },
 };

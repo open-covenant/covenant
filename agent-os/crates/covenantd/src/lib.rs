@@ -16,7 +16,7 @@ use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
-use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken};
+use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -329,6 +329,7 @@ impl Server {
                 limit,
                 pubkey_prefix,
             } => self.list_peers(limit, pubkey_prefix, peer).await,
+            Request::RevokePeer { token_prefix } => self.revoke_peer(token_prefix, peer).await,
         }
     }
 
@@ -797,6 +798,82 @@ impl Server {
                 message: format!("peers: {e}"),
             },
         }
+    }
+
+    /// Revoke a single peer registry entry by token-prefix. Sprint 65.
+    ///
+    /// Closes the post-incident response loop opened by Sprint 62 + 64:
+    /// the operator pastes the 6-char `token_prefix` from `peers list`
+    /// output (or any longer leading substring of the full base58 token)
+    /// to tombstone exactly one entry. The four [`RevokeOutcome`] cases
+    /// (Revoked / AlreadyRevoked / NotFound / Ambiguous) survive on the
+    /// wire so the CLI can render each clearly without re-calling
+    /// `peers list` for narrowing.
+    ///
+    /// Gated to the operator's own identity — `peer.pubkey ==
+    /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`
+    /// and `list_peers`. A capability-based gate would collapse to
+    /// "anyone authenticated can revoke" in v0 (no one but the operator
+    /// can mint caps); the identity gate is strictly stronger and reads
+    /// correctly going into Phase-1 multi-peer where a guest peer must
+    /// not revoke any other peer's token.
+    ///
+    /// Rejection records `OperatorPeerRevokeRejected` via
+    /// `record_daemon_event` (issuer = daemon identity), mirroring the
+    /// Sprint 61 audience model so the row passes the Sprint 58d
+    /// operator-feed filter and the rejected peer's `/audit` does not
+    /// double as a probe-was-logged oracle. Only the `Revoked` outcome
+    /// emits a `PeerRevoked` audit row (success); `NotFound`,
+    /// `Ambiguous`, and `AlreadyRevoked` are operator-narrowing events,
+    /// not security events, and the response itself is the operator's
+    /// signal.
+    ///
+    /// Empty prefix is rejected with a specific `Response::Error` —
+    /// otherwise the registry would return `Ambiguous { matches: <every
+    /// entry> }`, which is operationally a footgun.
+    async fn revoke_peer(&self, token_prefix: String, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind: AuditKind::OperatorPeerRevokeRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            self.record_daemon_event(event).await;
+            return Response::Error {
+                message: "peer revoke requires the operator identity".into(),
+            };
+        }
+        if token_prefix.is_empty() {
+            return Response::Error {
+                message: "peer revoke requires a non-empty token prefix".into(),
+            };
+        }
+        let outcome = match self.peers.revoke_by_token_prefix(&token_prefix).await {
+            Ok(o) => o,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("peers: {e}"),
+                };
+            }
+        };
+        if let RevokeOutcome::Revoked(summary) = &outcome {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::PeerRevoked {
+                    peer_display: summary.agent_id.display.clone(),
+                    peer_pubkey_b58: bs58::encode(summary.agent_id.pubkey).into_string(),
+                    token_prefix: summary.token_prefix.clone(),
+                },
+            };
+            self.record_peer_event(peer, event).await;
+        }
+        Response::PeerRevoked { outcome }
     }
 
     /// Returns audit rows whose `issuer.pubkey` matches `peer.pubkey`.
@@ -4850,5 +4927,287 @@ budget_credits_per_hour = {credits}
             json.contains(&prefix),
             "response should still expose the 6-char redacted prefix"
         );
+    }
+
+    /// Sprint 65 — operator-only `peers revoke` succeeds under the C3
+    /// gate and emits a `PeerRevoked` audit row whose issuer is the
+    /// operator (peer-event audience per Sprint 58f). The kind payload
+    /// names the revoked peer (display + pubkey-b58 + token-prefix);
+    /// the operator is the issuer because they took the action.
+    #[tokio::test]
+    async fn revoke_peer_succeeds_under_operator_identity_with_audit_row() {
+        let s = server_with(vec![], "");
+        let guest_token = PeerToken::generate();
+        let guest_pubkey = [7u8; 32];
+        s.peers
+            .register(PeerEntry {
+                token: guest_token,
+                agent_id: AgentId::new("guest@local", guest_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let prefix: String = guest_token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix.clone(),
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => match outcome {
+                RevokeOutcome::Revoked(summary) => {
+                    assert_eq!(summary.agent_id.display, "guest@local");
+                    assert_eq!(summary.agent_id.pubkey, guest_pubkey);
+                    assert_eq!(summary.token_prefix, prefix);
+                    assert!(summary.revoked_at.is_some());
+                }
+                other => panic!("expected Revoked, got {other:?}"),
+            },
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+        // The token no longer resolves.
+        assert_eq!(s.peers.resolve(&guest_token).await.unwrap(), None);
+        // PeerRevoked audit row exists with operator-issuer.
+        let events = s.audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::PeerRevoked { .. }))
+            .expect("PeerRevoked row");
+        assert_eq!(
+            row.issuer.pubkey,
+            s.identity.agent_id().pubkey,
+            "issuer is the operator (peer-event audience per Sprint 58f)"
+        );
+        match &row.kind {
+            AuditKind::PeerRevoked {
+                peer_display,
+                peer_pubkey_b58,
+                token_prefix,
+            } => {
+                assert_eq!(peer_display, "guest@local");
+                assert_eq!(peer_pubkey_b58, &bs58::encode(guest_pubkey).into_string());
+                assert_eq!(token_prefix, &prefix);
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+    }
+
+    /// Sprint 65 — C3 gate enforcement. A non-operator peer is rejected
+    /// with `Response::Error` and an `OperatorPeerRevokeRejected` audit
+    /// row whose issuer is the daemon identity (Sprint 61 audience model
+    /// — operator is the security audience, not the rejected peer).
+    #[tokio::test]
+    async fn revoke_peer_rejects_non_operator_with_audit_row() {
+        let s = server_with(vec![], "");
+        let foreign_pubkey = [11u8; 32];
+        let foreign = AgentId::new("guest@local", foreign_pubkey);
+        match s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: "abcdef".into(),
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "rejection message must name the gate; got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let events = s.audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::OperatorPeerRevokeRejected { .. }))
+            .expect("OperatorPeerRevokeRejected row");
+        assert_eq!(
+            row.issuer.pubkey,
+            s.identity.agent_id().pubkey,
+            "issuer is the daemon identity (operator-feed audience)"
+        );
+        match &row.kind {
+            AuditKind::OperatorPeerRevokeRejected {
+                peer_display,
+                peer_pubkey_b58,
+            } => {
+                assert_eq!(peer_display, &foreign.display);
+                assert_eq!(peer_pubkey_b58, &bs58::encode(foreign_pubkey).into_string());
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+    }
+
+    /// Sprint 65 — Sprint 58d audience-filter regression. The rejection
+    /// row must reach the operator's `/audit` feed and must NOT reach
+    /// the rejected peer's feed (no oracle for the probing attacker).
+    /// Mirrors `list_peers_rejection_visible_to_operator_audit_feed`.
+    #[tokio::test]
+    async fn revoke_peer_rejection_visible_to_operator_audit_feed() {
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let foreign = AgentId::new("guest@local", [11u8; 32]);
+        match s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: "abcdef".into(),
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let resp_op = s
+            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .await;
+        let events_op = match resp_op {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            events_op
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorPeerRevokeRejected { .. })),
+            "operator must see the rejection row in their filtered /audit feed"
+        );
+
+        let resp_foreign = s
+            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .await;
+        let events_foreign = match resp_foreign {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert!(
+            !events_foreign
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorPeerRevokeRejected { .. })),
+            "rejected peer must not see the row (no oracle)"
+        );
+    }
+
+    /// Sprint 65 — ambiguous outcome. Two peers whose tokens share a
+    /// 1-char b58 prefix; the operator's revoke matches both and the
+    /// daemon returns `Ambiguous { matches }`. The registry is unchanged
+    /// (both still resolve) and NO audit row is recorded — non-rejection
+    /// failures are not security events (E1 plan-gate decision).
+    #[tokio::test]
+    async fn revoke_peer_returns_ambiguous_when_prefix_matches_multiple() {
+        let s = server_with(vec![], "");
+        let (t1, e1) = peer_with_token_b58_starting_with("1", "a@local", [1u8; 32]);
+        let (t2, e2) = peer_with_token_b58_starting_with("1", "b@local", [2u8; 32]);
+        s.peers.register(e1).await.unwrap();
+        s.peers.register(e2).await.unwrap();
+        let pre_count = s.audit.recent(50).await.unwrap().len();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: "1".into(),
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => match outcome {
+                RevokeOutcome::Ambiguous { matches } => {
+                    assert_eq!(matches.len(), 2, "both seeded peers surface");
+                    assert!(matches.iter().all(|m| m.revoked_at.is_none()));
+                }
+                other => panic!("expected Ambiguous, got {other:?}"),
+            },
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+        // Both still resolve — the registry is unchanged.
+        assert!(s.peers.resolve(&t1).await.unwrap().is_some());
+        assert!(s.peers.resolve(&t2).await.unwrap().is_some());
+        // No audit row added — non-rejection failures are not security events.
+        let post_count = s.audit.recent(50).await.unwrap().len();
+        assert_eq!(
+            post_count, pre_count,
+            "ambiguous outcome must not emit any audit row"
+        );
+    }
+
+    /// Sprint 65 — wire-format regression: a `Response::PeerRevoked`
+    /// must never carry a peer's full token b58. Mirrors
+    /// `list_peers_response_never_contains_full_token_b58`.
+    #[tokio::test]
+    async fn revoke_peer_response_never_contains_full_token_b58() {
+        let s = server_with(vec![], "");
+        let token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix.clone(),
+            })
+            .await;
+        let json = serde_json::to_string(&resp).expect("serialize PeerRevoked");
+        let full_b58 = token.to_b58();
+        assert!(
+            !json.contains(&full_b58),
+            "response must not carry full token b58: {json}"
+        );
+        assert!(
+            json.contains(&prefix),
+            "response should still expose the 6-char redacted prefix"
+        );
+    }
+
+    /// Sprint 65 — empty prefix is rejected at the daemon boundary.
+    /// Without this guard the registry would return `Ambiguous {
+    /// matches: <every entry> }`, which is operationally a footgun.
+    #[tokio::test]
+    async fn revoke_peer_rejects_empty_prefix() {
+        let s = server_with(vec![], "");
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("guest@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        match s
+            .op_respond(Request::RevokePeer {
+                token_prefix: String::new(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(message.contains("non-empty")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// Generate a `PeerEntry` whose `token.to_b58()` starts with the
+    /// supplied prefix. Random-rejection sampling — converges in ~58
+    /// iterations per leading char of base58. Used by the daemon-side
+    /// `revoke_peer_returns_ambiguous_when_prefix_matches_multiple`
+    /// test to seed two peers with a deterministic shared prefix.
+    fn peer_with_token_b58_starting_with(
+        prefix: &str,
+        name: &str,
+        pubkey: [u8; 32],
+    ) -> (PeerToken, PeerEntry) {
+        for _ in 0..10_000 {
+            let t = PeerToken::generate();
+            if t.to_b58().starts_with(prefix) {
+                let ent = PeerEntry {
+                    token: t,
+                    agent_id: AgentId::new(name, pubkey),
+                    registered_at: epoch_ms(),
+                };
+                return (t, ent);
+            }
+        }
+        panic!("could not find token starting with {prefix:?} after 10000 tries");
     }
 }

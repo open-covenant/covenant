@@ -194,6 +194,32 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// Logged when the operator successfully revokes a peer registry
+    /// entry via `RevokePeer`. Issuer is the operator (peer-event
+    /// audience per Sprint 58f) — the operator took the action.
+    /// `peer_display` and `peer_pubkey_b58` describe the *revoked*
+    /// peer (not the issuer). `token_prefix` is the same 6-char
+    /// redaction `OperatorTokenRotated` records — full token bytes
+    /// never enter the audit log. Sprint 65.
+    PeerRevoked {
+        peer_display: String,
+        peer_pubkey_b58: String,
+        token_prefix: String,
+    },
+    /// Logged when `RevokePeer` is rejected because the authenticated
+    /// peer is not the operator. Daemon-as-issuer audience model
+    /// matching [`AuditKind::OperatorTokenRotationRejected`] and
+    /// [`AuditKind::OperatorPeersListRejected`] — Sprint 61's mid-sprint
+    /// security review caught the inverted-audience bug; recording the
+    /// rejection under the rejected peer would (a) hide the probe from
+    /// the operator's `/audit` feed under the Sprint 58d filter and
+    /// (b) turn the rejected peer's own feed into a probe-was-logged
+    /// oracle. `peer_pubkey_b58` is the unforgeable identifier; the
+    /// `display` is wire-supplied. Sprint 65.
+    OperatorPeerRevokeRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
 }
 
 #[async_trait]

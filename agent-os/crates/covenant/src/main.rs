@@ -18,6 +18,8 @@
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
+//!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>]
+//!   covenant peers revoke <token-prefix>
 //!   covenant intents resume <intent-id>
 //! ```
 
@@ -92,6 +94,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant peers list [--limit N] [--prefix B58]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix"
+    );
+    eprintln!(
+        "  covenant peers revoke <TOKEN-PREFIX>    revoke a single peer by its token prefix (operator-only)"
     );
     eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
@@ -650,7 +655,7 @@ async fn main() -> Result<()> {
         }
         "peers" => {
             if args.len() < 2 {
-                eprintln!("covenant peers: expected `purge`, `rotate`, or `list`");
+                eprintln!("covenant peers: expected `purge`, `rotate`, `list`, or `revoke`");
                 std::process::exit(2);
             }
             match args[1].as_str() {
@@ -758,6 +763,61 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "revoke" => {
+                    let token_prefix = args
+                        .get(2)
+                        .context("covenant peers revoke: missing TOKEN-PREFIX argument")?
+                        .clone();
+                    write_frame(&mut stream, &Request::RevokePeer { token_prefix }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::PeerRevoked { outcome } => match outcome {
+                            covenant_peer_auth::RevokeOutcome::Revoked(s) => {
+                                println!(
+                                    "revoked\t{display}\t{pubkey}\t{prefix}…\trevoked@{revoked}",
+                                    display = s.agent_id.display,
+                                    pubkey = s.agent_id.pubkey_base58(),
+                                    prefix = s.token_prefix,
+                                    revoked = s.revoked_at.unwrap_or(0),
+                                );
+                            }
+                            covenant_peer_auth::RevokeOutcome::AlreadyRevoked(s) => {
+                                println!(
+                                    "already revoked at {revoked}: {display}\t{pubkey}\t{prefix}…",
+                                    display = s.agent_id.display,
+                                    pubkey = s.agent_id.pubkey_base58(),
+                                    prefix = s.token_prefix,
+                                    revoked = s.revoked_at.unwrap_or(0),
+                                );
+                            }
+                            covenant_peer_auth::RevokeOutcome::NotFound => {
+                                eprintln!("no peer matched the supplied prefix");
+                                std::process::exit(1);
+                            }
+                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches } => {
+                                eprintln!(
+                                    "prefix matched {n} peers — narrow the prefix:",
+                                    n = matches.len()
+                                );
+                                for p in matches {
+                                    let status = match p.revoked_at {
+                                        Some(ts) => format!("revoked@{ts}"),
+                                        None => "live".into(),
+                                    };
+                                    eprintln!(
+                                        "  {display}\t{pubkey}\t{prefix}…\tregistered@{registered}\t{status}",
+                                        display = p.agent_id.display,
+                                        pubkey = p.agent_id.pubkey_base58(),
+                                        prefix = p.token_prefix,
+                                        registered = p.registered_at,
+                                    );
+                                }
+                                std::process::exit(1);
+                            }
+                        },
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
                     }

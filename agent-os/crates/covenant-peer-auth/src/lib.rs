@@ -130,6 +130,36 @@ pub struct PeerSummary {
     pub revoked_at: Option<u64>,
 }
 
+/// Outcome of [`PeerRegistry::revoke_by_token_prefix`]. The operator
+/// runs `peers list --prefix <pubkey>` to find a registry entry, copies
+/// the 6-char `token_prefix`, then runs `peers revoke <prefix>`. The
+/// prefix matches against `entry.token.to_b58().starts_with(prefix)`
+/// (the full base58 of the token, not just the redacted 6-char view) so
+/// supplying any number of leading characters works; longer is more
+/// specific. Sprint 65.
+///
+/// Carries [`PeerSummary`] (not [`PeerEntry`]) on the wire so token
+/// bytes never leak — same invariant as [`Response::PeerList`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RevokeOutcome {
+    /// Exactly one entry matched; it was live; it is now revoked.
+    /// `summary.revoked_at` carries the moment of revocation.
+    Revoked(PeerSummary),
+    /// Exactly one entry matched but it was already in the revoked map.
+    /// Idempotent — the operator's intent ("ensure this is revoked") is
+    /// satisfied. `summary.revoked_at` carries the *original* timestamp,
+    /// which is informative for incident postmortems.
+    AlreadyRevoked(PeerSummary),
+    /// No entry's full base58 token matched the supplied prefix.
+    NotFound,
+    /// More than one entry matched. The operator narrows by re-running
+    /// with a longer prefix. Each [`PeerSummary`] carries its current
+    /// `revoked_at` so the operator can see live-vs-tombstoned at a
+    /// glance. The registry is unchanged.
+    Ambiguous { matches: Vec<PeerSummary> },
+}
+
 #[async_trait]
 pub trait PeerRegistry: Send + Sync {
     async fn register(&self, entry: PeerEntry) -> Result<(), PeerError>;
@@ -163,6 +193,20 @@ pub trait PeerRegistry: Send + Sync {
     /// drop too). Live entries (registered but never revoked) are
     /// untouched. Mirrors `CapabilityStore::purge_revoked_older_than`.
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError>;
+    /// Find the registry entry whose full base58 token starts with
+    /// `prefix`, then either tombstone it or report what stopped the
+    /// revocation (no match, ambiguous, already revoked). Operator
+    /// triage flow: paste the `token_prefix` from `peers list` output.
+    /// Sprint 65.
+    ///
+    /// Match semantics: `entry.token.to_b58().starts_with(prefix)`. A
+    /// 6-char prefix matches what the operator copy-pastes from `peers
+    /// list`; a full b58 (the operator's own freshly-rotated token, e.g.)
+    /// is a strict subset of the same predicate. An empty prefix is the
+    /// caller's bug — the daemon-side `revoke_peer` rejects it before
+    /// it reaches this method, but the registry-side behaviour would be
+    /// `Ambiguous { matches: <every entry> }` if it did.
+    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError>;
 }
 
 /// 6-char base58 prefix of `token`. Same redaction posture as
@@ -287,6 +331,38 @@ impl PeerRegistry for InMemoryPeerRegistry {
         let mut entries = self.entries.lock().await;
         entries.retain(|e| !drop_set.contains(e.token.as_bytes()));
         Ok(purged)
+    }
+
+    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError> {
+        let entries = self.entries.lock().await;
+        let mut revoked = self.revoked.lock().await;
+        let matched: Vec<&PeerEntry> = entries
+            .iter()
+            .filter(|e| e.token.to_b58().starts_with(prefix))
+            .collect();
+        if matched.is_empty() {
+            return Ok(RevokeOutcome::NotFound);
+        }
+        if matched.len() > 1 {
+            let summaries = matched
+                .iter()
+                .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
+                .collect();
+            return Ok(RevokeOutcome::Ambiguous { matches: summaries });
+        }
+        let entry = matched[0];
+        if let Some(rev_at) = revoked.get(entry.token.as_bytes()).copied() {
+            return Ok(RevokeOutcome::AlreadyRevoked(summary_from(
+                entry,
+                Some(rev_at),
+            )));
+        }
+        let revoked_at = epoch_ms();
+        revoked.insert(*entry.token.as_bytes(), revoked_at);
+        Ok(RevokeOutcome::Revoked(summary_from(
+            entry,
+            Some(revoked_at),
+        )))
     }
 }
 
@@ -508,6 +584,52 @@ impl PeerRegistry for JsonlPeerRegistry {
             }
         }
         Ok(purged)
+    }
+
+    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError> {
+        let _g = self.file_lock.lock().await;
+        // Snapshot under both inner locks; release before file IO so
+        // resolve() / list_summaries can run during the append.
+        let entry_to_revoke = {
+            let entries = self.entries.lock().await;
+            let revoked = self.revoked.lock().await;
+            let matched: Vec<&PeerEntry> = entries
+                .iter()
+                .filter(|e| e.token.to_b58().starts_with(prefix))
+                .collect();
+            if matched.is_empty() {
+                return Ok(RevokeOutcome::NotFound);
+            }
+            if matched.len() > 1 {
+                let summaries = matched
+                    .iter()
+                    .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
+                    .collect();
+                return Ok(RevokeOutcome::Ambiguous { matches: summaries });
+            }
+            let entry = matched[0];
+            if let Some(rev_at) = revoked.get(entry.token.as_bytes()).copied() {
+                return Ok(RevokeOutcome::AlreadyRevoked(summary_from(
+                    entry,
+                    Some(rev_at),
+                )));
+            }
+            entry.clone()
+        };
+        let revoked_at = epoch_ms();
+        self.append(&PeerEvent::Revoked {
+            token: entry_to_revoke.token,
+            revoked_at,
+        })
+        .await?;
+        self.revoked
+            .lock()
+            .await
+            .insert(*entry_to_revoke.token.as_bytes(), revoked_at);
+        Ok(RevokeOutcome::Revoked(summary_from(
+            &entry_to_revoke,
+            Some(revoked_at),
+        )))
     }
 }
 
@@ -980,5 +1102,127 @@ mod tests {
             .find(|x| x.token_prefix == live_tok.to_b58()[..6])
             .expect("live entry replayed");
         assert!(live.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn revoke_by_token_prefix_revokes_unique_match() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("alice@local");
+        r.register(ent.clone()).await.unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        match outcome {
+            RevokeOutcome::Revoked(s) => {
+                assert_eq!(s.agent_id, ent.agent_id);
+                assert!(s.revoked_at.is_some());
+                assert_eq!(s.token_prefix, &token.to_b58()[..6]);
+            }
+            other => panic!("expected Revoked, got {other:?}"),
+        }
+        // Post-revoke: the token does not resolve.
+        assert_eq!(r.resolve(&token).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn revoke_by_token_prefix_returns_not_found_for_unknown_prefix() {
+        let r = InMemoryPeerRegistry::new();
+        let outcome = r.revoke_by_token_prefix("zzzzzzzz").await.unwrap();
+        assert!(matches!(outcome, RevokeOutcome::NotFound));
+    }
+
+    #[tokio::test]
+    async fn revoke_by_token_prefix_returns_already_revoked_for_revoked_match() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("dead@local");
+        r.register(ent).await.unwrap();
+        assert!(r.revoke(&token).await.unwrap());
+        let original_ts = *r.revoked.lock().await.get(token.as_bytes()).unwrap();
+
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        match outcome {
+            RevokeOutcome::AlreadyRevoked(s) => {
+                assert_eq!(s.revoked_at, Some(original_ts));
+                assert_eq!(s.token_prefix, &token.to_b58()[..6]);
+            }
+            other => panic!("expected AlreadyRevoked, got {other:?}"),
+        }
+    }
+
+    /// Generate a `PeerEntry` whose `token.to_b58()` starts with the
+    /// supplied prefix. Random-rejection sampling — converges in ~58
+    /// iterations per leading char of base58. Used by tests that need
+    /// two tokens with a deterministic shared prefix to drive the
+    /// `Ambiguous` outcome.
+    fn entry_with_token_b58_starting_with(prefix: &str, name: &str) -> (PeerToken, PeerEntry) {
+        for _ in 0..10_000 {
+            let t = PeerToken::generate();
+            if t.to_b58().starts_with(prefix) {
+                let ent = PeerEntry {
+                    token: t,
+                    agent_id: AgentId::new(name, [0u8; 32]),
+                    registered_at: 1_700_000_000_000,
+                };
+                return (t, ent);
+            }
+        }
+        panic!("could not find token starting with {prefix:?} after 10000 tries");
+    }
+
+    #[tokio::test]
+    async fn revoke_by_token_prefix_returns_ambiguous_for_multiple_matches() {
+        let r = InMemoryPeerRegistry::new();
+        let (t1, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1").await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches } => {
+                assert_eq!(matches.len(), 2);
+                // Neither tombstoned.
+                assert!(matches.iter().all(|s| s.revoked_at.is_none()));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        // Registry unchanged — both still resolve.
+        assert!(r.resolve(&t1).await.unwrap().is_some());
+        assert!(r.resolve(&t2).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn revoke_by_token_prefix_outcome_never_serializes_full_token_b58() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("p@local");
+        r.register(ent).await.unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let full_b58 = token.to_b58();
+        assert!(
+            !json.contains(&full_b58),
+            "wire form must never carry the full token"
+        );
+        assert!(json.contains(&full_b58[..6]), "6-char prefix is fine");
+    }
+
+    #[tokio::test]
+    async fn jsonl_revoke_by_token_prefix_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let (token, ent) = entry("p@local");
+        {
+            let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+            r.register(ent).await.unwrap();
+            let prefix: String = token.to_b58().chars().take(6).collect();
+            let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+            assert!(matches!(outcome, RevokeOutcome::Revoked(_)));
+        }
+        let r2 = JsonlPeerRegistry::open(path).await.unwrap();
+        assert_eq!(r2.resolve(&token).await.unwrap(), None);
+        // The summary list still surfaces the revoked entry.
+        let s = r2.list_summaries(10, None).await.unwrap();
+        assert_eq!(s.len(), 1);
+        assert!(s[0].revoked_at.is_some());
     }
 }

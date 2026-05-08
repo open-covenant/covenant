@@ -573,6 +573,7 @@ dependencies = [
  "anyhow",
  "covenant-ipc",
  "covenant-mcp",
+ "covenant-peer-auth",
  "covenant-types",
  "serde_json",
  "tokio",

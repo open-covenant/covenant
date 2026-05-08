@@ -9,7 +9,7 @@ use covenant_a2a::{A2ATask, A2ATaskResult};
 use covenant_audit::AuditEvent;
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
-use covenant_peer_auth::PeerSummary;
+use covenant_peer_auth::{PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
 
@@ -181,6 +181,16 @@ pub enum Request {
         #[serde(default)]
         pubkey_prefix: Option<String>,
     },
+    /// Revoke a single peer registry entry by token-prefix. The
+    /// operator pastes the 6-char `token_prefix` they see in `peers
+    /// list` output (or any longer leading substring of the full
+    /// base58 token). Operator-only (Sprint 60 C3 gate); a non-operator
+    /// peer is rejected with an `OperatorPeerRevokeRejected` audit row.
+    /// Closes the post-incident response loop opened by Sprint 62 +
+    /// Sprint 64. Sprint 65.
+    RevokePeer {
+        token_prefix: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -300,6 +310,15 @@ pub enum Response {
     /// **never** carried — only the 6-char `token_prefix`. Sprint 62.
     PeerList {
         peers: Vec<PeerSummary>,
+    },
+    /// Response to [`Request::RevokePeer`]. The four `RevokeOutcome`
+    /// cases (Revoked / AlreadyRevoked / NotFound / Ambiguous) are
+    /// distinct on the wire so the CLI can render each case clearly.
+    /// Token bytes are **never** carried — `RevokeOutcome` carries
+    /// `PeerSummary` (or `Vec<PeerSummary>` for ambiguous), which by
+    /// the Sprint 62 invariant excludes `PeerToken`. Sprint 65.
+    PeerRevoked {
+        outcome: RevokeOutcome,
     },
     Error {
         message: String,

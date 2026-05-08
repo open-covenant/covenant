@@ -140,6 +140,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/purge", post(peers_purge))
         .route("/peers/rotate", post(peers_rotate))
         .route("/peers/list", get(peers_list))
+        .route("/peers/revoke", post(peers_revoke))
         .route("/intents/resume", post(intents_resume))
         .route("/budget/debits", get(budget_debits))
         .layer(middleware::from_fn_with_state(
@@ -598,6 +599,28 @@ async fn peers_list(
                 Request::ListPeers {
                     limit: q.limit.unwrap_or(20),
                     pubkey_prefix: q.prefix,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct RevokePeerBody {
+    token_prefix: String,
+}
+
+async fn peers_revoke(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<RevokePeerBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: b.token_prefix,
                 },
                 &peer,
             )

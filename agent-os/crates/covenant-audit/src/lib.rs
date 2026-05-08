@@ -220,6 +220,22 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// Logged when the operator's `RevokePeer` request would have
+    /// revoked their own bootstrap token but `force` was `false`. The
+    /// daemon returns `RevokeOutcome::SelfRevokeForbidden` and the
+    /// registry is unchanged. Issuer is the operator (peer-event
+    /// audience per Sprint 58f) — distinct from
+    /// [`AuditKind::OperatorPeerRevokeRejected`] which records a
+    /// non-operator's *probe* under the daemon-issuer audience. Here
+    /// the operator IS the issuer and the audience; the row surfaces
+    /// in their own `/audit` feed for triage of self-fat-fingers.
+    /// `token_prefix` is the same 6-char redaction
+    /// [`AuditKind::PeerRevoked`] records. Sprint 69.
+    PeerSelfRevokeBlocked {
+        peer_display: String,
+        peer_pubkey_b58: String,
+        token_prefix: String,
+    },
 }
 
 #[async_trait]

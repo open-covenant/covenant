@@ -19,7 +19,7 @@
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>]
-//!   covenant peers revoke <token-prefix>
+//!   covenant peers revoke <token-prefix> [--force]
 //!   covenant intents resume <intent-id>
 //! ```
 
@@ -96,7 +96,7 @@ fn print_usage() {
         "  covenant peers list [--limit N] [--prefix B58]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix"
     );
     eprintln!(
-        "  covenant peers revoke <TOKEN-PREFIX>    revoke a single peer by its token prefix (operator-only)"
+        "  covenant peers revoke <TOKEN-PREFIX> [--force]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard"
     );
     eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
@@ -776,11 +776,21 @@ async fn main() -> Result<()> {
                     }
                 }
                 "revoke" => {
+                    let force = args.iter().any(|a| a == "--force");
                     let token_prefix = args
-                        .get(2)
+                        .iter()
+                        .skip(2)
+                        .find(|a| !a.starts_with("--"))
                         .context("covenant peers revoke: missing TOKEN-PREFIX argument")?
                         .clone();
-                    write_frame(&mut stream, &Request::RevokePeer { token_prefix }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RevokePeer {
+                            token_prefix,
+                            force,
+                        },
+                    )
+                    .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::PeerRevoked { outcome } => match outcome {
                             covenant_peer_auth::RevokeOutcome::Revoked(s) => {
@@ -823,6 +833,24 @@ async fn main() -> Result<()> {
                                         registered = p.registered_at,
                                     );
                                 }
+                                std::process::exit(1);
+                            }
+                            covenant_peer_auth::RevokeOutcome::SelfRevokeForbidden(s) => {
+                                eprintln!(
+                                    "refused to revoke the operator's own bootstrap token: {display}\t{pubkey}\t{prefix}…",
+                                    display = s.agent_id.display,
+                                    pubkey = s.agent_id.pubkey_base58(),
+                                    prefix = s.token_prefix,
+                                );
+                                eprintln!(
+                                    "  use `covenant peers rotate` to retire the current token without bricking auth,"
+                                );
+                                eprintln!(
+                                    "  or pass --force to override (this WILL brick auth; recover by deleting"
+                                );
+                                eprintln!(
+                                    "  $COVENANT_HOME/peers/operator.token and restarting the daemon)."
+                                );
                                 std::process::exit(1);
                             }
                         },

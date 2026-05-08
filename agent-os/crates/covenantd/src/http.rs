@@ -609,6 +609,8 @@ async fn peers_list(
 #[derive(Debug, Deserialize)]
 struct RevokePeerBody {
     token_prefix: String,
+    #[serde(default)]
+    force: bool,
 }
 
 async fn peers_revoke(
@@ -621,6 +623,7 @@ async fn peers_revoke(
             .respond(
                 Request::RevokePeer {
                     token_prefix: b.token_prefix,
+                    force: b.force,
                 },
                 &peer,
             )

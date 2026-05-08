@@ -329,7 +329,10 @@ impl Server {
                 limit,
                 pubkey_prefix,
             } => self.list_peers(limit, pubkey_prefix, peer).await,
-            Request::RevokePeer { token_prefix } => self.revoke_peer(token_prefix, peer).await,
+            Request::RevokePeer {
+                token_prefix,
+                force,
+            } => self.revoke_peer(token_prefix, force, peer).await,
         }
     }
 
@@ -808,10 +811,10 @@ impl Server {
     /// Closes the post-incident response loop opened by Sprint 62 + 64:
     /// the operator pastes the 6-char `token_prefix` from `peers list`
     /// output (or any longer leading substring of the full base58 token)
-    /// to tombstone exactly one entry. The four [`RevokeOutcome`] cases
-    /// (Revoked / AlreadyRevoked / NotFound / Ambiguous) survive on the
-    /// wire so the CLI can render each clearly without re-calling
-    /// `peers list` for narrowing.
+    /// to tombstone exactly one entry. The five [`RevokeOutcome`] cases
+    /// (Revoked / AlreadyRevoked / NotFound / Ambiguous /
+    /// SelfRevokeForbidden) survive on the wire so the CLI can render
+    /// each clearly without re-calling `peers list` for narrowing.
     ///
     /// Gated to the operator's own identity — `peer.pubkey ==
     /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`
@@ -834,7 +837,27 @@ impl Server {
     /// Empty prefix is rejected with a specific `Response::Error` —
     /// otherwise the registry would return `Ambiguous { matches: <every
     /// entry> }`, which is operationally a footgun.
-    async fn revoke_peer(&self, token_prefix: String, peer: &AgentId) -> Response {
+    ///
+    /// Sprint 69 — daemon-side self-revoke guard. After the C3 gate and
+    /// empty-prefix check, the daemon peeks the registry via
+    /// [`PeerRegistry::find_unique_live_by_token_prefix`]; if the unique
+    /// live match's `agent_id.pubkey` equals
+    /// `self.identity.agent_id().pubkey` (operator-identity-centric, not
+    /// caller-centric — the predicate reads correctly in v0 and in
+    /// Phase-1 multi-peer where a guest peer asks "are you trying to
+    /// revoke yourself?" — wrong question) AND `force == false`, the
+    /// daemon emits a `PeerSelfRevokeBlocked` audit row via
+    /// `record_peer_event` (issuer = peer = operator, distinct from
+    /// `OperatorPeerRevokeRejected`'s daemon-issuer audience because
+    /// here the operator IS both issuer and audience — a self-fat-finger,
+    /// not a probe) and returns `RevokeOutcome::SelfRevokeForbidden`
+    /// without mutating. The CLI's preferred recovery path is `peers
+    /// rotate` (Sprint 60); `--force` exists for the "deliberately brick
+    /// auth to test the recovery flow" use case the F1 carry-forward
+    /// preserved. The peek's TOCTOU is benign because
+    /// `self.identity.agent_id().pubkey` is stable across token rotation
+    /// (Sprint 60 rotates the token, not the keypair).
+    async fn revoke_peer(&self, token_prefix: String, force: bool, peer: &AgentId) -> Response {
         if peer.pubkey != self.identity.agent_id().pubkey {
             let event = AuditEvent {
                 id: Uuid::new_v4(),
@@ -854,6 +877,36 @@ impl Server {
             return Response::Error {
                 message: "peer revoke requires a non-empty token prefix".into(),
             };
+        }
+        if !force {
+            match self
+                .peers
+                .find_unique_live_by_token_prefix(&token_prefix)
+                .await
+            {
+                Ok(Some(summary)) if summary.agent_id.pubkey == self.identity.agent_id().pubkey => {
+                    let event = AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::PeerSelfRevokeBlocked {
+                            peer_display: summary.agent_id.display.clone(),
+                            peer_pubkey_b58: bs58::encode(summary.agent_id.pubkey).into_string(),
+                            token_prefix: summary.token_prefix.clone(),
+                        },
+                    };
+                    self.record_peer_event(peer, event).await;
+                    return Response::PeerRevoked {
+                        outcome: RevokeOutcome::SelfRevokeForbidden(summary),
+                    };
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("peers: {e}"),
+                    };
+                }
+            }
         }
         let outcome = match self.peers.revoke_by_token_prefix(&token_prefix).await {
             Ok(o) => o,
@@ -5086,6 +5139,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
+                force: false,
             })
             .await;
         match resp {
@@ -5140,6 +5194,7 @@ budget_credits_per_hour = {credits}
             .respond(
                 Request::RevokePeer {
                     token_prefix: "abcdef".into(),
+                    force: false,
                 },
                 &foreign,
             )
@@ -5188,6 +5243,7 @@ budget_credits_per_hour = {credits}
             .respond(
                 Request::RevokePeer {
                     token_prefix: "abcdef".into(),
+                    force: false,
                 },
                 &foreign,
             )
@@ -5241,6 +5297,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::RevokePeer {
                 token_prefix: "1".into(),
+                force: false,
             })
             .await;
         match resp {
@@ -5283,6 +5340,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::RevokePeer {
                 token_prefix: prefix.clone(),
+                force: false,
             })
             .await;
         let json = serde_json::to_string(&resp).expect("serialize PeerRevoked");
@@ -5314,12 +5372,277 @@ budget_credits_per_hour = {credits}
         match s
             .op_respond(Request::RevokePeer {
                 token_prefix: String::new(),
+                force: false,
             })
             .await
         {
             Response::Error { message } => assert!(message.contains("non-empty")),
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    /// Seed a `PeerEntry` whose `agent_id.pubkey` equals the daemon's
+    /// own identity pubkey — i.e., the operator's bootstrap row as the
+    /// daemon's `bootstrap_operator_token` would write it. The seeded
+    /// entry's `agent_id.display` is `"operator@local"` to mirror the
+    /// `boot_identity()` shape; for the self-revoke guard the predicate
+    /// is identity-pubkey-centric (G1) so the display is irrelevant to
+    /// the guard's decision but informative for the audit row payload.
+    async fn seed_operator_self_entry(s: &Server) -> (PeerToken, [u8; 32]) {
+        let token = PeerToken::generate();
+        let op_pubkey = s.identity.agent_id().pubkey;
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("operator@local", op_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        (token, op_pubkey)
+    }
+
+    /// Sprint 69 — self-revoke without `--force` returns
+    /// `SelfRevokeForbidden`, leaves the registry unchanged, and emits
+    /// a `PeerSelfRevokeBlocked` audit row whose issuer is the operator
+    /// (peer-event audience per Sprint 58f).
+    #[tokio::test]
+    async fn revoke_peer_self_target_without_force_is_blocked() {
+        let s = server_with(vec![], "");
+        let (op_token, op_pubkey) = seed_operator_self_entry(&s).await;
+        let prefix: String = op_token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix.clone(),
+                force: false,
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => match outcome {
+                RevokeOutcome::SelfRevokeForbidden(summary) => {
+                    assert_eq!(summary.agent_id.pubkey, op_pubkey);
+                    assert_eq!(summary.token_prefix, prefix);
+                    assert!(summary.revoked_at.is_none(), "registry must be unchanged");
+                }
+                other => panic!("expected SelfRevokeForbidden, got {other:?}"),
+            },
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+        assert!(
+            s.peers.resolve(&op_token).await.unwrap().is_some(),
+            "operator token still resolves — registry was not mutated"
+        );
+        let events = s.audit.recent(50).await.unwrap();
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::PeerSelfRevokeBlocked { .. }))
+            .expect("PeerSelfRevokeBlocked row");
+        assert_eq!(
+            row.issuer.pubkey,
+            s.identity.agent_id().pubkey,
+            "issuer is the operator (peer-event audience per Sprint 58f, not the daemon-issuer Sprint 61 model)"
+        );
+        match &row.kind {
+            AuditKind::PeerSelfRevokeBlocked {
+                peer_display,
+                peer_pubkey_b58,
+                token_prefix,
+            } => {
+                assert_eq!(peer_display, "operator@local");
+                assert_eq!(peer_pubkey_b58, &bs58::encode(op_pubkey).into_string());
+                assert_eq!(token_prefix, &prefix);
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
+    }
+
+    /// Sprint 69 — `--force` overrides the self-revoke guard. Used by
+    /// the operator's recovery-flow test (deliberately brick auth, then
+    /// recover by deleting `peers/operator.token` and restarting the
+    /// daemon). Emits the existing `PeerRevoked` audit row (E1 — no
+    /// special "OperatorSelfRevokeForced" variant; correlation comes
+    /// from `issuer.pubkey == peer_pubkey_b58` in the row payload).
+    #[tokio::test]
+    async fn revoke_peer_self_target_with_force_succeeds() {
+        let s = server_with(vec![], "");
+        let (op_token, op_pubkey) = seed_operator_self_entry(&s).await;
+        let prefix: String = op_token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix.clone(),
+                force: true,
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => match outcome {
+                RevokeOutcome::Revoked(summary) => {
+                    assert_eq!(summary.agent_id.pubkey, op_pubkey);
+                    assert!(summary.revoked_at.is_some());
+                }
+                other => panic!("expected Revoked, got {other:?}"),
+            },
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+        assert_eq!(
+            s.peers.resolve(&op_token).await.unwrap(),
+            None,
+            "force-revoked operator token no longer resolves"
+        );
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::PeerRevoked { .. })),
+            "force-revoke emits the standard PeerRevoked row, not a special variant"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::PeerSelfRevokeBlocked { .. })),
+            "no PeerSelfRevokeBlocked row when force=true (the guard short-circuit was not taken)"
+        );
+    }
+
+    /// Sprint 69 — non-self targets are unaffected by the guard. A
+    /// guest peer revoke with `force=false` proceeds normally — Sprint
+    /// 65's path is unchanged.
+    #[tokio::test]
+    async fn revoke_peer_non_self_target_unaffected_by_force_flag() {
+        let s = server_with(vec![], "");
+        let guest_token = PeerToken::generate();
+        let guest_pubkey = [7u8; 32];
+        assert_ne!(guest_pubkey, s.identity.agent_id().pubkey);
+        s.peers
+            .register(PeerEntry {
+                token: guest_token,
+                agent_id: AgentId::new("guest@local", guest_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let prefix: String = guest_token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix,
+                force: false,
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => {
+                assert!(matches!(outcome, RevokeOutcome::Revoked(_)));
+            }
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
+    }
+
+    /// Sprint 69 — `#[serde(default)]` regression: a `Request::RevokePeer`
+    /// JSON without the `force` field deserialises with `force == false`
+    /// (the safe default — guard fires). This is what a stale CLI built
+    /// before Sprint 69 produces; the new daemon must accept it.
+    #[tokio::test]
+    async fn revoke_peer_force_field_defaults_to_false_on_deserialize() {
+        let json = r#"{"kind":"revoke_peer","token_prefix":"abcdef"}"#;
+        let req: Request = serde_json::from_str(json).expect("stale-CLI frame deserialises");
+        match req {
+            Request::RevokePeer {
+                token_prefix,
+                force,
+            } => {
+                assert_eq!(token_prefix, "abcdef");
+                assert!(!force, "missing force field defaults to false");
+            }
+            other => panic!("expected RevokePeer, got {other:?}"),
+        }
+    }
+
+    /// Sprint 69 — Phase-1 forward-compat. The self-revoke guard's
+    /// pubkey comparison MUST be operator-identity-centric (G1), not
+    /// caller-centric (G2). In v0 these are equivalent because the
+    /// only authenticated peer is the operator and its `peer.pubkey`
+    /// always equals `self.identity.pubkey`. This test simulates the
+    /// (impossible-in-v0) scenario where a non-operator caller's
+    /// pubkey accidentally matches the matched-entry's pubkey: the
+    /// guard must NOT fire for such a caller, because the rule is
+    /// "you cannot revoke the *operator's* bootstrap row", not "you
+    /// cannot revoke a row whose pubkey matches yours". The test
+    /// exercises the C3 gate boundary; the inner guard is unreachable
+    /// for non-operator callers because the C3 rejection happens
+    /// first, and the assertion below documents that ordering as
+    /// load-bearing for the multi-peer rewrite.
+    #[tokio::test]
+    async fn revoke_peer_self_target_uses_identity_pubkey_not_caller_pubkey() {
+        let s = server_with(vec![], "");
+        // A non-operator caller whose pubkey collides with a guest
+        // entry's pubkey would, under G2 (caller-centric), have its
+        // revoke blocked. Under G1 (identity-centric, what we want),
+        // the request never reaches the guard — the C3 gate rejects it
+        // first with `OperatorPeerRevokeRejected`.
+        let collide_pubkey = [42u8; 32];
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("guest@local", collide_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let foreign_caller = AgentId::new("foreign@local", collide_pubkey);
+        match s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: "anything".into(),
+                    force: false,
+                },
+                &foreign_caller,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("expected C3 Error, got {other:?}"),
+        }
+        // The C3 rejection records `OperatorPeerRevokeRejected` (Sprint 61
+        // daemon-issuer audience), NOT `PeerSelfRevokeBlocked` — the
+        // ordering is what makes G2 and G1 indistinguishable in v0 from
+        // the caller's perspective, but G1 is what the next-sprint
+        // multi-peer rewrite reads correctly without re-interpretation.
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::OperatorPeerRevokeRejected { .. })),
+            "C3 rejection row exists"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::PeerSelfRevokeBlocked { .. })),
+            "self-revoke guard never fired for a non-operator caller"
+        );
+    }
+
+    /// Sprint 69 — wire-format regression: `RevokeOutcome::SelfRevokeForbidden`
+    /// carries a `PeerSummary` (token_prefix only, 6 chars), never the
+    /// full base58 token. Mirrors the Sprint 65
+    /// `revoke_peer_response_never_contains_full_token_b58` invariant.
+    #[tokio::test]
+    async fn self_revoke_forbidden_response_never_contains_full_token_b58() {
+        let s = server_with(vec![], "");
+        let (op_token, _) = seed_operator_self_entry(&s).await;
+        let prefix: String = op_token.to_b58().chars().take(6).collect();
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: prefix,
+                force: false,
+            })
+            .await;
+        let json = serde_json::to_string(&resp).expect("serialize PeerRevoked");
+        let full_b58 = op_token.to_b58();
+        assert!(
+            !json.contains(&full_b58),
+            "full token b58 must never appear in SelfRevokeForbidden wire payload"
+        );
     }
 
     /// Generate a `PeerEntry` whose `token.to_b58()` starts with the

@@ -140,6 +140,12 @@ pub struct PeerSummary {
 ///
 /// Carries [`PeerSummary`] (not [`PeerEntry`]) on the wire so token
 /// bytes never leak — same invariant as [`Response::PeerList`].
+///
+/// Sprint 69 added [`SelfRevokeForbidden`] for the daemon-side guard
+/// against revoking the operator's own bootstrap token. The variant is
+/// produced by `Server::revoke_peer` (not the registry trait) so the
+/// storage layer stays peer-agnostic; the daemon peeks via
+/// [`PeerRegistry::find_unique_live_by_token_prefix`] before committing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RevokeOutcome {
@@ -158,6 +164,13 @@ pub enum RevokeOutcome {
     /// `revoked_at` so the operator can see live-vs-tombstoned at a
     /// glance. The registry is unchanged.
     Ambiguous { matches: Vec<PeerSummary> },
+    /// The unique live match is the operator's own bootstrap row and
+    /// the request did not pass `force: true`. The registry is unchanged.
+    /// Sprint 69 — defence-in-depth across IPC + HTTP + CLI against the
+    /// "fat-finger via web UI bypassed by curl" failure mode flagged in
+    /// Sprint 66's EFM #1; pairs with Sprint 67's UI-only guard.
+    /// `summary.revoked_at` is `None` (the entry remained live).
+    SelfRevokeForbidden(PeerSummary),
 }
 
 #[async_trait]
@@ -207,6 +220,32 @@ pub trait PeerRegistry: Send + Sync {
     /// it reaches this method, but the registry-side behaviour would be
     /// `Ambiguous { matches: <every entry> }` if it did.
     async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError>;
+
+    /// Read-only peek used by the daemon's Sprint 69 self-revoke guard.
+    /// Returns `Ok(Some(summary))` only when exactly one entry matches
+    /// `prefix` AND that entry is currently live (not tombstoned).
+    /// Returns `Ok(None)` for no-match, ambiguous-multi, or
+    /// matches-only-revoked. The returned summary's `revoked_at` is
+    /// always `None` (live by construction).
+    ///
+    /// The daemon uses this to decide whether the unique live match is
+    /// the operator's own bootstrap row before deciding whether to
+    /// short-circuit with `SelfRevokeForbidden` or fall through to
+    /// [`Self::revoke_by_token_prefix`]. Keeping this method peer-agnostic
+    /// (it does not know about caller identity) preserves the storage
+    /// layer's separation from daemon concerns; the identity comparison
+    /// happens at the `Server` boundary.
+    ///
+    /// TOCTOU: between this peek and a subsequent revoke, another caller
+    /// could tombstone or register a colliding-prefix entry. Both races
+    /// are benign — the subsequent `revoke_by_token_prefix` will return
+    /// `AlreadyRevoked` or `Ambiguous` accordingly, and the operator's
+    /// authoritative pubkey (`Server::identity`) does not change across
+    /// token rotation (Sprint 60 rotates the token, not the keypair).
+    async fn find_unique_live_by_token_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<PeerSummary>, PeerError>;
 }
 
 /// 6-char base58 prefix of `token`. Same redaction posture as
@@ -363,6 +402,26 @@ impl PeerRegistry for InMemoryPeerRegistry {
             entry,
             Some(revoked_at),
         )))
+    }
+
+    async fn find_unique_live_by_token_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<PeerSummary>, PeerError> {
+        let entries = self.entries.lock().await;
+        let revoked = self.revoked.lock().await;
+        let matched: Vec<&PeerEntry> = entries
+            .iter()
+            .filter(|e| e.token.to_b58().starts_with(prefix))
+            .collect();
+        if matched.len() != 1 {
+            return Ok(None);
+        }
+        let entry = matched[0];
+        if revoked.contains_key(entry.token.as_bytes()) {
+            return Ok(None);
+        }
+        Ok(Some(summary_from(entry, None)))
     }
 }
 
@@ -630,6 +689,26 @@ impl PeerRegistry for JsonlPeerRegistry {
             &entry_to_revoke,
             Some(revoked_at),
         )))
+    }
+
+    async fn find_unique_live_by_token_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<PeerSummary>, PeerError> {
+        let entries = self.entries.lock().await;
+        let revoked = self.revoked.lock().await;
+        let matched: Vec<&PeerEntry> = entries
+            .iter()
+            .filter(|e| e.token.to_b58().starts_with(prefix))
+            .collect();
+        if matched.len() != 1 {
+            return Ok(None);
+        }
+        let entry = matched[0];
+        if revoked.contains_key(entry.token.as_bytes()) {
+            return Ok(None);
+        }
+        Ok(Some(summary_from(entry, None)))
     }
 }
 
@@ -1224,5 +1303,86 @@ mod tests {
         let s = r2.list_summaries(10, None).await.unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].revoked_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn find_unique_live_returns_summary_for_unique_live_match() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("solo@local");
+        r.register(ent.clone()).await.unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let s = r
+            .find_unique_live_by_token_prefix(&prefix)
+            .await
+            .unwrap()
+            .expect("unique live match");
+        assert_eq!(s.agent_id, ent.agent_id);
+        assert_eq!(s.token_prefix, &token.to_b58()[..6]);
+        assert!(s.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_unique_live_returns_none_for_no_match() {
+        let r = InMemoryPeerRegistry::new();
+        assert!(r
+            .find_unique_live_by_token_prefix("zzzzzzzz")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_unique_live_returns_none_for_revoked_match() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("dead@local");
+        r.register(ent).await.unwrap();
+        assert!(r.revoke(&token).await.unwrap());
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        assert!(r
+            .find_unique_live_by_token_prefix(&prefix)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_unique_live_returns_none_for_ambiguous_matches() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (_, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        assert!(r
+            .find_unique_live_by_token_prefix("1")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn find_unique_live_does_not_mutate_registry() {
+        let r = InMemoryPeerRegistry::new();
+        let (token, ent) = entry("snapshot@local");
+        r.register(ent).await.unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let _ = r.find_unique_live_by_token_prefix(&prefix).await.unwrap();
+        assert!(r.resolve(&token).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn jsonl_find_unique_live_returns_summary_for_unique_live_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (token, ent) = entry("solo@local");
+        r.register(ent.clone()).await.unwrap();
+        let prefix: String = token.to_b58().chars().take(6).collect();
+        let s = r
+            .find_unique_live_by_token_prefix(&prefix)
+            .await
+            .unwrap()
+            .expect("unique live match");
+        assert_eq!(s.agent_id, ent.agent_id);
+        assert!(s.revoked_at.is_none());
     }
 }

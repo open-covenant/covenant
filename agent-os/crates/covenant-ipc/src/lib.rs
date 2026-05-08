@@ -188,8 +188,21 @@ pub enum Request {
     /// peer is rejected with an `OperatorPeerRevokeRejected` audit row.
     /// Closes the post-incident response loop opened by Sprint 62 +
     /// Sprint 64. Sprint 65.
+    ///
+    /// Sprint 69 added `force` for the daemon-side self-revoke guard.
+    /// When `false` (the default), a unique live match against the
+    /// operator's own bootstrap token returns
+    /// `RevokeOutcome::SelfRevokeForbidden` without mutating the
+    /// registry; the operator must `peers rotate` (Sprint 60) for the
+    /// no-downtime token rotation, or pass `force: true` to deliberately
+    /// brick auth for the recovery-flow test.
+    /// `#[serde(default)]` lets a stale CLI built before Sprint 69 send
+    /// frames without the field; the new daemon parses them as
+    /// `force: false`, the safe default.
     RevokePeer {
         token_prefix: String,
+        #[serde(default)]
+        force: bool,
     },
 }
 

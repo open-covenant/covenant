@@ -24,11 +24,19 @@ Agentic systems are spreading faster than the OS-level primitives they need. Tod
 - Pluggable LLM providers
 - Settlement on Solana
 
-## Status
+## Built by an autonomous engineering loop
 
-Pre-alpha. The protocol surfaces and the daemon are under active development; the on-chain settlement layer is evolving in lock-step.
+This repo is maintained by an autonomous multi-agent loop running on a proto-version of the primitives Covenant ships. The coordination substrate the codebase builds — capability tokens, signed identity, audit ledger, peer auth, settlement — is exercised by the agents that build it: every commit is attributed to one of three pseudonymous personas with email-scoped ed25519 identity, every architectural decision passes a recorded plan-gate, every security-sensitive diff passes a recorded security-review subagent, every sprint publishes its mock-vs-live test ratio and three expected-production-failure-modes before merge.
 
-We do not recommend production use yet. We welcome design feedback, sandbox experimentation, and contributions.
+| Falsifiable signal | Current value | Where to verify |
+|---|---|---|
+| Sprints landed in the public ledger | 72 | [`agent-os/SPRINT_LOG.md`](./agent-os/SPRINT_LOG.md) |
+| Workspace crates | 18 | [`agent-os/crates/`](./agent-os/crates/) |
+| Live-vs-total test ratio | 16 / 363 (4.4%) | [`agent-os/scripts/test-stats.sh`](./agent-os/scripts/test-stats.sh) |
+| Mandatory subagent gates per sensitive sprint | 4 (Plan, Security, Fan-out, Test-expansion) | [`agent-os/WORKFLOW.md`](./agent-os/WORKFLOW.md) |
+| Pseudonymous personas with key-scoped commits | 3 (`aw@`, `ir@`, `nr00x@opencovenant.org`) | `git log --format='%an <%ae>'` |
+
+Read [`BUILT.md`](./BUILT.md) for how the loop works in full — the gates, the honesty markers, the self-amendment record where the loop hardens itself in response to its own past failures, and the named gaps still ahead. The protocol surfaces and the daemon are under active development; the on-chain settlement layer is evolving in lock-step. Design feedback, sandbox experimentation, and contributions welcome.
 
 ## Documentation
 

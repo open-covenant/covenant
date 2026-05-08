@@ -4,9 +4,9 @@ Covenant treats anything that can move value, alter execution rights on the daem
 
 ## Supported versions
 
-Pre-alpha: the latest `main` branch is in scope.
+The latest `main` branch is in scope.
 
-Post-launch: the latest released daemon and on-chain settlement program remain in scope, plus the immediately previous release during the rollout window.
+Once releases are cut, the latest released daemon and on-chain settlement program will remain in scope, plus the immediately previous release during the rollout window.
 
 ## Reporting a vulnerability
 

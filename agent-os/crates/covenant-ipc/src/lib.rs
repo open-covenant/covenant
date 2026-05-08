@@ -329,10 +329,20 @@ pub enum Response {
     /// `String::new()`, which never matches a real pubkey b58 — the
     /// consumer's predicate falls through to the legacy behaviour, which
     /// surfaces the revoke button on every row).
+    ///
+    /// `truncated` is `true` when more rows existed in the registry
+    /// than the caller's `limit` allowed — the operator then knows the
+    /// displayed list is incomplete and that a longer `pubkey_prefix`
+    /// or a higher `limit` is needed to see the rest. `#[serde(default)]`
+    /// so a stale CLI deserialises a new daemon's response (the field
+    /// reads as `false`, which degrades to the pre-bound behaviour
+    /// where the operator assumes the displayed peers are exhaustive).
     PeerList {
         peers: Vec<PeerSummary>,
         #[serde(default)]
         operator_pubkey_b58: String,
+        #[serde(default)]
+        truncated: bool,
     },
     /// Response to [`Request::RevokePeer`]. The four `RevokeOutcome`
     /// cases (Revoked / AlreadyRevoked / NotFound / Ambiguous) are

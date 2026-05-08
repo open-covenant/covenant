@@ -159,7 +159,21 @@ pub enum RevokeOutcome {
     /// with a longer prefix. Each [`PeerSummary`] carries its current
     /// `revoked_at` so the operator can see live-vs-tombstoned at a
     /// glance. The registry is unchanged.
-    Ambiguous { matches: Vec<PeerSummary> },
+    ///
+    /// `matches.len()` is bounded by the `limit` argument to
+    /// [`PeerRegistry::revoke_by_token_prefix`]. `truncated` is `true`
+    /// when more than `limit` entries matched the prefix; the operator
+    /// then knows the displayed list is incomplete and that a longer
+    /// prefix is needed to narrow further. `#[serde(default)]` so a
+    /// stale CLI built before the field landed deserialises a new
+    /// daemon's response (the field reads as `false`, which degrades to
+    /// the pre-bound behaviour where the operator assumes the displayed
+    /// matches are exhaustive).
+    Ambiguous {
+        matches: Vec<PeerSummary>,
+        #[serde(default)]
+        truncated: bool,
+    },
     /// The unique live match is the operator's own bootstrap row and
     /// the request did not pass `force: true`. The registry is unchanged.
     /// Defence-in-depth across IPC + HTTP + CLI against the
@@ -191,11 +205,16 @@ pub trait PeerRegistry: Send + Sync {
     /// [`AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`]
     /// records, so an operator can paste the audit row's b58 directly.
     /// Empty/`None` prefix means "no filter".
+    ///
+    /// Returns `(rows, truncated)`. `rows.len() <= limit`; `truncated`
+    /// is `true` when more matches existed than `limit` allowed. The
+    /// implementation peeks one entry past `limit` so the cost is
+    /// O(limit), not O(N), even on a registry with thousands of rows.
     async fn list_summaries(
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
-    ) -> Result<Vec<PeerSummary>, PeerError>;
+    ) -> Result<(Vec<PeerSummary>, bool), PeerError>;
     /// Drop revocation tombstones with `revoked_at < before_ms` along
     /// with their matching `Registered` entries. Returns the number of
     /// revocations dropped (= number of `Registered` entries also
@@ -214,8 +233,21 @@ pub trait PeerRegistry: Send + Sync {
     /// is a strict subset of the same predicate. An empty prefix is the
     /// caller's bug — the daemon-side `revoke_peer` rejects it before
     /// it reaches this method, but the registry-side behaviour would be
-    /// `Ambiguous { matches: <every entry> }` if it did.
-    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError>;
+    /// `Ambiguous { matches: <up to `limit` entries>, truncated: true }`
+    /// if it did.
+    ///
+    /// `limit` caps the `Ambiguous.matches` payload. The implementation
+    /// peeks one entry past `limit`; if more than `limit` matched, the
+    /// returned `Ambiguous { truncated: true }` carries exactly `limit`
+    /// summaries and the operator narrows by re-running with a longer
+    /// prefix. The cap is the caller's choice — the daemon passes a
+    /// constant today; a future CLI flag (`--limit-matches`) routes
+    /// through the same parameter.
+    async fn revoke_by_token_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<RevokeOutcome, PeerError>;
 
     /// Read-only peek used by the daemon's self-revoke guard.
     /// Returns `Ok(Some(summary))` only when exactly one entry matches
@@ -336,16 +368,21 @@ impl PeerRegistry for InMemoryPeerRegistry {
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
-    ) -> Result<Vec<PeerSummary>, PeerError> {
+    ) -> Result<(Vec<PeerSummary>, bool), PeerError> {
         let entries = self.entries.lock().await;
         let revoked = self.revoked.lock().await;
-        Ok(entries
+        let mut peeked: Vec<PeerSummary> = entries
             .iter()
             .rev()
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
-            .take(limit)
-            .collect())
+            .take(limit + 1)
+            .collect();
+        let truncated = peeked.len() > limit;
+        if truncated {
+            peeked.truncate(limit);
+        }
+        Ok((peeked, truncated))
     }
 
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError> {
@@ -368,22 +405,34 @@ impl PeerRegistry for InMemoryPeerRegistry {
         Ok(purged)
     }
 
-    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError> {
+    async fn revoke_by_token_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<RevokeOutcome, PeerError> {
         let entries = self.entries.lock().await;
         let mut revoked = self.revoked.lock().await;
-        let matched: Vec<&PeerEntry> = entries
+        let mut matched: Vec<&PeerEntry> = entries
             .iter()
             .filter(|e| e.token.to_b58().starts_with(prefix))
+            .take(limit + 1)
             .collect();
         if matched.is_empty() {
             return Ok(RevokeOutcome::NotFound);
         }
         if matched.len() > 1 {
+            let truncated = matched.len() > limit;
+            if truncated {
+                matched.truncate(limit);
+            }
             let summaries = matched
                 .iter()
                 .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
                 .collect();
-            return Ok(RevokeOutcome::Ambiguous { matches: summaries });
+            return Ok(RevokeOutcome::Ambiguous {
+                matches: summaries,
+                truncated,
+            });
         }
         let entry = matched[0];
         if let Some(rev_at) = revoked.get(entry.token.as_bytes()).copied() {
@@ -553,16 +602,21 @@ impl PeerRegistry for JsonlPeerRegistry {
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
-    ) -> Result<Vec<PeerSummary>, PeerError> {
+    ) -> Result<(Vec<PeerSummary>, bool), PeerError> {
         let entries = self.entries.lock().await;
         let revoked = self.revoked.lock().await;
-        Ok(entries
+        let mut peeked: Vec<PeerSummary> = entries
             .iter()
             .rev()
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
-            .take(limit)
-            .collect())
+            .take(limit + 1)
+            .collect();
+        let truncated = peeked.len() > limit;
+        if truncated {
+            peeked.truncate(limit);
+        }
+        Ok((peeked, truncated))
     }
 
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PeerError> {
@@ -641,26 +695,38 @@ impl PeerRegistry for JsonlPeerRegistry {
         Ok(purged)
     }
 
-    async fn revoke_by_token_prefix(&self, prefix: &str) -> Result<RevokeOutcome, PeerError> {
+    async fn revoke_by_token_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<RevokeOutcome, PeerError> {
         let _g = self.file_lock.lock().await;
         // Snapshot under both inner locks; release before file IO so
         // resolve() / list_summaries can run during the append.
         let entry_to_revoke = {
             let entries = self.entries.lock().await;
             let revoked = self.revoked.lock().await;
-            let matched: Vec<&PeerEntry> = entries
+            let mut matched: Vec<&PeerEntry> = entries
                 .iter()
                 .filter(|e| e.token.to_b58().starts_with(prefix))
+                .take(limit + 1)
                 .collect();
             if matched.is_empty() {
                 return Ok(RevokeOutcome::NotFound);
             }
             if matched.len() > 1 {
+                let truncated = matched.len() > limit;
+                if truncated {
+                    matched.truncate(limit);
+                }
                 let summaries = matched
                     .iter()
                     .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
                     .collect();
-                return Ok(RevokeOutcome::Ambiguous { matches: summaries });
+                return Ok(RevokeOutcome::Ambiguous {
+                    matches: summaries,
+                    truncated,
+                });
             }
             let entry = matched[0];
             if let Some(rev_at) = revoked.get(entry.token.as_bytes()).copied() {
@@ -1073,7 +1139,8 @@ mod tests {
         r.register(dead_ent).await.unwrap();
         r.revoke(&dead_tok).await.unwrap();
 
-        let s = r.list_summaries(10, None).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, None).await.unwrap();
+        assert!(!truncated, "two entries under cap of ten");
         assert_eq!(s.len(), 2, "live and revoked both surface");
         let dead_summary = s
             .iter()
@@ -1103,7 +1170,8 @@ mod tests {
         r.register(e_mid).await.unwrap();
         r.register(e_new).await.unwrap();
 
-        let s = r.list_summaries(10, None).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, None).await.unwrap();
+        assert!(!truncated, "three entries under cap of ten");
         let displays: Vec<&str> = s.iter().map(|x| x.agent_id.display.as_str()).collect();
         assert_eq!(
             displays,
@@ -1125,14 +1193,15 @@ mod tests {
 
         let target_b58 = bs58::encode(e_match.agent_id.pubkey).into_string();
         let prefix: String = target_b58.chars().take(4).collect();
-        let s = r.list_summaries(10, Some(&prefix)).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, Some(&prefix)).await.unwrap();
+        assert!(!truncated);
         assert_eq!(s.len(), 1, "only the matching pubkey surfaces");
         assert_eq!(s[0].agent_id.display, "match@local");
 
-        let none = r.list_summaries(10, Some("zzzzzz")).await.unwrap();
+        let (none, _) = r.list_summaries(10, Some("zzzzzz")).await.unwrap();
         assert!(none.is_empty(), "non-matching prefix returns empty");
 
-        let all = r.list_summaries(10, Some("")).await.unwrap();
+        let (all, _) = r.list_summaries(10, Some("")).await.unwrap();
         assert_eq!(all.len(), 2, "empty prefix is no filter");
     }
 
@@ -1141,7 +1210,7 @@ mod tests {
         let r = InMemoryPeerRegistry::new();
         let (tok, ent) = entry("p@local");
         r.register(ent).await.unwrap();
-        let s = r.list_summaries(10, None).await.unwrap();
+        let (s, _) = r.list_summaries(10, None).await.unwrap();
         let json = serde_json::to_string(&s).unwrap();
         let full_b58 = tok.to_b58();
         assert!(
@@ -1165,7 +1234,7 @@ mod tests {
         }
 
         let r2 = JsonlPeerRegistry::open(path).await.unwrap();
-        let s = r2.list_summaries(10, None).await.unwrap();
+        let (s, _) = r2.list_summaries(10, None).await.unwrap();
         assert_eq!(s.len(), 2);
         let dead = s
             .iter()
@@ -1185,7 +1254,7 @@ mod tests {
         let (token, ent) = entry("alice@local");
         r.register(ent.clone()).await.unwrap();
         let prefix: String = token.to_b58().chars().take(6).collect();
-        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        let outcome = r.revoke_by_token_prefix(&prefix, 16).await.unwrap();
         match outcome {
             RevokeOutcome::Revoked(s) => {
                 assert_eq!(s.agent_id, ent.agent_id);
@@ -1201,7 +1270,7 @@ mod tests {
     #[tokio::test]
     async fn revoke_by_token_prefix_returns_not_found_for_unknown_prefix() {
         let r = InMemoryPeerRegistry::new();
-        let outcome = r.revoke_by_token_prefix("zzzzzzzz").await.unwrap();
+        let outcome = r.revoke_by_token_prefix("zzzzzzzz", 16).await.unwrap();
         assert!(matches!(outcome, RevokeOutcome::NotFound));
     }
 
@@ -1214,7 +1283,7 @@ mod tests {
         let original_ts = *r.revoked.lock().await.get(token.as_bytes()).unwrap();
 
         let prefix: String = token.to_b58().chars().take(6).collect();
-        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        let outcome = r.revoke_by_token_prefix(&prefix, 16).await.unwrap();
         match outcome {
             RevokeOutcome::AlreadyRevoked(s) => {
                 assert_eq!(s.revoked_at, Some(original_ts));
@@ -1251,10 +1320,11 @@ mod tests {
         let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
         r.register(e1).await.unwrap();
         r.register(e2).await.unwrap();
-        let outcome = r.revoke_by_token_prefix("1").await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", 16).await.unwrap();
         match outcome {
-            RevokeOutcome::Ambiguous { matches } => {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
                 assert_eq!(matches.len(), 2);
+                assert!(!truncated, "two matches under cap of sixteen");
                 // Neither tombstoned.
                 assert!(matches.iter().all(|s| s.revoked_at.is_none()));
             }
@@ -1265,13 +1335,52 @@ mod tests {
         assert!(r.resolve(&t2).await.unwrap().is_some());
     }
 
+    /// At-cap match count: exactly `limit` entries match, none truncated.
+    #[tokio::test]
+    async fn revoke_by_token_prefix_ambiguous_at_cap_not_truncated() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (_, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", 2).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2);
+                assert!(!truncated, "exactly cap is not truncation");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    /// Over-cap match count: more entries match than `limit`, list is
+    /// truncated and `truncated == true`.
+    #[tokio::test]
+    async fn revoke_by_token_prefix_ambiguous_over_cap_truncated() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (_, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        let (_, e3) = entry_with_token_b58_starting_with("1", "c@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        r.register(e3).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", 2).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2, "list capped at limit");
+                assert!(truncated, "third match drops; flag set");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn revoke_by_token_prefix_outcome_never_serializes_full_token_b58() {
         let r = InMemoryPeerRegistry::new();
         let (token, ent) = entry("p@local");
         r.register(ent).await.unwrap();
         let prefix: String = token.to_b58().chars().take(6).collect();
-        let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+        let outcome = r.revoke_by_token_prefix(&prefix, 16).await.unwrap();
         let json = serde_json::to_string(&outcome).unwrap();
         let full_b58 = token.to_b58();
         assert!(
@@ -1290,15 +1399,83 @@ mod tests {
             let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
             r.register(ent).await.unwrap();
             let prefix: String = token.to_b58().chars().take(6).collect();
-            let outcome = r.revoke_by_token_prefix(&prefix).await.unwrap();
+            let outcome = r.revoke_by_token_prefix(&prefix, 16).await.unwrap();
             assert!(matches!(outcome, RevokeOutcome::Revoked(_)));
         }
         let r2 = JsonlPeerRegistry::open(path).await.unwrap();
         assert_eq!(r2.resolve(&token).await.unwrap(), None);
         // The summary list still surfaces the revoked entry.
-        let s = r2.list_summaries(10, None).await.unwrap();
+        let (s, _) = r2.list_summaries(10, None).await.unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].revoked_at.is_some());
+    }
+
+    /// `list_summaries` peeks one entry past `limit`; when more rows
+    /// exist than `limit`, the returned list is exactly `limit` long
+    /// and `truncated == true`. The operator's signal that they need
+    /// to either bump `limit` or refine `pubkey_prefix`.
+    #[tokio::test]
+    async fn list_summaries_marks_truncated_when_more_rows_exist() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        let (_, e3) = entry("c@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        r.register(e3).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated);
+    }
+
+    /// At-cap exact match count is NOT truncation. The peek-one-past
+    /// shape returns exactly `limit + 1` candidates only when more
+    /// than `limit` exist; with exactly `limit`, the iterator stops
+    /// at `limit` and `truncated` stays `false`.
+    #[tokio::test]
+    async fn list_summaries_at_cap_not_truncated() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated);
+    }
+
+    /// JSONL impl mirrors the in-memory peek-one-past shape so a
+    /// post-restart registry sees the same flag.
+    #[tokio::test]
+    async fn jsonl_list_summaries_marks_truncated_when_more_rows_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        let (_, e3) = entry("c@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        r.register(e3).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated);
+    }
+
+    /// Stale callers that don't know about `truncated` still
+    /// deserialise an `Ambiguous` payload from a new daemon. The
+    /// `#[serde(default)]` reads as `false`, the safe degradation.
+    #[tokio::test]
+    async fn ambiguous_truncated_field_is_serde_default_for_forward_compat() {
+        let raw = r#"{"type":"ambiguous","matches":[]}"#;
+        let outcome: RevokeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert!(matches.is_empty());
+                assert!(!truncated, "missing field defaults to false");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 
     #[tokio::test]

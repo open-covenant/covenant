@@ -40,6 +40,16 @@ pub fn covenant_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".covenant"))
 }
 
+/// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
+/// registry entries match the operator's prefix, the daemon returns the
+/// first `PEER_MATCH_LIMIT` summaries plus `truncated: true` so the
+/// operator can narrow with a longer prefix without first paying for an
+/// unbounded payload. Distinct from the CLI's `PEER_LOOKUP_LIMIT`
+/// (`crates/covenant/src/main.rs`) which bounds peer-lookup fanout for
+/// `expand_a2a_action`, not revoke-match fanout — keep the names
+/// distinct so a future `grep` resolves cleanly.
+const PEER_MATCH_LIMIT: usize = 16;
+
 #[derive(Clone)]
 pub struct Server {
     router: Arc<Router>,
@@ -805,9 +815,10 @@ impl Server {
             .list_summaries(limit, pubkey_prefix.as_deref())
             .await
         {
-            Ok(peers) => Response::PeerList {
+            Ok((peers, truncated)) => Response::PeerList {
                 peers,
                 operator_pubkey_b58: bs58::encode(self.identity.agent_id().pubkey).into_string(),
+                truncated,
             },
             Err(e) => Response::Error {
                 message: format!("peers: {e}"),
@@ -825,6 +836,13 @@ impl Server {
     /// (Revoked / AlreadyRevoked / NotFound / Ambiguous /
     /// SelfRevokeForbidden) survive on the wire so the CLI can render
     /// each clearly without re-calling `peers list` for narrowing.
+    ///
+    /// `Ambiguous.matches` is bounded at [`PEER_MATCH_LIMIT`]; when more
+    /// than that many entries match the prefix, `Ambiguous.truncated`
+    /// is `true` and the displayed list carries exactly the cap. The
+    /// operator narrows by re-running with a longer prefix; a future
+    /// `--limit-matches` CLI flag would route through the same registry
+    /// parameter.
     ///
     /// Gated to the operator's own identity — `peer.pubkey ==
     /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`
@@ -917,7 +935,11 @@ impl Server {
                 }
             }
         }
-        let outcome = match self.peers.revoke_by_token_prefix(&token_prefix).await {
+        let outcome = match self
+            .peers
+            .revoke_by_token_prefix(&token_prefix, PEER_MATCH_LIMIT)
+            .await
+        {
             Ok(o) => o,
             Err(e) => {
                 return Response::Error {
@@ -5441,6 +5463,7 @@ budget_credits_per_hour = {credits}
             Response::PeerList {
                 peers,
                 operator_pubkey_b58,
+                ..
             } => {
                 assert!(peers.is_empty(), "no peer matches the bogus prefix");
                 operator_pubkey_b58
@@ -5487,9 +5510,11 @@ budget_credits_per_hour = {credits}
             Response::PeerList {
                 peers,
                 operator_pubkey_b58,
+                truncated,
             } => {
                 assert!(peers.is_empty());
                 assert_eq!(operator_pubkey_b58, "");
+                assert!(!truncated, "missing field defaults to false");
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -5680,8 +5705,9 @@ budget_credits_per_hour = {credits}
             .await;
         match resp {
             Response::PeerRevoked { outcome } => match outcome {
-                RevokeOutcome::Ambiguous { matches } => {
+                RevokeOutcome::Ambiguous { matches, truncated } => {
                     assert_eq!(matches.len(), 2, "both seeded peers surface");
+                    assert!(!truncated, "two matches under PEER_MATCH_LIMIT");
                     assert!(matches.iter().all(|m| m.revoked_at.is_none()));
                 }
                 other => panic!("expected Ambiguous, got {other:?}"),
@@ -5697,6 +5723,77 @@ budget_credits_per_hour = {credits}
             post_count, pre_count,
             "ambiguous outcome must not emit any audit row"
         );
+    }
+
+    /// `Response::PeerList.truncated` is `true` when more registry rows
+    /// existed than the caller's `limit` allowed. The daemon does not
+    /// transform the registry's truncation flag — it threads through to
+    /// the response so the operator can see "you're not seeing them
+    /// all" without a second round-trip.
+    #[tokio::test]
+    async fn list_peers_response_marks_truncated_when_registry_truncates() {
+        let s = server_with(vec![], "");
+        for i in 0..3u8 {
+            s.peers
+                .register(PeerEntry {
+                    token: PeerToken::generate(),
+                    agent_id: AgentId::new(format!("p{i}@local"), [i; 32]),
+                    registered_at: epoch_ms(),
+                })
+                .await
+                .unwrap();
+        }
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 2,
+                pubkey_prefix: None,
+            })
+            .await;
+        match resp {
+            Response::PeerList {
+                peers, truncated, ..
+            } => {
+                assert_eq!(peers.len(), 2, "list capped at limit");
+                assert!(truncated, "third peer drops; flag set");
+            }
+            other => panic!("expected PeerList, got {other:?}"),
+        }
+    }
+
+    /// `Response::PeerRevoked { outcome: Ambiguous { truncated } }` is
+    /// `true` when more than `PEER_MATCH_LIMIT` registry entries match
+    /// the operator's prefix. The daemon does not transform the
+    /// registry's truncation flag — it threads through to the response.
+    #[tokio::test]
+    async fn revoke_peer_response_marks_ambiguous_truncated() {
+        let s = server_with(vec![], "");
+        for i in 0..(PEER_MATCH_LIMIT + 1) {
+            let mut pubkey = [0u8; 32];
+            pubkey[0] = i as u8;
+            let (_, ent) =
+                peer_with_token_b58_starting_with("1", &format!("collide{i}@local"), pubkey);
+            s.peers.register(ent).await.unwrap();
+        }
+        let resp = s
+            .op_respond(Request::RevokePeer {
+                token_prefix: "1".into(),
+                force: false,
+            })
+            .await;
+        match resp {
+            Response::PeerRevoked { outcome } => match outcome {
+                RevokeOutcome::Ambiguous { matches, truncated } => {
+                    assert_eq!(
+                        matches.len(),
+                        PEER_MATCH_LIMIT,
+                        "list capped at PEER_MATCH_LIMIT",
+                    );
+                    assert!(truncated, "more matches existed; flag set");
+                }
+                other => panic!("expected Ambiguous, got {other:?}"),
+            },
+            other => panic!("expected PeerRevoked, got {other:?}"),
+        }
     }
 
     /// Wire-format regression: a `Response::PeerRevoked` must never

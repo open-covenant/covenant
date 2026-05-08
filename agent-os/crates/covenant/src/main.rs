@@ -781,6 +781,7 @@ async fn main() -> Result<()> {
                         Response::PeerList {
                             peers,
                             operator_pubkey_b58,
+                            ..
                         } => {
                             if peers.is_empty() {
                                 println!("(no matching peers)");
@@ -849,7 +850,7 @@ async fn main() -> Result<()> {
                                 eprintln!("no peer matched the supplied prefix");
                                 std::process::exit(1);
                             }
-                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches } => {
+                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches, .. } => {
                                 eprintln!(
                                     "prefix matched {n} peers — narrow the prefix:",
                                     n = matches.len()

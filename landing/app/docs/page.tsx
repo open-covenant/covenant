@@ -97,12 +97,11 @@ export default function DocsIndexPage() {
       <h2>Release</h2>
       <p>
         Covenant 0.1 (alpha) is released on 13 May 2026. Settlement runs on
-        Solana mainnet from the alpha release. An external security audit of
-        the settlement program is scheduled for the M2 milestone; the
-        post-alpha milestone schedule is published on the{" "}
-        <a href="https://opencovenant.org/roadmap">public roadmap</a>. Protocol
-        wire formats — IPC, capabilities, and agent manifest — are subject to
-        revision ahead of the 1.0 release.
+        Solana mainnet from the alpha release. The post-alpha milestone
+        schedule is published on the{" "}
+        <a href="https://opencovenant.org/roadmap">public roadmap</a>.
+        Protocol wire formats — IPC, capabilities, and agent manifest — are
+        subject to revision ahead of the 1.0 release.
       </p>
 
       <h2>Position in the stack</h2>

@@ -6,7 +6,7 @@ import { MobileMenu } from "../MobileMenu";
 export const metadata: Metadata = {
   title: "Roadmap — Covenant",
   description:
-    "Development milestones for Covenant following the alpha release on 13.05.2026: hardening, audit and marketplace, native integration, distributed operation, and the 1.0 stability commitment.",
+    "Development milestones for Covenant following the alpha release on 13.05.2026: hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
@@ -99,11 +99,11 @@ const MILESTONES: Milestone[] = [
   },
   {
     code: "M2",
-    title: "Audit and Marketplace",
+    title: "Marketplace and SDKs",
     status: "Upcoming",
-    intro: "External security validation and the first marketplace surface.",
+    intro:
+      "On-chain marketplace foundations and a published SDK surface.",
     bullets: [
-      "External security audit of the settlement program",
       "On-chain agent registry with slashable identity stakes",
       "Reputation primitive",
       "SDKs published to PyPI (Python), npm (TypeScript), and crates.io (Rust)",

@@ -140,9 +140,8 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
       <p>
         Off-chain receipts and the local credit accounting are stable.
         The on-chain settlement program is deployed to Solana mainnet
-        from the alpha release; an external security audit follows on
-        the M2 milestone. Refer to the public roadmap for the milestone
-        schedule.
+        from the alpha release. Refer to the public roadmap for the
+        post-alpha milestone schedule.
       </p>
 
       <h2>Related</h2>

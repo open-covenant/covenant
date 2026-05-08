@@ -17,6 +17,7 @@
 //!   covenant tools call <name> [--args <json>]
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
+//!   covenant intents resume <intent-id>
 //! ```
 
 #![deny(unsafe_code)]
@@ -84,6 +85,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant peers purge (--before-ms M | --older-than-ms D)  drop revoked peer registrations older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
     );
 }
 
@@ -673,6 +677,33 @@ async fn main() -> Result<()> {
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::PeersPurged { purged } => {
                     println!("purged {purged} revoked peer(s)");
+                }
+                Response::Error { message } => bail!("daemon error: {message}"),
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
+        "intents" => {
+            if args.len() < 2 || args[1] != "resume" {
+                eprintln!("covenant intents: expected `resume <intent-id>`");
+                std::process::exit(2);
+            }
+            let intent_id_str = args
+                .get(2)
+                .context("covenant intents resume: missing <intent-id>")?;
+            let intent_id: uuid::Uuid = intent_id_str
+                .parse()
+                .with_context(|| format!("intent-id must be a uuid, got {intent_id_str:?}"))?;
+            write_frame(&mut stream, &Request::ResumeIntent { intent_id }).await?;
+            match read_frame::<_, Response>(&mut stream).await? {
+                Response::IntentResult { text, sources, .. } => {
+                    println!("{text}");
+                    if !sources.is_empty() {
+                        println!();
+                        println!("sources:");
+                        for s in sources {
+                            println!("  - {s}");
+                        }
+                    }
                 }
                 Response::Error { message } => bail!("daemon error: {message}"),
                 other => bail!("unexpected response: {other:?}"),

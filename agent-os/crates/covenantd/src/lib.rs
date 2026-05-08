@@ -260,6 +260,7 @@ impl Server {
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
+            Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
         }
     }
 
@@ -605,14 +606,29 @@ impl Server {
                     Err(BudgetError::NoCapacity(_)) => {
                         // Manifest opts in to budget but the bucket was never
                         // seeded — operator forgot to call
-                        // `register_agent_budgets`. Warn loudly and pass for
-                        // v0 (don't block dispatch on a misconfigured
-                        // daemon); Sprint 58c hardens this.
+                        // `register_agent_budgets`, or a hot-reload added the
+                        // manifest without re-seeding. v0 still passes
+                        // (don't block dispatch on a misconfigured daemon)
+                        // but the bypass now lands in /audit/recent so the
+                        // operator sees it. Sprint 58c M2 closure.
                         warn!(
                             agent = %card.id,
                             "no budget capacity registered for agent; \
                              dispatching without debit (call register_agent_budgets at startup)"
                         );
+                        let event = AuditEvent {
+                            id: Uuid::new_v4(),
+                            timestamp_ms: epoch_ms(),
+                            issuer: issuer.clone(),
+                            kind: AuditKind::BudgetUnseeded {
+                                agent_display: agent.display.clone(),
+                                intent_id,
+                                requested,
+                            },
+                        };
+                        if let Err(e) = self.audit.record(event).await {
+                            warn!(error = %e, "audit record (budget unseeded) failed");
+                        }
                     }
                     Err(BudgetError::Exhausted {
                         tokens_remaining,
@@ -625,6 +641,7 @@ impl Server {
                             kind: AuditKind::BudgetExhausted {
                                 agent_display: agent.display.clone(),
                                 intent_id,
+                                intent_text: text.clone(),
                                 requested,
                                 tokens_remaining,
                                 refill_eta_ms,
@@ -633,10 +650,14 @@ impl Server {
                         if let Err(e) = self.audit.record(event).await {
                             warn!(error = %e, "audit record (budget exhausted) failed");
                         }
+                        // Wire response rounds tokens_remaining to a coarse
+                        // bucket; the audit row above keeps the precise u64.
+                        // Sprint 58c L3 closure (multi-peer prep).
+                        let coarse = round_tokens_remaining(tokens_remaining);
                         return Response::Error {
                             message: format!(
                                 "agent {} budget exhausted: requested {requested} credit(s), \
-                                 {tokens_remaining} remaining, refill eta {refill_eta_ms}ms",
+                                 ≥{coarse} remaining, refill eta {refill_eta_ms}ms",
                                 card.id
                             ),
                         };
@@ -733,6 +754,50 @@ impl Server {
             text: text_out,
             sources: sources_out,
             settlement: None,
+        }
+    }
+
+    /// Re-dispatch a previously budget-rejected intent. The audit log's
+    /// `BudgetExhausted` row carries the original `intent_text`, so the
+    /// resume verb scans recent audit, finds the matching `intent_id`,
+    /// and runs the text through `dispatch_intent` like any fresh
+    /// `SubmitIntent` (capability check, ignore rules, and budget gate
+    /// all re-run — the bucket may have refilled). Returns
+    /// `Response::Error` if no `BudgetExhausted` row matches the supplied
+    /// `intent_id`. Sprint 58c — closes the §11 pin's "queue a resume"
+    /// half for Phase-0 single-shot agents (Phase-1 multi-step agents
+    /// will need an actual checkpoint/restart mechanism on top of this).
+    async fn resume_intent(&self, intent_id: Uuid, peer: &AgentId) -> Response {
+        // Recent-audit window: 1024 events covers the typical operator
+        // turnaround (a few minutes of feed) without scanning the whole
+        // log. If the row has aged out, the operator must re-submit
+        // with the original text via SubmitIntent.
+        let window = 1024usize;
+        let events = match self.audit.recent(window).await {
+            Ok(es) => es,
+            Err(e) => {
+                warn!(error = %e, "audit recent failed during resume");
+                return Response::Error {
+                    message: format!("resume: audit read failed: {e}"),
+                };
+            }
+        };
+        let text = events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::BudgetExhausted {
+                intent_id: row_id,
+                intent_text,
+                ..
+            } if *row_id == intent_id => Some(intent_text.clone()),
+            _ => None,
+        });
+        match text {
+            Some(t) => self.dispatch_intent(t, peer).await,
+            None => Response::Error {
+                message: format!(
+                    "resume: no BudgetExhausted audit row for intent {intent_id} \
+                     within last {window} events"
+                ),
+            },
         }
     }
 
@@ -1098,6 +1163,39 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Coarse-bucket rounding for the `tokens_remaining` value embedded in
+/// the wire `Response::Error` message of an exhausted dispatch.
+/// Powers-of-5 sequence — operator-readable and defeats fine-grained
+/// inference of peer state in the multi-peer build (post-58c). The
+/// audit row keeps the precise `u64`. Sprint 58c L3 closure.
+fn round_tokens_remaining(n: u64) -> u64 {
+    const BUCKETS: &[u64] = &[
+        0,
+        1,
+        5,
+        10,
+        50,
+        100,
+        500,
+        1_000,
+        5_000,
+        10_000,
+        50_000,
+        100_000,
+        500_000,
+        1_000_000,
+        5_000_000,
+        10_000_000,
+        50_000_000,
+        100_000_000,
+        500_000_000,
+        1_000_000_000,
+        5_000_000_000,
+        10_000_000_000,
+    ];
+    BUCKETS.iter().rev().copied().find(|&b| b <= n).unwrap_or(0)
 }
 
 /// Map an `AgentCard` to a stable `AgentId` for budget keying. v0 agents
@@ -2250,6 +2348,7 @@ budget_credits_per_hour = {credits}
         match &exhausted.kind {
             AuditKind::BudgetExhausted {
                 agent_display,
+                intent_text,
                 requested,
                 tokens_remaining,
                 ..
@@ -2257,6 +2356,9 @@ budget_credits_per_hour = {credits}
                 assert_eq!(agent_display, "research@agent");
                 assert_eq!(*requested, 1);
                 assert_eq!(*tokens_remaining, 0);
+                // Sprint 58c: audit row carries the rejected text so
+                // `intents resume <id>` can re-dispatch from this row alone.
+                assert_eq!(intent_text, "find more recent papers");
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -2269,6 +2371,181 @@ budget_credits_per_hour = {credits}
     /// and skips the debit. (Equivalent test: card with budget = 0 plus
     /// no register_agent_budgets call, exercising the NoCapacity warn-
     /// and-pass branch.)
+    /// Sprint 58c M2 closure — when the manifest opts in to budget but
+    /// `register_agent_budgets` was never called, dispatch falls into
+    /// the NoCapacity arm. v0 still passes the dispatch through but
+    /// records a `BudgetUnseeded` audit row so the bypass is visible.
+    #[tokio::test]
+    async fn dispatch_audits_unseeded_when_manifest_opts_in_but_bucket_missing() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        // Skip register_agent_budgets — the bucket is absent.
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers".into(),
+            })
+            .await;
+        // Dispatch passes (v0 fail-open).
+        assert!(matches!(resp, Response::IntentResult { .. }));
+        let events = audit.recent(50).await.unwrap();
+        let unseeded = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::BudgetUnseeded { .. }))
+            .expect("expected a BudgetUnseeded audit event");
+        match &unseeded.kind {
+            AuditKind::BudgetUnseeded {
+                agent_display,
+                requested,
+                ..
+            } => {
+                assert_eq!(agent_display, "research@agent");
+                assert_eq!(*requested, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Sprint 58c L3 closure — wire response rounds tokens_remaining to
+    /// a powers-of-5 bucket. Sanity covers the bucket boundaries.
+    #[test]
+    fn round_tokens_remaining_collapses_to_powers_of_five() {
+        assert_eq!(round_tokens_remaining(0), 0);
+        assert_eq!(round_tokens_remaining(1), 1);
+        assert_eq!(round_tokens_remaining(4), 1);
+        assert_eq!(round_tokens_remaining(5), 5);
+        assert_eq!(round_tokens_remaining(9), 5);
+        assert_eq!(round_tokens_remaining(10), 10);
+        assert_eq!(round_tokens_remaining(49), 10);
+        assert_eq!(round_tokens_remaining(50), 50);
+        assert_eq!(round_tokens_remaining(99), 50);
+        assert_eq!(round_tokens_remaining(100), 100);
+        assert_eq!(round_tokens_remaining(499), 100);
+        assert_eq!(round_tokens_remaining(500), 500);
+        assert_eq!(round_tokens_remaining(999), 500);
+        assert_eq!(round_tokens_remaining(1000), 1_000);
+        assert_eq!(round_tokens_remaining(u64::MAX), 10_000_000_000);
+    }
+
+    /// Sprint 58c — resume verb plumbing. A `BudgetExhausted` audit
+    /// row recorded for a given `intent_id` is the only state the
+    /// resume verb needs: it scans the audit, extracts `intent_text`,
+    /// and runs it through `dispatch_intent`. Synthesised audit row
+    /// here so the test doesn't have to actually exhaust then refill
+    /// (no clock-injection at the InMemoryLedger layer).
+    #[tokio::test]
+    async fn resume_intent_re_dispatches_from_budget_exhausted_audit_row() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )])),
+            Arc::new(MockRunner::new("resumed result")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        s.register_agent_budgets().await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        // Synthesise a BudgetExhausted row as if a previous dispatch had
+        // been rejected. The resume verb scans recent audit, finds this
+        // row by intent_id, and re-dispatches the captured text.
+        let exhausted_intent = Uuid::new_v4();
+        audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: AgentId::new("user@local", [0u8; 32]),
+                kind: AuditKind::BudgetExhausted {
+                    agent_display: "research@agent".into(),
+                    intent_id: exhausted_intent,
+                    intent_text: "find recent papers".into(),
+                    requested: 1,
+                    tokens_remaining: 0,
+                    refill_eta_ms: 0,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s
+            .op_respond(Request::ResumeIntent {
+                intent_id: exhausted_intent,
+            })
+            .await;
+        match resp {
+            Response::IntentResult { text, .. } => assert_eq!(text, "resumed result"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Sprint 58c — resume with no matching audit row returns Error,
+    /// not a fresh dispatch on an empty intent.
+    #[tokio::test]
+    async fn resume_intent_returns_error_when_no_audit_row_matches() {
+        let s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "should not run",
+        );
+        let resp = s
+            .op_respond(Request::ResumeIntent {
+                intent_id: Uuid::new_v4(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("no BudgetExhausted audit row"),
+                    "expected resume-not-found message, got {message:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn dispatch_skips_budget_for_zero_credit_agents() {
         let s = server_with(

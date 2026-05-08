@@ -28,18 +28,15 @@
 //! Both serialize concurrent mutations through a `Mutex` so two
 //! debits can't race past the same `tokens_remaining` snapshot.
 //!
-//! ## Compaction trade-off (Sprint 58a)
+//! ## Compaction (Sprint 58c)
 //!
 //! [`BudgetLedger::compact_older_than`] drops [`BudgetEvent::Debit`]
-//! events older than the cutoff. Currently this is **destructive of
-//! replay accuracy**: after compaction, reopening the ledger sees only
-//! the surviving events and so reconstructs a bucket that never
-//! consumed the dropped credits. The intent for production
-//! (Sprint 58c) is to write a synthetic snapshot event before the
-//! drop so the replay state stays correct. For Sprint 58a, operators
-//! should compact only when the cutoff is older than any window the
-//! refill rate cares about (i.e., older than ~1 hour past the slowest
-//! refill rate the deployment uses).
+//! events older than the cutoff and emits one per-agent
+//! [`BudgetEvent::Snapshot`] capturing the bucket's `(capacity,
+//! tokens_remaining, last_refill_ms)` at the cutoff. Replay treats
+//! Snapshot as authoritative for that agent, so reopening a compacted
+//! ledger reconstructs the same bucket state as before the rewrite.
+//! Sprint 58a's destructive-compact note is closed.
 //!
 //! [`tokens_remaining`]: BudgetLedger::tokens_remaining
 //! [`would_exceed`]: BudgetLedger::would_exceed
@@ -108,6 +105,18 @@ enum BudgetEvent {
         at_ms: u64,
     },
     Debit(BudgetDebit),
+    /// Synthetic checkpoint emitted by [`BudgetLedger::compact_older_than`]
+    /// before pre-cutoff [`BudgetEvent::Debit`] events are dropped.
+    /// Replay overwrites the bucket's state with these fields, so the
+    /// dropped debits' net effect is preserved. One per agent that had
+    /// any debit dropped.
+    Snapshot {
+        agent: AgentId,
+        capacity: u64,
+        tokens_remaining: u64,
+        last_refill_ms: u64,
+        at_ms: u64,
+    },
 }
 
 #[async_trait]
@@ -229,6 +238,16 @@ impl BudgetLedger for InMemoryLedger {
     ) -> Result<(), BudgetError> {
         let now = epoch_ms();
         let mut buckets = self.buckets.lock().await;
+        // Idempotent on capacity match: a re-stamp of last_refill_ms = now
+        // every boot would prevent slow-rate buckets from ever refilling
+        // on restart-heavy deployments. Display name is updated in place
+        // (cheap, no rate-limit semantic).
+        if let Some(existing) = buckets.get_mut(&agent.pubkey) {
+            if existing.capacity == credits_per_hour {
+                existing.display = agent.display.clone();
+                return Ok(());
+            }
+        }
         let entry = buckets.entry(agent.pubkey).or_insert_with(|| Bucket {
             display: agent.display.clone(),
             capacity: credits_per_hour,
@@ -390,6 +409,23 @@ impl JsonlLedger {
                     }
                     debits.push(debit);
                 }
+                BudgetEvent::Snapshot {
+                    agent,
+                    capacity,
+                    tokens_remaining,
+                    last_refill_ms,
+                    at_ms: _,
+                } => {
+                    buckets.insert(
+                        agent.pubkey,
+                        Bucket {
+                            display: agent.display,
+                            capacity,
+                            tokens_remaining,
+                            last_refill_ms,
+                        },
+                    );
+                }
             }
         }
 
@@ -423,6 +459,20 @@ impl BudgetLedger for JsonlLedger {
         credits_per_hour: u64,
     ) -> Result<(), BudgetError> {
         let _g = self.file_lock.lock().await;
+        // Idempotent: when the bucket already has the requested capacity
+        // (prior CapacitySet replayed at open) skip the persist + the
+        // last_refill_ms re-stamp. Avoids the slow-rate-bucket
+        // starvation on restart-heavy deployments — `register_agent_budgets`
+        // calls this on every boot.
+        {
+            let mut buckets = self.buckets.lock().await;
+            if let Some(existing) = buckets.get_mut(&agent.pubkey) {
+                if existing.capacity == credits_per_hour {
+                    existing.display = agent.display.clone();
+                    return Ok(());
+                }
+            }
+        }
         let now = epoch_ms();
         self.append(&BudgetEvent::CapacitySet {
             agent: agent.clone(),
@@ -540,23 +590,112 @@ impl BudgetLedger for JsonlLedger {
             .map(serde_json::from_str)
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Replay all pre-cutoff events into a synthetic bucket map and
+        // track which agents had at least one pre-cutoff Debit (those
+        // are the agents whose Debit rows we'll drop and replace with a
+        // Snapshot). Agents with only pre-cutoff CapacitySet rows — no
+        // dropped Debits — keep their CapacitySet rows in the rewritten
+        // stream, no Snapshot needed.
+        let mut state: HashMap<[u8; 32], Bucket> = HashMap::new();
+        let mut affected: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
         let mut dropped: u64 = 0;
-        let kept: Vec<&BudgetEvent> = events
-            .iter()
-            .filter(|ev| match ev {
-                BudgetEvent::CapacitySet { .. } => true,
-                BudgetEvent::Debit(d) => {
-                    if d.at_ms < before_ms {
-                        dropped += 1;
-                        false
-                    } else {
-                        true
+        for ev in &events {
+            match ev {
+                BudgetEvent::CapacitySet {
+                    agent,
+                    credits_per_hour,
+                    at_ms,
+                } if *at_ms < before_ms => {
+                    let entry = state.entry(agent.pubkey).or_insert_with(|| Bucket {
+                        display: agent.display.clone(),
+                        capacity: *credits_per_hour,
+                        tokens_remaining: *credits_per_hour,
+                        last_refill_ms: *at_ms,
+                    });
+                    refill(entry, *at_ms);
+                    entry.capacity = *credits_per_hour;
+                    entry.display = agent.display.clone();
+                    if entry.tokens_remaining > *credits_per_hour {
+                        entry.tokens_remaining = *credits_per_hour;
                     }
+                    entry.last_refill_ms = *at_ms;
                 }
-            })
-            .collect();
+                BudgetEvent::Debit(d) if d.at_ms < before_ms => {
+                    if let Some(bucket) = state.get_mut(&d.agent.pubkey) {
+                        refill(bucket, d.at_ms);
+                        bucket.tokens_remaining = bucket.tokens_remaining.saturating_sub(d.credits);
+                    }
+                    affected.insert(d.agent.pubkey);
+                    dropped += 1;
+                }
+                BudgetEvent::Snapshot {
+                    agent,
+                    capacity,
+                    tokens_remaining,
+                    last_refill_ms,
+                    at_ms,
+                } if *at_ms < before_ms => {
+                    state.insert(
+                        agent.pubkey,
+                        Bucket {
+                            display: agent.display.clone(),
+                            capacity: *capacity,
+                            tokens_remaining: *tokens_remaining,
+                            last_refill_ms: *last_refill_ms,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
         if dropped == 0 {
             return Ok(0);
+        }
+
+        // Rewrite the event stream:
+        //   1. Pre-cutoff CapacitySet and Snapshot rows are kept (replay
+        //      will set the bucket up; the new Snapshot for affected
+        //      agents comes after and overwrites them).
+        //   2. Pre-cutoff Debit rows are dropped.
+        //   3. One Snapshot per affected agent at at_ms = before_ms - 1.
+        //   4. All post-cutoff events kept verbatim.
+        // Post-cutoff Snapshot insertion order is determined by sort
+        // over pubkeys for cross-run determinism.
+        let snapshot_at = before_ms.saturating_sub(1);
+        let mut rewritten: Vec<BudgetEvent> = Vec::new();
+        for ev in &events {
+            match ev {
+                BudgetEvent::CapacitySet { at_ms, .. } if *at_ms < before_ms => {
+                    rewritten.push(ev.clone());
+                }
+                BudgetEvent::Snapshot { at_ms, .. } if *at_ms < before_ms => {
+                    rewritten.push(ev.clone());
+                }
+                _ => {}
+            }
+        }
+        let mut affected_sorted: Vec<[u8; 32]> = affected.iter().copied().collect();
+        affected_sorted.sort();
+        for pk in &affected_sorted {
+            if let Some(b) = state.get(pk) {
+                rewritten.push(BudgetEvent::Snapshot {
+                    agent: AgentId::new(b.display.clone(), *pk),
+                    capacity: b.capacity,
+                    tokens_remaining: b.tokens_remaining,
+                    last_refill_ms: b.last_refill_ms,
+                    at_ms: snapshot_at,
+                });
+            }
+        }
+        for ev in &events {
+            let at = match ev {
+                BudgetEvent::CapacitySet { at_ms, .. } => *at_ms,
+                BudgetEvent::Debit(d) => d.at_ms,
+                BudgetEvent::Snapshot { at_ms, .. } => *at_ms,
+            };
+            if at >= before_ms {
+                rewritten.push(ev.clone());
+            }
         }
 
         let tmp_path = self.path.with_extension("jsonl.tmp");
@@ -566,7 +705,7 @@ impl BudgetLedger for JsonlLedger {
             .truncate(true)
             .open(&tmp_path)
             .await?;
-        for ev in &kept {
+        for ev in &rewritten {
             let line = serde_json::to_string(ev)?;
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
@@ -897,6 +1036,115 @@ mod tests {
         assert!(!path.with_extension("jsonl.tmp").exists());
         // Surviving debit still on disk.
         assert_eq!(l.recent_debits(&a, 10).await.unwrap().len(), 1);
+    }
+
+    /// Sprint 58c — non-destructive compact. Pre-cutoff Debits are
+    /// dropped but a per-agent Snapshot captures the state at cutoff,
+    /// so reopening reconstructs the same `tokens_remaining` as before
+    /// the rewrite.
+    #[tokio::test]
+    async fn jsonl_compact_replay_yields_same_state_as_pre_compact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("a@local");
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap();
+        l.try_debit(&a, 2, Uuid::new_v4()).await.unwrap();
+        // Rewrite all event timestamps into the past so compact sees
+        // them as droppable. CapacitySet AND Debits both pre-cutoff.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut shifted: Vec<String> = Vec::new();
+        let mut t: u64 = 0;
+        for line in raw.lines() {
+            let mut ev: BudgetEvent = serde_json::from_str(line).unwrap();
+            match &mut ev {
+                BudgetEvent::CapacitySet { at_ms, .. } => *at_ms = t,
+                BudgetEvent::Debit(d) => d.at_ms = t,
+                BudgetEvent::Snapshot { at_ms, .. } => *at_ms = t,
+            }
+            t += 10;
+            shifted.push(serde_json::to_string(&ev).unwrap());
+        }
+        std::fs::write(&path, shifted.join("\n") + "\n").unwrap();
+
+        // Reopen so in-memory state matches the rewritten timestamps,
+        // then snapshot tokens_remaining BEFORE compact.
+        let l2 = JsonlLedger::open(path.clone()).await.unwrap();
+        let pre = l2.tokens_remaining(&a).await.unwrap();
+        let purged = l2.compact_older_than(100).await.unwrap();
+        assert!(
+            purged >= 2,
+            "expected at least 2 Debits dropped, got {purged}"
+        );
+
+        // Reopen the compacted file: tokens_remaining must equal pre
+        // (the bucket state at cutoff is the Snapshot's checkpoint).
+        let l3 = JsonlLedger::open(path).await.unwrap();
+        let post = l3.tokens_remaining(&a).await.unwrap();
+        assert_eq!(
+            post, pre,
+            "compact then reopen must preserve tokens_remaining; pre={pre} post={post}"
+        );
+        // The dropped Debit history is gone but the surviving in-memory
+        // log is empty (compact cleared it of pre-cutoff entries).
+        assert!(l3.recent_debits(&a, 10).await.unwrap().is_empty());
+    }
+
+    /// Sprint 58c L2 closure — `set_capacity` is idempotent on capacity
+    /// match. A re-stamp of `last_refill_ms = now` every boot would
+    /// prevent slow-rate buckets from refilling on restart-heavy
+    /// deployments.
+    #[tokio::test]
+    async fn in_memory_set_capacity_idempotent_when_unchanged() {
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+        // Burn 1, leaving 9.
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap();
+        // Stash last_refill_ms so we can verify the no-op below leaves
+        // it untouched.
+        let before = {
+            let buckets = l.buckets.lock().await;
+            buckets.get(&a.pubkey).unwrap().last_refill_ms
+        };
+        // Re-set with the same capacity — must be a no-op on the clock.
+        l.set_capacity(&a, 10).await.unwrap();
+        let after = {
+            let buckets = l.buckets.lock().await;
+            buckets.get(&a.pubkey).unwrap().last_refill_ms
+        };
+        assert_eq!(before, after, "last_refill_ms must not be re-stamped");
+        assert_eq!(l.tokens_remaining(&a).await.unwrap(), 9);
+    }
+
+    #[tokio::test]
+    async fn in_memory_set_capacity_re_stamps_when_capacity_changes() {
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 4, Uuid::new_v4()).await.unwrap();
+        // Capacity change still re-stamps and clamps tokens (pre-existing
+        // semantic from `set_capacity_clamps_tokens_when_shrinking`).
+        l.set_capacity(&a, 5).await.unwrap();
+        assert_eq!(l.tokens_remaining(&a).await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn jsonl_set_capacity_idempotent_does_not_append_second_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("a@local");
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        l.set_capacity(&a, 10).await.unwrap();
+        let after_first = std::fs::read_to_string(&path).unwrap();
+        // Idempotent re-call must not append.
+        l.set_capacity(&a, 10).await.unwrap();
+        let after_second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after_first, after_second,
+            "second set_capacity with unchanged capacity must not write"
+        );
     }
 
     #[tokio::test]

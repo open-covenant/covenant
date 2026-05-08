@@ -133,6 +133,17 @@ pub enum Request {
     PurgePeers {
         before_ms: u64,
     },
+    /// Re-dispatch the intent that the audit log's most recent
+    /// `BudgetExhausted` row records under `intent_id`. The audit row
+    /// carries `intent_text` (Sprint 58c — closure of the §11 pin's
+    /// "queue a resume" semantic for Phase-0 single-shot agents);
+    /// the resume verb scans the audit, extracts the text, and runs
+    /// it through `dispatch_intent` like any fresh `SubmitIntent`.
+    /// Caller's responsibility to wait until the bucket has refilled
+    /// — `BudgetExhausted.refill_eta_ms` is the wait floor.
+    ResumeIntent {
+        intent_id: Uuid,
+    },
 }
 
 fn default_recent_limit() -> usize {

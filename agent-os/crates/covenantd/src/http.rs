@@ -138,6 +138,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/results/recent", get(recent_a2a_results))
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
+        .route("/intents/resume", post(intents_resume))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -561,6 +562,28 @@ async fn peers_purge(
             .respond(
                 Request::PurgePeers {
                     before_ms: b.before_ms,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ResumeIntentBody {
+    intent_id: uuid::Uuid,
+}
+
+async fn intents_resume(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<ResumeIntentBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::ResumeIntent {
+                    intent_id: b.intent_id,
                 },
                 &peer,
             )

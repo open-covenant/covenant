@@ -95,15 +95,32 @@ pub enum AuditKind {
     /// the synthesized `AgentId.display` for the matched agent (e.g.
     /// `research@agent`); `requested` is the credit cost the daemon
     /// tried to debit; `tokens_remaining` is what the bucket actually
-    /// had at the moment of the check; `refill_eta_ms` is the wall
-    /// time until the bucket can satisfy `requested` again. Sprint 58c
-    /// uses the same row to schedule the resume of a paused intent.
+    /// had at the moment of the check (precise `u64`; the wire response
+    /// rounds to a coarse bucket per the Sprint 58c L3 closure);
+    /// `refill_eta_ms` is the wall time until the bucket can satisfy
+    /// `requested` again; `intent_text` carries the rejected intent so
+    /// `covenant intents resume <intent-id>` can re-dispatch from this
+    /// row alone — the audit log is the resume queue.
     BudgetExhausted {
         agent_display: String,
         intent_id: Uuid,
+        intent_text: String,
         requested: u64,
         tokens_remaining: u64,
         refill_eta_ms: u64,
+    },
+    /// Logged when `dispatch_intent` falls into the NoCapacity fail-open
+    /// arm: the manifest opted in to budget enforcement
+    /// (`budget_credits_per_hour > 0`) but no bucket was seeded for the
+    /// agent — the operator forgot to call `register_agent_budgets`, or
+    /// a hot-reload added the manifest without re-seeding. v0 logs and
+    /// passes. Distinct from [`AuditKind::BudgetExhausted`] so /audit
+    /// consumers can filter operator-misconfig vs. policy-rejection
+    /// without special-casing sentinel values.
+    BudgetUnseeded {
+        agent_display: String,
+        intent_id: Uuid,
+        requested: u64,
     },
 }
 

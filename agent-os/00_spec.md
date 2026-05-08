@@ -36,7 +36,7 @@ Six phases, 36 weeks. Settlement appears at both ends: interface stub in Phase 0
 | 2 — Identity & Permissions | 11–17 | ed25519 identity, capability tokens, delegation chains, audit log |
 | 3 — Comms | 18–22 | Agent bus, registry, MCP bridge, A2A adapter, orchestrator agent |
 | 4 — Compositor & Interface | 23–30 | TUI (Ratatui), intent bar, agent panel, memory browser, web UI (Next.js) |
-| 5 — Settlement-on-chain & Ecosystem | 31–36 | Settlement program (credits + buyback), SDKs, marketplace, installer, security audit |
+| 5 — Settlement-on-chain & Ecosystem | 31–36 | Settlement program (credits + buyback), SDKs, marketplace, installer |
 
 Sum: 4 + 6 + 7 + 5 + 8 + 6 = 36.
 

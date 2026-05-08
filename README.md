@@ -8,7 +8,7 @@
 Covenant is the coordination layer for agentic software. It runs on your own machine, speaks to local and remote AI agents, and provides the OS-level primitives — intent, runtime, memory, identity, permissions, comms, compositor, settlement — that humans and agents need to safely share a computer, delegate work, and pay for usage.
 
 - **Web** — [opencovenant.org](https://opencovenant.org)
-- **Docs** — [opencovenant.org/docs](https://opencovenant.org/docs)
+- **Docs** — [opencovenant.org/docs](https://docs.opencovenant.org)
 - **X** — [@OpenCovenant](https://x.com/OpenCovenant)
 
 ## Why

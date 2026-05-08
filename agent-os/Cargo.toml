@@ -16,6 +16,7 @@ members = [
     "crates/covenant-mcp",
     "crates/covenant-a2a",
     "crates/covenant-peer-auth",
+    "crates/covenant-budget",
     "crates/covenantd",
     "crates/covenant",
     "agents/research",

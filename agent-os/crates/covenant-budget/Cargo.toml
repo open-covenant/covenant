@@ -1,0 +1,20 @@
+[package]
+name = "covenant-budget"
+version = "0.1.0"
+description = "Per-agent token-bucket ledger that backs `Settlement.budget_credits_per_hour` (manifest §5). Async trait + in-memory and JSONL-backed event-log implementations. Sprint 58a scaffolding — daemon wiring lands in 58b."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+covenant-types = { path = "../covenant-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -609,6 +609,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-budget"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "covenant-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "covenant-identity"
 version = "0.1.0"
 dependencies = [

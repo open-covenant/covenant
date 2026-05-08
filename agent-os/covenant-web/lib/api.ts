@@ -349,9 +349,11 @@ export const api = {
   listPeers: (limit = 20, prefix?: string) => {
     const q = new URLSearchParams({ limit: String(limit) });
     if (prefix) q.set("prefix", prefix);
-    return call<{ kind: "peer_list"; peers: PeerSummary[] }>(
-      `/peers/list?${q.toString()}`,
-    );
+    return call<{
+      kind: "peer_list";
+      peers: PeerSummary[];
+      operator_pubkey_b58: string;
+    }>(`/peers/list?${q.toString()}`);
   },
 
   revokePeer: (token_prefix: string) =>

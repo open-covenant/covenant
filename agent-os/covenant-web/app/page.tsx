@@ -43,6 +43,7 @@ export default function Home() {
     "" | "working" | "episodic" | "longterm"
   >("");
   const [peers, setPeers] = useState<PeerSummary[]>([]);
+  const [operatorPubkey, setOperatorPubkey] = useState<string>("");
   const [peerPrefix, setPeerPrefix] = useState("");
   const [revoking, setRevoking] = useState<string | null>(null);
 
@@ -75,6 +76,7 @@ export default function Home() {
       setA2aResults(ar.results);
       setDebits(d.debits);
       setPeers(p.peers);
+      setOperatorPubkey(p.operator_pubkey_b58);
       if (!toolName && t.tools.length > 0) setToolName(t.tools[0].name);
       setLastError(null);
     } catch (e) {
@@ -360,38 +362,49 @@ export default function Home() {
           </p>
         ) : (
           <ul>
-            {peers.map((p) => (
-              <li key={p.token_prefix + ":" + p.registered_at}>
-                <span className="dim">
-                  [{new Date(p.registered_at).toLocaleTimeString()}]{" "}
-                </span>
-                <span className={p.revoked_at !== null ? "dim" : "accent"}>
-                  {p.agent_id.display}
-                </span>{" "}
-                <span className="dim">
-                  · token {p.token_prefix}… · pubkey{" "}
-                  {p.agent_id.pubkey.slice(0, 8)}…
-                  {p.revoked_at !== null && (
-                    <>
-                      {" "}
-                      · revoked {new Date(p.revoked_at).toLocaleTimeString()}
-                    </>
+            {peers.map((p) => {
+              const isSelf =
+                operatorPubkey !== "" && p.agent_id.pubkey === operatorPubkey;
+              return (
+                <li key={p.token_prefix + ":" + p.registered_at}>
+                  <span className="dim">
+                    [{new Date(p.registered_at).toLocaleTimeString()}]{" "}
+                  </span>
+                  <span className={p.revoked_at !== null ? "dim" : "accent"}>
+                    {p.agent_id.display}
+                  </span>
+                  {isSelf && <span className="dim"> (self)</span>}{" "}
+                  <span className="dim">
+                    · token {p.token_prefix}… · pubkey{" "}
+                    {p.agent_id.pubkey.slice(0, 8)}…
+                    {p.revoked_at !== null && (
+                      <>
+                        {" "}
+                        · revoked {new Date(p.revoked_at).toLocaleTimeString()}
+                      </>
+                    )}
+                  </span>
+                  {p.revoked_at === null && !isSelf && (
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() =>
+                        onRevokePeer(p.token_prefix, p.agent_id.display)
+                      }
+                      disabled={revoking === p.token_prefix}
+                    >
+                      {revoking === p.token_prefix ? "revoking…" : "revoke"}
+                    </button>
                   )}
-                </span>
-                {p.revoked_at === null && (
-                  <button
-                    type="button"
-                    className="link"
-                    onClick={() =>
-                      onRevokePeer(p.token_prefix, p.agent_id.display)
-                    }
-                    disabled={revoking === p.token_prefix}
-                  >
-                    {revoking === p.token_prefix ? "revoking…" : "revoke"}
-                  </button>
-                )}
-              </li>
-            ))}
+                  {p.revoked_at === null && isSelf && (
+                    <span className="dim">
+                      {" "}
+                      · use rotate token above to replace
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

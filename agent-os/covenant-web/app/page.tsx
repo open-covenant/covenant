@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
+  setRuntimeToken,
   type A2ATask,
   type A2ATaskResult,
   type AuditEvent,
@@ -35,6 +36,8 @@ export default function Home() {
   const [a2aResults, setA2aResults] = useState<A2ATaskResult[]>([]);
   const [debits, setDebits] = useState<BudgetDebit[]>([]);
   const [resuming, setResuming] = useState<string | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [rotatedToken, setRotatedToken] = useState<string | null>(null);
   const [memoryTier, setMemoryTier] = useState<
     "" | "working" | "episodic" | "longterm"
   >("");
@@ -198,6 +201,44 @@ export default function Home() {
     }
   }
 
+  async function onRotate() {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        "Rotate the operator token? The current bootstrap token will be revoked. " +
+          "Other shells holding it will need to re-read peers/operator.token.",
+      )
+    ) {
+      return;
+    }
+    setRotating(true);
+    setLastError(null);
+    try {
+      const r = await api.rotateOperatorToken();
+      if (r.kind === "operator_token_rotated") {
+        setRuntimeToken(r.token_b58);
+        setRotatedToken(r.token_b58);
+        refresh();
+      } else {
+        setLastError(r.message);
+      }
+    } catch (e) {
+      setLastError(String(e));
+    } finally {
+      setRotating(false);
+    }
+  }
+
+  async function onCopyToken(token: string) {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(token);
+      } catch {
+        /* permissions denied — operator can copy from the input manually */
+      }
+    }
+  }
+
   return (
     <main className="page">
       <header>
@@ -222,6 +263,40 @@ export default function Home() {
         </form>
         {lastResult && <pre className="result">{lastResult}</pre>}
         {lastError && <pre className="result error">{lastError}</pre>}
+      </section>
+
+      <section>
+        <h2>operator token</h2>
+        <p className="dim">
+          rotate the bootstrap token at $COVENANT_HOME/peers/operator.token.
+          the new token is written to disk and stored in this tab so polling
+          continues without a dev-server restart.
+        </p>
+        <button type="button" onClick={onRotate} disabled={rotating}>
+          {rotating ? "rotating…" : "rotate operator token"}
+        </button>
+        {rotatedToken && (
+          <div className="result">
+            <p>
+              new token (also at $COVENANT_HOME/peers/operator.token, mode 0600):
+            </p>
+            <input
+              readOnly
+              value={rotatedToken}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <button type="button" onClick={() => onCopyToken(rotatedToken)}>
+              copy
+            </button>
+            <button type="button" onClick={() => setRotatedToken(null)}>
+              dismiss
+            </button>
+            <p className="dim">
+              paste into .env.development.local as NEXT_PUBLIC_COVENANT_TOKEN
+              for future builds. existing shells need to re-read the file.
+            </p>
+          </div>
+        )}
       </section>
 
       <section>
@@ -426,6 +501,13 @@ export default function Home() {
                       {" "}
                       {e.kind.agent_display} · {e.kind.requested} credits
                       requested · bucket unseeded (operator misconfig)
+                    </span>
+                  )}
+                  {e.kind.type === "operator_token_rotated" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.peer_display} · {e.kind.old_token_prefix}… →{" "}
+                      {e.kind.new_token_prefix}…
                     </span>
                   )}
                 </li>

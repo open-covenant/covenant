@@ -1,5 +1,32 @@
 const BASE = process.env.NEXT_PUBLIC_COVENANT_HTTP || "http://127.0.0.1:8421";
-const TOKEN = process.env.NEXT_PUBLIC_COVENANT_TOKEN || "";
+const BUILD_TOKEN = process.env.NEXT_PUBLIC_COVENANT_TOKEN || "";
+
+// Sprint 60: the bootstrap token is build-time-baked, but `RotateOperatorToken`
+// can mint a fresh one at runtime. Persist the rotated token in localStorage
+// so the live tab keeps working without a dev-server restart; fall back to
+// the build-time value when localStorage is empty (or unavailable, e.g. SSR).
+const TOKEN_KEY = "covnt_token";
+
+function readToken(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const v = window.localStorage.getItem(TOKEN_KEY);
+      if (v) return v;
+    } catch {
+      /* localStorage may be disabled (private mode, etc.) — fall through */
+    }
+  }
+  return BUILD_TOKEN;
+}
+
+export function setRuntimeToken(token: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    /* swallow — the rotation still succeeded server-side */
+  }
+}
 
 export type Memory = {
   id: string;
@@ -96,6 +123,12 @@ export type AuditKind =
       agent_display: string;
       intent_id: string;
       requested: number;
+    }
+  | {
+      type: "operator_token_rotated";
+      peer_display: string;
+      old_token_prefix: string;
+      new_token_prefix: string;
     };
 
 export type AuditEvent = {
@@ -144,8 +177,9 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     "Content-Type": "application/json",
     ...((init?.headers as Record<string, string>) || {}),
   };
-  if (TOKEN) {
-    headers["Authorization"] = `Bearer ${TOKEN}`;
+  const token = readToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
   const r = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!r.ok) {
@@ -237,5 +271,14 @@ export const api = {
     call<IntentResult>("/intents/resume", {
       method: "POST",
       body: JSON.stringify({ intent_id }),
+    }),
+
+  rotateOperatorToken: () =>
+    call<
+      | { kind: "operator_token_rotated"; token_b58: string }
+      | { kind: "error"; message: string }
+    >("/peers/rotate", {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
 };

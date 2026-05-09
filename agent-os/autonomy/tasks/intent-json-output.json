@@ -1,0 +1,37 @@
+{
+  "id": "intent-json-output",
+  "title": "Add JSON output for intent submission",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add stable machine-readable output for `covenant intent --json <text>` so autonomous callers can capture intent ids, status, result text, sources, and settlement receipts without parsing human stdout.",
+  "expectedFailureModes": [
+    "Automation scrapes the plain result line and loses the daemon-assigned intent id.",
+    "`--json` omits status or settlement data needed to correlate memory, audit, and receipt evidence.",
+    "CLI live coverage proves text rendering but not the structured automation boundary."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cd agent-os && cargo test -p covenant --locked intent_result_json",
+    "cd agent-os && cargo build -p covenant --locked",
+    "cd agent-os && cargo test -p covenantd --test live_cli_intent_json --locked -- --ignored live_",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomous backlog item.",
+  "updated": "2026-05-09"
+}

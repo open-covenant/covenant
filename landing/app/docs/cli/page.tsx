@@ -21,7 +21,7 @@ export default function CliPage() {
       <pre>
         <code>{`covenant <subcommand> [args]
 
-  intent <text>                      Submit an intent and print the result.
+  intent [--json] <text>             Submit an intent and print the result.
   ping                               Check the daemon is responsive.
   version                            Print daemon protocol metadata as JSON.
 
@@ -162,6 +162,10 @@ export default function CliPage() {
       <pre>
         <code>{`$ covenant intent "summarise recent work on agent memory"
 echo (no agent matched): summarise recent work on agent memory`}</code>
+      </pre>
+      <pre>
+        <code>{`$ covenant intent --json "summarise recent work on agent memory"
+{"kind":"intent_result","intent_id":"...","status":"ok","text":"...","sources":[],"settlement":null}`}</code>
       </pre>
 
       <h3>Inspect daemon protocol metadata</h3>

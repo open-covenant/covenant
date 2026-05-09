@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!   covenant ping
-//!   covenant intent <text>
+//!   covenant intent [--json] <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
@@ -89,7 +89,7 @@ fn print_usage() {
     eprintln!("covenant — agent-native operating layer CLI");
     eprintln!();
     eprintln!("usage:");
-    eprintln!("  covenant intent <text>                  submit an intent and print the result");
+    eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
     eprintln!("  covenant ping                           check the daemon is responsive");
     eprintln!(
         "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
@@ -310,10 +310,44 @@ async fn main() -> Result<()> {
                 eprintln!("covenant intent: missing intent text");
                 std::process::exit(2);
             }
-            let text = args[1..].join(" ");
-            write_frame(&mut stream, &Request::SubmitIntent { text }).await?;
+            let mut as_json = false;
+            let mut text_parts: Vec<String> = Vec::new();
+            for arg in args.iter().skip(1) {
+                if arg == "--json" {
+                    as_json = true;
+                } else {
+                    text_parts.push(arg.clone());
+                }
+            }
+            if text_parts.is_empty() {
+                eprintln!("covenant intent: missing intent text");
+                std::process::exit(2);
+            }
+            let request_text = text_parts.join(" ");
+            write_frame(&mut stream, &Request::SubmitIntent { text: request_text }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
-                Response::IntentResult { text, .. } => println!("{text}"),
+                Response::IntentResult {
+                    intent_id,
+                    status,
+                    text,
+                    sources,
+                    settlement,
+                } => {
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&intent_result_json(
+                                intent_id,
+                                &status,
+                                &text,
+                                &sources,
+                                settlement.as_ref(),
+                            ))?
+                        );
+                    } else {
+                        println!("{text}");
+                    }
+                }
                 Response::Error { message } => bail!("daemon error: {message}"),
                 other => bail!("unexpected response: {other:?}"),
             }
@@ -2084,6 +2118,23 @@ fn receipt_list_json(limit: usize, receipts: &[SettlementReceipt]) -> serde_json
     })
 }
 
+fn intent_result_json(
+    intent_id: uuid::Uuid,
+    status: &str,
+    text: &str,
+    sources: &[String],
+    settlement: Option<&SettlementReceipt>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "intent_result",
+        "intent_id": intent_id,
+        "status": status,
+        "text": text,
+        "sources": sources,
+        "settlement": settlement,
+    })
+}
+
 fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serde_json::Value {
     serde_json::json!({
         "kind": "capability_list",
@@ -2636,6 +2687,24 @@ mod tests {
         assert_eq!(value["receipts"][0]["resource"], "memory");
         assert_eq!(value["receipts"][0]["credits_consumed"], 42);
         assert!(value["receipts"][0]["tx_sig"].is_null());
+    }
+
+    #[test]
+    fn intent_result_json_renders_stable_shape() {
+        let value = intent_result_json(
+            uuid::Uuid::nil(),
+            "ok",
+            "phase 0 echo",
+            &["research".into()],
+            None,
+        );
+
+        assert_eq!(value["kind"], "intent_result");
+        assert_eq!(value["intent_id"], uuid::Uuid::nil().to_string());
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["text"], "phase 0 echo");
+        assert_eq!(value["sources"][0], "research");
+        assert!(value["settlement"].is_null());
     }
 
     #[test]

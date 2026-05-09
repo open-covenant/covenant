@@ -186,9 +186,9 @@
       "priority": "high",
       "ownerRole": "planner",
       "scope": [
+        "agent-os/scripts/provenance.mjs",
         "docs",
-        "packages",
-        "services"
+        "docs/provenance"
       ],
       "summary": "Add deterministic signing and verification for audit-root-attestation.v1 payloads so provenance claims can be verified end-to-end without overclaiming public transparency.",
       "expectedFailureModes": [
@@ -218,9 +218,11 @@
       "priority": "high",
       "ownerRole": "implementer",
       "scope": [
+        "agent-os/crates/covenant-permissions",
+        "agent-os/crates/covenantd",
+        "agent-os/crates/covenant",
         "docs",
-        "packages",
-        "services"
+        "landing/app/docs"
       ],
       "summary": "Validate versioned capability scope payloads when creating grants so enforcement can be strict without breaking existing callers or accepting arbitrary JSON.",
       "expectedFailureModes": [

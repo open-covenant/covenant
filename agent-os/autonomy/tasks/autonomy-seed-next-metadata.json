@@ -1,7 +1,7 @@
 {
   "id": "autonomy-seed-next-metadata",
   "title": "Add actor metadata when seeding tasks",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
@@ -20,11 +20,13 @@
   ],
   "verification": [
     "node agent-os/scripts/validate-autonomy.mjs",
-    "node agent-os/scripts/autonomy-seed-next.mjs --dry-run",
+    "node agent-os/scripts/autonomy-seed-next.mjs --dry-run --actor verifier --note 'Seeded for validation coverage'",
+    "sh -c '! node agent-os/scripts/autonomy-seed-next.mjs --dry-run --actor invalid-role --note x'",
+    "node --check agent-os/scripts/autonomy-seed-next.mjs",
     "bash agent-os/scripts/validate.sh --quick",
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Teach autonomy-seed-next to accept --actor and --note flags and apply them to the recorded seed event.",
+  "nextAction": "Integrated locally; continue with the next seeded autonomy task after commit and push.",
   "updated": "2026-05-09"
 }

@@ -36,6 +36,14 @@ node agent-os/scripts/autonomy-transition.mjs memory-drift-repair planned --acto
 
 Transitions update the task JSON and append an event to `agent-os/autonomy/events.jsonl`. Commit both when the transition represents durable project state.
 
+Seed the next backlog template directly:
+
+```bash
+node agent-os/scripts/autonomy-seed-next.mjs --actor planner --note "Seeded for the next autonomous slice"
+```
+
+The actor must be one of the workflow roles. The note is validated with the rest of the autonomy records, so machine-local identifiers and forbidden public framing are rejected before the task is kept.
+
 ## State Rules
 
 - `proposed`: idea exists; expected failure modes may be empty.

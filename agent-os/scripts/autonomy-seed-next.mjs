@@ -8,9 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const backlogPath = join(root, "autonomy", "backlog.json");
 const tasksDir = join(root, "autonomy", "tasks");
-
-const args = new Set(process.argv.slice(2));
-const dryRun = args.has("--dry-run");
+const workflowPath = join(root, "autonomy", "workflow.json");
 
 const fail = (message, code = 1) => {
   console.error(message);
@@ -18,6 +16,41 @@ const fail = (message, code = 1) => {
 };
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
+
+const workflow = readJson(workflowPath);
+const roles = new Set(workflow.roles || []);
+
+let dryRun = false;
+let actorRole = "planner";
+let note = "Seeded from backlog template.";
+const args = process.argv.slice(2);
+
+for (let index = 0; index < args.length; index += 1) {
+  const arg = args[index];
+  if (arg === "--dry-run") {
+    dryRun = true;
+    continue;
+  }
+  if (arg === "--actor") {
+    actorRole = args[index + 1] ?? "";
+    index += 1;
+    continue;
+  }
+  if (arg === "--note") {
+    note = args[index + 1] ?? "";
+    index += 1;
+    continue;
+  }
+  fail("usage: autonomy-seed-next.mjs [--dry-run] [--actor role] [--note text]", 2);
+}
+
+if (!roles.has(actorRole)) {
+  fail(`autonomy-seed-next: unknown actor role: ${actorRole}`, 2);
+}
+
+if (note.trim() === "") {
+  fail("autonomy-seed-next: --note must be non-empty", 2);
+}
 
 let backlog;
 try {
@@ -76,8 +109,8 @@ const event = {
   taskId: task.id,
   from: null,
   to: "proposed",
-  actorRole: "planner",
-  note: "Seeded from backlog template."
+  actorRole,
+  note
 };
 appendFileSync(eventsPath, `${JSON.stringify(event)}\n`);
 

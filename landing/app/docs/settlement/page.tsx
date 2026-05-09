@@ -22,7 +22,7 @@ export default function SettlementPage() {
         <code>{`SettlementReceipt {
   id:               uuid,
   payer:            AgentId,            // who consumed resources
-  resource:         "memory" | "compute" | "tool" | "egress",
+  resource:         "memory" | "compute" | "tool" | "message" | "registration",
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
   memory_record_id: uuid | null,        // set when resource == "memory"
@@ -36,7 +36,9 @@ export default function SettlementPage() {
         writes one receipt per resource event — for example, every
         memory write produces a receipt with{" "}
         <code>{'resource = "memory"'}</code> and{" "}
-        <code>credits_consumed</code> proportional to bytes written.
+        <code>credits_consumed</code> proportional to bytes written. Memory
+        receipts also carry <code>memory_record_id</code> so operators can join
+        receipts back to the exact memory record.
       </p>
 
       <h2>Credit pricing</h2>

@@ -463,9 +463,9 @@ mod tests {
             id: Uuid::nil(),
             payer: dummy_id(),
             resource: ResourceKind::Memory,
+            memory_record_id: None,
             credits_consumed: 42,
             settled_at: 0,
-            memory_record_id: None,
             chain: Some("solana".to_string()),
             cluster: Some("devnet".to_string()),
             batch_id: Some("batch-1".to_string()),
@@ -503,5 +503,6 @@ mod tests {
         assert_eq!(back.credits_consumed, 42);
         assert_eq!(back.chain, None);
         assert_eq!(back.tx_sig, None);
+        assert_eq!(back.memory_record_id, None);
     }
 }

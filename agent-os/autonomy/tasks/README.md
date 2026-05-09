@@ -10,6 +10,21 @@ node agent-os/scripts/validate-autonomy.mjs
 
 The validator is also called by `agent-os/scripts/validate.sh`.
 
+Pick the next unblocked task:
+
+```bash
+node agent-os/scripts/autonomy-next.mjs
+node agent-os/scripts/autonomy-next.mjs --json
+```
+
+Move a task through an allowed transition:
+
+```bash
+node agent-os/scripts/autonomy-transition.mjs memory-drift-repair planned --actor planner --note "ADR drafted"
+```
+
+Transitions update the task JSON and append an event to `agent-os/autonomy/events.jsonl`. Commit both when the transition represents durable project state.
+
 ## State Rules
 
 - `proposed`: idea exists; expected failure modes may be empty.

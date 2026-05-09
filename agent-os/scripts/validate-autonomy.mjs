@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const workflowPath = join(root, "autonomy", "workflow.json");
+const eventsPath = join(root, "autonomy", "events.jsonl");
 const tasksDir = join(root, "autonomy", "tasks");
 
 const forbiddenPatterns = [
@@ -186,6 +187,52 @@ for (const file of taskFiles) {
 
   if (!Array.isArray(task.humanEscalation)) {
     fail(path, "humanEscalation must be an array");
+  }
+}
+
+if (existsSync(eventsPath)) {
+  const eventLines = readFileSync(eventsPath, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const [index, line] of eventLines.entries()) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      fail(eventsPath, `line ${index + 1} is not valid JSON: ${error.message}`);
+      continue;
+    }
+
+    scanForbidden(eventsPath, event, `$[${index}]`);
+
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(event.timestamp || "")) {
+      fail(eventsPath, `line ${index + 1} timestamp must be ISO-like`);
+    }
+
+    if (!ids.has(event.taskId)) {
+      fail(eventsPath, `line ${index + 1} references unknown task: ${event.taskId}`);
+    }
+
+    if (event.from !== null && !states.has(event.from)) {
+      fail(eventsPath, `line ${index + 1} has unknown from state: ${event.from}`);
+    }
+
+    if (!states.has(event.to)) {
+      fail(eventsPath, `line ${index + 1} has unknown to state: ${event.to}`);
+    }
+
+    if (!roles.has(event.actorRole)) {
+      fail(eventsPath, `line ${index + 1} has unknown actorRole: ${event.actorRole}`);
+    }
+
+    if (event.from !== null) {
+      const allowed = new Set(workflow.transitions.map(([from, to]) => `${from}->${to}`));
+      if (event.from !== event.to && !allowed.has(`${event.from}->${event.to}`)) {
+        fail(eventsPath, `line ${index + 1} records invalid transition: ${event.from}->${event.to}`);
+      }
+    }
   }
 }
 

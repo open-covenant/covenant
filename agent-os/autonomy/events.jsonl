@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-09T00:00:00.000Z","taskId":"memory-drift-repair","from":null,"to":"triaged","actorRole":"strategist","note":"Initial autonomous backlog seed."}
+{"timestamp":"2026-05-09T00:00:00.000Z","taskId":"a2a-durable-queue","from":null,"to":"triaged","actorRole":"strategist","note":"Initial autonomous backlog seed."}
+{"timestamp":"2026-05-09T00:00:00.000Z","taskId":"runtime-sandboxing","from":null,"to":"proposed","actorRole":"strategist","note":"Initial autonomous backlog seed."}
+{"timestamp":"2026-05-09T00:00:00.000Z","taskId":"provenance-attestation","from":null,"to":"triaged","actorRole":"strategist","note":"Initial autonomous backlog seed."}
+{"timestamp":"2026-05-09T00:00:00.000Z","taskId":"live-test-expansion","from":null,"to":"triaged","actorRole":"strategist","note":"Initial autonomous backlog seed."}

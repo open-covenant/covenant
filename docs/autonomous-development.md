@@ -6,6 +6,15 @@ This protocol is the public, tool-neutral version of the engineering loop. Local
 
 The machine-readable workflow lives at [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json). The active autonomous backlog lives in [agent-os/autonomy/tasks](../agent-os/autonomy/tasks) and is validated by `node agent-os/scripts/validate-autonomy.mjs`.
 
+Operational helpers:
+
+```bash
+node agent-os/scripts/autonomy-next.mjs
+node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
+```
+
+`autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
+
 ## Objectives
 
 - Make autonomous work inspectable and repeatable.
@@ -132,6 +141,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): machine-readable lifecycle, roles, gates, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): machine-readable autonomous maintenance backlog.
+- [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.
 - [BUILT.md](../BUILT.md): recursive engineering model and honesty boundaries.
 

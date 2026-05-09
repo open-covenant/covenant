@@ -24,6 +24,7 @@ This status matrix separates what exists from what is experimental or planned. U
 
 - Default Rust gate: `bash agent-os/scripts/validate.sh`
 - Autonomy artifact gate: `node agent-os/scripts/validate-autonomy.mjs`
+- Next task selector: `node agent-os/scripts/autonomy-next.mjs`
 - Live coverage inventory: `bash agent-os/scripts/test-stats.sh`
 - Landing docs build: `pnpm --dir landing build`
 - Dependency audit: `bash scripts/audit.sh`

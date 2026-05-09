@@ -243,7 +243,6 @@ async fn live_cli_verify_json_reports_drift_after_audit_loss() {
     let _ = restarted.kill().await;
 }
 
-
 #[tokio::test]
 #[ignore = "live: spawns covenantd, purges memory, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_drift_after_memory_purge() {
@@ -296,8 +295,8 @@ async fn live_cli_verify_json_reports_drift_after_memory_purge() {
         intent_stderr.trim().is_empty(),
         "intent --json must not emit stderr on success: {intent_stderr:?}"
     );
-    let intent_json: Value = serde_json::from_str(intent_stdout.trim())
-        .expect("intent --json must be valid JSON");
+    let intent_json: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be valid JSON");
     assert_eq!(intent_json["kind"].as_str(), Some("intent_result"));
     let intent_id = intent_json["intent_id"]
         .as_str()
@@ -320,8 +319,8 @@ async fn live_cli_verify_json_reports_drift_after_memory_purge() {
         purge_stderr.trim().is_empty(),
         "memory purge --json must not emit stderr on success: {purge_stderr:?}"
     );
-    let purge_json: Value = serde_json::from_str(purge_stdout.trim())
-        .expect("memory purge --json must be valid JSON");
+    let purge_json: Value =
+        serde_json::from_str(purge_stdout.trim()).expect("memory purge --json must be valid JSON");
     assert_eq!(purge_json["kind"].as_str(), Some("memory_purged"));
 
     let output = run_cli_raw(
@@ -342,8 +341,8 @@ async fn live_cli_verify_json_reports_drift_after_memory_purge() {
         "verify --json should report drift on stdout without stderr noise: {stderr:?}"
     );
 
-    let value: Value = serde_json::from_str(stdout.trim())
-        .expect("verify --json drift stdout must be JSON");
+    let value: Value =
+        serde_json::from_str(stdout.trim()).expect("verify --json drift stdout must be JSON");
     assert_eq!(value["kind"].as_str(), Some("verify_report"));
     assert_eq!(value["window"].as_u64(), Some(100));
     assert!(

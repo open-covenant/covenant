@@ -74,7 +74,7 @@ export default function CliPage() {
   ignore check <text>                Report whether text matches the
                                      .covenantignore rules.
 
-  tools list                         List registered tools.
+  tools list [--json]                List registered tools.
   tools call <name> [--args <json>]  Invoke a registered tool.
 `}</code>
       </pre>
@@ -229,7 +229,10 @@ orphans total: 0`}</code>
 
       <h3>Invoke a tool</h3>
       <pre>
-        <code>{`$ covenant capabilities grant tool.call.echo
+        <code>{`$ covenant tools list --json
+{"kind":"tool_list","tools":[...]}
+
+$ covenant capabilities grant tool.call.echo
 $ covenant tools call echo --args '{"text":"hello"}'
 hello`}</code>
       </pre>

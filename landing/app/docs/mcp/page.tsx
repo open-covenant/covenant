@@ -73,7 +73,9 @@ ToolCallResult {
 
       <h2>Calling a tool</h2>
       <pre>
-        <code>{`# Grant the per-tool capability first.
+        <code>{`covenant tools list --json
+
+# Grant the per-tool capability first.
 covenant capabilities grant tool.call.echo
 
 # Then call the tool with JSON arguments.

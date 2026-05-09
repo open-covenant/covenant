@@ -20,7 +20,7 @@
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check <text>
-//!   covenant tools list
+//!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
 //!   covenant audit verify
@@ -47,6 +47,7 @@ use covenant_ipc::{
     read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
     VerifyDrift,
 };
+use covenant_mcp::ToolSpec;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{
@@ -116,7 +117,7 @@ fn print_usage() {
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
     eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
-    eprintln!("  covenant tools list                     list registered tools");
+    eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
     eprintln!(
         "  covenant audit recent [-n N]            list recent audit events as JSON lines (one per row, jq-friendly)"
@@ -1063,14 +1064,26 @@ async fn main() -> Result<()> {
             }
             match args[1].as_str() {
                 "list" => {
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
                     write_frame(&mut stream, &Request::ListTools).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::ToolList { tools } => {
-                            if tools.is_empty() {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&tool_list_json(&tools))?);
+                            } else if tools.is_empty() {
                                 println!("(no tools registered)");
-                            }
-                            for t in tools {
-                                println!("{} — {}", t.name, t.description);
+                            } else {
+                                for t in tools {
+                                    println!("{} — {}", t.name, t.description);
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1951,6 +1964,13 @@ fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     })
 }
 
+fn tool_list_json(tools: &[ToolSpec]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "tool_list",
+        "tools": tools,
+    })
+}
+
 fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> serde_json::Value {
     serde_json::json!({
         "kind": "receipt_batch_list",
@@ -2459,6 +2479,30 @@ mod tests {
         assert_eq!(value["kind"], "capabilities_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn tool_list_json_renders_stable_shape() {
+        let spec = ToolSpec {
+            name: "echo".into(),
+            description: "Echo text".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" }
+                }
+            }),
+        };
+
+        let value = tool_list_json(&[spec]);
+        assert_eq!(value["kind"], "tool_list");
+        assert_eq!(value["tools"][0]["name"], "echo");
+        assert_eq!(value["tools"][0]["description"], "Echo text");
+        assert_eq!(value["tools"][0]["inputSchema"]["type"], "object");
+        assert_eq!(
+            value["tools"][0]["inputSchema"]["properties"]["text"]["type"],
+            "string"
+        );
     }
 
     #[test]

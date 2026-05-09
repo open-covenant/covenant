@@ -31,6 +31,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Token bytes, private keys, secrets, hostnames, personal usernames, and machine-local paths should not be logged or committed.
 - Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs`; pre-push should pass the exact pushed ref range to the same validator.
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
+- Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
 - When the next autonomous task is already selected and no true blocker exists, continue into the next bounded slice instead of stopping at a status report.

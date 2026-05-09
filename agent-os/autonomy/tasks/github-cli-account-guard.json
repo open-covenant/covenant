@@ -1,0 +1,35 @@
+{
+  "id": "github-cli-account-guard",
+  "title": "Guard GitHub CLI remote attribution",
+  "state": "integrated",
+  "priority": "critical",
+  "ownerRole": "security_reviewer",
+  "scope": [
+    "agent-os/scripts",
+    "hooks",
+    "docs/project-memory.md"
+  ],
+  "summary": "Add a local guard for the active GitHub CLI account so remote-write tooling does not attribute autonomous work to a personal operator account even when Git commit metadata is neutral.",
+  "expectedFailureModes": [
+    "Git author and committer metadata are neutral but GitHub CLI writes are attributed to a personal account.",
+    "The pre-push hook checks commit metadata but misses authenticated tooling state.",
+    "Validation fails in CI because GitHub CLI is unavailable or unauthenticated."
+  ],
+  "gates": [
+    "security",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-github-cli-account.mjs",
+    "node agent-os/scripts/validate-current-git-identity.mjs",
+    "node agent-os/scripts/validate-git-identity.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Provision a repository-owned GitHub or deploy-key actor if push-event attribution must stop resolving to an individual SSH-key owner."
+  ],
+  "nextAction": "Use the neutral account guard before remote writes and continue autonomous backlog execution.",
+  "updated": "2026-05-09"
+}

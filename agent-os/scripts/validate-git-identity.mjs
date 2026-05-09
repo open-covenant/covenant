@@ -13,7 +13,7 @@ const usage = () => {
 
 const args = process.argv.slice(2);
 const revs = [];
-let recent = 200;
+let recent = 14;
 let recentExplicit = false;
 
 for (let index = 0; index < args.length; index += 1) {

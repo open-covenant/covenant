@@ -36,6 +36,7 @@ Release evidence should include:
 Minimum validation:
 
 ```bash
+node agent-os/scripts/alpha-release-evidence.mjs
 bash agent-os/scripts/validate.sh --quick
 node agent-os/scripts/validate-autonomy.mjs
 node agent-os/scripts/validate-live-coverage.mjs

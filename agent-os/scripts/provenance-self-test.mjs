@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -123,7 +123,73 @@ try {
   expectOk(["audit-root", "verify", "--file", auditRoot]);
   expectOk(["verify", "--file", auditRoot]);
 
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const signingKey = join(tempDir, "audit-root-signing-key.pem");
+  writeFileSync(
+    signingKey,
+    privateKey.export({ type: "pkcs8", format: "pem" }),
+  );
+
+  const signedAuditRoot = join(tempDir, "signed-audit-root.json");
+  expectOk([
+    "audit-root",
+    "write",
+    "--report",
+    auditReport,
+    "--task",
+    "memory-drift-repair",
+    "--commit",
+    "20ff55e",
+    "--out",
+    signedAuditRoot,
+    "--signing-key",
+    signingKey,
+    "--key-id",
+    "covenant-test-root",
+    "--validation",
+    "covenant audit verify=passed",
+  ]);
+  expectOk(["audit-root", "verify", "--file", signedAuditRoot]);
+
+  const signedOriginal = JSON.parse(readFileSync(signedAuditRoot, "utf8"));
+  const signatureTamper = join(tempDir, "signature-tamper.json");
+  writeFileSync(
+    signatureTamper,
+    `${JSON.stringify(
+      withPayloadDigest({
+        ...signedOriginal,
+        signing: {
+          ...signedOriginal.signing,
+          signature: Buffer.alloc(64).toString("base64"),
+        },
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  expectFail(["audit-root", "verify", "--file", signatureTamper], "signature verification failed");
+
   const auditRootOriginal = JSON.parse(readFileSync(auditRoot, "utf8"));
+  const unsignedSigningTamper = join(tempDir, "unsigned-signing-tamper.json");
+  writeFileSync(
+    unsignedSigningTamper,
+    `${JSON.stringify(
+      withPayloadDigest({
+        ...auditRootOriginal,
+        signing: {
+          ...auditRootOriginal.signing,
+          publicKeySpkiBase64: "AA==",
+        },
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  expectFail(
+    ["audit-root", "verify", "--file", unsignedSigningTamper],
+    "malformed unsigned signing block",
+  );
+
   const auditRootTamper = join(tempDir, "audit-root-tamper.json");
   writeFileSync(
     auditRootTamper,

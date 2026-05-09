@@ -59,7 +59,7 @@ Current implementation status:
 
 - Steps 1 and 2 are implemented in `agent-os/scripts/provenance.mjs`.
 - The verifier validates unsigned `covenant.audit-root-attestation.v1` payloads, canonical commits, valid audit reports, and task snapshot bindings.
-- Signature generation and signature verification remain blocked on the project signing identity decision.
+- Detached ed25519 signature generation and verification are implemented with embedded public-key material. A reviewed project key custody and release publication process is still required before these signatures should be treated as public non-repudiation.
 
 ## Consequences
 

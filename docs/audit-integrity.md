@@ -50,7 +50,7 @@ This is local tamper evidence, not public non-repudiation.
 
 The chain detects edits to retained audit rows, missing sidecar entries, and sidecar mismatch after events have been anchored locally. It does not stop a host-level attacker from deleting both the audit log and the sidecar, replacing both files together, or rolling the machine back to an older filesystem snapshot.
 
-The current implementation can generate and verify unsigned `audit-root-attestation.v1` payloads from `covenant audit verify` output. It does not publish roots to a transparency log, sign roots with a release identity, anchor roots on-chain, or define immutable retention storage. Those are future hardening steps and should not be claimed as shipped behavior.
+The current implementation can generate and verify `audit-root-attestation.v1` payloads from `covenant audit verify` output. It supports unsigned payloads and detached ed25519 signatures with embedded public-key material. It does not publish roots to a transparency log, define release key custody, anchor roots on-chain, or define immutable retention storage. Those are future hardening steps and should not be claimed as shipped behavior.
 
 ## Public Root Signing Direction
 
@@ -70,4 +70,4 @@ node agent-os/scripts/provenance.mjs audit-root verify \
   --file docs/provenance/audit-roots/<commit>-audit-root.json
 ```
 
-Until the project signing path lands, these payloads remain consistency evidence, not public non-repudiation.
+Signed payloads are local cryptographic integrity evidence for the embedded key. Public non-repudiation still depends on a reviewed project key custody and publication process.

@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign as cryptoSign,
+  verify as cryptoVerify,
+} from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +27,8 @@ const auditRootSchema = "covenant.audit-root-attestation.v1";
 const defaultRepository = "open-covenant/covenant";
 const privateEd25519KeyPattern = new RegExp(["id", "ed25519"].join("_"));
 const hex64Pattern = /^[0-9a-f]{64}$/;
+const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/;
+const keyIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{1,127}$/;
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const releasePattern = /^[A-Za-z0-9_.:@/-]+$/;
 
@@ -35,7 +43,7 @@ const forbiddenPatterns = [
 function usage() {
   console.error(`usage:
   node agent-os/scripts/provenance.mjs write --task <id> --out <path> [--commit <sha>] [--validation "command=passed"]
-  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"]
+  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"] [--signing-key <pem> --key-id <id>]
   node agent-os/scripts/provenance.mjs audit-root verify --file <path>
   node agent-os/scripts/provenance.mjs verify --file <path>
   node agent-os/scripts/provenance.mjs verify-all [--dir <path>]`);
@@ -226,6 +234,34 @@ function stripDigest(attestation) {
   return payload;
 }
 
+function signaturePayload(attestation) {
+  const payload = stripDigest(attestation);
+  return {
+    ...payload,
+    signing: {
+      ...payload.signing,
+      signature: null,
+    },
+  };
+}
+
+function assertKeyId(value) {
+  if (typeof value !== "string" || !keyIdPattern.test(value)) {
+    throw new Error(`key id contains unsupported characters: ${value}`);
+  }
+}
+
+function base64Bytes(value, label) {
+  if (typeof value !== "string" || !base64Pattern.test(value)) {
+    throw new Error(`${label} must be base64`);
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length === 0 || bytes.toString("base64") !== value) {
+    throw new Error(`${label} must be canonical base64`);
+  }
+  return bytes;
+}
+
 function parseAuditReport(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label}: expected audit integrity report object`);
@@ -342,6 +378,75 @@ function auditReportFromPayload(auditRoot) {
   };
 }
 
+function signAuditRootPayload(payload, signingKeyPath, keyId) {
+  assertKeyId(keyId);
+  const privateKey = createPrivateKey(readFileSync(resolve(repoRoot, signingKeyPath)));
+  const publicKeyDer = createPublicKey(privateKey).export({ type: "spki", format: "der" });
+  const signing = {
+    status: "signed",
+    keyId,
+    algorithm: "ed25519",
+    publicKeySpkiSha256: sha256(publicKeyDer),
+    publicKeySpkiBase64: Buffer.from(publicKeyDer).toString("base64"),
+    signature: null,
+  };
+  const signable = { ...payload, signing };
+  const signature = cryptoSign(null, Buffer.from(stableJson(signable)), privateKey).toString(
+    "base64",
+  );
+  return {
+    ...payload,
+    signing: {
+      ...signing,
+      signature,
+    },
+  };
+}
+
+function verifyAuditRootSignature(attestation, attestationPath) {
+  const signing = attestation.signing;
+  if (signing?.status === "unsigned") {
+    if (
+      signing.keyId !== null ||
+      signing.algorithm !== null ||
+      signing.signature !== null ||
+      signing.publicKeySpkiSha256 != null ||
+      signing.publicKeySpkiBase64 != null
+    ) {
+      throw new Error(`${attestationPath}: malformed unsigned signing block`);
+    }
+    return;
+  }
+
+  if (signing?.status !== "signed") {
+    throw new Error(`${attestationPath}: unsupported audit-root signing status`);
+  }
+  assertKeyId(signing.keyId);
+  if (signing.algorithm !== "ed25519") {
+    throw new Error(`${attestationPath}: unsupported audit-root signing algorithm`);
+  }
+
+  const publicKeyDer = base64Bytes(
+    signing.publicKeySpkiBase64,
+    `${attestationPath}: signing.publicKeySpkiBase64`,
+  );
+  if (signing.publicKeySpkiSha256 !== sha256(publicKeyDer)) {
+    throw new Error(`${attestationPath}: public key digest mismatch`);
+  }
+
+  const publicKey = createPublicKey({ key: publicKeyDer, format: "der", type: "spki" });
+  const signature = base64Bytes(signing.signature, `${attestationPath}: signing.signature`);
+  const ok = cryptoVerify(
+    null,
+    Buffer.from(stableJson(signaturePayload(attestation))),
+    publicKey,
+    signature,
+  );
+  if (!ok) {
+    throw new Error(`${attestationPath}: signature verification failed`);
+  }
+}
+
 function auditRootAttest(options) {
   const resolvedCommit = fullCommit(options.commit);
   const reportPath = resolve(repoRoot, options.report);
@@ -353,8 +458,11 @@ function auditRootAttest(options) {
   if (previousRootHashHex !== null) {
     assertHex64(previousRootHashHex, "--previous-root");
   }
+  if (Boolean(options.signingKey) !== Boolean(options.keyId)) {
+    throw new Error("audit-root signing requires both --signing-key and --key-id");
+  }
 
-  const payload = {
+  let payload = {
     schema: auditRootSchema,
     generatedAt: new Date().toISOString(),
     repository,
@@ -392,6 +500,17 @@ function auditRootAttest(options) {
       "This alpha audit-root attestation does not claim immutable retention.",
     ],
   };
+  if (options.signingKey) {
+    payload = {
+      ...payload,
+      limits: [
+        "This alpha audit-root attestation is a detached signature, not a transparency-log entry.",
+        "Embedded public key verification proves payload integrity for that key, not project key custody.",
+        "This alpha audit-root attestation does not claim immutable retention.",
+      ],
+    };
+    payload = signAuditRootPayload(payload, options.signingKey, options.keyId);
+  }
   assertNoPrivateStrings(payload, "audit root attestation");
   return { ...payload, payloadSha256: sha256(stableJson(payload)) };
 }
@@ -499,15 +618,7 @@ function verifyAuditRoot(attestationPath) {
     throw new Error(`${attestationPath}: unsupported target kind`);
   }
 
-  const signing = attestation.signing;
-  if (
-    signing?.status !== "unsigned" ||
-    signing.keyId !== null ||
-    signing.algorithm !== null ||
-    signing.signature !== null
-  ) {
-    throw new Error(`${attestationPath}: signed audit-root attestations are not supported yet`);
-  }
+  verifyAuditRootSignature(attestation, attestationPath);
 
   for (const item of attestation.verification) {
     if (!item.command || !["passed", "failed", "skipped"].includes(item.status)) {
@@ -578,6 +689,8 @@ try {
         repository: one(flags, "repository", defaultRepository),
         previousRoot: one(flags, "previous-root"),
         validationValues: many(flags, "validation"),
+        signingKey: one(flags, "signing-key"),
+        keyId: one(flags, "key-id"),
       });
       writeFile(resolve(repoRoot, out), attestation);
       console.log(`wrote ${relative(repoRoot, resolve(repoRoot, out))}`);

@@ -225,6 +225,7 @@ EOF`}</code>
       <pre>
         <code>{`covenant memory recent --limit 20
 covenant receipts recent --limit 20 --json
+covenant chain receipt-batches --limit 20 --json
 covenant capabilities recent
 covenant verify --window 100`}</code>
       </pre>

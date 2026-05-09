@@ -17,7 +17,7 @@
 //!   covenant receipts recent [--limit N] [--json]
 //!   covenant chain status
 //!   covenant chain flush-receipts [--limit N]
-//!   covenant chain receipt-batches [--limit N]
+//!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant verify [--window N]
 //!   covenant ignore check <text>
 //!   covenant tools list
@@ -41,7 +41,7 @@
 use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_audit::AuditKind;
-use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_ipc::{read_frame, write_frame, ReceiptBatchSummary, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
@@ -107,7 +107,7 @@ fn print_usage() {
     eprintln!(
         "  covenant chain flush-receipts [-n N]    batch local receipts into a Solana receipt root"
     );
-    eprintln!("  covenant chain receipt-batches [-n N]   list local receipt batches");
+    eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
     eprintln!("  covenant tools list                     list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
@@ -881,27 +881,49 @@ async fn main() -> Result<()> {
                     }
                 }
                 "receipt-batches" => {
-                    let limit = parse_limit_args(&args[2..])?;
+                    let mut limit = 10;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "-n" | "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
                     write_frame(&mut stream, &Request::ReceiptBatches { limit }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::ReceiptBatches { batches } => {
-                            if batches.is_empty() {
-                                println!("(no receipt batches)");
-                            }
-                            for batch in batches {
-                                let tx_sig = batch.tx_sig.as_deref().unwrap_or("(pending)");
-                                let slot = batch
-                                    .slot
-                                    .map(|slot| slot.to_string())
-                                    .unwrap_or_else(|| "(pending)".to_string());
+                            if as_json {
                                 println!(
-                                    "{} {} receipts root={} tx={} slot={}",
-                                    batch.batch_id,
-                                    batch.receipt_count,
-                                    batch.merkle_root,
-                                    tx_sig,
-                                    slot
+                                    "{}",
+                                    serde_json::to_string(&receipt_batch_list_json(
+                                        limit, &batches
+                                    ))?
                                 );
+                            } else if batches.is_empty() {
+                                println!("(no receipt batches)");
+                            } else {
+                                for batch in batches {
+                                    let tx_sig = batch.tx_sig.as_deref().unwrap_or("(pending)");
+                                    let slot = batch
+                                        .slot
+                                        .map(|slot| slot.to_string())
+                                        .unwrap_or_else(|| "(pending)".to_string());
+                                    println!(
+                                        "{} {} receipts root={} tx={} slot={}",
+                                        batch.batch_id,
+                                        batch.receipt_count,
+                                        batch.merkle_root,
+                                        tx_sig,
+                                        slot
+                                    );
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1826,6 +1848,14 @@ fn receipt_list_json(limit: usize, receipts: &[SettlementReceipt]) -> serde_json
     })
 }
 
+fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "receipt_batch_list",
+        "limit": limit,
+        "batches": batches,
+    })
+}
+
 fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
@@ -2227,6 +2257,24 @@ mod tests {
         assert_eq!(value["receipts"][0]["resource"], "memory");
         assert_eq!(value["receipts"][0]["credits_consumed"], 42);
         assert!(value["receipts"][0]["tx_sig"].is_null());
+    }
+
+    #[test]
+    fn receipt_batch_list_json_renders_stable_shape() {
+        let batch = ReceiptBatchSummary {
+            batch_id: "batch-1".into(),
+            merkle_root: "ab".repeat(32),
+            receipt_count: 2,
+            tx_sig: None,
+            slot: None,
+        };
+        let value = receipt_batch_list_json(10, &[batch]);
+        assert_eq!(value["kind"], "receipt_batch_list");
+        assert_eq!(value["limit"], 10);
+        assert_eq!(value["batches"][0]["batch_id"], "batch-1");
+        assert_eq!(value["batches"][0]["receipt_count"], 2);
+        assert!(value["batches"][0]["tx_sig"].is_null());
+        assert!(value["batches"][0]["slot"].is_null());
     }
 
     #[test]

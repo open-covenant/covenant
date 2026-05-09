@@ -1,7 +1,7 @@
 {
   "id": "receipt-batches-json-output",
   "title": "Add JSON output for receipt batches",
-  "state": "in_progress",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [
@@ -32,6 +32,6 @@
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Define the receipt batch JSON shape, add CLI rendering tests, and cover it with a live CLI round trip.",
+  "nextAction": "Continue with the next autonomy backlog item.",
   "updated": "2026-05-09"
 }

@@ -166,7 +166,8 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_agent_dispatch.rs",
-        "agent-os/crates/covenantd/tests/live_cli_receipts_recent_json.rs"
+        "agent-os/crates/covenantd/tests/live_cli_receipts_recent_json.rs",
+        "agent-os/crates/covenantd/tests/live_cli_receipt_batches_json.rs"
       ],
       "status": "covered",
       "nextGap": "Add live scoped receipt filter coverage once receipt query predicates become user-selectable."

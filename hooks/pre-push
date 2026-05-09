@@ -5,8 +5,8 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-node agent-os/scripts/validate-current-git-identity.mjs
-node agent-os/scripts/validate-github-cli-account.mjs
+node agent-os/scripts/validate-current-git-identity.mjs </dev/null
+node agent-os/scripts/validate-github-cli-account.mjs </dev/null
 
 refs=()
 while read -r local_ref local_sha remote_ref remote_sha || [ -n "${local_ref:-}" ]; do
@@ -24,7 +24,12 @@ while read -r local_ref local_sha remote_ref remote_sha || [ -n "${local_ref:-}"
 done
 
 if [ "${#refs[@]}" -eq 0 ]; then
-  node agent-os/scripts/validate-git-identity.mjs
-else
-  node agent-os/scripts/validate-git-identity.mjs "${refs[@]}"
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  if [ -n "$upstream" ]; then
+    refs+=(--rev "${upstream}..HEAD")
+  else
+    refs+=(--rev HEAD)
+  fi
 fi
+
+node agent-os/scripts/validate-git-identity.mjs "${refs[@]}"

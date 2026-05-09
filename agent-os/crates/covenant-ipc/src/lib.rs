@@ -61,6 +61,27 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
+pub const PROTOCOL_NAME: &str = "covenant.ipc";
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const MIN_PROTOCOL_VERSION: u32 = 1;
+pub const MAX_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProtocolInfo {
+    pub protocol: String,
+    pub version: u32,
+    pub min_supported: u32,
+    pub max_supported: u32,
+}
+
+pub fn protocol_info() -> ProtocolInfo {
+    ProtocolInfo {
+        protocol: PROTOCOL_NAME.into(),
+        version: PROTOCOL_VERSION,
+        min_supported: MIN_PROTOCOL_VERSION,
+        max_supported: MAX_PROTOCOL_VERSION,
+    }
+}
 
 // `PartialEq` only — `A2ATaskResult` (carried in `PostA2AResult`) holds a
 // `serde_json::Value` which isn't `Eq`. Symmetric with `Response`.
@@ -68,10 +89,12 @@ pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
     Ping,
-    /// Mandatory first frame on every IPC connection. Daemon resolves the
-    /// token through `covenant_peer_auth::PeerRegistry`; on success the
-    /// resolved `AgentId` is bound to the connection for the lifetime of
-    /// the socket.
+    ProtocolInfo,
+    /// Mandatory first privileged frame on every IPC connection. Clients may
+    /// send `ProtocolInfo` first to negotiate compatibility. Daemon resolves
+    /// the token through `covenant_peer_auth::PeerRegistry`; on success the
+    /// resolved `AgentId` is bound to the connection for the lifetime of the
+    /// socket.
     Authenticate {
         token_b58: String,
     },
@@ -303,6 +326,9 @@ fn default_verify_window() -> usize {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
     Pong,
+    ProtocolInfo {
+        info: ProtocolInfo,
+    },
     /// Sent in response to a successful `Authenticate`. `display` is the
     /// resolved peer's `AgentId.display` so the caller can confirm which
     /// identity the daemon bound the connection to.
@@ -538,6 +564,34 @@ mod tests {
         write_frame(&mut a, &Request::Ping).await.unwrap();
         let got: Request = read_frame(&mut b).await.unwrap();
         assert_eq!(got, Request::Ping);
+    }
+
+    #[tokio::test]
+    async fn protocol_info_roundtrips_via_pipe() {
+        let (mut a, mut b) = tokio::io::duplex(256);
+        write_frame(&mut a, &Request::ProtocolInfo).await.unwrap();
+        let got: Request = read_frame(&mut b).await.unwrap();
+        assert_eq!(got, Request::ProtocolInfo);
+
+        let response = Response::ProtocolInfo {
+            info: protocol_info(),
+        };
+        write_frame(&mut b, &response).await.unwrap();
+        let got: Response = read_frame(&mut a).await.unwrap();
+        assert_eq!(got, response);
+    }
+
+    #[test]
+    fn protocol_info_serialises_stable_shape() {
+        let response = Response::ProtocolInfo {
+            info: protocol_info(),
+        };
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(json["kind"], "protocol_info");
+        assert_eq!(json["info"]["protocol"], PROTOCOL_NAME);
+        assert_eq!(json["info"]["version"], PROTOCOL_VERSION);
+        assert_eq!(json["info"]["min_supported"], MIN_PROTOCOL_VERSION);
+        assert_eq!(json["info"]["max_supported"], MAX_PROTOCOL_VERSION);
     }
 
     #[tokio::test]

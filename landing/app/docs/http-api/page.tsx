@@ -49,7 +49,18 @@ export default function HttpApiPage() {
       <h3>Health</h3>
       <pre>
         <code>{`GET /health
-→ 200 { "status": "ok" }`}</code>
+→ 200 { "status": "ok" }
+
+GET /version
+→ 200 {
+    "kind": "protocol_info",
+    "info": {
+      "protocol": "covenant.ipc",
+      "version": 1,
+      "min_supported": 1,
+      "max_supported": 1
+    }
+  }`}</code>
       </pre>
 
       <h3>Intents</h3>
@@ -177,7 +188,8 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
 
       <h2>Authentication</h2>
       <p>
-        Every route except <code>/health</code> requires{" "}
+        Every route except <code>/health</code> and{" "}
+        <code>/version</code> requires{" "}
         <code>Authorization: Bearer &lt;token&gt;</code>. The token must
         resolve to a live peer in the daemon registry, matching the
         Unix-socket authentication model. The gateway still binds to

@@ -7,7 +7,9 @@
 //! whose token resolves to a registered peer through the
 //! [`covenant_peer_auth::PeerRegistry`] the daemon was constructed
 //! with — same registry that gates the Unix-socket `Authenticate`
-//! handshake.
+//! handshake. `/health` and `/version` are intentionally unauthenticated
+//! so supervisors and clients can check liveness and wire compatibility
+//! before presenting credentials.
 //!
 //! CORS: explicit origin allow-list, default `http://localhost:3000`.
 //! Override via `COVENANT_HTTP_ORIGINS` (comma-separated list of
@@ -31,7 +33,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use covenant_ipc::{Request, Response};
+use covenant_ipc::{protocol_info, Request, Response};
 use covenant_peer_auth::PeerToken;
 use covenant_types::{AgentId, MemoryTier};
 use serde::Deserialize;
@@ -159,6 +161,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
 
     Router::new()
         .route("/health", get(health))
+        .route("/version", get(version))
         .merge(protected)
         .layer(cors_layer(origins))
 }
@@ -208,6 +211,12 @@ async fn reject(s: &HttpState, message: &'static str) -> AxumResponse {
 
 async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn version() -> impl IntoResponse {
+    Json(Response::ProtocolInfo {
+        info: protocol_info(),
+    })
 }
 
 #[derive(Deserialize)]

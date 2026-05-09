@@ -4,7 +4,7 @@
 //! recent_receipts through the wire and assert each path.
 
 use covenant_identity::LocalIdentity;
-use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_ipc::{protocol_info, read_frame, write_frame, Request, Response};
 use covenant_llm::MockEmbedder;
 use covenant_manifest::Manifest;
 use covenant_memory::InMemoryStore;
@@ -34,7 +34,7 @@ required = ["tool.web_search"]
 }
 
 #[tokio::test]
-async fn full_loop_ping_intent_memory_receipts() {
+async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
     let dir = tempdir().unwrap();
     let sock = dir.path().join("sock");
     let listener = UnixListener::bind(&sock).unwrap();
@@ -83,6 +83,16 @@ async fn full_loop_ping_intent_memory_receipts() {
     let server_handle = tokio::spawn(async move { server.serve(listener).await });
 
     let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    write_frame(&mut stream, &Request::ProtocolInfo)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_frame::<_, Response>(&mut stream).await.unwrap(),
+        Response::ProtocolInfo {
+            info: protocol_info()
+        }
+    );
 
     write_frame(&mut stream, &Request::Authenticate { token_b58 })
         .await

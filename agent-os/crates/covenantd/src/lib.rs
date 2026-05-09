@@ -329,31 +329,54 @@ impl Server {
     }
 
     async fn handle(&self, mut stream: UnixStream) -> Result<()> {
-        // First frame must be `Authenticate`. Anything else terminates the
-        // connection after a single `AuthenticationFailed` reply. The
-        // authenticated peer is bound to the connection for its lifetime;
-        // a new connection requires a new handshake.
-        let first: Request = match read_frame(&mut stream).await {
-            Ok(r) => r,
-            Err(IpcError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-        let peer = match first {
-            Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
-                Some(agent_id) => {
+        // The daemon accepts any number of `ProtocolInfo` probes before
+        // authentication. The first non-probe frame must authenticate the peer;
+        // anything else terminates the connection after one failure reply.
+        let peer = loop {
+            let first: Request = match read_frame(&mut stream).await {
+                Ok(r) => r,
+                Err(IpcError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
+            match first {
+                Request::ProtocolInfo => {
                     write_frame(
                         &mut stream,
-                        &Response::Authenticated {
-                            display: agent_id.display.clone(),
+                        &Response::ProtocolInfo {
+                            info: covenant_ipc::protocol_info(),
                         },
                     )
                     .await?;
-                    agent_id
+                    continue;
                 }
-                None => {
-                    let reason = "unknown or revoked token";
+                Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
+                    Some(agent_id) => {
+                        write_frame(
+                            &mut stream,
+                            &Response::Authenticated {
+                                display: agent_id.display.clone(),
+                            },
+                        )
+                        .await?;
+                        break agent_id;
+                    }
+                    None => {
+                        let reason = "unknown or revoked token";
+                        self.record_auth_failure("ipc", reason).await;
+                        write_frame(
+                            &mut stream,
+                            &Response::AuthenticationFailed {
+                                reason: reason.into(),
+                            },
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                },
+                _ => {
+                    let reason = "first frame must be Authenticate";
                     self.record_auth_failure("ipc", reason).await;
                     write_frame(
                         &mut stream,
@@ -364,18 +387,6 @@ impl Server {
                     .await?;
                     return Ok(());
                 }
-            },
-            _ => {
-                let reason = "first frame must be Authenticate";
-                self.record_auth_failure("ipc", reason).await;
-                write_frame(
-                    &mut stream,
-                    &Response::AuthenticationFailed {
-                        reason: reason.into(),
-                    },
-                )
-                .await?;
-                return Ok(());
             }
         };
 
@@ -459,6 +470,9 @@ impl Server {
     pub async fn respond(&self, req: Request, peer: &AgentId) -> Response {
         match req {
             Request::Ping => Response::Pong,
+            Request::ProtocolInfo => Response::ProtocolInfo {
+                info: covenant_ipc::protocol_info(),
+            },
             Request::Authenticate { token_b58 } => match self.authenticate(&token_b58).await {
                 Some(agent_id) => Response::Authenticated {
                     display: agent_id.display,

@@ -105,6 +105,19 @@ async fn health_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn version_endpoint_returns_protocol_info_without_bearer() {
+    let s = spawn_test_server().await;
+    let r = reqwest::get(format!("{}/version", s.base)).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["kind"], "protocol_info");
+    assert_eq!(body["info"]["protocol"], "covenant.ipc");
+    assert_eq!(body["info"]["version"], 1);
+    assert_eq!(body["info"]["min_supported"], 1);
+    assert_eq!(body["info"]["max_supported"], 1);
+}
+
+#[tokio::test]
 async fn protected_route_rejects_without_bearer() {
     let s = spawn_test_server().await;
     let r = reqwest::get(format!("{}/tools", s.base)).await.unwrap();

@@ -50,6 +50,8 @@ export default function IpcPage() {
       <pre>
         <code>{`{ "kind": "ping" }
 
+{ "kind": "protocol_info" }
+
 { "kind": "authenticate",
   "token_b58": "…" }
 
@@ -117,6 +119,14 @@ export default function IpcPage() {
 
       <pre>
         <code>{`{ "kind": "pong" }
+
+{ "kind": "protocol_info",
+  "info": {
+    "protocol": "covenant.ipc",
+    "version": 1,
+    "min_supported": 1,
+    "max_supported": 1
+  } }
 
 { "kind": "authenticated",
   "display": "operator@local" }
@@ -192,9 +202,11 @@ export default function IpcPage() {
         </li>
         <li>
           <strong>Authentication.</strong> The first frame must be{" "}
-          <code>authenticate</code>. The daemon resolves the token through
-          the peer registry and binds the resulting identity to the
-          connection.
+          <code>authenticate</code>, except for an optional{" "}
+          <code>protocol_info</code> probe. The daemon answers protocol
+          probes before authentication and then continues waiting for
+          <code>authenticate</code>. After authentication, the resolved
+          identity is bound to the connection.
         </li>
       </ul>
 

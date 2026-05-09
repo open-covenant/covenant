@@ -1,7 +1,7 @@
 {
   "id": "audit-verify-json-output",
   "title": "Add stable JSON output for audit verify",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

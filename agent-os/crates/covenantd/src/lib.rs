@@ -27,9 +27,10 @@ use covenant_permissions::{
     memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
     memory_read_scope_allows as permission_memory_read_scope_allows,
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
-    memory_write_scope_allows as permission_memory_write_scope_allows, sign as sign_capability,
+    memory_write_scope_allows as permission_memory_write_scope_allows,
+    peer_scope_allows as permission_peer_scope_allows, sign as sign_capability,
     tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
-    A2aScopeRequest, CapabilityStore, MemoryCompactionScopeRequest,
+    A2aScopeRequest, CapabilityStore, MemoryCompactionScopeRequest, PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -1312,6 +1313,34 @@ impl Server {
                     .into(),
             };
         }
+        match self
+            .peer_scope_check(
+                "peers.purge",
+                peer,
+                PeerScopeRequest {
+                    before_ms: Some(before_ms),
+                    ..PeerScopeRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(PeerScopeCheck { allowed: true, .. }) => {}
+            Ok(PeerScopeCheck { .. }) => {
+                let reason = format!("before_ms {before_ms} exceeds capability scope");
+                self.record_capability_scope_rejected(peer, "peers:purge", "peers.purge", &reason)
+                    .await;
+                return Response::Error {
+                    message: format!("peers purge rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(peer, "peers:purge", "peers.purge", &reason)
+                    .await;
+                return Response::Error {
+                    message: format!("peers purge rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         match self.peers.purge_revoked_older_than(before_ms).await {
             Ok(purged) => Response::PeersPurged { purged },
             Err(e) => Response::Error {
@@ -1320,7 +1349,7 @@ impl Server {
         }
     }
 
-    /// Operator-only triage view of the peer registry.
+    /// Triage view of the peer registry.
     ///
     /// Closes the display-collision probe post-incident response gap:
     /// an `OperatorTokenRotationRejected` audit row carries
@@ -1328,15 +1357,13 @@ impl Server {
     /// `covenant peers list --prefix <b58>` to identify which registry
     /// entry to revoke (or confirm already-revoked).
     ///
-    /// Gated to the operator's own identity — `peer.pubkey ==
-    /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`.
-    /// A capability-based gate would collapse to "anyone authenticated
-    /// can list every peer" in v0 (no one but the operator can mint
-    /// caps); the identity gate is strictly stronger and reads correctly
-    /// going into Phase-1 multi-peer where a guest peer must not
-    /// enumerate the registry.
+    /// The operator identity remains the root authority. Non-operator
+    /// peers need `peers.list`; scoped grants must either be unscoped or
+    /// match the concrete full `peer_pubkey_b58` requested through
+    /// `pubkey_prefix`, so a narrow grant cannot enumerate unrelated
+    /// registry rows.
     ///
-    /// Rejection records `OperatorPeersListRejected` via
+    /// Missing-delegation rejection records `OperatorPeersListRejected` via
     /// `record_daemon_event` (issuer = daemon identity), mirroring the
     /// `OperatorTokenRotationRejected` audience model so the row passes
     /// the operator-feed filter and the rejected peer's `/audit` does
@@ -1348,20 +1375,69 @@ impl Server {
         status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
         peer: &AgentId,
     ) -> Response {
-        if peer.pubkey != self.identity.agent_id().pubkey {
-            let event = AuditEvent {
-                id: Uuid::new_v4(),
-                timestamp_ms: epoch_ms(),
-                issuer: self.identity.agent_id(),
-                kind: AuditKind::OperatorPeersListRejected {
-                    peer_display: peer.display.clone(),
-                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
-                },
-            };
-            self.record_daemon_event(event).await;
-            return Response::Error {
-                message: "peers list requires the operator identity".into(),
-            };
+        let operator_pubkey = self.identity.agent_id().pubkey;
+        if peer.pubkey != operator_pubkey {
+            let check = self
+                .check_capabilities("peers:list".into(), vec!["peers.list".into()], peer)
+                .await;
+            if !check.passed {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: self.identity.agent_id(),
+                    kind: AuditKind::OperatorPeersListRejected {
+                        peer_display: peer.display.clone(),
+                        peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                    },
+                };
+                self.record_daemon_event(event).await;
+                return Response::Error {
+                    message:
+                        "peers list requires the operator identity or capability \"peers.list\""
+                            .into(),
+                };
+            }
+
+            let peer_pubkey_b58 = bs58::encode(peer.pubkey).into_string();
+            let self_target = pubkey_prefix
+                .as_deref()
+                .map(|prefix| prefix == peer_pubkey_b58);
+            match self
+                .peer_scope_check(
+                    "peers.list",
+                    peer,
+                    PeerScopeRequest {
+                        peer_pubkey_b58: pubkey_prefix.as_deref(),
+                        self_target,
+                        ..PeerScopeRequest::default()
+                    },
+                )
+                .await
+            {
+                Ok(PeerScopeCheck { allowed: true, .. }) => {}
+                Ok(PeerScopeCheck { .. }) => {
+                    let reason = "peer_pubkey_b58 or self does not match capability scope";
+                    self.record_capability_scope_rejected(peer, "peers:list", "peers.list", reason)
+                        .await;
+                    return Response::Error {
+                        message: format!("peers list rejected by capability scope: {reason}"),
+                    };
+                }
+                Err(reason) => {
+                    self.record_capability_scope_rejected(
+                        peer,
+                        "peers:list",
+                        "peers.list",
+                        &reason,
+                    )
+                    .await;
+                    return Response::Error {
+                        message: format!(
+                            "peers list rejected by invalid capability scope: {reason}"
+                        ),
+                    };
+                }
+            }
         }
         match self
             .peers
@@ -1370,7 +1446,7 @@ impl Server {
         {
             Ok((peers, truncated)) => Response::PeerList {
                 peers,
-                operator_pubkey_b58: bs58::encode(self.identity.agent_id().pubkey).into_string(),
+                operator_pubkey_b58: bs58::encode(operator_pubkey).into_string(),
                 truncated,
             },
             Err(e) => Response::Error {
@@ -1397,15 +1473,12 @@ impl Server {
     /// re-running with a longer prefix or by raising `--limit-matches`
     /// on the CLI.
     ///
-    /// Gated to the operator's own identity — `peer.pubkey ==
-    /// self.identity.pubkey`, the same C3 gate as `rotate_operator_token`
-    /// and `list_peers`. A capability-based gate would collapse to
-    /// "anyone authenticated can revoke" in v0 (no one but the operator
-    /// can mint caps); the identity gate is strictly stronger and reads
-    /// correctly going into Phase-1 multi-peer where a guest peer must
-    /// not revoke any other peer's token.
+    /// The operator identity remains the root authority. Non-operator
+    /// peers need `peers.revoke`; scoped grants must admit the requested
+    /// token prefix and force posture before the daemon can mutate the
+    /// registry.
     ///
-    /// Rejection records `OperatorPeerRevokeRejected` via
+    /// Missing-delegation rejection records `OperatorPeerRevokeRejected` via
     /// `record_daemon_event` (issuer = daemon identity), mirroring the
     /// daemon-issuer audience model so the row passes the operator-feed
     /// filter and the rejected peer's `/audit` does not double as a
@@ -1444,20 +1517,28 @@ impl Server {
         match_limit: Option<usize>,
         peer: &AgentId,
     ) -> Response {
-        if peer.pubkey != self.identity.agent_id().pubkey {
-            let event = AuditEvent {
-                id: Uuid::new_v4(),
-                timestamp_ms: epoch_ms(),
-                issuer: self.identity.agent_id(),
-                kind: AuditKind::OperatorPeerRevokeRejected {
-                    peer_display: peer.display.clone(),
-                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
-                },
-            };
-            self.record_daemon_event(event).await;
-            return Response::Error {
-                message: "peer revoke requires the operator identity".into(),
-            };
+        let operator_pubkey = self.identity.agent_id().pubkey;
+        if peer.pubkey != operator_pubkey {
+            let check = self
+                .check_capabilities("peers:revoke".into(), vec!["peers.revoke".into()], peer)
+                .await;
+            if !check.passed {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: self.identity.agent_id(),
+                    kind: AuditKind::OperatorPeerRevokeRejected {
+                        peer_display: peer.display.clone(),
+                        peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                    },
+                };
+                self.record_daemon_event(event).await;
+                return Response::Error {
+                    message:
+                        "peer revoke requires the operator identity or capability \"peers.revoke\""
+                            .into(),
+                };
+            }
         }
         if token_prefix.is_empty() {
             return Response::Error {
@@ -1475,6 +1556,49 @@ impl Server {
             return Response::Error {
                 message: "peer revoke match_limit must be at least 1".into(),
             };
+        }
+        if peer.pubkey != operator_pubkey {
+            match self
+                .peer_scope_check(
+                    "peers.revoke",
+                    peer,
+                    PeerScopeRequest {
+                        token_prefix: Some(&token_prefix),
+                        force: Some(force),
+                        ..PeerScopeRequest::default()
+                    },
+                )
+                .await
+            {
+                Ok(PeerScopeCheck { allowed: true, .. }) => {}
+                Ok(PeerScopeCheck { .. }) => {
+                    let reason = "token_prefix or force does not match capability scope";
+                    self.record_capability_scope_rejected(
+                        peer,
+                        "peers:revoke",
+                        "peers.revoke",
+                        reason,
+                    )
+                    .await;
+                    return Response::Error {
+                        message: format!("peer revoke rejected by capability scope: {reason}"),
+                    };
+                }
+                Err(reason) => {
+                    self.record_capability_scope_rejected(
+                        peer,
+                        "peers:revoke",
+                        "peers.revoke",
+                        &reason,
+                    )
+                    .await;
+                    return Response::Error {
+                        message: format!(
+                            "peer revoke rejected by invalid capability scope: {reason}"
+                        ),
+                    };
+                }
+            }
         }
         if !force {
             match self
@@ -2297,6 +2421,54 @@ impl Server {
     ) -> Result<A2aScopeCheck, String> {
         self.a2a_scope_check_for_subject(peer.pubkey, alternatives, request)
             .await
+    }
+
+    async fn peer_scope_check(
+        &self,
+        action: &str,
+        peer: &AgentId,
+        request: PeerScopeRequest<'_>,
+    ) -> Result<PeerScopeCheck, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        let mut has_matching_action = false;
+
+        for cap in user_caps
+            .iter()
+            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
+        {
+            has_matching_action = true;
+            match permission_peer_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                action,
+                request,
+            ) {
+                Ok(true) => {
+                    return Ok(PeerScopeCheck {
+                        allowed: true,
+                        has_matching_action: true,
+                    });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(PeerScopeCheck {
+            allowed: false,
+            has_matching_action,
+        })
     }
 
     async fn grant_capability(
@@ -3422,6 +3594,12 @@ struct A2aScopeCheck {
     has_matching_action: bool,
 }
 
+struct PeerScopeCheck {
+    allowed: bool,
+    #[allow(dead_code)]
+    has_matching_action: bool,
+}
+
 /// Wraps a [`BudgetError`] from [`Server::register_agent_budgets`] with
 /// the manifest id that failed, so startup error messages name the
 /// offending agent instead of dropping a bare `serde:` line on the
@@ -3689,6 +3867,29 @@ required = {caps:?}
         assert!(
             matches!(resp, Response::CapabilityGranted { .. }),
             "grant {action} failed: {resp:?}"
+        );
+    }
+
+    async fn grant_scoped_action_to(
+        s: &Server,
+        peer: &AgentId,
+        action: &str,
+        scope: serde_json::Value,
+    ) {
+        let resp = s
+            .respond(
+                Request::GrantCapability {
+                    action: action.into(),
+                    scope: Some(scope),
+                    expires_at: None,
+                },
+                peer,
+            )
+            .await;
+        assert!(
+            matches!(resp, Response::CapabilityGranted { .. }),
+            "grant {action} to {} failed: {resp:?}",
+            peer.display
         );
     }
 
@@ -6602,6 +6803,31 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn purge_peers_rejects_scope_cutoff_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "peers.purge",
+            serde_json::json!({
+                "version": 1,
+                "before_ms": 1_000
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::PurgePeers { before_ms: 1_001 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "peers.purge"
+            )
+        }));
+    }
+
+    #[tokio::test]
     async fn revoke_rejects_when_peer_is_not_subject() {
         let s = server_with(vec![], "");
         // Operator (= s.identity) grants themselves a cap. The capability's
@@ -8799,6 +9025,81 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[tokio::test]
+    async fn list_peers_rejects_scope_pubkey_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let delegate = AgentId::new("delegate@local", [9u8; 32]);
+        let target_pubkey = [1u8; 32];
+        let other_pubkey = [2u8; 32];
+        let target_pubkey_b58 = bs58::encode(target_pubkey).into_string();
+        let other_pubkey_b58 = bs58::encode(other_pubkey).into_string();
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("target@local", target_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers
+            .register(PeerEntry {
+                token: PeerToken::generate(),
+                agent_id: AgentId::new("other@local", other_pubkey),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        grant_scoped_action_to(
+            &s,
+            &delegate,
+            "peers.list",
+            serde_json::json!({
+                "version": 1,
+                "peer_pubkey_b58": target_pubkey_b58
+            }),
+        )
+        .await;
+
+        let rejected = s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: Some(other_pubkey_b58),
+                    status_filter: None,
+                },
+                &delegate,
+            )
+            .await;
+        match rejected {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "peers.list"
+            )
+        }));
+
+        let allowed = s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: Some(target_pubkey_b58),
+                    status_filter: None,
+                },
+                &delegate,
+            )
+            .await;
+        match allowed {
+            Response::PeerList { peers, .. } => {
+                assert_eq!(peers.len(), 1);
+                assert_eq!(peers[0].agent_id.display, "target@local");
+            }
+            other => panic!("expected scoped list success, got {other:?}"),
+        }
+    }
+
     /// Server-side `pubkey_prefix` filter. Paste the b58 of an audit
     /// row's `peer_pubkey_b58` and the daemon returns only matching
     /// registry entries.
@@ -9180,6 +9481,87 @@ budget_credits_per_hour = {credits}
                 .any(|e| matches!(e.kind, AuditKind::OperatorPeerRevokeRejected { .. })),
             "rejected peer must not see the row (no oracle)"
         );
+    }
+
+    #[tokio::test]
+    async fn revoke_peer_rejects_scope_token_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let delegate = AgentId::new("delegate@local", [11u8; 32]);
+        let target_token = PeerToken::from_bytes([21u8; 32]);
+        let other_token = PeerToken::from_bytes([22u8; 32]);
+        let target_prefix: String = target_token.to_b58().chars().take(6).collect();
+        let other_prefix: String = other_token.to_b58().chars().take(6).collect();
+        assert!(
+            !other_prefix.starts_with(&target_prefix),
+            "test premise: prefixes must differ"
+        );
+        s.peers
+            .register(PeerEntry {
+                token: target_token,
+                agent_id: AgentId::new("target@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers
+            .register(PeerEntry {
+                token: other_token,
+                agent_id: AgentId::new("other@local", [2u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        grant_scoped_action_to(
+            &s,
+            &delegate,
+            "peers.revoke",
+            serde_json::json!({
+                "version": 1,
+                "token_prefix": target_prefix,
+                "force": false
+            }),
+        )
+        .await;
+
+        let rejected = s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: other_prefix,
+                    force: false,
+                    match_limit: None,
+                },
+                &delegate,
+            )
+            .await;
+        match rejected {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.peers.resolve(&other_token).await.unwrap().is_some());
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "peers.revoke"
+            )
+        }));
+
+        let allowed = s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: target_token.to_b58(),
+                    force: false,
+                    match_limit: None,
+                },
+                &delegate,
+            )
+            .await;
+        match allowed {
+            Response::PeerRevoked {
+                outcome: RevokeOutcome::Revoked(summary),
+            } => assert_eq!(summary.agent_id.display, "target@local"),
+            other => panic!("expected scoped revoke success, got {other:?}"),
+        }
+        assert_eq!(s.peers.resolve(&target_token).await.unwrap(), None);
     }
 
     /// Ambiguous outcome. Two peers whose tokens share a 1-char b58

@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, and stable A2A predicates for send, receive-admission, respond, and repair flows at dispatch. Peer and settlement scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, and peer predicates for delegated list/revoke flows plus purge retention at dispatch. Settlement scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -118,16 +118,20 @@ Use for peer registry and local identity operations.
   "version": 1,
   "peer_pubkey_b58": null,
   "token_prefix": null,
-  "self": false,
-  "force": false
+  "self": null,
+  "force": null,
+  "before_ms": null
 }
 ```
 
 Rules:
 
-- `peer_pubkey_b58` is preferred for identity-stable operations.
-- `token_prefix` may be used only for operator-facing revoke flows that already perform ambiguity checks.
-- `self` and `force` must be explicit for self-revocation recovery paths.
+- The operator identity remains the root authority for local peer-registry control. Scoped peer grants are delegated authority for non-operator peers.
+- `peer_pubkey_b58` narrows delegated `peers.list`; when present, it must decode to a 32-byte base58 public key and the request must use the exact target pubkey as `pubkey_prefix`.
+- `token_prefix` narrows delegated `peers.revoke`; when present, it must be a non-empty base58 prefix. The requested token prefix must start with the scoped prefix, and the daemon's normal ambiguity checks still run before mutation.
+- `force` narrows delegated revoke requests when present. `force: false` permits only non-force revocations; `force: true` permits only force revocations.
+- `before_ms` narrows `peers.purge`; the requested cutoff must be less than or equal to the scoped value.
+- `self` is reserved for self-targeting peer and identity operations; when present, it must match the daemon's concrete self-target predicate.
 
 ### `chain.*`
 

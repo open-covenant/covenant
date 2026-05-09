@@ -226,6 +226,40 @@ pub fn a2a_scope_allows(
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PeerScopeRequest<'a> {
+    pub peer_pubkey_b58: Option<&'a str>,
+    pub token_prefix: Option<&'a str>,
+    pub self_target: Option<bool>,
+    pub force: Option<bool>,
+    pub before_ms: Option<u64>,
+}
+
+pub fn peer_scope_allows(
+    action: &str,
+    scope: &Value,
+    expected_action: &str,
+    request: PeerScopeRequest<'_>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(
+        scope_allows_string(obj, "peer_pubkey_b58", request.peer_pubkey_b58)
+            && scope_allows_token_prefix(obj, request.token_prefix)
+            && scope_allows_optional_bool(obj, "self", request.self_target)
+            && scope_allows_optional_bool(obj, "force", request.force)
+            && scope_allows_optional_before_ms(obj, request.before_ms),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryCompactionScopeRequest {
     pub apply: bool,
@@ -476,6 +510,37 @@ fn scope_allows_string(obj: &Map<String, Value>, field: &str, actual: Option<&st
     }
 }
 
+fn scope_allows_token_prefix(obj: &Map<String, Value>, actual: Option<&str>) -> bool {
+    match obj.get("token_prefix") {
+        Some(value) if value.is_null() => true,
+        Some(value) => match (value.as_str(), actual) {
+            (Some(expected), Some(actual)) => actual.starts_with(expected),
+            _ => false,
+        },
+        None => true,
+    }
+}
+
+fn scope_allows_optional_bool(obj: &Map<String, Value>, field: &str, actual: Option<bool>) -> bool {
+    match obj.get(field) {
+        Some(value) if value.is_null() => true,
+        Some(value) => actual
+            .map(|actual| value.as_bool() == Some(actual))
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
+fn scope_allows_optional_before_ms(obj: &Map<String, Value>, before_ms: Option<u64>) -> bool {
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => true,
+        Some(value) => before_ms
+            .map(|before_ms| before_ms <= value.as_u64().unwrap_or(0))
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
 fn scope_allows_duplicate_risk(obj: &Map<String, Value>, actual: Option<&str>) -> bool {
     match obj.get("duplicate_risk") {
         Some(value) if value.is_null() => true,
@@ -559,10 +624,11 @@ fn validate_audit_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Pe
 }
 
 fn validate_peer_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
-    optional_string_or_null(action, obj, "peer_pubkey_b58")?;
-    optional_string_or_null(action, obj, "token_prefix")?;
-    optional_bool(action, obj, "self")?;
-    optional_bool(action, obj, "force")?;
+    optional_pubkey_b58_or_null(action, obj, "peer_pubkey_b58")?;
+    optional_base58_prefix_or_null(action, obj, "token_prefix")?;
+    optional_bool_or_null(action, obj, "self")?;
+    optional_bool_or_null(action, obj, "force")?;
+    optional_non_negative_integer_or_null(action, obj, "before_ms")?;
     Ok(())
 }
 
@@ -589,6 +655,64 @@ fn optional_string_or_null(
     Ok(())
 }
 
+fn optional_pubkey_b58_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(value) = value.as_str() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a base58 public key or null"),
+        ));
+    };
+    let Ok(decoded) = bs58::decode(value).into_vec() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a base58 public key or null"),
+        ));
+    };
+    if decoded.len() != 32 {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must decode to a 32-byte public key"),
+        ));
+    }
+    Ok(())
+}
+
+fn optional_base58_prefix_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(value) = value.as_str() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a non-empty base58 prefix or null"),
+        ));
+    };
+    if value.is_empty() || bs58::decode(value).into_vec().is_err() {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a non-empty base58 prefix or null"),
+        ));
+    }
+    Ok(())
+}
+
 fn optional_bool(
     action: &str,
     obj: &Map<String, Value>,
@@ -597,6 +721,22 @@ fn optional_bool(
     if let Some(value) = obj.get(field) {
         if !value.is_boolean() {
             return Err(invalid_scope(action, format!("{field} must be a boolean")));
+        }
+    }
+    Ok(())
+}
+
+fn optional_bool_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    if let Some(value) = obj.get(field) {
+        if !value.is_null() && !value.is_boolean() {
+            return Err(invalid_scope(
+                action,
+                format!("{field} must be a boolean or null"),
+            ));
         }
     }
     Ok(())
@@ -1194,8 +1334,9 @@ mod tests {
                     "version": 1,
                     "peer_pubkey_b58": null,
                     "token_prefix": "abc123",
-                    "self": false,
-                    "force": true
+                    "self": null,
+                    "force": true,
+                    "before_ms": null
                 }),
             ),
             (
@@ -1252,6 +1393,14 @@ mod tests {
         assert_invalid_scope(
             "peers.revoke",
             serde_json::json!({ "version": 1, "force": "yes" }),
+        );
+        assert_invalid_scope(
+            "peers.revoke",
+            serde_json::json!({ "version": 1, "token_prefix": "" }),
+        );
+        assert_invalid_scope(
+            "peers.revoke",
+            serde_json::json!({ "version": 1, "peer_pubkey_b58": "peer-1" }),
         );
         assert_invalid_scope(
             "chain.flush",
@@ -1441,6 +1590,79 @@ mod tests {
             "a2a.send.peer",
             &serde_json::json!({}),
             "a2a.send.other",
+            request
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn peer_scope_allows_peer_token_force_and_cutoff_predicates() {
+        let peer_pubkey_b58 = bs58::encode([1u8; 32]).into_string();
+        let scope = serde_json::json!({
+            "version": 1,
+            "peer_pubkey_b58": peer_pubkey_b58,
+            "token_prefix": "abc123",
+            "self": false,
+            "force": false,
+            "before_ms": 1_000
+        });
+        let request = PeerScopeRequest {
+            peer_pubkey_b58: Some(&peer_pubkey_b58),
+            token_prefix: Some("abc123fff"),
+            self_target: Some(false),
+            force: Some(false),
+            before_ms: Some(999),
+        };
+        assert!(peer_scope_allows("peers.revoke", &scope, "peers.revoke", request).unwrap());
+
+        assert!(!peer_scope_allows(
+            "peers.revoke",
+            &scope,
+            "peers.revoke",
+            PeerScopeRequest {
+                token_prefix: Some("ab"),
+                ..request
+            }
+        )
+        .unwrap());
+        assert!(!peer_scope_allows(
+            "peers.revoke",
+            &scope,
+            "peers.revoke",
+            PeerScopeRequest {
+                force: Some(true),
+                ..request
+            }
+        )
+        .unwrap());
+        assert!(!peer_scope_allows(
+            "peers.purge",
+            &scope,
+            "peers.purge",
+            PeerScopeRequest {
+                before_ms: Some(1_001),
+                ..request
+            }
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn peer_scope_allows_unscoped_and_rejects_action_mismatch() {
+        let request = PeerScopeRequest {
+            peer_pubkey_b58: Some("4vJ9JU1bJJE96FWSKczs4eeH9YnCMMpuSBjtpy6nG6GU"),
+            token_prefix: None,
+            self_target: None,
+            force: None,
+            before_ms: None,
+        };
+        assert!(
+            peer_scope_allows("peers.list", &serde_json::json!({}), "peers.list", request).unwrap()
+        );
+        assert!(!peer_scope_allows(
+            "peers.list",
+            &serde_json::json!({}),
+            "peers.revoke",
             request
         )
         .unwrap());

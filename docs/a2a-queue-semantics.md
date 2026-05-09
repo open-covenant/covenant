@@ -111,13 +111,13 @@ Policy:
 
 Required metadata before any automatic retry:
 
-- A stable sender-supplied idempotency key scoped to `(sender, recipient, task class)`.
+- Sender-supplied `idempotency_key` and `duplicate_risk` metadata on `A2ATask` so receivers can classify duplicates explicitly.
 - Receiver-side de-duplication that persists `idempotency_key → result` so redelivery can short-circuit without repeating side effects.
 - A bounded retry policy (lease TTL, max attempts, backoff) that never silently upgrades `operator_accepted` work into automatic retry.
 
-Until this metadata exists on `A2ATask`, the only retry mechanism is explicit repair (`requeue` / `force_error`).
+Until receiver-side de-duplication exists and is proven, the only retry mechanism is explicit repair (`requeue` / `force_error`).
 
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Keep automatic retry disabled until task classes can declare idempotency safely.
+- Keep automatic retry disabled until receiver-side de-duplication is implemented and validated.

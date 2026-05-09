@@ -16,7 +16,7 @@
 //! Hermetic — no external services. Uses two different HTTP ports to
 //! avoid bind contention while the OS releases the first.
 
-use covenant_a2a::{A2ATask, A2ATaskQueueState, A2ATaskResult};
+use covenant_a2a::{A2ADuplicateRisk, A2ATask, A2ATaskQueueState, A2ATaskResult};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_mcp::Content;
 use covenant_types::AgentId;
@@ -123,6 +123,8 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         intent_text: "find recent papers".into(),
         parent: None,
         deadline_ms: None,
+        idempotency_key: Some("restart-fixture".into()),
+        duplicate_risk: Some(A2ADuplicateRisk::Idempotent),
     };
 
     {
@@ -161,6 +163,8 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
             Response::A2ATasks { tasks } => {
                 assert_eq!(tasks.len(), 1);
                 assert_eq!(tasks[0].id, task.id);
+                assert_eq!(tasks[0].idempotency_key.as_deref(), Some("restart-fixture"));
+                assert_eq!(tasks[0].duplicate_risk, Some(A2ADuplicateRisk::Idempotent));
             }
             other => panic!("expected A2ATasks, got {other:?}"),
         }
@@ -220,6 +224,8 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
                 assert_eq!(t.sender, task.sender);
                 assert_eq!(t.recipient, task.recipient);
                 assert_eq!(t.intent_text, "find recent papers");
+                assert_eq!(t.idempotency_key.as_deref(), Some("restart-fixture"));
+                assert_eq!(t.duplicate_risk, Some(A2ADuplicateRisk::Idempotent));
             }
             other => panic!("expected replayed task, got {other:?}"),
         }
@@ -238,6 +244,14 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
                 assert_eq!(tasks.len(), 1);
                 assert_eq!(tasks[0].state, A2ATaskQueueState::InFlight);
                 assert_eq!(tasks[0].task.id, task.id);
+                assert_eq!(
+                    tasks[0].task.idempotency_key.as_deref(),
+                    Some("restart-fixture")
+                );
+                assert_eq!(
+                    tasks[0].task.duplicate_risk,
+                    Some(A2ADuplicateRisk::Idempotent)
+                );
                 assert_eq!(tasks[0].leased_to.as_ref(), Some(&peer));
             }
             other => panic!("expected A2AQueue after recv, got {other:?}"),

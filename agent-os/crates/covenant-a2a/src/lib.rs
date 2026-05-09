@@ -43,6 +43,10 @@ pub struct A2ATask {
     pub parent: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_risk: Option<A2ADuplicateRisk>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1145,6 +1149,8 @@ mod tests {
             intent_text: "find recent papers on agent memory".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         }
     }
 
@@ -1153,6 +1159,18 @@ mod tests {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();
         assert!(s.contains("\"intent_text\":"));
+        let back: A2ATask = serde_json::from_str(&s).unwrap();
+        assert_eq!(t, back);
+    }
+
+    #[test]
+    fn task_round_trips_idempotency_metadata() {
+        let mut t = dummy_task();
+        t.idempotency_key = Some("intent:example".into());
+        t.duplicate_risk = Some(A2ADuplicateRisk::Idempotent);
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(s.contains("\"idempotency_key\""));
+        assert!(s.contains("\"duplicate_risk\":\"idempotent\""));
         let back: A2ATask = serde_json::from_str(&s).unwrap();
         assert_eq!(t, back);
     }
@@ -1570,6 +1588,8 @@ mod tests {
             intent_text: "1".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         let to_carol = A2ATask {
             id: Uuid::new_v4(),
@@ -1578,6 +1598,8 @@ mod tests {
             intent_text: "2".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         let to_bob_2 = A2ATask {
             id: Uuid::new_v4(),
@@ -1586,6 +1608,8 @@ mod tests {
             intent_text: "3".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         m.send_task(to_bob_1.clone()).await.unwrap();
         m.send_task(to_carol.clone()).await.unwrap();
@@ -1617,6 +1641,8 @@ mod tests {
             intent_text: "for bob only".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         m.send_task(to_bob.clone()).await.unwrap();
         assert!(m.try_recv_task_for(&stranger).await.unwrap().is_none());
@@ -1637,6 +1663,8 @@ mod tests {
             intent_text: "alice's".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         let alice_task_2 = A2ATask {
             id: Uuid::new_v4(),
@@ -1645,6 +1673,8 @@ mod tests {
             intent_text: "alice's other".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         let dan_task = A2ATask {
             id: Uuid::new_v4(),
@@ -1653,6 +1683,8 @@ mod tests {
             intent_text: "dan's".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         };
         m.send_task(alice_task_1.clone()).await.unwrap();
         m.send_task(alice_task_2.clone()).await.unwrap();
@@ -1710,6 +1742,8 @@ mod tests {
             intent_text: "x".into(),
             parent: None,
             deadline_ms: None,
+            idempotency_key: None,
+            duplicate_risk: None,
         }
     }
 

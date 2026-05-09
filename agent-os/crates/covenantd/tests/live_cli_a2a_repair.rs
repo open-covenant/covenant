@@ -110,6 +110,8 @@ fn task(peer: &AgentId, text: &str) -> A2ATask {
         intent_text: text.to_string(),
         parent: None,
         deadline_ms: None,
+        idempotency_key: None,
+        duplicate_risk: None,
     }
 }
 

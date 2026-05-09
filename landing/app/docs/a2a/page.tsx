@@ -33,6 +33,8 @@ export default function A2APage() {
   intent_text: "do the thing",
   parent:      uuid | null,
   deadline_ms: u64 | null
+  idempotency_key: string | null
+  duplicate_risk: "idempotent" | "operator_accepted" | null
 }
 
 A2ATaskResult {

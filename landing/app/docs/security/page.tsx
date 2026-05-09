@@ -18,8 +18,10 @@ export default function SecurityPage() {
         over Covenant-mediated actions: ed25519-signed capability tokens,
         an append-only audit log, and enforcement at dispatch. Trusted-local
         subprocess execution is not process isolation. The runtime crate has
-        an initial Linux gVisor runner; daemon selection and live Linux
-        coverage are still required before production sandbox claims.
+        an initial Linux gVisor runner, daemon-selectable backend
+        configuration, and opt-in live Linux coverage; repeatable CI
+        provisioning and broader policy enforcement are still required before
+        production sandbox claims.
       </p>
 
       <h2>Trust boundaries</h2>
@@ -243,6 +245,10 @@ export default function SecurityPage() {
         <li>
           <Link href="/audit">Audit log</Link> — the system&apos;s
           ground truth and how to read it.
+        </li>
+        <li>
+          <Link href="/gvisor-live-runner">Linux gVisor runner</Link> —
+          repeatable setup for the opt-in sandbox live test.
         </li>
       </ul>
     </>

@@ -44,6 +44,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/identity", label: "Identity and keys" },
       { href: "/memory", label: "Memory tiers" },
       { href: "/live-coverage", label: "Live coverage" },
+      { href: "/gvisor-live-runner", label: "Linux gVisor runner" },
       { href: "/provenance", label: "Provenance" },
     ],
   },

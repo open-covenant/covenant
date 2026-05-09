@@ -39,7 +39,7 @@ The repository is organized around a small set of operating-layer primitives:
 | Primitive | Current implementation |
 |---|---|
 | Intent | CLI/IPC/HTTP request shapes, router, daemon dispatch path |
-| Runtime | Trusted-local subprocess runner, timeout enforcement, manifest sandbox contract, opt-in Linux gVisor runner selection |
+| Runtime | Trusted-local subprocess runner, timeout enforcement, manifest sandbox contract, opt-in Linux gVisor runner selection and live-runner guide |
 | Memory | SQLite-backed tiered records, embedding hooks, ignore rules |
 | Identity | Local ed25519 identity, peer registry, token rotation |
 | Permissions | Signed capabilities, expiry, revocation tombstones, enforcement |
@@ -86,7 +86,7 @@ Implemented and tested in the repository:
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |
-| Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage exists. Repeatable CI coverage and Firecracker isolation are future work. |
+| Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage and a repeatable runner guide exist. CI-host automation and Firecracker isolation are future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
 
@@ -152,7 +152,7 @@ Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md
 
 ## Security
 
-Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation contract is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md). Do not open public issues for vulnerabilities.
+Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation contract is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md), and the opt-in Linux gVisor runner setup is tracked in [docs/gvisor-live-runner.md](./docs/gvisor-live-runner.md). Do not open public issues for vulnerabilities.
 
 ## License
 

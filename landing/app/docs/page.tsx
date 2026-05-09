@@ -62,6 +62,11 @@ const TILES = [
     title: "Live coverage",
     body: "Opt-in real-boundary test inventory across daemon, CLI, A2A, MCP, runtime, and model surfaces.",
   },
+  {
+    href: "/gvisor-live-runner",
+    title: "Linux gVisor runner",
+    body: "Repeatable Linux host setup for the opt-in runsc sandbox validation path.",
+  },
 ];
 
 export default function DocsIndexPage() {
@@ -112,10 +117,11 @@ export default function DocsIndexPage() {
         autonomous development loop, live coverage matrix, and public
         provenance envelopes are experimental. Runtime sandboxing currently
         has manifest-level requirements, trusted-local fail-closed behavior,
-        and an initial runtime-level gVisor runner; daemon backend selection,
-        live Linux sandbox coverage, on-chain settlement, installer, SDK
-        ecosystem, signed releases, and transparency-log publication remain
-        planned work.
+        daemon-selectable Linux gVisor configuration, an initial runtime-level
+        gVisor runner, opt-in live Linux sandbox coverage, and a documented
+        Linux runner setup. On-chain settlement, installer, SDK ecosystem,
+        signed releases, production sandbox CI, and transparency-log
+        publication remain planned work.
       </p>
 
       <h2>Position in the stack</h2>

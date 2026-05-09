@@ -13,13 +13,14 @@ Implemented:
 - The initial `GvisorRunner` supports `filesystem = "read-only-package"` and `network = "off"` only.
 - `covenantd` can select `trusted-local` or `linux-gvisor` at startup through explicit runtime backend configuration.
 - The live coverage matrix includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
+- A repeatable Linux runner guide documents the host, `runsc`, rootfs, and CI adoption requirements for that live path.
 - Sandbox stderr redacts configured host-local paths before surfacing failure text.
 
 Not implemented:
 
 - `outbound-https-only`, `full`, `ephemeral`, and `host` sandbox policies are not enforced by the initial runner; they fail closed instead.
 - macOS execution is trusted-local only.
-- Default CI does not provision the Linux host, `runsc`, or rootfs needed for live sandbox validation.
+- Default CI does not yet provision the Linux host, `runsc`, or rootfs needed for live sandbox validation.
 
 ## Trust Boundary
 
@@ -79,12 +80,12 @@ COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
 
 ## Live gVisor Validation
 
-The runtime crate has an opt-in live test for the real `runsc` dispatch path. It is intentionally ignored by default because the host requirements are not portable:
+The runtime crate has an opt-in live test for the real `runsc` dispatch path. It is intentionally ignored by default because the host requirements are not portable. The repeatable setup is documented in [Linux gVisor Live Runner](gvisor-live-runner.md).
 
 ```bash
 cd agent-os
 COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
-  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
 ```
 
 Optional:

@@ -29,6 +29,16 @@ cargo build -p covenant --locked
 cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_reads_protocol_info_without_token
 ```
 
+Linux gVisor runtime coverage has host prerequisites outside the default suite. Use the repeatable runner guide before interpreting a pass or failure as sandbox evidence:
+
+```bash
+cd agent-os
+COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
+```
+
+See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux host, `runsc`, rootfs, and CI adoption contract.
+
 ## Current Surface Map
 
 | Surface | Status | Live coverage | Next gap |
@@ -42,7 +52,7 @@ cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_re
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI repair, restart replay | Stale-lease guard failure coverage after machine-readable status output stabilizes. |
 | MCP subprocess transport | Covered | stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
-| Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Linux host with `runsc` and a minimal `/bin/sh` rootfs. |
+| Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Automate the documented Linux `runsc` runner on a pinned rootfs. |
 | Budget enforcement | Covered | daemon rejection when budget exhausts | Budget resume after pause/resume policy lands. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Model availability probes before more model coverage. |
 

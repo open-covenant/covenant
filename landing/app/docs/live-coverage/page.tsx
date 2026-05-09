@@ -16,6 +16,7 @@ const SURFACES = [
   ["A2A mailbox", "covered", "explicit requeue repair"],
   ["MCP subprocess", "covered", "third-party fixture"],
   ["Runtime subprocess", "covered", "daemon dispatch failure receipts"],
+  ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],
   ["Budget enforcement", "covered", "budget resume"],
   ["Local model", "external service", "model availability probes"],
 ];
@@ -38,7 +39,17 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 
 # Before targeted live CLI tests:
 cargo build -p covenant --locked
-cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_reads_protocol_info_without_token`}</code>
+cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_reads_protocol_info_without_token
+
+# Linux gVisor runtime validation:
+COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \\
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc`}</code>
+
+      <p>
+        Linux gVisor coverage requires a Linux host with <code>runsc</code> and
+        a rootfs containing <code>/bin/sh</code>. The repeatable setup lives in{" "}
+        <Link href="/gvisor-live-runner">Linux gVisor runner</Link>.
+      </p>
 
       <h2>Matrix</h2>
       <table>
@@ -69,6 +80,10 @@ cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_re
         <li>
           <Link href="/security">Security model</Link> — why real boundary
           tests matter.
+        </li>
+        <li>
+          <Link href="/gvisor-live-runner">Linux gVisor runner</Link> — host
+          setup for the sandbox live path.
         </li>
         <li>
           <Link href="/provenance">Provenance</Link> — evidence attached to

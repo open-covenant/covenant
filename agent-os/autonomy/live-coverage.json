@@ -140,7 +140,7 @@
         "agent-os/crates/covenant-runtime/tests/live_gvisor.rs"
       ],
       "status": "external_service",
-      "nextGap": "Run the opt-in live test on a Linux host with runsc and a minimal /bin/sh rootfs before claiming sandbox-grade execution."
+      "nextGap": "Promote the documented Linux runsc runner to CI on a pinned minimal rootfs before claiming sandbox-grade execution."
     },
     {
       "id": "budget-enforcement",

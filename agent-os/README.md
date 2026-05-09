@@ -96,8 +96,10 @@ The real `runsc` dispatch path has ignored live coverage. It is skipped unless a
 
 ```bash
 COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
-  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
 ```
+
+See [`../docs/gvisor-live-runner.md`](../docs/gvisor-live-runner.md) for the Linux host, `runsc`, rootfs, and CI adoption contract.
 
 ## Crate Groups
 

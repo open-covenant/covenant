@@ -11,6 +11,7 @@ Operational helpers:
 ```bash
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
+node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/provenance.mjs verify-all
 ```
@@ -129,6 +130,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 |---|---|---|
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
+| Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers for project-domain or platform-bot identities. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |

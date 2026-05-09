@@ -1,0 +1,33 @@
+{
+  "id": "git-identity-guard",
+  "title": "Add git commit identity guard",
+  "state": "integrated",
+  "priority": "critical",
+  "ownerRole": "verifier",
+  "scope": [
+    "agent-os/scripts",
+    "docs/autonomous-development.md",
+    "docs/project-memory.md"
+  ],
+  "summary": "Add a validation guard that scans current and upstream commit authors and committers for project-approved domains and bot identities, so autonomous workers catch identity drift before another push.",
+  "expectedFailureModes": [
+    "A worker pushes a commit with a local or personal Git identity because validation only checks file content.",
+    "The guard rejects legitimate platform bot commits.",
+    "The guard scans all historical commits and blocks the repository on legacy identities instead of the active autonomous window.",
+    "The guard leaks private identity strings into repository docs or task records."
+  ],
+  "gates": [
+    "security",
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/validate-git-identity.mjs",
+    "node agent-os/scripts/validate-git-identity.mjs --ref HEAD --recent 1",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Integrated locally; future hardening should add an optional pre-push hook installer around the same validator.",
+  "updated": "2026-05-09"
+}

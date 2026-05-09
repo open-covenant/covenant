@@ -26,6 +26,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Capability checks should happen before protected dispatches or mutations.
 - Important rejections should produce audit rows.
 - Token bytes, private keys, secrets, hostnames, personal usernames, and machine-local paths should not be logged or committed.
+- Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs` before autonomous work is pushed.
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
 - When the next autonomous task is already selected and no true blocker exists, continue into the next bounded slice instead of stopping at a status report.

@@ -5,4 +5,21 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-node agent-os/scripts/validate-git-identity.mjs
+node agent-os/scripts/validate-current-git-identity.mjs
+
+refs=()
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ -z "${local_ref:-}" ] || [ -z "${local_sha:-}" ]; then
+    continue
+  fi
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+  refs+=(--ref "$local_sha")
+done
+
+if [ "${#refs[@]}" -eq 0 ]; then
+  node agent-os/scripts/validate-git-identity.mjs
+else
+  node agent-os/scripts/validate-git-identity.mjs "${refs[@]}"
+fi

@@ -145,7 +145,8 @@ Use the narrowest sufficient gate during development, then the full gate before 
 |---|---|---|
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
-| Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers for project-domain or platform-bot identities. |
+| Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers for exact project identities or platform-bot identities. |
+| Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes when the active local Git author or committer does not resolve to an approved project identity. |
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |

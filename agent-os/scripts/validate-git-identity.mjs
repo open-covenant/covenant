@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { approvedIdentitySummary, identityViolation } from "./git-identity-policy.mjs";
 
-const projectDomains = new Set(["opencovenant.org", ["covenant", "base.com"].join("")]);
 const recordSeparator = "\x1e";
 const fieldSeparator = "\x1f";
 
@@ -67,31 +67,6 @@ const defaultRefs = () => {
   return selected;
 };
 
-const emailDomain = (email) => {
-  const at = email.lastIndexOf("@");
-  if (at === -1 || at === email.length - 1) {
-    return "";
-  }
-  return email.slice(at + 1).toLowerCase();
-};
-
-const isPlatformBot = (name, email) => {
-  if (name === "GitHub" && email === "noreply@github.com") {
-    return true;
-  }
-  return (
-    name === "dependabot[bot]" &&
-    /^[0-9]+\+dependabot\[bot\]@users\.noreply\.github\.com$/i.test(email)
-  );
-};
-
-const isAllowed = (name, email) => {
-  if (isPlatformBot(name, email)) {
-    return true;
-  }
-  return projectDomains.has(emailDomain(email));
-};
-
 const scanRef = (ref) => {
   const format = ["%H", "%an", "%ae", "%cn", "%ce", "%s"].join(fieldSeparator) + recordSeparator;
   const result = git(["log", `-${recent}`, `--format=${format}`, ref]);
@@ -129,11 +104,13 @@ let checked = 0;
 for (const ref of selectedRefs) {
   for (const commit of scanRef(ref)) {
     checked += 1;
-    if (!isAllowed(commit.authorName, commit.authorEmail)) {
-      failures.push(`${ref} ${commit.sha.slice(0, 12)} author identity is not approved`);
+    const authorViolation = identityViolation(commit.authorName, commit.authorEmail);
+    if (authorViolation) {
+      failures.push(`${ref} ${commit.sha.slice(0, 12)} author identity ${authorViolation}`);
     }
-    if (!isAllowed(commit.committerName, commit.committerEmail)) {
-      failures.push(`${ref} ${commit.sha.slice(0, 12)} committer identity is not approved`);
+    const committerViolation = identityViolation(commit.committerName, commit.committerEmail);
+    if (committerViolation) {
+      failures.push(`${ref} ${commit.sha.slice(0, 12)} committer identity ${committerViolation}`);
     }
   }
 }
@@ -146,6 +123,7 @@ if (failures.length > 0) {
   console.error(
     "Inspect the commit with: git show -s --format='%an <%ae> | %cn <%ce>' <sha>"
   );
+  console.error(`Approved project identities: ${approvedIdentitySummary()}`);
   process.exit(1);
 }
 

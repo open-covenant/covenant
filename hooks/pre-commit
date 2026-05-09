@@ -12,6 +12,11 @@
 
 set -euo pipefail
 
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+node agent-os/scripts/validate-current-git-identity.mjs
+
 # --- Session lock ---
 #
 # When COVENANT_SESSION_ID is set in env (autonomous session spawned by
@@ -23,7 +28,6 @@ set -euo pipefail
 # (manual cleanup, dependabot tweak, etc.) and skip the check entirely.
 
 if [ -n "${COVENANT_SESSION_ID:-}" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel)"
   LOCK_PATH="$REPO_ROOT/.covenant-session-id"
 
   if [ ! -f "$LOCK_PATH" ]; then

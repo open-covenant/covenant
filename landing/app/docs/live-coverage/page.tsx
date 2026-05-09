@@ -34,7 +34,11 @@ export default function LiveCoveragePage() {
       <code>{`node agent-os/scripts/validate-live-coverage.mjs
 bash agent-os/scripts/test-stats.sh
 cd agent-os
-cargo test --workspace --exclude covenant-settlement-program -- --ignored live_`}</code>
+cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
+
+# Before targeted live CLI tests:
+cargo build -p covenant --locked
+cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_reads_protocol_info_without_token`}</code>
 
       <h2>Matrix</h2>
       <table>

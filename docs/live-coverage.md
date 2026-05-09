@@ -22,6 +22,13 @@ Run the live suite from `agent-os/`:
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
+Targeted live CLI tests execute `target/debug/covenant` from the workspace. Build the CLI first when running one of those tests directly:
+
+```bash
+cargo build -p covenant --locked
+cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_reads_protocol_info_without_token
+```
+
 ## Current Surface Map
 
 | Surface | Status | Live coverage | Next gap |

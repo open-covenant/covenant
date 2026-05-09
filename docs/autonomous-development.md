@@ -146,6 +146,8 @@ Use the narrowest sufficient gate during development, then the full gate before 
 
 Live tests are not a substitute for unit tests. They are the signal that a path survives real process and tool boundaries.
 
+When running a targeted live CLI test directly, build the CLI first with `cargo build -p covenant --locked`; those tests execute the workspace `target/debug/covenant` binary.
+
 ## Project Memory
 
 Tracked memory should be durable, concise, and useful to future contributors:

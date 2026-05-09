@@ -3,163 +3,153 @@
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> Open, agent-native operating layer for long-running autonomous software systems.
+> Operating-layer infrastructure for governed autonomous software engineering.
 
-Covenant is a local-first control plane for software agents. It sits above macOS or Linux and gives autonomous systems structured access to codebases, tools, execution environments, project memory, capability-scoped permissions, audit trails, and review loops.
+Covenant is an open control plane for AI agents that need to operate against real codebases, tools, and execution environments with durable memory, scoped authority, auditability, and verifiable provenance.
 
-The project is intentionally recursive: Covenant is being developed through the same operating model it exposes. Agents plan work, implement changes, review diffs, run verification, repair failures, update memory, and escalate only when human judgment, credentials, or external deployment authority are required.
+It is designed for research teams and engineering organizations building long-running autonomous systems where every privileged action must be bounded, inspectable, resumable, and attributable. Covenant sits below agent applications and above the host operating system, giving agents a disciplined substrate for planning, execution, review, repair, and handoff.
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
 
-## Thesis
+## Why Covenant
 
-Modern computers are still human-operated environments. Filesystems, terminals, process managers, permission prompts, package managers, and issue trackers assume a person is present to decide what matters, what may run, what state should persist, and when work is complete.
+Advanced software agents are moving beyond chat sessions and isolated tool calls. They need to maintain context over time, coordinate with other agents, enforce policy before touching sensitive surfaces, preserve evidence for what changed, and recover cleanly after interruptions.
 
-Frontier agents need a different layer: one that can decompose work, delegate execution, preserve context, enforce policy, manage tools, record provenance, review outputs, repair failures, and continue across interruptions. Covenant explores that layer as open infrastructure for autonomous software maintenance.
+Conventional developer environments were built around a human operator sitting at the terminal. Covenant adds the missing operating layer for autonomous engineering systems:
 
-## System Overview
+- **Control:** dispatch work through explicit intents, routes, manifests, and review gates.
+- **Authority:** grant only the capabilities required for a task, with expiry, revocation, and scoped enforcement.
+- **Memory:** persist project context in tiered records with drift checks and repair workflows.
+- **Provenance:** bind agent-produced changes to task state, validation, audit events, and Git object data.
+- **Continuity:** keep work resumable across process failures, context changes, and multi-step handoffs.
+- **Interoperability:** expose native tooling, MCP integration, A2A messaging, and local gateway APIs.
 
-Covenant is not a chat wrapper or a single agent framework. The core is a Rust daemon, `covenantd`, with a CLI, local HTTP gateway, IPC protocol, agent manifests, and storage primitives. The daemon owns local state and mediates all privileged actions.
+## Platform Model
 
-At a high level, Covenant provides:
+Covenant is not a single-agent framework and not a hosted wrapper around an LLM. The system center is `covenantd`, a Rust daemon that owns local state and mediates privileged operations through IPC, an HTTP gateway, signed capabilities, audit logs, memory stores, and runtime dispatch.
 
-- an **agent control plane** for dispatching intents, routing work, and coordinating peers;
-- an **execution substrate** for spawning agents and bounding their runtime behavior;
-- a **policy layer** based on signed capabilities, expiry, revocation, and peer authentication;
-- **persistent project memory** backed by tiered records, embeddings, ignore rules, and read-only drift reports;
-- **audit and provenance** through append-only JSONL logs, local hash-chain integrity reports, signed actions, CI gates, review artifacts, and verifiable commit provenance envelopes;
-- **tool orchestration** through native tools, MCP integration, A2A messaging, and local gateway APIs;
-- a path toward **economic settlement** through local receipts today and a Solana program scaffold for future on-chain settlement.
+The platform is organized around seven operating primitives:
 
-## Architecture
-
-The repository is organized around a small set of operating-layer primitives:
-
-| Primitive | Current implementation |
+| Primitive | Role |
 |---|---|
-| Intent | CLI/IPC/HTTP request shapes, router, daemon dispatch path |
-| Runtime | Trusted-local subprocess runner, timeout enforcement, manifest sandbox contract, opt-in Linux gVisor runner selection and live-runner guide |
-| Memory | SQLite-backed tiered records, embedding hooks, ignore rules |
-| Identity | Local ed25519 identity, peer registry, token rotation |
-| Permissions | Signed capabilities, expiry, revocation tombstones, enforcement |
-| Comms | IPC socket, HTTP gateway, MCP adapter, A2A mailbox |
-| Audit | Append-only JSONL events, local hash-chain sidecar, deterministic integrity report, unsigned root attestations |
-| Settlement | Local receipt ledger; Solana program scaffold is experimental |
+| Intent | Normalized request shapes for CLI, IPC, HTTP, routing, and daemon dispatch. |
+| Runtime | Agent execution with timeout enforcement, manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
+| Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
+| Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |
+| Memory | SQLite-backed working, episodic, and long-term records with embedding hooks, ignore rules, drift reports, repair, and bounded compaction. |
+| Audit | Append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. |
+| Settlement | Local resource receipts today; Solana settlement program scaffolding for future on-chain coordination. |
 
-The architectural center is `agent-os/`: the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer auth, audit, MCP/A2A adapters, and settlement scaffold. The surrounding monorepo contains public docs, web surfaces, contracts, circuits, and services that support or experiment with adjacent protocol layers.
+The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement scaffold. The rest of the monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
-See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), and [agent-os/README.md](./agent-os/README.md) for the build map and capability status.
+Start with [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), and [agent-os/README.md](./agent-os/README.md) for the build map and capability status.
 
-## Autonomous Development Loop
+## Capability Surface
 
-Covenant's engineering loop is treated as part of the system design, not as repository trivia. The loop follows a task lifecycle:
+Covenant includes:
 
-`intake -> plan -> implement -> self-review -> cross-review -> validate -> repair -> document -> integrate -> handoff`
-
-The loop uses explicit gates for architectural choices, security-sensitive diffs, broad cross-crate edits, insufficient tests, docs drift, and human-only blockers. The goal is not to pretend agents need no oversight. The goal is to make autonomous work inspectable, repeatable, resumable, and hard to overclaim.
-
-The tracked protocol is in [docs/autonomous-development.md](./docs/autonomous-development.md). The machine-readable lifecycle and autonomous backlog live under [agent-os/autonomy](./agent-os/autonomy). Durable context lives in [docs/project-memory.md](./docs/project-memory.md). The implementation history and current limits are summarized in [BUILT.md](./BUILT.md).
-
-## Current Capabilities
-
-Implemented and tested in the repository:
-
-- Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
-- Signed capability lifecycle: grant, validate known scopes, enforce tool-call argument scopes, enforce audit purge cutoffs, enforce memory and A2A dispatch scopes, verify, expire, revoke, and list.
-- Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
-- Append-only audit log with structured event types, bounded recent reads, retention purge, and local hash-chain verification.
-- SQLite-backed memory records with working, episodic, and long-term tiers.
+- Rust daemon and CLI for local agent orchestration.
+- IPC and local HTTP gateway surfaces.
+- Signed capability lifecycle for implemented namespaces, including grant-time validation, expiry, revocation, and dispatch-time scope enforcement.
+- Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A checks.
+- Append-only audit log with structured event types, bounded reads, retention purge, and local hash-chain verification.
+- SQLite-backed project memory across working, episodic, and long-term tiers.
+- MCP adapter, native tool integration, and A2A mailbox primitives.
 - Local settlement receipts for resource accounting.
-- Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
-- Unsigned or locally signed audit-root attestations that bind local audit integrity reports to commits and tasks before public key custody and transparency publication land.
-- Live opt-in tests for real daemon/CLI boundaries and selected real backends.
-- Machine-readable live coverage matrix for protocol, CLI, runtime, and model boundaries.
-- CI for Rust, landing docs, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
+- Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
+- Unsigned or locally signed audit-root attestations for local integrity reports.
+- Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
+- CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
 
 ## Status
 
-| Area | Status | Notes |
+| Area | Status | Boundary |
 |---|---|---|
-| Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
-| Identity, permissions, audit | Implemented | Signed ed25519 capability model with grant-time scope validation, tool-call argument scope enforcement, scoped audit purge cutoffs, scoped memory read/write and mutation enforcement, revocation, audit rows, and local audit hash-chain verification. |
-| Memory | Implemented, hardening | SQLite, embeddings, read-only drift reports, explicit repair commands, and bounded compaction dry-run/apply policy are present; automatic schedules and exact receipt correlation are not claimed. |
-| MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
-| Autonomous development loop | Experimental | Protocol, session locking, validation, review gates, continuation, and deterministic sprint summaries exist; full benchmarked self-improvement is not claimed. |
-| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data, and unsigned or locally signed audit-root attestations bind local integrity reports to commits and tasks; public key custody and transparency-log publication are not claimed. |
-| Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage and a repeatable runner guide exist. CI-host automation and Firecracker isolation are future work. |
-| On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
-| Installer and SDK ecosystem | Planned | The alpha contract is source-built; package installers and stable SDKs are future work. |
+| Local daemon and CLI | Implemented | Source-built Rust workspace under `agent-os/`. |
+| IPC and HTTP gateway | Implemented | Local operation with protocol metadata and daemon tests. |
+| Identity, peer auth, and permissions | Implemented, hardening | Signed ed25519 capability model with scoped enforcement for implemented namespaces. |
+| Audit and provenance | Implemented, hardening | Local hash-chain verification and provenance envelopes are included; public key custody and transparency publication are outside the release boundary. |
+| Memory | Implemented, hardening | SQLite records, drift reports, repair commands, and bounded compaction are included; automatic schedules are on the roadmap. |
+| MCP and A2A | Implemented, hardening | Adapter tests, durable queue state, lease inspection, and manual repair are included; multi-peer production operation is outside the release boundary. |
+| Runtime sandboxing | Partially implemented | Trusted-local execution is available; sandbox-required manifests fail closed when unsupported; Linux gVisor support is opt-in and still hardening. |
+| Autonomous workflow | Experimental | Task protocol, validation gates, session locking, review gates, continuation, and sprint summaries are included; benchmarked self-improvement is outside the release boundary. |
+| On-chain settlement | Scaffolded | Local receipts are included; the Solana program is not production deployed. |
+| Installer and SDK ecosystem | Roadmap | The alpha is source-built; package installers and stable SDK commitments are outside the release boundary. |
 
-## Alpha Release Contract
+The authoritative status matrix is maintained in [docs/status.md](./docs/status.md).
 
-Covenant may only be presented as alpha when the release matches [docs/alpha-release-contract.md](./docs/alpha-release-contract.md). The current alpha boundary is source-built, local-first infrastructure for engineers and researchers. It does not claim production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, a marketplace, or multi-host production operation.
+## Release Boundary
 
-Human approval is required before creating or publishing any release tag, artifact, package, or announcement.
+Covenant alpha is source-built, local-first infrastructure for engineers and researchers who can inspect the code, run the validation gates, and operate the daemon with explicit trust boundaries.
 
-## Local Validation
+The alpha does not include production deployment guarantees, default sandbox isolation, live network settlement, installer-backed distribution, stable SDK commitments, or safety guarantees for untrusted third-party agents. Those capabilities sit outside this release boundary.
 
-From the repository root:
+The release contract, non-goals, and evidence requirements are tracked in [docs/alpha-release-contract.md](./docs/alpha-release-contract.md).
+
+## Validation
+
+From the repository root, run the fast local gate:
 
 ```bash
 bash agent-os/scripts/validate.sh --quick
 ```
 
-For the full Rust gate used by CI:
+Run the full Rust validation gate used by CI:
 
 ```bash
 bash agent-os/scripts/validate.sh
 ```
 
-To inspect public provenance envelopes directly:
+Verify committed provenance envelopes:
 
 ```bash
 node agent-os/scripts/provenance.mjs verify-all
 ```
 
-The landing docs build separately:
+Build the public documentation surface:
 
 ```bash
 pnpm --dir landing install --frozen-lockfile --ignore-workspace
 pnpm --dir landing build
 ```
 
-Live tests are opt-in because they may spawn real binaries or require local services:
+Run opt-in live boundary tests when host prerequisites are available:
 
 ```bash
 cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
-Coverage inventory:
+Inspect the live coverage inventory:
 
 ```bash
 bash agent-os/scripts/test-stats.sh
 ```
 
-## Research Direction
+## Research Agenda
 
-Covenant is exploring:
+Covenant is advancing open infrastructure for:
 
-- durable project memory for long-running autonomous maintenance;
-- verifiable agent actions and public provenance;
+- governed autonomous software maintenance;
+- verifiable agent actions and commit-scoped provenance;
 - capability-scoped delegation across local and remote agents;
-- resumable task ownership after process, context, or machine interruption;
+- durable project memory for long-running work;
+- resumable task ownership across interruptions;
 - policy-aware tool use and sandboxed execution;
-- continuous repair and regression hardening;
-- human-directed autonomous engineering without hiding the human authority boundary.
+- audit-root attestations, public provenance, and future settlement coordination.
 
-Claims that are not implemented are kept in the roadmap rather than marketed as shipped behavior.
+Roadmap items remain roadmap items until they have implementation evidence and validation coverage.
 
 ## Contributing
 
-Covenant is early infrastructure. Serious contributions are welcome from systems engineers, AI researchers, security reviewers, protocol designers, and open-source maintainers.
+Covenant is early infrastructure with security-sensitive boundaries. Contributions are expected to include a validation plan, tests for changed behavior, and a clear statement of any remaining production risks.
 
-Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md](./docs/autonomous-development.md), and [ROADMAP.md](./ROADMAP.md). Pull requests should include a validation plan, tests for changed behavior, and a clear statement of any remaining production risks.
+Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md](./docs/autonomous-development.md), and [ROADMAP.md](./ROADMAP.md). Changes touching identity, permissions, audit, runtime isolation, settlement, provenance, release automation, or CI should receive especially close review.
 
 ## Security
 
-Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation contract is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md), and the opt-in Linux gVisor runner setup is tracked in [docs/gvisor-live-runner.md](./docs/gvisor-live-runner.md). Do not open public issues for vulnerabilities.
+Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation boundary is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md), and the opt-in Linux gVisor runner setup is tracked in [docs/gvisor-live-runner.md](./docs/gvisor-live-runner.md). Do not open public issues for vulnerabilities.
 
 ## License
 

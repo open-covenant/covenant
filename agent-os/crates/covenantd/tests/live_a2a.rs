@@ -7,7 +7,8 @@
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_a2a -- --ignored live_`.
 
-use covenant_a2a::{A2ATask, A2ATaskResult};
+use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency, A2ATask, A2ATaskQueueState, A2ATaskResult};
+use covenant_audit::AuditKind;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_mcp::Content;
 use covenant_types::AgentId;
@@ -237,6 +238,155 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
             assert_eq!(got.status, covenant_a2a::A2ATaskStatus::Ok);
         }
         other => panic!("expected queued result, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + waits for the opt-in A2A retry scheduler"]
+async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let port = pick_free_port();
+
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("COVENANT_A2A_AUTO_RETRY_SCHEDULER", "1")
+        .env("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS", "25")
+        .env("COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS", "0")
+        .env("COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS", "3")
+        .env("COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES", "1")
+        .env("COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT", "10")
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+
+    let mut stream = UnixStream::connect(&sock).await.expect("connect");
+    authenticate(&mut stream, home.path()).await;
+
+    let pubkey = read_peer_pubkey(home.path());
+    let peer = AgentId::new("user@local", pubkey);
+    let task = A2ATask {
+        id: Uuid::new_v4(),
+        sender: peer.clone(),
+        recipient: peer.clone(),
+        intent_text: "scheduler live retry".into(),
+        parent: None,
+        deadline_ms: None,
+        idempotency: Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "live:scheduler:retry",
+        )),
+    };
+
+    for action in [
+        format!("a2a.send.{}", task.recipient.display),
+        "a2a.repair.requeue".to_string(),
+    ] {
+        match req(
+            &mut stream,
+            Request::GrantCapability {
+                action,
+                scope: None,
+                expires_at: None,
+            },
+        )
+        .await
+        {
+            Response::CapabilityGranted { .. } => {}
+            other => panic!("grant failed: {other:?}"),
+        }
+    }
+
+    match req(&mut stream, Request::SendA2ATask { task: task.clone() }).await {
+        Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+        other => panic!("expected A2ATaskQueued, got {other:?}"),
+    }
+
+    match req(&mut stream, Request::TryRecvA2ATask).await {
+        Response::A2ATaskOpt { task: Some(got) } => assert_eq!(got.id, task.id),
+        other => panic!("expected leased task, got {other:?}"),
+    }
+
+    for _ in 0..100 {
+        match req(
+            &mut stream,
+            Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            },
+        )
+        .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                if let Some(entry) = tasks.iter().find(|entry| entry.task.id == task.id) {
+                    if entry.state == A2ATaskQueueState::Queued && entry.attempt == 1 {
+                        break;
+                    }
+                }
+            }
+            other => panic!("expected A2AQueue, got {other:?}"),
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+
+    match req(
+        &mut stream,
+        Request::A2AQueue {
+            limit: 10,
+            min_lease_age_ms: None,
+        },
+    )
+    .await
+    {
+        Response::A2AQueue { tasks, .. } => {
+            let entry = tasks
+                .iter()
+                .find(|entry| entry.task.id == task.id)
+                .expect("task still visible in queue");
+            assert_eq!(entry.state, A2ATaskQueueState::Queued);
+            assert_eq!(entry.attempt, 1);
+        }
+        other => panic!("expected A2AQueue, got {other:?}"),
+    }
+
+    match req(&mut stream, Request::RecentAudit { limit: 50 }).await {
+        Response::AuditEvents { events } => {
+            assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::A2AAutoRetrySchedulerScan {
+                        requeued: 1,
+                        error: None,
+                        ..
+                    }
+                )
+            }));
+            assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::A2ARepairApplied {
+                        task_id,
+                        action,
+                        ..
+                    } if *task_id == task.id && action == "auto_requeue"
+                )
+            }));
+        }
+        other => panic!("expected AuditEvents, got {other:?}"),
     }
 
     drop(stream);

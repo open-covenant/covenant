@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, and the `tool.call.*` `arguments.allow` predicate at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, and the `audit.purge` `before_ms` cutoff at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -101,7 +101,7 @@ Use for audit reads, verification, and retention.
 Rules:
 
 - `window` bounds read and verification work.
-- `before_ms` narrows purge authority.
+- `before_ms` narrows purge authority. When present on `audit.purge`, the requested purge cutoff must be less than or equal to the scoped value.
 - `include_integrity` records whether the grant covers hash-chain verification, not only event reads.
 
 ### `peers.*` and `identity.*`
@@ -147,8 +147,9 @@ Rules:
 1. Keep accepting `{}` for existing broad grants.
 2. Validate non-empty scopes at grant time for known action namespaces.
 3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
-4. Add dispatch-time checks for the next stable action families.
-5. Fail closed for malformed versioned scopes after a migration window.
-6. Keep action-only checks as the fallback only for unscoped operator grants.
+4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
+5. Add dispatch-time checks for the next stable action families.
+6. Fail closed for malformed versioned scopes after a migration window.
+7. Keep action-only checks as the fallback only for unscoped operator grants.
 
 Until a namespace-specific predicate lands, public docs must describe that namespace's scope as validated signed metadata and compatibility preparation, not as enforced least-privilege behavior.

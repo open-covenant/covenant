@@ -77,10 +77,11 @@ export default function CapabilitiesPage() {
         Grant-time validation rejects malformed non-empty scopes for
         known action namespaces. Dispatch-time enforcement checks
         signature validity, expiry, subject, action presence,
-        revocation, and the <code>tool.call.*</code>{" "}
-        <code>arguments.allow</code> predicate. Other scope predicates
-        remain compatibility metadata until their dispatch semantics
-        stabilize.
+        revocation, the <code>tool.call.*</code>{" "}
+        <code>arguments.allow</code> predicate, and the{" "}
+        <code>audit.purge</code> <code>before_ms</code> cutoff. Other
+        scope predicates remain compatibility metadata until their
+        dispatch semantics stabilize.
       </p>
 
       <p>
@@ -103,7 +104,7 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
         the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for memory and audit mutation predicates.
+        dispatch-time checks for memory mutation predicates.
       </p>
 
       <h2>Canonical encoding</h2>

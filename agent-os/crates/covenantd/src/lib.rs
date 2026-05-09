@@ -20,8 +20,9 @@ use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
-    sign as sign_capability, tool_call_scope_allows as permission_tool_call_scope_allows,
-    validate_scope, verify_with_clock, CapabilityStore,
+    audit_purge_scope_allows as permission_audit_purge_scope_allows, sign as sign_capability,
+    tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
+    CapabilityStore,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -1357,12 +1358,81 @@ impl Server {
                     .into(),
             };
         }
+        match self.audit_purge_scope_allows(before_ms, peer).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = format!("before_ms {before_ms} exceeds capability scope");
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "audit:purge".into(),
+                        action: "audit.purge".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("audit purge rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "audit:purge".into(),
+                        action: "audit.purge".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("audit purge rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         match self.audit.purge_older_than(before_ms).await {
             Ok(purged) => Response::AuditPurged { purged },
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },
         }
+    }
+
+    async fn audit_purge_scope_allows(
+        &self,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == "audit.purge" && verify_with_clock(cap, now).is_ok()
+        }) {
+            match permission_audit_purge_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                before_ms,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
     }
 
     async fn verify_audit_integrity(&self, peer: &AgentId) -> Response {
@@ -5246,6 +5316,54 @@ required = {caps:?}
         match resp {
             Response::AuditPurged { .. } => {}
             other => panic!("expected AuditPurged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_audit_accepts_scope_cutoff() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "audit.purge".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "before_ms": 1_000
+            })),
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::PurgeAudit { before_ms: 1_000 }).await;
+        match resp {
+            Response::AuditPurged { .. } => {}
+            other => panic!("expected AuditPurged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_audit_rejects_scope_cutoff_exceeded() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "audit.purge".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "before_ms": 1_000
+            })),
+            expires_at: None,
+        })
+        .await;
+        let resp = s.op_respond(Request::PurgeAudit { before_ms: 1_001 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action, .. } if action == "audit.purge"
+                )
+            })),
+            other => panic!("unexpected: {other:?}"),
         }
     }
 

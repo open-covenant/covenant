@@ -1,0 +1,38 @@
+{
+  "id": "audit-purge-scope-dispatch",
+  "title": "Enforce audit purge scope predicates",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-audit",
+    "agent-os/crates/covenant-permissions",
+    "agent-os/crates/covenantd",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Enforce the `audit.purge` `before_ms` scope predicate so scoped grants can cap destructive audit retention authority.",
+  "expectedFailureModes": [
+    "A scoped audit purge grant can still purge a broader time range than the operator intended.",
+    "Retention predicates are validated at grant time but ignored at dispatch, undermining the capability scope model.",
+    "Scope rejections for destructive audit operations are not auditable."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cargo test -p covenant-permissions --locked audit_purge_scope",
+    "cargo test -p covenantd --locked purge_audit",
+    "cargo clippy -p covenant-permissions -p covenant-audit -p covenantd --all-targets --locked -- -D warnings",
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue capability dispatch hardening with memory mutation predicate enforcement.",
+  "updated": "2026-05-09"
+}

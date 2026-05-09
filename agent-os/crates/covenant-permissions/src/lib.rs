@@ -172,6 +172,28 @@ pub fn tool_call_scope_allows(
     }
 }
 
+pub fn audit_purge_scope_allows(
+    action: &str,
+    scope: &Value,
+    before_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "audit.purge" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => Ok(true),
+        Some(value) => Ok(before_ms <= value.as_u64().unwrap_or(0)),
+        None => Ok(true),
+    }
+}
+
 fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_string_or_null(action, obj, "tool")?;
     if let (Some(expected), Some(tool)) = (
@@ -995,6 +1017,31 @@ mod tests {
             ),
             Err(PermissionError::InvalidScope(_))
         ));
+    }
+
+    #[test]
+    fn audit_purge_scope_allows_unscoped_grants() {
+        assert!(audit_purge_scope_allows("audit.purge", &serde_json::json!({}), 1_000).unwrap());
+    }
+
+    #[test]
+    fn audit_purge_scope_allows_cutoff_within_scope() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "before_ms": 1_000
+        });
+        assert!(audit_purge_scope_allows("audit.purge", &scope, 999).unwrap());
+        assert!(audit_purge_scope_allows("audit.purge", &scope, 1_000).unwrap());
+    }
+
+    #[test]
+    fn audit_purge_scope_rejects_cutoff_beyond_scope() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "before_ms": 1_000
+        });
+        assert!(!audit_purge_scope_allows("audit.purge", &scope, 1_001).unwrap());
+        assert!(!audit_purge_scope_allows("audit.verify", &serde_json::json!({}), 1_000).unwrap());
     }
 
     #[test]

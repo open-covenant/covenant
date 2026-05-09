@@ -1,7 +1,7 @@
 //! Covenant command-line client for the local daemon.
 //!
 //! ```text
-//!   covenant ping
+//!   covenant ping [--json]
 //!   covenant intent [--json] <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
@@ -90,7 +90,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("usage:");
     eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
-    eprintln!("  covenant ping                           check the daemon is responsive");
+    eprintln!("  covenant ping [--json]                  check the daemon is responsive");
     eprintln!(
         "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
     );
@@ -298,9 +298,24 @@ async fn main() -> Result<()> {
 
     match args[0].as_str() {
         "ping" => {
+            let mut as_json = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--json" => as_json = true,
+                    other => bail!("unknown flag '{other}'"),
+                }
+                i += 1;
+            }
             write_frame(&mut stream, &Request::Ping).await?;
             match read_frame::<_, Response>(&mut stream).await? {
-                Response::Pong => println!("pong"),
+                Response::Pong => {
+                    if as_json {
+                        println!("{}", serde_json::to_string(&ping_json())?);
+                    } else {
+                        println!("pong");
+                    }
+                }
                 Response::Error { message } => bail!("daemon error: {message}"),
                 other => bail!("unexpected response: {other:?}"),
             }
@@ -2135,6 +2150,13 @@ fn intent_result_json(
     })
 }
 
+fn ping_json() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "daemon_ping",
+        "status": "ok",
+    })
+}
+
 fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serde_json::Value {
     serde_json::json!({
         "kind": "capability_list",
@@ -2705,6 +2727,13 @@ mod tests {
         assert_eq!(value["text"], "phase 0 echo");
         assert_eq!(value["sources"][0], "research");
         assert!(value["settlement"].is_null());
+    }
+
+    #[test]
+    fn ping_json_renders_stable_shape() {
+        let value = ping_json();
+        assert_eq!(value["kind"], "daemon_ping");
+        assert_eq!(value["status"], "ok");
     }
 
     #[test]

@@ -22,7 +22,7 @@ export default function CliPage() {
         <code>{`covenant <subcommand> [args]
 
   intent [--json] <text>             Submit an intent and print the result.
-  ping                               Check the daemon is responsive.
+  ping [--json]                      Check the daemon is responsive.
   version                            Print daemon protocol metadata as JSON.
 
   memory recent [--tier T] [-n N]
@@ -172,6 +172,12 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <pre>
         <code>{`$ covenant version
 {"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":1}`}</code>
+      </pre>
+
+      <h3>Probe daemon health</h3>
+      <pre>
+        <code>{`$ covenant ping --json
+{"kind":"daemon_ping","status":"ok"}`}</code>
       </pre>
 
       <h3>Inspect recent memory</h3>

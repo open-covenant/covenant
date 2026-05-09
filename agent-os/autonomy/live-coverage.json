@@ -9,6 +9,7 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_daemon.rs",
+        "agent-os/crates/covenantd/tests/live_cli_ping_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_intent_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_intent_dispatch.rs",
         "agent-os/crates/covenantd/tests/live_cli_intents_resume.rs"

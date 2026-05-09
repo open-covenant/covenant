@@ -15,6 +15,7 @@
 //!   covenant ignore check <text>
 //!   covenant tools list
 //!   covenant tools call <name> [--args <json>]
+//!   covenant audit recent [--limit N]
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
@@ -78,6 +79,9 @@ fn print_usage() {
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
     eprintln!("  covenant tools list                     list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
+    eprintln!(
+        "  covenant audit recent [-n N]            list recent audit events as JSON lines (one per row, jq-friendly)"
+    );
     eprintln!(
         "  covenant audit purge (--before-ms M | --older-than-ms D)  drop audit events older than ms epoch / D ms ago"
     );
@@ -633,44 +637,88 @@ async fn main() -> Result<()> {
             }
         }
         "audit" => {
-            if args.len() < 2 || args[1] != "purge" {
-                eprintln!("covenant audit: expected `purge`");
+            if args.len() < 2 {
+                eprintln!("covenant audit: expected `recent` or `purge`");
                 std::process::exit(2);
             }
-            let mut before_ms: Option<u64> = None;
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--before-ms" => {
+            match args[1].as_str() {
+                "recent" => {
+                    let mut limit: usize = 50;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "-n" | "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
                         i += 1;
-                        let v = args.get(i).context("--before-ms needs a value")?;
-                        before_ms = Some(
-                            v.parse()
-                                .context("--before-ms must be an integer (epoch ms)")?,
-                        );
                     }
-                    "--older-than-ms" => {
+                    write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::AuditEvents { events } => {
+                            // One JSON line per event. The on-disk
+                            // `audit/events.jsonl` uses the same shape, so
+                            // a row read off the wire here matches what
+                            // grep/jq would surface against the file.
+                            // Universal renderer — every current and
+                            // future `AuditKind` variant ships unchanged.
+                            if events.is_empty() {
+                                println!("(no audit events)");
+                            }
+                            for e in events {
+                                println!("{}", serde_json::to_string(&e)?);
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "purge" => {
+                    let mut before_ms: Option<u64> = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--before-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--before-ms needs a value")?;
+                                before_ms = Some(
+                                    v.parse()
+                                        .context("--before-ms must be an integer (epoch ms)")?,
+                                );
+                            }
+                            "--older-than-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--older-than-ms needs a value")?;
+                                let dur: u64 =
+                                    v.parse().context("--older-than-ms must be an integer")?;
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                before_ms = Some(now.saturating_sub(dur));
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
                         i += 1;
-                        let v = args.get(i).context("--older-than-ms needs a value")?;
-                        let dur: u64 = v.parse().context("--older-than-ms must be an integer")?;
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        before_ms = Some(now.saturating_sub(dur));
                     }
-                    other => bail!("unknown flag '{other}'"),
+                    let before_ms = before_ms.context("missing --before-ms or --older-than-ms")?;
+                    write_frame(&mut stream, &Request::PurgeAudit { before_ms }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::AuditPurged { purged } => {
+                            println!("purged {purged} event(s)");
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
                 }
-                i += 1;
-            }
-            let before_ms = before_ms.context("missing --before-ms or --older-than-ms")?;
-            write_frame(&mut stream, &Request::PurgeAudit { before_ms }).await?;
-            match read_frame::<_, Response>(&mut stream).await? {
-                Response::AuditPurged { purged } => {
-                    println!("purged {purged} event(s)");
+                other => {
+                    eprintln!("covenant audit: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
                 }
-                Response::Error { message } => bail!("daemon error: {message}"),
-                other => bail!("unexpected response: {other:?}"),
             }
         }
         "a2a" => {

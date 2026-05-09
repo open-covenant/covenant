@@ -20,9 +20,11 @@
       "mockTests": [
         "agent-os/crates/covenantd/tests/http_gateway.rs"
       ],
-      "liveTests": [],
-      "status": "mock_only",
-      "nextGap": "Add a real daemon HTTP-gateway smoke test that binds a loopback port and authenticates through the public route surface."
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_http_gateway.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live /tools/call round-trip coverage through the daemon once operator capability grant expectations are documented."
     },
     {
       "id": "cli-capabilities",

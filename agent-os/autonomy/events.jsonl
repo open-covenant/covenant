@@ -41,3 +41,10 @@
 {"timestamp":"2026-05-09T09:44:28.032Z","taskId":"memory-repair-commands","from":"triaged","to":"planned","actorRole":"planner","note":"Selected crate-first repair primitives before daemon and CLI exposure."}
 {"timestamp":"2026-05-09T09:44:28.085Z","taskId":"memory-repair-commands","from":"planned","to":"in_progress","actorRole":"implementer","note":"Added memory store repair primitives for detach-parent, delete-record, and provenance backfill."}
 {"timestamp":"2026-05-09T09:44:28.137Z","taskId":"memory-repair-commands","from":"in_progress","to":"blocked","actorRole":"implementer","note":"Daemon, HTTP, CLI, and audit wiring are blocked by unrelated dirty daemon/CLI files; crate repair primitives are implemented."}
+{"timestamp":"2026-05-09T09:54:15.224Z","taskId":"http-gateway-live-smoke","from":"proposed","to":"triaged","actorRole":"planner","note":"Scoped live daemon HTTP smoke test (health + bearer auth)."}
+{"timestamp":"2026-05-09T09:54:18.326Z","taskId":"http-gateway-live-smoke","from":"triaged","to":"planned","actorRole":"planner","note":"Plan: add ignored live_http_gateway test and update live-coverage matrix."}
+{"timestamp":"2026-05-09T09:54:21.438Z","taskId":"http-gateway-live-smoke","from":"planned","to":"in_progress","actorRole":"implementer","note":"Implement live HTTP gateway smoke test."}
+{"timestamp":"2026-05-09T09:56:33.257Z","taskId":"http-gateway-live-smoke","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Review live test for flakiness and identity hygiene before running validation."}
+{"timestamp":"2026-05-09T09:58:08.182Z","taskId":"http-gateway-live-smoke","from":"self_review","to":"validation","actorRole":"verifier","note":"Verified live_http_gateway and validate.sh --quick pass."}
+{"timestamp":"2026-05-09T09:58:11.567Z","taskId":"http-gateway-live-smoke","from":"validation","to":"ready","actorRole":"verifier","note":"Ready: HTTP gateway no longer mock-only in live coverage matrix."}
+{"timestamp":"2026-05-09T09:58:15.188Z","taskId":"http-gateway-live-smoke","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated live HTTP gateway smoke coverage."}

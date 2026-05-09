@@ -1,0 +1,31 @@
+{
+  "id": "http-gateway-live-smoke",
+  "title": "Add live HTTP gateway smoke coverage",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "verifier",
+  "scope": [
+    "agent-os/crates/covenantd/tests/live_http_gateway.rs",
+    "agent-os/autonomy/live-coverage.json"
+  ],
+  "summary": "Add an opt-in live test that spawns the real covenantd binary and asserts the HTTP gateway is reachable, rejects missing bearer auth, and accepts the minted operator token for basic queries.",
+  "expectedFailureModes": [
+    "The daemon claims an HTTP gateway exists but the listener does not start reliably under a clean tempdir home.",
+    "Protected HTTP routes accidentally accept requests without bearer auth or with malformed tokens.",
+    "The operator token written to disk cannot authenticate through the HTTP gateway due to registry drift or token formatting mismatches.",
+    "The live test flaps because it does not wait for the HTTP listener before issuing requests."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cd agent-os && cargo test -p covenantd --test live_http_gateway -- --ignored live_",
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Implement the ignored live_http_gateway.rs test, wire it into the live coverage matrix, and mark the HTTP surface covered once it passes under validate.sh --quick.",
+  "updated": "2026-05-09"
+}

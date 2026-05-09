@@ -31,6 +31,6 @@
   "humanEscalation": [
     "Credentials for paid or rate-limited external APIs"
   ],
-  "nextAction": "Add a real daemon HTTP-gateway smoke test; the matrix now marks HTTP as the only mock-only surface.",
+  "nextAction": "Add live /tools/call round-trip coverage through the daemon once operator capability grant expectations are documented.",
   "updated": "2026-05-09"
 }

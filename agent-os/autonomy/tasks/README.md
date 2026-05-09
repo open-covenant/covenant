@@ -50,12 +50,31 @@ The seeded tasks in this directory come from templates in `agent-os/autonomy/bac
 
 When `node agent-os/scripts/autonomy-seed-next.mjs` reports backlog exhaustion, it means every template already has a corresponding JSON file in `agent-os/autonomy/tasks`.
 
-Add a new template by appending an object to `agent-os/autonomy/backlog.json` and then validate before seeding:
+Add a new template with the scaffold CLI, then validate before seeding:
 
 ```bash
+node agent-os/scripts/autonomy-scaffold-backlog-template.mjs capability-scope-live-check \
+  --title "Add live checks for capability scopes" \
+  --summary "Capability scope docs need a small live check that proves the documented shape can be parsed before enforcement expands." \
+  --next-action "Add a focused validator or test for the documented capability scope shape." \
+  --failure "The documented scope shape drifts away from accepted runtime input." \
+  --failure "The check accepts local-only paths or secret-bearing examples." \
+  --failure "Future enforcement rejects existing grants without a migration signal."
+
 node agent-os/scripts/validate-autonomy.mjs
 node agent-os/scripts/autonomy-next.mjs --seed
 ```
+
+The scaffold writes a validator-friendly `proposed` template with conservative defaults:
+
+- `priority`: `high`
+- `ownerRole`: `implementer`
+- `scope`: `["docs"]`
+- `gates`: `["docs"]`
+- `verification`: `["node agent-os/scripts/validate-autonomy.mjs", "git diff --check"]`
+- `humanEscalation`: `[]`
+
+Tighten those defaults before seeding when the task touches code, security, release, CI, or public protocol behavior.
 
 Checklist for new templates:
 

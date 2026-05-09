@@ -26,12 +26,12 @@ This chooses inspectability over accidental duplicate work:
 Operators can narrow status views to stale leases with `--min-lease-age-ms`:
 
 ```bash
-covenant a2a status --min-lease-age-ms 300000
+covenant a2a status --min-lease-age-ms 300000 --json
 ```
 
 HTTP exposes the same discovery-only filter through `GET /a2a/queue?min_lease_age_ms=300000`. IPC callers pass `min_lease_age_ms` on `A2AQueue`.
 
-The filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
+The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_age_ms`, `tasks`, and `results`. The stale-lease filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
 
 ## Result Contract
 

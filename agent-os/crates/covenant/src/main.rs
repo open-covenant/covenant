@@ -16,7 +16,7 @@
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N] [--json]
 //!   covenant chain status [--json]
-//!   covenant chain flush-receipts [--limit N]
+//!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant verify [--window N]
 //!   covenant ignore check <text>
@@ -24,7 +24,7 @@
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
 //!   covenant audit verify
-//!   covenant a2a status [--limit N] [--min-lease-age-ms N]
+//!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a compact
@@ -39,7 +39,9 @@
 #![deny(unsafe_code)]
 
 use anyhow::{bail, Context, Result};
-use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
+use covenant_a2a::{
+    A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
+};
 use covenant_audit::AuditKind;
 use covenant_ipc::{read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -105,7 +107,7 @@ fn print_usage() {
     eprintln!("  covenant receipts recent [-n N] [--json]  list recent settlement receipts");
     eprintln!("  covenant chain status [--json]          show Solana protocol configuration");
     eprintln!(
-        "  covenant chain flush-receipts [-n N]    batch local receipts into a Solana receipt root"
+        "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
@@ -122,7 +124,7 @@ fn print_usage() {
         "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant a2a status [-n N] [--min-lease-age-ms N]  list queued tasks, in-flight leases, and pending results"
+        "  covenant a2a status [-n N] [--min-lease-age-ms N] [--json]  list queued tasks, in-flight leases, and pending results"
     );
     eprintln!(
         "  covenant a2a requeue <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted [--lease-id UUID]"
@@ -181,23 +183,6 @@ fn parse_tier(s: &str) -> Result<MemoryTier> {
         "longterm" | "long-term" | "long_term" => Ok(MemoryTier::LongTerm),
         other => bail!("unknown tier '{other}' (expected working|episodic|longterm)"),
     }
-}
-
-fn parse_limit_args(args: &[String]) -> Result<usize> {
-    let mut limit = 10;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-n" | "--limit" => {
-                i += 1;
-                let value = args.get(i).context("--limit needs a value")?;
-                limit = value.parse().context("--limit must be an integer")?;
-            }
-            other => bail!("unknown flag '{other}'"),
-        }
-        i += 1;
-    }
-    Ok(limit)
 }
 
 fn parse_duplicate_risk(value: &str) -> Result<A2ADuplicateRisk> {
@@ -877,18 +862,46 @@ async fn main() -> Result<()> {
                     }
                 }
                 "flush-receipts" => {
-                    let limit = parse_limit_args(&args[2..])?;
+                    let mut limit = 10;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "-n" | "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
                     write_frame(&mut stream, &Request::FlushReceipts { limit }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::ReceiptBatchFlushed {
                             batch,
                             receipts_updated,
                         } => {
-                            println!("batch_id: {}", batch.batch_id);
-                            println!("merkle_root: {}", batch.merkle_root);
-                            println!("receipt_count: {}", batch.receipt_count);
-                            println!("receipts_updated: {receipts_updated}");
-                            println!("tx_sig: {}", batch.tx_sig.as_deref().unwrap_or("(pending)"));
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&flush_receipts_json(
+                                        limit,
+                                        &batch,
+                                        receipts_updated
+                                    ))?
+                                );
+                            } else {
+                                println!("batch_id: {}", batch.batch_id);
+                                println!("merkle_root: {}", batch.merkle_root);
+                                println!("receipt_count: {}", batch.receipt_count);
+                                println!("receipts_updated: {receipts_updated}");
+                                println!(
+                                    "tx_sig: {}",
+                                    batch.tx_sig.as_deref().unwrap_or("(pending)")
+                                );
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -1176,6 +1189,7 @@ async fn main() -> Result<()> {
                 "status" => {
                     let mut limit: usize = 10;
                     let mut min_lease_age_ms: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1191,6 +1205,7 @@ async fn main() -> Result<()> {
                                     v.parse().context("--min-lease-age-ms must be an integer")?,
                                 );
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1205,20 +1220,32 @@ async fn main() -> Result<()> {
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::A2AQueue { tasks, results } => {
-                            if tasks.is_empty() && results.is_empty() {
-                                println!("(a2a queue empty)");
-                            }
-                            for entry in tasks {
+                            if as_json {
                                 println!(
                                     "{}",
-                                    serde_json::json!({ "type": "task", "entry": entry })
+                                    serde_json::to_string(&a2a_status_json(
+                                        limit,
+                                        min_lease_age_ms,
+                                        &tasks,
+                                        &results
+                                    ))?
                                 );
-                            }
-                            for result in results {
-                                println!(
-                                    "{}",
-                                    serde_json::json!({ "type": "result", "result": result })
-                                );
+                            } else {
+                                if tasks.is_empty() && results.is_empty() {
+                                    println!("(a2a queue empty)");
+                                }
+                                for entry in tasks {
+                                    println!(
+                                        "{}",
+                                        serde_json::json!({ "type": "task", "entry": entry })
+                                    );
+                                }
+                                for result in results {
+                                    println!(
+                                        "{}",
+                                        serde_json::json!({ "type": "result", "result": result })
+                                    );
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1877,6 +1904,34 @@ fn chain_status_json(status: &ChainStatus) -> serde_json::Value {
     })
 }
 
+fn flush_receipts_json(
+    limit: usize,
+    batch: &ReceiptBatchSummary,
+    receipts_updated: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "receipt_batch_flushed",
+        "limit": limit,
+        "receipts_updated": receipts_updated,
+        "batch": batch,
+    })
+}
+
+fn a2a_status_json(
+    limit: usize,
+    min_lease_age_ms: Option<u64>,
+    tasks: &[A2ATaskQueueEntry],
+    results: &[A2ATaskResult],
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "a2a_status",
+        "limit": limit,
+        "min_lease_age_ms": min_lease_age_ms,
+        "tasks": tasks,
+        "results": results,
+    })
+}
+
 fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
@@ -1934,6 +1989,7 @@ fn print_expand_error(err: &ExpandError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use covenant_a2a::{A2ATask, A2ATaskQueueState};
     use covenant_types::AgentId;
 
     fn make_peer(seed: u8, display: &str, revoked: bool) -> PeerSummary {
@@ -2318,6 +2374,56 @@ mod tests {
         assert!(value["status"]["ws_url"].is_null());
         assert_eq!(value["status"]["ready"], false);
         assert_eq!(value["status"]["missing"][0], "program_id");
+    }
+
+    #[test]
+    fn flush_receipts_json_renders_stable_shape() {
+        let batch = ReceiptBatchSummary {
+            batch_id: "batch-1".into(),
+            merkle_root: "ab".repeat(32),
+            receipt_count: 2,
+            tx_sig: None,
+            slot: None,
+        };
+        let value = flush_receipts_json(10, &batch, 7);
+        assert_eq!(value["kind"], "receipt_batch_flushed");
+        assert_eq!(value["limit"], 10);
+        assert_eq!(value["receipts_updated"], 7);
+        assert_eq!(value["batch"]["batch_id"], "batch-1");
+        assert_eq!(value["batch"]["receipt_count"], 2);
+        assert!(value["batch"]["tx_sig"].is_null());
+        assert!(value["batch"]["slot"].is_null());
+    }
+
+    #[test]
+    fn a2a_status_json_renders_stable_shape() {
+        let sender = AgentId::new("sender@local", [1u8; 32]);
+        let recipient = AgentId::new("recipient@local", [2u8; 32]);
+        let task_id = uuid::Uuid::nil();
+        let task = A2ATask {
+            id: task_id,
+            sender,
+            recipient,
+            intent_text: "status probe".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        let entry = A2ATaskQueueEntry {
+            state: A2ATaskQueueState::Queued,
+            task,
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let result = A2ATaskResult::ok(task_id, vec![]);
+        let value = a2a_status_json(5, Some(300_000), &[entry], &[result]);
+        assert_eq!(value["kind"], "a2a_status");
+        assert_eq!(value["limit"], 5);
+        assert_eq!(value["min_lease_age_ms"], 300_000);
+        assert_eq!(value["tasks"][0]["state"], "queued");
+        assert_eq!(value["tasks"][0]["task"]["intent_text"], "status probe");
+        assert_eq!(value["results"][0]["status"], "ok");
     }
 
     #[test]

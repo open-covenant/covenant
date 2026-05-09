@@ -41,9 +41,22 @@ export default function CliPage() {
 
   receipts recent [-n N] [--json]    List recent settlement receipts.
   chain status [--json]               Print configured chain settlement state.
-  chain flush-receipts [-n N]         Batch local receipts into a receipt root.
+  chain flush-receipts [-n N] [--json]
+                                     Batch local receipts into a receipt root.
   chain receipt-batches [-n N] [--json]
                                      List local receipt batches.
+
+  a2a status [-n N] [--min-lease-age-ms N] [--json]
+                                     Inspect queued tasks, in-flight leases,
+                                     and pending results.
+  a2a requeue <task-id>
+        --reason <text>
+        --duplicate-risk <idempotent|operator-accepted>
+        [--lease-id <uuid>]          Return an in-flight task to queued.
+  a2a force-error <task-id>
+        --reason <text>
+        --message <text>
+        [--lease-id <uuid>]          Resolve an in-flight task as failed.
 
   verify [--window N]                Cross-check audit log vs other state.
 
@@ -184,6 +197,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant audit verify
 {"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
+      </pre>
+
+      <h3>Inspect the A2A queue</h3>
+      <pre>
+        <code>{`$ covenant a2a status --min-lease-age-ms 300000 --json
+{"kind":"a2a_status","limit":10,"min_lease_age_ms":300000,"tasks":[],"results":[]}`}</code>
       </pre>
 
       <h3>Invoke a tool</h3>

@@ -13,11 +13,12 @@ const SURFACES = [
   ["CLI audit feed", "covered", "audit purge after retention policy defaults"],
   ["Peer authentication", "covered", "forced self-revoke recovery fixture"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
-  ["A2A mailbox", "covered", "explicit requeue repair"],
+  ["A2A mailbox", "covered", "stale-lease guard failure"],
   ["MCP subprocess", "covered", "third-party fixture"],
   ["Runtime subprocess", "covered", "daemon dispatch failure receipts"],
   ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],
   ["Budget enforcement", "covered", "budget resume"],
+  ["Settlement receipts", "covered", "scoped receipt filters"],
   ["Local model", "external service", "model availability probes"],
 ];
 

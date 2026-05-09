@@ -1,0 +1,37 @@
+{
+  "id": "chain-flush-receipts-json-output",
+  "title": "Add JSON output for flush receipts",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add `covenant chain flush-receipts --json` with a stable machine-readable shape so automation can flush local receipts and capture the resulting batch without parsing human output.",
+  "expectedFailureModes": [
+    "Automation depends on human output that changes without schema review.",
+    "`--json` prints non-JSON to stdout (warnings, progress text, etc.).",
+    "The JSON output omits `batch_id` or `merkle_root`, forcing callers back to human parsing."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cargo test -p covenant --locked flush_receipts",
+    "cargo build -p covenant --locked",
+    "cargo test -p covenantd --test live_cli_chain_flush_receipts_json --locked -- --ignored live_",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomy backlog item.",
+  "updated": "2026-05-09"
+}

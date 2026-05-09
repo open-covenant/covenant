@@ -98,10 +98,11 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_a2a.rs",
         "agent-os/crates/covenantd/tests/live_cli_a2a_repair.rs",
+        "agent-os/crates/covenantd/tests/live_cli_a2a_status_json.rs",
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
       ],
       "status": "covered",
-      "nextGap": "Add CLI stale-lease guard failure coverage and machine-readable status output once the operator format stabilizes."
+      "nextGap": "Add CLI stale-lease guard failure coverage now that machine-readable status output is stable."
     },
     {
       "id": "mcp-subprocess",
@@ -167,6 +168,7 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_agent_dispatch.rs",
         "agent-os/crates/covenantd/tests/live_cli_chain_status_json.rs",
+        "agent-os/crates/covenantd/tests/live_cli_chain_flush_receipts_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_receipts_recent_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_receipt_batches_json.rs"
       ],

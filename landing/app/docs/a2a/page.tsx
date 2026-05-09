@@ -79,7 +79,9 @@ A2ATaskResult {
         A received task becomes an explicit <code>in_flight</code> lease.
         Leases survive daemon restart and are not automatically
         redelivered; operators inspect them through the queue-status
-        surface and repair them explicitly when needed.
+        surface and repair them explicitly when needed. The CLI status
+        surface also has a one-object JSON mode for supervisors that
+        need a stable queue snapshot.
       </p>
 
       <h2>Lease repair</h2>
@@ -129,6 +131,11 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
 
 GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results
   → 200 { "kind": "a2a_queue", "tasks": [ ... ], "results": [ ... ] }`}</code>
+      </pre>
+
+      <pre>
+        <code>{`covenant a2a status --min-lease-age-ms 300000 --json
+  → { "kind": "a2a_status", "limit": 10, "min_lease_age_ms": 300000, "tasks": [ ... ], "results": [ ... ] }`}</code>
       </pre>
 
       <p>

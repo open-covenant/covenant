@@ -228,11 +228,17 @@ export type PeerSummary = {
 // Internally tagged on `type`; newtype variants flatten `PeerSummary`'s
 // fields into the wrapper. Token bytes never carried — only `PeerSummary`,
 // which excludes `PeerToken` by the registry's redaction invariant.
+//
+// `truncated` on the ambiguous variant is `true` when the registry held
+// more matches than the daemon's `PEER_MATCH_LIMIT` cap (or the CLI's
+// `--limit-matches` override). Optional in the TS type so a stale daemon
+// (pre-truncation field) deserialises into `undefined` rather than a
+// runtime crash; rendering treats `truncated !== true` as honest no-op.
 export type RevokeOutcome =
   | ({ type: "revoked" } & PeerSummary)
   | ({ type: "already_revoked" } & PeerSummary)
   | { type: "not_found" }
-  | { type: "ambiguous"; matches: PeerSummary[] };
+  | { type: "ambiguous"; matches: PeerSummary[]; truncated?: boolean };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
@@ -351,6 +357,10 @@ export const api = {
       kind: "peer_list";
       peers: PeerSummary[];
       operator_pubkey_b58: string;
+      // `true` when the registry held more rows than `limit`; daemon caps
+      // the payload at `limit` regardless. Optional so a stale daemon
+      // omitting the field renders as honest not-truncated.
+      truncated?: boolean;
     }>(`/peers/list?${q.toString()}`);
   },
 

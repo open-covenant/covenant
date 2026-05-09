@@ -50,6 +50,7 @@ export default function Home() {
     "" | "working" | "episodic" | "longterm"
   >("");
   const [peers, setPeers] = useState<PeerSummary[]>([]);
+  const [peersTruncated, setPeersTruncated] = useState(false);
   const [operatorPubkey, setOperatorPubkey] = useState<string>("");
   const [peerPrefix, setPeerPrefix] = useState("");
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -83,6 +84,7 @@ export default function Home() {
       setA2aResults(ar.results);
       setDebits(d.debits);
       setPeers(p.peers);
+      setPeersTruncated(p.truncated === true);
       setOperatorPubkey(p.operator_pubkey_b58);
       if (!toolName && t.tools.length > 0) setToolName(t.tools[0].name);
       setLastError(null);
@@ -285,8 +287,11 @@ export default function Home() {
       if (r.kind === "error") {
         setLastError(r.message);
       } else if (r.outcome.type === "ambiguous") {
+        const countPhrase = r.outcome.truncated
+          ? `at least ${r.outcome.matches.length} peers (list capped)`
+          : `${r.outcome.matches.length} peers`;
         setLastError(
-          `prefix ${tokenPrefix} matched ${r.outcome.matches.length} peers; ` +
+          `prefix ${tokenPrefix} matched ${countPhrase}; ` +
             "use a longer prefix via `covenant peers revoke <PREFIX>`.",
         );
       } else if (r.outcome.type === "not_found") {
@@ -392,51 +397,59 @@ export default function Home() {
             {peerPrefix ? "(no peers match prefix)" : "(no peers registered)"}
           </p>
         ) : (
-          <ul>
-            {peers.map((p) => {
-              const isSelf =
-                operatorPubkey !== "" && p.agent_id.pubkey === operatorPubkey;
-              return (
-                <li key={p.token_prefix + ":" + p.registered_at}>
-                  <span className="dim">
-                    [{new Date(p.registered_at).toLocaleTimeString()}]{" "}
-                  </span>
-                  <span className={p.revoked_at !== null ? "dim" : "accent"}>
-                    {p.agent_id.display}
-                  </span>
-                  {isSelf && <span className="dim"> (self)</span>}{" "}
-                  <span className="dim">
-                    · token {p.token_prefix}… · pubkey{" "}
-                    {p.agent_id.pubkey.slice(0, 8)}…
-                    {p.revoked_at !== null && (
-                      <>
-                        {" "}
-                        · revoked {new Date(p.revoked_at).toLocaleTimeString()}
-                      </>
-                    )}
-                  </span>
-                  {p.revoked_at === null && !isSelf && (
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() =>
-                        onRevokePeer(p.token_prefix, p.agent_id.display)
-                      }
-                      disabled={revoking === p.token_prefix}
-                    >
-                      {revoking === p.token_prefix ? "revoking…" : "revoke"}
-                    </button>
-                  )}
-                  {p.revoked_at === null && isSelf && (
+          <>
+            <ul>
+              {peers.map((p) => {
+                const isSelf =
+                  operatorPubkey !== "" && p.agent_id.pubkey === operatorPubkey;
+                return (
+                  <li key={p.token_prefix + ":" + p.registered_at}>
                     <span className="dim">
-                      {" "}
-                      · use rotate token above to replace
+                      [{new Date(p.registered_at).toLocaleTimeString()}]{" "}
                     </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                    <span className={p.revoked_at !== null ? "dim" : "accent"}>
+                      {p.agent_id.display}
+                    </span>
+                    {isSelf && <span className="dim"> (self)</span>}{" "}
+                    <span className="dim">
+                      · token {p.token_prefix}… · pubkey{" "}
+                      {p.agent_id.pubkey.slice(0, 8)}…
+                      {p.revoked_at !== null && (
+                        <>
+                          {" "}
+                          · revoked {new Date(p.revoked_at).toLocaleTimeString()}
+                        </>
+                      )}
+                    </span>
+                    {p.revoked_at === null && !isSelf && (
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() =>
+                          onRevokePeer(p.token_prefix, p.agent_id.display)
+                        }
+                        disabled={revoking === p.token_prefix}
+                      >
+                        {revoking === p.token_prefix ? "revoking…" : "revoke"}
+                      </button>
+                    )}
+                    {p.revoked_at === null && isSelf && (
+                      <span className="dim">
+                        {" "}
+                        · use rotate token above to replace
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {peersTruncated && (
+              <p className="dim">
+                (showing first {peers.length} — narrow with the prefix box
+                above to see more)
+              </p>
+            )}
+          </>
         )}
       </section>
 

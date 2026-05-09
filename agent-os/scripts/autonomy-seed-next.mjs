@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -45,19 +45,21 @@ const task = {
 };
 
 const taskPath = join(tasksDir, `${task.id}.json`);
+const eventsPath = join(root, "autonomy", "events.jsonl");
 
 if (dryRun) {
   console.log(`autonomy-seed-next: would seed ${task.id}: ${task.title}`);
   process.exit(0);
 }
 
-writeFileSync(taskPath, `${JSON.stringify(task, null, 2)}\n`);
-
-const validation = spawnSync(process.execPath, [join(root, "scripts", "validate-autonomy.mjs")], {
+const validate = () => spawnSync(process.execPath, [join(root, "scripts", "validate-autonomy.mjs")], {
   cwd: resolve(root, ".."),
   encoding: "utf8"
 });
 
+writeFileSync(taskPath, `${JSON.stringify(task, null, 2)}\n`);
+
+const validation = validate();
 if (validation.status !== 0) {
   try {
     unlinkSync(taskPath);
@@ -66,6 +68,33 @@ if (validation.status !== 0) {
   }
   process.stderr.write(validation.stderr || validation.stdout);
   process.exit(validation.status ?? 1);
+}
+
+const previousEventsText = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8") : null;
+const event = {
+  timestamp: new Date().toISOString(),
+  taskId: task.id,
+  from: null,
+  to: "proposed",
+  actorRole: "planner",
+  note: "Seeded from backlog template."
+};
+appendFileSync(eventsPath, `${JSON.stringify(event)}\n`);
+
+const eventValidation = validate();
+if (eventValidation.status !== 0) {
+  try {
+    unlinkSync(taskPath);
+  } catch {
+    // Best-effort rollback. The validation output below names the broken task.
+  }
+  if (previousEventsText === null) {
+    writeFileSync(eventsPath, "");
+  } else {
+    writeFileSync(eventsPath, previousEventsText);
+  }
+  process.stderr.write(eventValidation.stderr || eventValidation.stdout);
+  process.exit(eventValidation.status ?? 1);
 }
 
 console.log(`autonomy-seed-next: seeded ${task.id}: ${task.title}`);

@@ -11,6 +11,7 @@ const workflow = JSON.parse(readFileSync(join(root, "autonomy", "workflow.json")
 
 const args = new Set(process.argv.slice(2));
 const asJson = args.has("--json");
+const seed = args.has("--seed");
 
 const validation = spawnSync(process.execPath, [join(root, "scripts", "validate-autonomy.mjs")], {
   cwd: resolve(root, ".."),
@@ -38,23 +39,46 @@ const stateRank = new Map([
   ["proposed", 30]
 ]);
 
-const tasks = readdirSync(tasksDir)
-  .filter((file) => file.endsWith(".json"))
-  .map((file) => JSON.parse(readFileSync(join(tasksDir, file), "utf8")))
-  .filter((task) => !["integrated", "blocked"].includes(task.state))
-  .sort((a, b) => {
-    const byState = (stateRank.get(b.state) ?? 0) - (stateRank.get(a.state) ?? 0);
-    if (byState !== 0) return byState;
-    const byPriority = (priorityRank.get(b.priority) ?? 0) - (priorityRank.get(a.priority) ?? 0);
-    if (byPriority !== 0) return byPriority;
-    return a.id.localeCompare(b.id);
-  });
+const loadTasks = () =>
+  readdirSync(tasksDir)
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => JSON.parse(readFileSync(join(tasksDir, file), "utf8")))
+    .filter((task) => !["integrated", "blocked"].includes(task.state))
+    .sort((a, b) => {
+      const byState = (stateRank.get(b.state) ?? 0) - (stateRank.get(a.state) ?? 0);
+      if (byState !== 0) return byState;
+      const byPriority = (priorityRank.get(b.priority) ?? 0) - (priorityRank.get(a.priority) ?? 0);
+      if (byPriority !== 0) return byPriority;
+      return a.id.localeCompare(b.id);
+    });
 
-const next = tasks[0] ?? null;
+let tasks = loadTasks();
+let next = tasks[0] ?? null;
+let seedOutput = "";
+
+if (!next && seed) {
+  const seeded = spawnSync(process.execPath, [join(root, "scripts", "autonomy-seed-next.mjs")], {
+    cwd: resolve(root, ".."),
+    encoding: "utf8"
+  });
+  seedOutput = seeded.stdout || seeded.stderr || "";
+
+  if (seeded.status === 0) {
+    tasks = loadTasks();
+    next = tasks[0] ?? null;
+  } else if (seeded.status !== 2) {
+    process.stderr.write(seedOutput);
+    process.exit(seeded.status ?? 1);
+  }
+}
 
 if (asJson) {
-  console.log(JSON.stringify({ next, candidates: tasks }, null, 2));
+  console.log(JSON.stringify({ next, candidates: tasks, seeded: seedOutput.trim() || null }, null, 2));
   process.exit(0);
+}
+
+if (seedOutput) {
+  process.stdout.write(seedOutput);
 }
 
 if (!next) {

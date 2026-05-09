@@ -15,7 +15,10 @@ Pick the next unblocked task:
 ```bash
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-next.mjs --json
+node agent-os/scripts/autonomy-next.mjs --seed
 ```
+
+Use `--seed` when every tracked task is integrated or blocked and the backlog still contains task templates. It creates the next task JSON, appends a durable `events.jsonl` seed event, validates the autonomy records, and then prints the selected task.
 
 Continuation check after a commit or push:
 

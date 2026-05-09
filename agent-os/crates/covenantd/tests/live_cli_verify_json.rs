@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -26,7 +27,7 @@ fn covenant_cli_bin() -> PathBuf {
 
 async fn wait_for_sock(path: &std::path::Path) -> bool {
     for _ in 0..100 {
-        if path.exists() {
+        if UnixStream::connect(path).await.is_ok() {
             return true;
         }
         sleep(Duration::from_millis(100)).await;
@@ -47,41 +48,78 @@ async fn wait_for_operator_token(home: &std::path::Path) {
     panic!("operator token never appeared at {}", path.display());
 }
 
+async fn spawn_daemon(home: &std::path::Path, port: u16) -> tokio::process::Child {
+    let daemon_exe = env!("CARGO_BIN_EXE_covenantd");
+    Command::new(daemon_exe)
+        .env("COVENANT_HOME", home)
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd")
+}
+
+async fn wait_for_daemon(home: &std::path::Path, child: &mut tokio::process::Child) {
+    let sock = home.join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+    wait_for_operator_token(home).await;
+}
+
+async fn run_cli_raw(
+    cli_exe: &std::path::Path,
+    home: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
+    Command::new(cli_exe)
+        .args(args)
+        .env("COVENANT_HOME", home)
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("spawn covenant CLI")
+}
+
+async fn run_cli(cli_exe: &std::path::Path, home: &std::path::Path, args: &[&str]) -> String {
+    let output = run_cli_raw(cli_exe, home, args).await;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "CLI failed for {args:?}: status={:?} stdout={stdout:?} stderr={stderr:?}",
+        output.status
+    );
+    assert!(
+        stderr.trim().is_empty(),
+        "CLI command {args:?} must not emit stderr on success: {stderr:?}"
+    );
+    stdout
+}
+
 #[tokio::test]
 #[ignore = "live: spawns covenantd + runs `covenant verify --json` subprocess"]
 async fn live_cli_verify_json_round_trip() {
     let home = tempfile::tempdir().expect("tempdir");
 
     let port = pick_free_port();
-    let daemon_exe = env!("CARGO_BIN_EXE_covenantd");
-    let mut child = Command::new(daemon_exe)
-        .env("COVENANT_HOME", home.path())
-        .env("COVENANT_HTTP_PORT", port.to_string())
-        .env("HOME", home.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn covenantd");
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
 
-    let sock = home.path().join("sock");
-    if !wait_for_sock(&sock).await {
-        let _ = child.kill().await;
-        panic!("daemon never created its socket at {}", sock.display());
-    }
-    wait_for_operator_token(home.path()).await;
-
-    let output = Command::new(covenant_cli_bin())
-        .args(["verify", "--json", "--window", "25"])
-        .env("COVENANT_HOME", home.path())
-        .env("HOME", home.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .expect("spawn covenant CLI");
+    let cli_exe = covenant_cli_bin();
+    let output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -111,4 +149,87 @@ async fn live_cli_verify_json_round_trip() {
     assert!(value["drift"].as_array().expect("drift array").is_empty());
 
     let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, mutates state out of band, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_drift_after_audit_loss() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    run_cli(&cli_exe, home.path(), &["intent", "verify drift fixture"]).await;
+
+    let _ = child.kill().await;
+    let audit_events = home.path().join("audit").join("events.jsonl");
+    std::fs::write(&audit_events, "").expect("clear audit events");
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        !output.status.success(),
+        "verify --json should exit non-zero when drift exists: status={:?} stdout={stdout:?} stderr={stderr:?}",
+        output.status
+    );
+    assert!(
+        stderr.trim().is_empty(),
+        "verify --json should report drift on stdout without stderr noise: {stderr:?}"
+    );
+
+    let value: Value =
+        serde_json::from_str(stdout.trim()).expect("verify --json drift stdout must be JSON");
+    assert_eq!(value["kind"].as_str(), Some("verify_report"));
+    assert!(
+        value["orphans_total"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "drift report should count orphaned state: {value:?}"
+    );
+
+    let drift = value["drift"].as_array().expect("drift array");
+    let memory_without_audit = drift.iter().find(|item| {
+        item["kind"].as_str() == Some("memory_without_audit")
+            && item["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("IntentDispatched audit row"))
+    });
+    let item = memory_without_audit
+        .unwrap_or_else(|| panic!("expected memory_without_audit drift row: {value:?}"));
+    assert!(
+        item["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("explicit repair command")),
+        "drift row should include actionable repair guidance: {item:?}"
+    );
+
+    assert!(
+        value["checks"]
+            .as_array()
+            .expect("checks array")
+            .iter()
+            .any(|check| check["name"].as_str() == Some("memory ↔ audit")
+                && check["passed"].as_bool() == Some(false)),
+        "memory/audit check should fail when audit evidence is removed: {value:?}"
+    );
+
+    let _ = restarted.kill().await;
 }

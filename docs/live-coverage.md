@@ -44,7 +44,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | Surface | Status | Live coverage | Next gap |
 | --- | --- | --- | --- |
 | Daemon IPC core | Covered | daemon ping/intent, CLI ping JSON, CLI intent, CLI intent JSON, CLI resume JSON, CLI version | Resume-success fixture once budget refill semantics can be exercised without long sleeps. |
-| State verifier | Covered | CLI `verify --json` on a real daemon | Live drift fixture that asserts non-zero exit with actionable repair hints. |
+| State verifier | Covered | CLI `verify --json` healthy and drift paths on a real daemon | Live repair fixture that applies a verifier-suggested memory repair and proves the next verify run clears the targeted drift. |
 | Memory retention | Covered | CLI memory read JSON, CLI memory purge JSON | Live repair and compaction fixtures that assert memory/audit/receipt consistency. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |

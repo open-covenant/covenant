@@ -26,8 +26,7 @@
     "brand.mjs",
     "brand.d.ts",
     "networks.mjs",
-    "networks.d.ts",
-    "deployments/*.json"
+    "networks.d.ts"
   ],
   "peerDependencies": {
     "@fontsource-variable/inter": "^5.2.0",

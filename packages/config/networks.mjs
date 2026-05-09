@@ -1,88 +1,64 @@
-import baseManifest from './deployments/base.json' with { type: 'json' };
-import baseSepoliaManifest from './deployments/baseSepolia.json' with { type: 'json' };
-import localBaseManifest from './deployments/localBase.json' with { type: 'json' };
+export const SOLANA_ADDRESS_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-
-export const covenantContractKeys = Object.freeze([
-  'agentRegistry',
-  'capabilityRegistry',
-  'treasury',
-  'taskMarket',
-  'proofVerifier',
-  'disputeArbitration',
-  'governance',
-  'feeCollector',
-  'staking',
-  'templateRegistry',
-  'token',
-]);
-
-const EMPTY_DEPLOYMENTS = Object.freeze(
-  Object.fromEntries(covenantContractKeys.map((key) => [key, ZERO_ADDRESS])),
-);
-
-const MANIFESTS = Object.freeze({
-  base: Object.freeze(baseManifest),
-  baseSepolia: Object.freeze(baseSepoliaManifest),
-  localBase: Object.freeze(localBaseManifest),
+export const covenantSolanaNetworks = Object.freeze({
+  devnet: Object.freeze({
+    key: 'devnet',
+    name: 'Solana Devnet',
+    cluster: 'devnet',
+    explorerUrl: 'https://explorer.solana.com',
+    defaultRpcUrl: 'https://api.devnet.solana.com',
+    defaultWsUrl: 'wss://api.devnet.solana.com',
+  }),
+  localnet: Object.freeze({
+    key: 'localnet',
+    name: 'Solana Localnet',
+    cluster: 'localnet',
+    explorerUrl: 'http://localhost:8899',
+    defaultRpcUrl: 'http://127.0.0.1:8899',
+    defaultWsUrl: 'ws://127.0.0.1:8900',
+  }),
+  mainnet: Object.freeze({
+    key: 'mainnet',
+    name: 'Solana Mainnet',
+    cluster: 'mainnet-beta',
+    explorerUrl: 'https://explorer.solana.com',
+    defaultRpcUrl: 'https://api.mainnet-beta.solana.com',
+    defaultWsUrl: 'wss://api.mainnet-beta.solana.com',
+  }),
 });
 
-const BASE_NETWORKS = Object.freeze(
-  Object.fromEntries(
-    Object.entries(MANIFESTS).map(([key, manifest]) => [
-      key,
-      Object.freeze({
-        key: manifest.key,
-        id: manifest.id,
-        name: manifest.name,
-        explorerUrl: manifest.explorerUrl,
-        defaultRpcUrl: manifest.defaultRpcUrl,
-      }),
-    ]),
-  ),
-);
-
-function envNameForContract(key) {
-  return `COVENANT_CONTRACT_${key.replace(/[A-Z]/g, (value) => `_${value}`).toUpperCase()}`;
-}
-
-function withFallback(raw, fallback) {
-  return raw && raw.length > 0 ? raw : fallback;
-}
-
-export function defaultCovenantDeployments() {
-  return { ...EMPTY_DEPLOYMENTS };
-}
-
-function manifestDeploymentsFor(network) {
-  const manifest = MANIFESTS[network];
-  if (!manifest) return defaultCovenantDeployments();
-  return { ...EMPTY_DEPLOYMENTS, ...manifest.contracts };
-}
-
-export function resolveCovenantDeployments(env = process.env, overrides = {}, network = undefined) {
-  const result = manifestDeploymentsFor(network);
-  for (const key of covenantContractKeys) {
-    const envValue = env[envNameForContract(key)];
-    result[key] = withFallback(overrides[key], withFallback(envValue, ZERO_ADDRESS));
-  }
-  return result;
-}
+export const DEFAULT_PROTOCOL_PROGRAM_ID = 'CovntSettLement1111111111111111111111111111';
 
 export function resolveCovenantNetwork(env = process.env, overrides = {}) {
-  const selected = overrides.network ?? env.NEXT_PUBLIC_BASE_NETWORK ?? env.COVENANT_BASE_NETWORK ?? 'baseSepolia';
-  const network = BASE_NETWORKS[selected] ?? BASE_NETWORKS.baseSepolia;
-  const rpcUrl =
-    overrides.rpcUrl ??
-    env.NEXT_PUBLIC_BASE_RPC_URL ??
-    env.COVENANT_BASE_RPC_URL ??
-    network.defaultRpcUrl;
+  const selected =
+    overrides.cluster ??
+    env.NEXT_PUBLIC_COVENANT_SOLANA_CLUSTER ??
+    env.COVENANT_SOLANA_CLUSTER ??
+    'devnet';
+  const network = covenantSolanaNetworks[selected] ?? covenantSolanaNetworks.devnet;
   return {
     ...network,
-    rpcUrl,
-    contracts: resolveCovenantDeployments(env, overrides.contracts ?? {}, selected),
+    rpcUrl:
+      overrides.rpcUrl ??
+      env.NEXT_PUBLIC_COVENANT_SOLANA_RPC_URL ??
+      env.COVENANT_SOLANA_RPC_URL ??
+      network.defaultRpcUrl,
+    wsUrl:
+      overrides.wsUrl ??
+      env.NEXT_PUBLIC_COVENANT_SOLANA_WS_URL ??
+      env.COVENANT_SOLANA_WS_URL ??
+      network.defaultWsUrl,
+    programId:
+      overrides.programId ??
+      env.NEXT_PUBLIC_COVENANT_PROTOCOL_PROGRAM_ID ??
+      env.COVENANT_PROTOCOL_PROGRAM_ID ??
+      DEFAULT_PROTOCOL_PROGRAM_ID,
+    covntMint:
+      overrides.covntMint ?? env.NEXT_PUBLIC_COVNT_MINT ?? env.COVNT_MINT ?? null,
   };
 }
 
-export { BASE_NETWORKS as covenantBaseNetworks };
+export function explorerHref(kind, value, network = resolveCovenantNetwork()) {
+  const clusterQuery = network.key === 'mainnet' ? '' : `?cluster=${network.cluster}`;
+  return `${network.explorerUrl.replace(/\/$/, '')}/${kind}/${value}${clusterQuery}`;
+}

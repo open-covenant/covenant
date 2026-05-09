@@ -144,6 +144,9 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/revoke", post(peers_revoke))
         .route("/intents/resume", post(intents_resume))
         .route("/budget/debits", get(budget_debits))
+        .route("/chain/status", get(chain_status))
+        .route("/chain/flush-receipts", post(chain_flush_receipts))
+        .route("/chain/receipt-batches", get(chain_receipt_batches))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -700,6 +703,47 @@ async fn budget_debits(
             .respond(
                 Request::RecentDebits {
                     limit: q.limit.unwrap_or(20),
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+async fn chain_status(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(s.server.respond(Request::ChainStatus, &peer).await))
+}
+
+async fn chain_receipt_batches(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Query(q): Query<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::ReceiptBatches {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+async fn chain_flush_receipts(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(q): Json<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::FlushReceipts {
+                    limit: q.limit.unwrap_or(10),
                 },
                 &peer,
             )

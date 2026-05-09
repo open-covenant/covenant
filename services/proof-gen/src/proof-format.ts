@@ -20,15 +20,15 @@ function requireLength(name: string, actual: number, expected: number) {
   }
 }
 
-export function toBytes32Hex(value: string | number | bigint): `0x${string}` {
-  return `0x${padWord(normalizeField(value))}`;
+export function toFieldWordHex(value: string | number | bigint): string {
+  return padWord(normalizeField(value));
 }
 
-export function encodePublicInputsBytes32(publicSignals: Array<string | number | bigint>): Array<`0x${string}`> {
-  return publicSignals.map(toBytes32Hex);
+export function encodePublicInputWords(publicSignals: Array<string | number | bigint>): string[] {
+  return publicSignals.map(toFieldWordHex);
 }
 
-export function encodeGroth16ProofBytes(proof: Groth16Proof): `0x${string}` {
+export function encodeGroth16ProofHex(proof: Groth16Proof): string {
   requireLength('proof.pi_a', proof.pi_a.length, 3);
   requireLength('proof.pi_b', proof.pi_b.length, 3);
   requireLength('proof.pi_c', proof.pi_c.length, 3);
@@ -46,5 +46,5 @@ export function encodeGroth16ProofBytes(proof: Groth16Proof): `0x${string}` {
     normalizeField(proof.pi_c[1]),
   ];
 
-  return `0x${words.map(padWord).join('')}`;
+  return words.map(padWord).join('');
 }

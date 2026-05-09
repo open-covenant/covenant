@@ -1,15 +1,11 @@
 import { jwtVerify } from 'jose';
-import { EVM_ADDRESS_REGEX } from '../base/contracts.js';
+import { isSolanaAddress, type SolanaAddress } from '../solana/accounts.js';
 
 export const SESSION_ISSUER = 'covenant.session';
 
 export interface SessionPayload {
-  address: `0x${string}`;
+  address: SolanaAddress;
   expiresAt: number;
-}
-
-function isEvmAddress(value: string): value is `0x${string}` {
-  return EVM_ADDRESS_REGEX.test(value);
 }
 
 export function sessionSecret(raw = process.env.SESSION_SECRET): Uint8Array {
@@ -28,7 +24,7 @@ export async function verifySessionJwt(
     if (typeof payload.sub !== 'string' || typeof payload.exp !== 'number') {
       return null;
     }
-    if (!isEvmAddress(payload.sub)) return null;
+    if (!isSolanaAddress(payload.sub)) return null;
     return {
       address: payload.sub,
       expiresAt: payload.exp,

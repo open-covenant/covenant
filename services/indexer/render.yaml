@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: covenant-base-indexer
+    name: covenant-solana-indexer
     runtime: docker
     plan: starter
     dockerfilePath: services/indexer/Dockerfile
@@ -8,10 +8,12 @@ services:
     autoDeploy: true
     healthCheckPath: /healthz
     envVars:
-      - key: BASE_RPC_URL
+      - key: COVENANT_SOLANA_RPC_URL
         sync: false
-      - key: BASE_CHAIN_ID
-        value: "8453"
+      - key: COVENANT_SOLANA_CLUSTER
+        value: devnet
+      - key: COVENANT_PROTOCOL_PROGRAM_ID
+        sync: false
       - key: INDEXER_BIND_ADDR
         value: 0.0.0.0:8080
       - key: RUST_LOG

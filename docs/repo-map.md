@@ -1,24 +1,21 @@
 # Repository Map
 
-Covenant is a monorepo. The agent-native operating layer lives primarily in `agent-os/`; adjacent apps, contracts, circuits, and services support public documentation, settlement experiments, and protocol surfaces.
+Covenant is a monorepo. The agent-native operating layer lives primarily in `agent-os/`; adjacent apps, circuits, packages, and services support public documentation, Solana settlement experiments, and protocol surfaces.
 
 ## Top-level Layout
 
 | Path | Role |
 |---|---|
-| `agent-os/` | Rust workspace for the daemon, CLI, operating primitives, local web console, and Solana settlement scaffold. |
+| `agent-os/` | Rust workspace for the daemon, CLI, operating primitives, local web console, and Solana protocol program. |
 | `landing/` | Public site and documentation app. |
 | `docs/` | Repository-level documentation that should remain readable without running the docs site. |
 | `docs/decisions/` | Architecture decision records. |
 | `docs/provenance/` | Alpha provenance contract and committed attestation envelopes. |
-| `apps/portal/` | Protocol portal and user-facing application experiments. |
-| `apps/docs/` | Secondary docs app retained for the broader workspace. |
-| `contracts/` | EVM contracts and scripts for protocol surfaces outside the local daemon. |
 | `circuits/` | Circom proof circuits and catalog metadata. |
 | `packages/` | Shared TypeScript SDK, UI, and configuration packages. |
-| `services/` | Supporting services: discovery, MCP bridge, proof generation, indexer, compute broker, gateway, and bots. |
+| `services/` | Supporting services: MCP bridges, proof generation, indexer, compute broker, and bots. |
 | `.github/workflows/` | CI, security scans, CodeQL, and workflow security checks. |
-| `scripts/` | Root-level workspace scripts for artifacts, contract metadata, and audits. |
+| `scripts/` | Root-level workspace scripts for bootstrap, validation, and audits. |
 
 ## Agent OS Workspace
 
@@ -40,10 +37,17 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/crates/covenant-budget` | Credit budget ledger and exhaustion behavior. |
 | `agent-os/crates/covenant-settlement` | Local settlement receipt ledger. |
 | `agent-os/agents/research` | Reference research agent. |
-| `agent-os/programs/settlement` | Experimental Solana settlement program. |
+| `agent-os/programs/settlement` | Solana protocol program for agent registration, stake, credits, task escrow, and receipt anchors. |
 | `agent-os/covenant-web` | Local operator web console. |
 | `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrix, and task backlog. |
 | `agent-os/scripts` | Validation, live coverage checks, provenance verification, test inventory, handoff, and regression guards. |
+
+## MCP Bridges
+
+| Path | Role |
+|---|---|
+| `services/mcp-bridge` | Covenant MCP server for Solana instruction prep plus authenticated `covenantd` HTTP tools. |
+| `services/hermes-mcp-bridge` | Hermes API Server wrapper that exposes generic Hermes agent runs over MCP. |
 
 ## Public vs Internal State
 

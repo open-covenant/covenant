@@ -117,7 +117,12 @@ impl ToolRegistry {
     pub fn from_tools(tools: Vec<Arc<dyn Tool>>) -> Self {
         let mut map = BTreeMap::new();
         for t in tools {
-            map.insert(t.name().to_string(), t);
+            let name = t.name().to_string();
+            if map.contains_key(&name) {
+                tracing::warn!(tool = %name, "duplicate tool name ignored");
+                continue;
+            }
+            map.insert(name, t);
         }
         Self {
             inner: Arc::new(map),
@@ -152,7 +157,28 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use crate::native::EchoTool;
+
+    struct StaticTool {
+        name: &'static str,
+        text: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for StaticTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "static test tool"
+        }
+
+        async fn call(&self, _arguments: Value) -> Result<ToolCallResult, ToolError> {
+            Ok(ToolCallResult::ok(vec![Content::text(self.text)]))
+        }
+    }
 
     fn registry_with_echo() -> ToolRegistry {
         ToolRegistry::from_tools(vec![Arc::new(EchoTool)])
@@ -209,6 +235,27 @@ mod tests {
         assert!(!r.is_error);
         match &r.content[0] {
             Content::Text { text } => assert_eq!(text, "hello"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_keeps_first_duplicate_tool_name() {
+        let reg = ToolRegistry::from_tools(vec![
+            Arc::new(StaticTool {
+                name: "dup",
+                text: "first",
+            }),
+            Arc::new(StaticTool {
+                name: "dup",
+                text: "second",
+            }),
+        ]);
+
+        assert_eq!(reg.len(), 1);
+        let r = reg.call("dup", Value::Null).await.unwrap();
+        match &r.content[0] {
+            Content::Text { text } => assert_eq!(text, "first"),
             other => panic!("unexpected: {other:?}"),
         }
     }

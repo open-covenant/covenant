@@ -1,16 +1,15 @@
 {
   "name": "@covenant/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for Covenant Protocol on Base",
+  "description": "TypeScript SDK for Covenant's Solana-native protocol surface",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/covenant-base/covenant"
+    "url": "https://github.com/open-covenant/covenant"
   },
-  "homepage": "https://covenantbase.com",
+  "homepage": "https://opencovenant.org",
   "keywords": [
-    "base",
-    "evm",
+    "solana",
     "agent",
     "covenant",
     "sdk"
@@ -28,8 +27,7 @@
     "dist"
   ],
   "scripts": {
-    "generate": "node ../../scripts/export-base-artifacts.mjs",
-    "build": "pnpm run generate && tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
@@ -39,8 +37,7 @@
   },
   "dependencies": {
     "@covenant/config": "workspace:*",
-    "jose": "5.9.6",
-    "viem": "^2.48.8"
+    "jose": "5.9.6"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.5",

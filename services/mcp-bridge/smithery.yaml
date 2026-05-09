@@ -1,61 +1,63 @@
 name: "@covenant/mcp-bridge"
-description: MCP server for discovering and coordinating AI agents on Covenant Protocol
+description: MCP server for Covenant's Solana-native protocol and local daemon surfaces
 version: 0.2.0
 
 startCommand: "npx @covenant/mcp-bridge"
 
 tools:
-  - name: register_agent
-    description: Register a new Covenant agent for the configured operator
+  - name: get_network
+    description: Return Solana network metadata
+  - name: list_agents
+    description: List registered agents
   - name: list_tasks
-    description: Browse open tasks by capability
-  - name: get_task
-    description: Get task details by ID
-  - name: get_reputation
-    description: Look up agent reputation score
-  - name: bid_on_task
-    description: Submit a bid on an open task
-  - name: reveal_bid
-    description: Reveal a previously committed bid
-  - name: submit_result
-    description: Submit task completion result
-  - name: claim_payout
-    description: Release a verified task payout after the dispute window
-  - name: withdraw_earnings
-    description: Withdraw accrued funds from a treasury payment stream
+    description: List task escrow records
+  - name: prepare_register_agent
+    description: Prepare an agent-registration instruction descriptor
+  - name: prepare_buy_credits
+    description: Prepare a credit-purchase instruction descriptor
+  - name: prepare_stake
+    description: Prepare a stake instruction descriptor
+  - name: prepare_create_task
+    description: Prepare a task escrow instruction descriptor
+  - name: prepare_anchor_receipt_batch
+    description: Prepare a receipt-root anchoring descriptor
+  - name: daemon_tools_list
+    description: List tools registered in the local Covenant daemon
+  - name: daemon_submit_intent
+    description: Submit an intent through the local Covenant daemon
+  - name: daemon_chain_status
+    description: Read Covenant chain configuration status from the daemon
 
 env:
-  COVENANT_BASE_NETWORK:
-    description: Base network label to connect to
+  COVENANT_SOLANA_CLUSTER:
+    description: Solana cluster label
     type: string
-    enum: [localBase, baseSepolia, base]
-    default: baseSepolia
+    enum: [localnet, devnet, mainnet]
+    default: devnet
     required: false
-  COVENANT_BASE_RPC_URL:
-    description: Custom RPC endpoint URL (overrides cluster default)
-    type: string
-    required: false
-  COVENANT_DISCOVERY_URL:
-    description: Discovery service base URL for capability-aware task search
+  COVENANT_SOLANA_RPC_URL:
+    description: Solana RPC endpoint URL
     type: string
     required: false
-  COVENANT_OPERATOR_PRIVATE_KEY:
-    description: Hex-encoded EVM private key for optional signing
+  COVENANT_SOLANA_WS_URL:
+    description: Solana websocket endpoint URL
     type: string
     required: false
-  COVENANT_AUTO_SIGN:
-    description: Automatically sign Base transactions without prompting (requires COVENANT_OPERATOR_PRIVATE_KEY)
+  COVENANT_PROTOCOL_PROGRAM_ID:
+    description: Covenant protocol program id
     type: string
-    enum: ["true", "false"]
-    default: "false"
     required: false
-  COVENANT_AUTO_SIGN_MAX_VALUE_WEI:
-    description: Maximum wei value per auto-signed transaction
+  COVNT_MINT:
+    description: External COVNT SPL mint address
     type: string
-    default: "0"
     required: false
-  COVENANT_AUTO_SIGN_VELOCITY_LIMIT:
-    description: Maximum number of auto-signed transactions per 60-second window
+  COVENANT_HTTP_URL:
+    description: Covenant daemon HTTP gateway URL
     type: string
-    default: "10"
+    default: http://127.0.0.1:8421
     required: false
+  COVENANT_AUTH_TOKEN:
+    description: Bearer token for daemon-backed tools
+    type: string
+    required: false
+    secret: true

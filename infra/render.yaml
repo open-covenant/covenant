@@ -1,30 +1,8 @@
-databases:
-  - name: covenant-postgres
-    plan: starter
-    postgresMajorVersion: "16"
-
 services:
   - type: keyvalue
     name: covenant-redis
     plan: starter
     ipAllowList: []
-
-  - type: web
-    name: covenant-iacp
-    env: node
-    plan: starter
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @covenant/iacp build
-    startCommand: pnpm --filter @covenant/iacp start
-    envVars:
-      - key: NODE_VERSION
-        value: 24
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: covenant-redis
-          property: connectionString
-      - key: SESSION_SECRET
-        generateValue: true
 
   - type: worker
     name: covenant-proof-gen
@@ -44,59 +22,21 @@ services:
         generateValue: true
 
   - type: web
-    name: covenant-x402-gateway
+    name: covenant-mcp-bridge
     env: node
     plan: starter
-    healthCheckPath: /healthz
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @covenant/x402-gateway build
-    startCommand: pnpm --filter @covenant/x402-gateway start
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @covenant/mcp-bridge build
+    startCommand: pnpm --filter @covenant/mcp-bridge start
     envVars:
       - key: NODE_VERSION
         value: 24
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: covenant-redis
-          property: connectionString
-      - key: COVENANT_BASE_NETWORK
-        value: base
-      - key: COVENANT_BASE_RPC_URL
+      - key: COVENANT_SOLANA_CLUSTER
+        value: devnet
+      - key: COVENANT_SOLANA_RPC_URL
         sync: false
-      - key: COVENANT_OPERATOR_PRIVATE_KEY
+      - key: COVENANT_SOLANA_WS_URL
         sync: false
-      - key: CORS_ORIGINS
-        value: "https://covenantbase.com,https://docs.covenantbase.com,https://analytics.covenantbase.com"
-
-  - type: worker
-    name: covenant-base-indexer
-    env: docker
-    plan: starter
-    dockerfilePath: services/indexer/Dockerfile
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: covenant-postgres
-          property: connectionString
-      - key: BASE_RPC_URL
+      - key: COVENANT_PROTOCOL_PROGRAM_ID
         sync: false
-      - key: BASE_CHAIN_ID
-        value: "8453"
-
-  - type: web
-    name: covenant-portal
-    env: node
-    plan: starter
-    healthCheckPath: /
-    buildCommand: pnpm install --frozen-lockfile && pnpm exec turbo run build --filter=@covenant/portal...
-    startCommand: pnpm --filter @covenant/portal start
-    envVars:
-      - key: NODE_VERSION
-        value: 24
-      - key: NEXT_PUBLIC_BASE_NETWORK
-        value: base
-      - key: NEXT_PUBLIC_BASE_CHAIN_ID
-        value: "8453"
-      - key: NEXT_PUBLIC_BASE_RPC_URL
+      - key: COVNT_MINT
         sync: false
-      - key: SESSION_SECRET
-        generateValue: true

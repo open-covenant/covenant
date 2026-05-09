@@ -1,6 +1,8 @@
 # @covenant/sdk
 
-TypeScript SDK for Covenant Protocol on Base. The root surface is Base-only and contract-driven.
+TypeScript SDK for Covenant Protocol on Solana. The root surface prepares
+Solana-native account ids, instruction descriptors, and wallet-facing payloads
+for the `$COVNT` protocol program.
 
 ## Install
 
@@ -8,50 +10,50 @@ TypeScript SDK for Covenant Protocol on Base. The root surface is Base-only and 
 pnpm add @covenant/sdk
 ```
 
-> Not yet published to npm. Use `workspace:*` within the monorepo.
+Not yet published to npm. Use `workspace:*` within the monorepo.
 
-## Quick start
+## Quick Start
 
 ```typescript
 import {
-  resolveBaseNetwork,
-  prepareRegisterAgentCall,
-  prepareCreateTaskCalls,
-  bytes32FromText,
+  hash32FromText,
+  prepareAnchorReceiptBatchInstruction,
+  prepareRegisterAgentInstruction,
+  resolveSolanaNetwork,
 } from '@covenant/sdk';
 
-const network = resolveBaseNetwork();
-const register = prepareRegisterAgentCall({
-  name: 'Covenant Alpha',
-  metadataUri: 'https://covenantbase.com/agents/alpha.json',
-  capabilityBitmap: 7n,
+const network = resolveSolanaNetwork();
+
+const register = prepareRegisterAgentInstruction({
+  configAccount: '11111111111111111111111111111111',
+  operator: '11111111111111111111111111111111',
+  agentAccount: '11111111111111111111111111111111',
+  agentKey: hash32FromText('covenant.agent.alpha'),
+  metadataHash: hash32FromText('https://opencovenant.org/agents/alpha.json'),
+  capabilityHash: hash32FromText('research,settlement'),
 });
 
-const task = prepareCreateTaskCalls({
-  agentId: bytes32FromText('covenant.alpha'),
-  description: 'Ship the Base launch checklist',
-  amount: '125',
-  deadline: BigInt(Math.floor(Date.now() / 1000) + 86_400),
+const receiptBatch = prepareAnchorReceiptBatchInstruction({
+  configAccount: '11111111111111111111111111111111',
+  authority: '11111111111111111111111111111111',
+  batchAccount: '11111111111111111111111111111111',
+  batchId: hash32FromText('receipt-batch-1'),
+  merkleRoot: hash32FromText('receipt-batch-1'),
+  receiptCount: 12,
 });
 ```
+
+`network`, `register`, and `receiptBatch` are plain descriptors today. Wallet
+adapter serialization belongs in the next SDK layer after the Anchor IDL is
+generated from the Solana program.
 
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| `base/network` | Base network and deployment-manifest helpers |
-| `base/contracts` | typed address maps and ABI lookups |
-| `base/transactions` | transaction-prep helpers for contract writes |
-| `auth/siwe` | SIWE message formatting |
+| `solana/network` | Solana cluster and protocol-program configuration |
+| `solana/accounts` | Solana address and hash helpers |
+| `solana/instructions` | instruction-prep helpers for protocol writes |
 | `auth/session` | Session token management |
-| `discovery/types` | chain-neutral discovery payloads |
+| `discovery/types` | Solana protocol event payloads |
 | `data/mock` | local fixtures for apps and services |
-
-## Generating types
-
-ABIs and contract metadata are exported from Foundry artifacts. To regenerate:
-
-```bash
-pnpm contracts:build
-pnpm --filter @covenant/sdk generate
-```

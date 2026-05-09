@@ -3,23 +3,22 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import type { Address, Hex } from 'viem';
+import { callDaemonTool, daemonTools } from './daemon.js';
 import {
-  BYTES32_REGEX,
-  EVM_ADDRESS_REGEX,
   MOCK_AGENT_DETAILS,
   MOCK_TASKS,
   TASK_STATUS_VALUES,
-  bytes32FromText,
-  defaultCovenantContracts,
-  prepareCreateTaskCalls,
-  prepareRegisterAgentCall,
-  prepareStakeCall,
-  resolveBaseNetwork,
+  hash32FromText,
+  prepareAnchorReceiptBatchInstruction,
+  prepareBuyCreditsInstruction,
+  prepareCreateTaskInstruction,
+  prepareRegisterAgentInstruction,
+  prepareStakeInstruction,
+  resolveSolanaNetwork,
+  isSolanaAddress,
 } from '@covenant/sdk';
 
-const network = resolveBaseNetwork();
-const contracts = defaultCovenantContracts();
+const network = resolveSolanaNetwork();
 
 const server = new Server(
   {
@@ -33,15 +32,8 @@ const server = new Server(
   },
 );
 
-const addressSchema: z.ZodType<Address, z.ZodTypeDef, string> = z
-  .string()
-  .regex(EVM_ADDRESS_REGEX)
-  .transform((value) => value as Address);
-
-const bytes32Schema: z.ZodType<Hex, z.ZodTypeDef, string> = z
-  .string()
-  .regex(BYTES32_REGEX)
-  .transform((value) => value as Hex);
+const addressSchema = z.string().refine(isSolanaAddress, 'expected a Solana address');
+const hash32Schema = z.string().regex(/^[a-f0-9]{64}$/i, 'expected a 32-byte hex string');
 
 const listAgentsSchema = z.object({
   capability: z.string().optional(),
@@ -50,28 +42,58 @@ const listAgentsSchema = z.object({
 
 const listTasksSchema = z.object({
   status: z.enum(TASK_STATUS_VALUES).optional(),
-  agentId: bytes32Schema.optional(),
+  agentId: hash32Schema.optional(),
 });
 
 const registerAgentSchema = z.object({
-  name: z.string().min(3),
-  metadataUri: z.string().url(),
-  capabilityBitmap: z.union([z.string(), z.number(), z.bigint()]).transform((value) => BigInt(value)),
+  configAccount: addressSchema,
+  operator: addressSchema,
+  agentAccount: addressSchema,
+  name: z.string().min(1),
+  metadataHash: hash32Schema.optional(),
+  capabilityHash: hash32Schema.optional(),
 });
 
-const createTaskSchema = z.object({
-  agentId: bytes32Schema,
-  description: z.string().min(3),
-  amount: z.string().min(1),
-  deadline: z
-    .union([z.string(), z.number(), z.bigint()])
-    .optional()
-    .transform((value) => (value === undefined ? undefined : BigInt(value))),
+const buyCreditsSchema = z.object({
+  configAccount: addressSchema,
+  owner: addressSchema,
+  creditAccount: addressSchema,
+  ownerCovntAccount: addressSchema,
+  treasury: addressSchema,
+  amountCovnt: z.string().min(1),
 });
 
 const stakeSchema = z.object({
-  amount: z.string().min(1),
-  lockDurationSeconds: z.union([z.string(), z.number(), z.bigint()]).transform((value) => BigInt(value)),
+  configAccount: addressSchema,
+  owner: addressSchema,
+  agentAccount: addressSchema,
+  positionAccount: addressSchema,
+  ownerCovntAccount: addressSchema,
+  stakeVault: addressSchema,
+  amountCovnt: z.string().min(1),
+  lockUntil: z.string().min(1),
+});
+
+const createTaskSchema = z.object({
+  configAccount: addressSchema,
+  client: addressSchema,
+  agentAccount: addressSchema,
+  taskAccount: addressSchema,
+  clientCovntAccount: addressSchema,
+  escrowVault: addressSchema,
+  provider: addressSchema,
+  description: z.string().min(3),
+  amountCovnt: z.string().min(1),
+  deadline: z.string().min(1),
+});
+
+const receiptBatchSchema = z.object({
+  configAccount: addressSchema,
+  authority: addressSchema,
+  batchAccount: addressSchema,
+  batchId: hash32Schema,
+  merkleRoot: hash32Schema,
+  receiptCount: z.number().int().positive(),
 });
 
 const deriveIdSchema = z.object({
@@ -121,68 +143,121 @@ function describeTool(name: string, description: string, inputSchema: ToolInputS
   };
 }
 
-const tools = [
-  describeTool('get_network', 'Return the active Covenant/Base network metadata.', {
+export const tools = [
+  describeTool('get_network', 'Return the active Covenant Solana network metadata.', {
     type: 'object',
   }),
-  describeTool('get_contracts', 'Return the active Covenant/Base contract address map.', {
-    type: 'object',
-  }),
-  describeTool('list_agents', 'List active Covenant agents on Base.', {
+  describeTool('list_agents', 'List active Covenant agents using Solana-native identifiers.', {
     type: 'object',
     properties: {
       capability: { type: 'string' },
-      operatorAddress: { type: 'string', pattern: EVM_ADDRESS_REGEX.source },
+      operatorAddress: { type: 'string' },
     },
   }),
-  describeTool('list_tasks', 'List Covenant task-market tasks using Base-native identifiers.', {
+  describeTool('list_tasks', 'List Covenant tasks using Solana-native identifiers.', {
     type: 'object',
     properties: {
       status: {
         type: 'string',
         enum: [...TASK_STATUS_VALUES],
       },
-      agentId: { type: 'string', pattern: BYTES32_REGEX.source },
+      agentId: { type: 'string' },
     },
   }),
-  describeTool('prepare_register_agent', 'Prepare a Base transaction bundle to register a Covenant agent.', {
+  describeTool('prepare_register_agent', 'Prepare a Solana instruction descriptor to register an agent.', {
     type: 'object',
     properties: {
+      operator: { type: 'string' },
+      configAccount: { type: 'string' },
+      agentAccount: { type: 'string' },
       name: { type: 'string' },
-      metadataUri: { type: 'string', format: 'uri' },
-      capabilityBitmap: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+      metadataHash: { type: 'string' },
+      capabilityHash: { type: 'string' },
     },
-    required: ['name', 'metadataUri', 'capabilityBitmap'],
+    required: ['configAccount', 'operator', 'agentAccount', 'name'],
   }),
-  describeTool(
-    'prepare_create_task',
-    'Prepare the ERC-20 approval and task-market create call for Base.',
-    {
-      type: 'object',
-      properties: {
-        agentId: { type: 'string', pattern: BYTES32_REGEX.source },
-        description: { type: 'string' },
-        amount: { type: 'string' },
-        deadline: { anyOf: [{ type: 'string' }, { type: 'number' }] },
-      },
-      required: ['agentId', 'description', 'amount'],
-    },
-  ),
-  describeTool('prepare_stake', 'Prepare a Base staking transaction bundle.', {
+  describeTool('prepare_buy_credits', 'Prepare a COVNT credit purchase instruction descriptor.', {
     type: 'object',
     properties: {
-      amount: { type: 'string' },
-      lockDurationSeconds: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+      configAccount: { type: 'string' },
+      owner: { type: 'string' },
+      creditAccount: { type: 'string' },
+      ownerCovntAccount: { type: 'string' },
+      treasury: { type: 'string' },
+      amountCovnt: { type: 'string' },
     },
-    required: ['amount', 'lockDurationSeconds'],
+    required: ['configAccount', 'owner', 'creditAccount', 'ownerCovntAccount', 'treasury', 'amountCovnt'],
   }),
-  describeTool('derive_bytes32_id', 'Derive a bytes32 identifier from human-readable input.', {
+  describeTool('prepare_stake', 'Prepare a COVNT stake instruction descriptor.', {
+    type: 'object',
+    properties: {
+      configAccount: { type: 'string' },
+      owner: { type: 'string' },
+      agentAccount: { type: 'string' },
+      positionAccount: { type: 'string' },
+      ownerCovntAccount: { type: 'string' },
+      stakeVault: { type: 'string' },
+      amountCovnt: { type: 'string' },
+      lockUntil: { type: 'string' },
+    },
+    required: [
+      'owner',
+      'configAccount',
+      'agentAccount',
+      'positionAccount',
+      'ownerCovntAccount',
+      'stakeVault',
+      'amountCovnt',
+      'lockUntil',
+    ],
+  }),
+  describeTool('prepare_create_task', 'Prepare a COVNT task escrow instruction descriptor.', {
+    type: 'object',
+    properties: {
+      configAccount: { type: 'string' },
+      client: { type: 'string' },
+      agentAccount: { type: 'string' },
+      taskAccount: { type: 'string' },
+      clientCovntAccount: { type: 'string' },
+      escrowVault: { type: 'string' },
+      provider: { type: 'string' },
+      description: { type: 'string' },
+      amountCovnt: { type: 'string' },
+      deadline: { type: 'string' },
+    },
+    required: [
+      'client',
+      'configAccount',
+      'agentAccount',
+      'taskAccount',
+      'clientCovntAccount',
+      'escrowVault',
+      'provider',
+      'description',
+      'amountCovnt',
+      'deadline',
+    ],
+  }),
+  describeTool('prepare_anchor_receipt_batch', 'Prepare a receipt Merkle-root anchoring descriptor.', {
+    type: 'object',
+    properties: {
+      configAccount: { type: 'string' },
+      authority: { type: 'string' },
+      batchAccount: { type: 'string' },
+      batchId: { type: 'string' },
+      merkleRoot: { type: 'string' },
+      receiptCount: { type: 'number' },
+    },
+    required: ['configAccount', 'authority', 'batchAccount', 'batchId', 'merkleRoot', 'receiptCount'],
+  }),
+  describeTool('derive_hash32_id', 'Derive a 32-byte hex identifier from human-readable input.', {
     type: 'object',
     properties: {
       value: { type: 'string' },
     },
     required: ['value'],
   }),
+  ...daemonTools,
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -196,27 +271,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (request.params.name) {
       case 'get_network':
         return asText({
-          chain_id: network.id,
-          network: network.key,
+          chain: 'solana',
+          cluster: network.cluster,
           rpc_url: network.rpcUrl,
+          ws_url: network.wsUrl,
+          program_id: network.programId,
+          covnt_mint: network.covntMint,
           explorer_url: network.explorerUrl,
-        });
-      case 'get_contracts':
-        return asText({
-          chain_id: network.id,
-          contract_addresses: contracts,
         });
       case 'list_agents': {
         const { capability, operatorAddress } = listAgentsSchema.parse(args);
         return asText({
           items: MOCK_AGENT_DETAILS.filter((agent) => {
             if (capability && !agent.tags.includes(capability)) return false;
-            if (
-              operatorAddress &&
-              agent.operatorAddress.toLowerCase() !== operatorAddress.toLowerCase()
-            ) {
-              return false;
-            }
+            if (operatorAddress && agent.operatorAddress !== operatorAddress) return false;
             return true;
           }),
         });
@@ -226,39 +294,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return asText({
           items: MOCK_TASKS.filter((task) => {
             if (status && task.status !== status) return false;
-            if (agentId && task.agentId.toLowerCase() !== agentId.toLowerCase()) return false;
+            if (agentId && task.agentId !== agentId) return false;
             return true;
           }),
         });
       }
       case 'prepare_register_agent': {
-        const { name, metadataUri, capabilityBitmap } = registerAgentSchema.parse(args);
-        return asText(prepareRegisterAgentCall({ name, metadataUri, capabilityBitmap }));
-      }
-      case 'prepare_create_task': {
-        const { agentId, description, amount, deadline } = createTaskSchema.parse(args);
+        const { configAccount, operator, agentAccount, name, metadataHash, capabilityHash } =
+          registerAgentSchema.parse(args);
         return asText(
-          prepareCreateTaskCalls({
-            agentId,
-            description,
-            amount,
-            deadline: deadline ?? BigInt(Math.floor(Date.now() / 1000) + 3600),
+          prepareRegisterAgentInstruction({
+            configAccount,
+            operator,
+            agentAccount,
+            agentKey: hash32FromText(name),
+            metadataHash: metadataHash ?? hash32FromText(`${name}:metadata`),
+            capabilityHash: capabilityHash ?? hash32FromText(`${name}:capabilities`),
           }),
         );
       }
-      case 'prepare_stake': {
-        const { amount, lockDurationSeconds } = stakeSchema.parse(args);
-        return asText(prepareStakeCall(amount, lockDurationSeconds));
+      case 'prepare_buy_credits':
+        return asText(prepareBuyCreditsInstruction(buyCreditsSchema.parse(args)));
+      case 'prepare_stake':
+        return asText(prepareStakeInstruction(stakeSchema.parse(args)));
+      case 'prepare_create_task': {
+        const parsed = createTaskSchema.parse(args);
+        return asText(
+          prepareCreateTaskInstruction({
+            ...parsed,
+            taskId: hash32FromText(parsed.description),
+            taskHash: hash32FromText(parsed.description),
+            criteriaHash: hash32FromText(`criteria:${parsed.description}`),
+          }),
+        );
       }
-      case 'derive_bytes32_id': {
+      case 'prepare_anchor_receipt_batch':
+        return asText(prepareAnchorReceiptBatchInstruction(receiptBatchSchema.parse(args)));
+      case 'derive_hash32_id': {
         const { value } = deriveIdSchema.parse(args);
         return asText({
           value,
-          bytes32: bytes32FromText(value),
+          hash32: hash32FromText(value),
         });
       }
       default:
-        return asError(`Unknown tool: ${request.params.name}`);
+        return (await callDaemonTool(request.params.name, args)) ?? asError(`Unknown tool: ${request.params.name}`);
     }
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -99,10 +99,29 @@ async fn main() -> Result<()> {
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
-        match covenant_mcp::transport::StdioMcpClient::spawn(&srv.command, &srv.args).await {
+        if !srv.enabled {
+            info!(server = %srv.name, "mcp server disabled");
+            continue;
+        }
+        match covenant_mcp::transport::StdioMcpClient::spawn_with_env(
+            &srv.command,
+            &srv.args,
+            &srv.env,
+        )
+        .await
+        {
             Ok(client) => {
                 let client_dyn: Arc<dyn covenant_mcp::transport::McpClient> = client;
-                match covenant_mcp::external::bootstrap_remote_tools(client_dyn).await {
+                let options = covenant_mcp::external::RemoteToolOptions {
+                    tool_prefix: srv.tool_prefix.clone(),
+                    include: srv.include.clone(),
+                    exclude: srv.exclude.clone(),
+                };
+                match covenant_mcp::external::bootstrap_remote_tools_with_options(
+                    client_dyn, options,
+                )
+                .await
+                {
                     Ok(remote) => {
                         info!(server = %srv.name, count = remote.len(), "mcp server ready");
                         tools_vec.extend(remote);

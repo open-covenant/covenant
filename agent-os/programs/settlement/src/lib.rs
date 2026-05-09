@@ -1,26 +1,14 @@
-//! Covenant on-chain settlement program.
+//! Covenant Solana protocol program.
 //!
-//! Anchor program implementing the credit-mint, consumption, and
-//! buyback shape of Covenant's settlement model. Three instructions:
-//!
-//!   - `initialize(args)`           — one-shot setup of the [`Config`]
-//!     PDA under seed `b"settlement-config"`, recording authority,
-//!     mints, and rate.
-//!   - `mint_credits(amount_covnt)` — exchange burned tokens for credits
-//!     at the configured rate.
-//!   - `consume_credits(amount)`    — destroy credits at the point of
-//!     consumption (memory write, tool call, etc.).
-//!
-//! The current implementation emits structured events; the SPL token
-//! CPIs and oracle integration are gated on a downstream change.
+//! `$COVNT` is an external SPL mint. The program never mints it; protocol
+//! utility comes from staking, escrowing, burning, and metering it into
+//! non-transferable credits.
 
-// Anchor 0.31.1's `#[program]` macro expands to calls that hit a few
-// deprecated `AccountInfo` methods. Suppressing here keeps clippy `-D
-// warnings` clean; revisit when bumping anchor-lang.
 #![allow(deprecated)]
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("CovntSettLement1111111111111111111111111111");
 
@@ -29,47 +17,290 @@ pub mod settlement {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
-        let cfg = &mut ctx.accounts.config;
-        cfg.authority = ctx.accounts.authority.key();
-        cfg.covnt_mint = args.covnt_mint;
-        cfg.usdc_mint = args.usdc_mint;
-        cfg.credits_per_covnt = args.credits_per_covnt;
-        cfg.bump = ctx.bumps.config;
-        emit!(SettlementInitialized {
-            authority: cfg.authority,
-            covnt_mint: cfg.covnt_mint,
-            usdc_mint: cfg.usdc_mint,
-            credits_per_covnt: cfg.credits_per_covnt,
+        require!(args.credits_per_covnt > 0, CovenantError::ZeroAmount);
+
+        let config = &mut ctx.accounts.config;
+        config.authority = ctx.accounts.authority.key();
+        config.slash_authority = args.slash_authority;
+        config.covnt_mint = ctx.accounts.covnt_mint.key();
+        config.treasury = ctx.accounts.treasury.key();
+        config.credits_per_covnt = args.credits_per_covnt;
+        config.paused = false;
+        config.bump = ctx.bumps.config;
+
+        emit!(ProtocolInitialized {
+            authority: config.authority,
+            slash_authority: config.slash_authority,
+            covnt_mint: config.covnt_mint,
+            treasury: config.treasury,
+            credits_per_covnt: config.credits_per_covnt,
         });
         Ok(())
     }
 
-    pub fn mint_credits(ctx: Context<MintCredits>, amount_covnt: u64) -> Result<()> {
-        require!(amount_covnt > 0, SettlementError::ZeroAmount);
-        let cfg = &ctx.accounts.config;
+    pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
+        ctx.accounts.config.paused = paused;
+        emit!(ProtocolPauseUpdated { paused });
+        Ok(())
+    }
+
+    pub fn register_agent(ctx: Context<RegisterAgent>, args: RegisterAgentArgs) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+
+        let agent = &mut ctx.accounts.agent;
+        agent.agent_key = args.agent_key;
+        agent.operator = ctx.accounts.operator.key();
+        agent.metadata_hash = args.metadata_hash;
+        agent.capability_hash = args.capability_hash;
+        agent.stake = 0;
+        agent.reputation = 0;
+        agent.active = true;
+        agent.bump = ctx.bumps.agent;
+
+        emit!(AgentRegistered {
+            agent_key: agent.agent_key,
+            operator: agent.operator,
+            metadata_hash: agent.metadata_hash,
+            capability_hash: agent.capability_hash,
+        });
+        Ok(())
+    }
+
+    pub fn set_agent_active(ctx: Context<SetAgentActive>, active: bool) -> Result<()> {
+        ctx.accounts.agent.active = active;
+        emit!(AgentStatusUpdated {
+            agent_key: ctx.accounts.agent.agent_key,
+            active,
+        });
+        Ok(())
+    }
+
+    pub fn open_credit_account(ctx: Context<OpenCreditAccount>) -> Result<()> {
+        let credits = &mut ctx.accounts.credits;
+        credits.owner = ctx.accounts.owner.key();
+        credits.balance = 0;
+        credits.bump = ctx.bumps.credits;
+
+        emit!(CreditAccountOpened {
+            owner: credits.owner,
+            credit_account: credits.key(),
+        });
+        Ok(())
+    }
+
+    pub fn buy_credits(ctx: Context<BuyCredits>, amount_covnt: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount_covnt > 0, CovenantError::ZeroAmount);
+
+        token::transfer(ctx.accounts.buy_transfer_ctx(), amount_covnt)?;
+
         let credits = amount_covnt
-            .checked_mul(cfg.credits_per_covnt)
-            .ok_or(SettlementError::Overflow)?;
-        // TODO(phase-5+): CPI into spl_token::burn on payer's covnt account
-        //   and spl_token::mint_to on the credits mint controlled by this
-        //   program's authority PDA. Pyth oracle adjusts the rate.
-        emit!(CreditsRequested {
-            payer: ctx.accounts.payer.key(),
+            .checked_mul(ctx.accounts.config.credits_per_covnt)
+            .ok_or(CovenantError::Overflow)?;
+        ctx.accounts.credits.balance = ctx
+            .accounts
+            .credits
+            .balance
+            .checked_add(credits)
+            .ok_or(CovenantError::Overflow)?;
+
+        emit!(CreditsPurchased {
+            owner: ctx.accounts.owner.key(),
             amount_covnt,
             credits,
         });
         Ok(())
     }
 
-    pub fn consume_credits(ctx: Context<ConsumeCredits>, amount: u64) -> Result<()> {
-        require!(amount > 0, SettlementError::ZeroAmount);
-        // TODO(phase-5+): CPI into spl_token::burn on the payer's credits
-        //   account; track consumption stats per-payer in a stat PDA so
-        //   buyback batches read from on-chain truth rather than off-chain
-        //   logs.
+    pub fn consume_credits(
+        ctx: Context<ConsumeCredits>,
+        amount: u64,
+        receipt_hash: [u8; 32],
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(
+            ctx.accounts.credits.balance >= amount,
+            CovenantError::InsufficientCredits
+        );
+
+        ctx.accounts.credits.balance -= amount;
+
         emit!(CreditsConsumed {
-            payer: ctx.accounts.payer.key(),
+            owner: ctx.accounts.owner.key(),
             amount,
+            receipt_hash,
+        });
+        Ok(())
+    }
+
+    pub fn stake(ctx: Context<Stake>, amount: u64, lock_until: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+
+        token::transfer(ctx.accounts.stake_transfer_ctx(), amount)?;
+
+        let position = &mut ctx.accounts.position;
+        position.agent_key = ctx.accounts.agent.agent_key;
+        position.owner = ctx.accounts.owner.key();
+        position.amount = amount;
+        position.lock_until = lock_until;
+        position.active = true;
+        position.bump = ctx.bumps.position;
+
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_add(amount)
+            .ok_or(CovenantError::Overflow)?;
+
+        emit!(StakeOpened {
+            agent_key: position.agent_key,
+            owner: position.owner,
+            amount,
+            lock_until,
+            position: position.key(),
+        });
+        Ok(())
+    }
+
+    pub fn slash_stake(ctx: Context<SlashStake>, amount: u64, reason_hash: [u8; 32]) -> Result<()> {
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        require!(
+            ctx.accounts.position.amount >= amount,
+            CovenantError::InsufficientStake
+        );
+
+        let agent_key = ctx.accounts.position.agent_key;
+        let owner = ctx.accounts.position.owner;
+        let signer_seeds: &[&[u8]] = &[
+            b"stake",
+            agent_key.as_ref(),
+            owner.as_ref(),
+            &[ctx.accounts.position.bump],
+        ];
+        token::transfer(
+            ctx.accounts
+                .slash_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            amount,
+        )?;
+
+        ctx.accounts.position.amount -= amount;
+        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+        if ctx.accounts.position.amount == 0 {
+            ctx.accounts.position.active = false;
+        }
+
+        emit!(StakeSlashed {
+            agent_key,
+            owner,
+            amount,
+            reason_hash,
+        });
+        Ok(())
+    }
+
+    pub fn create_task(ctx: Context<CreateTask>, args: CreateTaskArgs) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+
+        token::transfer(ctx.accounts.task_fund_ctx(), args.amount_covnt)?;
+
+        let task = &mut ctx.accounts.task;
+        task.task_id = args.task_id;
+        task.client = ctx.accounts.client.key();
+        task.agent_key = ctx.accounts.agent.agent_key;
+        task.provider = args.provider;
+        task.amount_covnt = args.amount_covnt;
+        task.task_hash = args.task_hash;
+        task.criteria_hash = args.criteria_hash;
+        task.deadline = args.deadline;
+        task.status = TASK_FUNDED;
+        task.bump = ctx.bumps.task;
+
+        emit!(TaskCreated {
+            task_id: task.task_id,
+            client: task.client,
+            agent_key: task.agent_key,
+            provider: task.provider,
+            amount_covnt: task.amount_covnt,
+            task_hash: task.task_hash,
+            criteria_hash: task.criteria_hash,
+            deadline: task.deadline,
+        });
+        Ok(())
+    }
+
+    pub fn release_task(
+        ctx: Context<ReleaseTask>,
+        result_hash: [u8; 32],
+        receipt_hash: [u8; 32],
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.task.status == TASK_FUNDED,
+            CovenantError::WrongTaskStatus
+        );
+
+        let task_id = ctx.accounts.task.task_id;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        token::transfer(
+            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
+            ctx.accounts.task.amount_covnt,
+        )?;
+
+        ctx.accounts.task.status = TASK_RELEASED;
+        ctx.accounts.task.result_hash = result_hash;
+
+        emit!(TaskReleased {
+            task_id,
+            provider: ctx.accounts.task.provider,
+            amount_covnt: ctx.accounts.task.amount_covnt,
+            result_hash,
+            receipt_hash,
+        });
+        Ok(())
+    }
+
+    pub fn burn_covnt(ctx: Context<BurnCovnt>, amount: u64, reason_hash: [u8; 32]) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+
+        token::burn(ctx.accounts.burn_ctx(), amount)?;
+
+        emit!(CovntBurned {
+            owner: ctx.accounts.owner.key(),
+            amount,
+            reason_hash,
+        });
+        Ok(())
+    }
+
+    pub fn anchor_receipt_batch(
+        ctx: Context<AnchorReceiptBatch>,
+        args: AnchorReceiptBatchArgs,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(args.receipt_count > 0, CovenantError::ZeroAmount);
+
+        let batch = &mut ctx.accounts.batch;
+        batch.batch_id = args.batch_id;
+        batch.authority = ctx.accounts.authority.key();
+        batch.merkle_root = args.merkle_root;
+        batch.receipt_count = args.receipt_count;
+        batch.created_at = Clock::get()?.unix_timestamp;
+        batch.bump = ctx.bumps.batch;
+
+        emit!(ReceiptBatchAnchored {
+            batch_id: batch.batch_id,
+            authority: batch.authority,
+            merkle_root: batch.merkle_root,
+            receipt_count: batch.receipt_count,
+            created_at: batch.created_at,
         });
         Ok(())
     }
@@ -81,79 +312,588 @@ pub struct Initialize<'info> {
         init,
         payer = authority,
         space = 8 + Config::INIT_SPACE,
-        seeds = [b"settlement-config"],
+        seeds = [b"config"],
         bump,
     )]
     pub config: Account<'info, Config>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub covnt_mint: Account<'info, Mint>,
+    #[account(
+        constraint = treasury.mint == covnt_mint.key() @ CovenantError::WrongMint,
+    )]
+    pub treasury: Account<'info, TokenAccount>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct MintCredits<'info> {
+pub struct SetPause<'info> {
     #[account(
-        seeds = [b"settlement-config"],
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(args: RegisterAgentArgs)]
+pub struct RegisterAgent<'info> {
+    #[account(
+        seeds = [b"config"],
         bump = config.bump,
     )]
     pub config: Account<'info, Config>,
-    pub payer: Signer<'info>,
+    #[account(
+        init,
+        payer = operator,
+        space = 8 + Agent::INIT_SPACE,
+        seeds = [b"agent", args.agent_key.as_ref()],
+        bump,
+    )]
+    pub agent: Account<'info, Agent>,
+    #[account(mut)]
+    pub operator: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetAgentActive<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub agent: Account<'info, Agent>,
+}
+
+#[derive(Accounts)]
+pub struct OpenCreditAccount<'info> {
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + CreditAccount::INIT_SPACE,
+        seeds = [b"credits", owner.key().as_ref()],
+        bump,
+    )]
+    pub credits: Account<'info, CreditAccount>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct BuyCredits<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = treasury,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut, has_one = owner)]
+    pub credits: Account<'info, CreditAccount>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
+        constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub owner_covnt: Account<'info, TokenAccount>,
+    #[account(mut, constraint = treasury.mint == config.covnt_mint @ CovenantError::WrongMint)]
+    pub treasury: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> BuyCredits<'info> {
+    fn buy_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.owner_covnt.to_account_info(),
+                to: self.treasury.to_account_info(),
+                authority: self.owner.to_account_info(),
+            },
+        )
+    }
 }
 
 #[derive(Accounts)]
 pub struct ConsumeCredits<'info> {
     #[account(
-        seeds = [b"settlement-config"],
+        seeds = [b"config"],
         bump = config.bump,
     )]
     pub config: Account<'info, Config>,
-    pub payer: Signer<'info>,
+    #[account(mut, has_one = owner)]
+    pub credits: Account<'info, CreditAccount>,
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Stake<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut)]
+    pub agent: Account<'info, Agent>,
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + StakePosition::INIT_SPACE,
+        seeds = [b"stake", agent.agent_key.as_ref(), owner.key().as_ref()],
+        bump,
+    )]
+    pub position: Account<'info, StakePosition>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
+        constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub owner_covnt: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> Stake<'info> {
+    fn stake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.owner_covnt.to_account_info(),
+                to: self.stake_vault.to_account_info(),
+                authority: self.owner.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct SlashStake<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = slash_authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub slash_authority: Signer<'info>,
+    #[account(mut, constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch)]
+    pub agent: Account<'info, Agent>,
+    #[account(mut)]
+    pub position: Account<'info, StakePosition>,
+    #[account(
+        mut,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: Account<'info, TokenAccount>,
+    #[account(mut, constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint)]
+    pub slash_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> SlashStake<'info> {
+    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.stake_vault.to_account_info(),
+                to: self.slash_vault.to_account_info(),
+                authority: self.position.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(args: CreateTaskArgs)]
+pub struct CreateTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    pub agent: Account<'info, Agent>,
+    #[account(
+        init,
+        payer = client,
+        space = 8 + Task::INIT_SPACE,
+        seeds = [b"task", args.task_id.as_ref()],
+        bump,
+    )]
+    pub task: Account<'info, Task>,
+    #[account(mut)]
+    pub client: Signer<'info>,
+    #[account(
+        mut,
+        constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
+        constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub client_covnt: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> CreateTask<'info> {
+    fn task_fund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.client_covnt.to_account_info(),
+                to: self.escrow_vault.to_account_info(),
+                authority: self.client.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct ReleaseTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        has_one = client @ CovenantError::Unauthorized,
+    )]
+    pub task: Account<'info, Task>,
+    pub client: Signer<'info>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
+        constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_covnt: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> ReleaseTask<'info> {
+    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.escrow_vault.to_account_info(),
+                to: self.provider_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct BurnCovnt<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(mut, address = config.covnt_mint)]
+    pub covnt_mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
+        constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub owner_covnt: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> BurnCovnt<'info> {
+    fn burn_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Burn<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Burn {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.owner_covnt.to_account_info(),
+                authority: self.owner.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(args: AnchorReceiptBatchArgs)]
+pub struct AnchorReceiptBatch<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + ReceiptBatch::INIT_SPACE,
+        seeds = [b"receipt_batch", args.batch_id.as_ref()],
+        bump,
+    )]
+    pub batch: Account<'info, ReceiptBatch>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
-    pub covnt_mint: Pubkey,
-    pub usdc_mint: Pubkey,
-    /// Initial fixed conversion rate. Phase 5+ replaces this with a Pyth-
-    /// driven oracle read so the rate floats with covnt's market price.
+    pub slash_authority: Pubkey,
     pub credits_per_covnt: u64,
 }
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct RegisterAgentArgs {
+    pub agent_key: [u8; 32],
+    pub metadata_hash: [u8; 32],
+    pub capability_hash: [u8; 32],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct CreateTaskArgs {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub task_hash: [u8; 32],
+    pub criteria_hash: [u8; 32],
+    pub deadline: i64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct AnchorReceiptBatchArgs {
+    pub batch_id: [u8; 32],
+    pub merkle_root: [u8; 32],
+    pub receipt_count: u32,
+}
+
+pub const TASK_FUNDED: u8 = 1;
+pub const TASK_RELEASED: u8 = 2;
 
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
     pub authority: Pubkey,
+    pub slash_authority: Pubkey,
     pub covnt_mint: Pubkey,
-    pub usdc_mint: Pubkey,
+    pub treasury: Pubkey,
     pub credits_per_covnt: u64,
+    pub paused: bool,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Agent {
+    pub agent_key: [u8; 32],
+    pub operator: Pubkey,
+    pub metadata_hash: [u8; 32],
+    pub capability_hash: [u8; 32],
+    pub stake: u64,
+    pub reputation: u64,
+    pub active: bool,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct CreditAccount {
+    pub owner: Pubkey,
+    pub balance: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct StakePosition {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub lock_until: u64,
+    pub active: bool,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Task {
+    pub task_id: [u8; 32],
+    pub client: Pubkey,
+    pub agent_key: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub task_hash: [u8; 32],
+    pub criteria_hash: [u8; 32],
+    pub result_hash: [u8; 32],
+    pub deadline: i64,
+    pub status: u8,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ReceiptBatch {
+    pub batch_id: [u8; 32],
+    pub authority: Pubkey,
+    pub merkle_root: [u8; 32],
+    pub receipt_count: u32,
+    pub created_at: i64,
     pub bump: u8,
 }
 
 #[event]
-pub struct SettlementInitialized {
+pub struct ProtocolInitialized {
     pub authority: Pubkey,
+    pub slash_authority: Pubkey,
     pub covnt_mint: Pubkey,
-    pub usdc_mint: Pubkey,
+    pub treasury: Pubkey,
     pub credits_per_covnt: u64,
 }
 
 #[event]
-pub struct CreditsRequested {
-    pub payer: Pubkey,
+pub struct ProtocolPauseUpdated {
+    pub paused: bool,
+}
+
+#[event]
+pub struct AgentRegistered {
+    pub agent_key: [u8; 32],
+    pub operator: Pubkey,
+    pub metadata_hash: [u8; 32],
+    pub capability_hash: [u8; 32],
+}
+
+#[event]
+pub struct AgentStatusUpdated {
+    pub agent_key: [u8; 32],
+    pub active: bool,
+}
+
+#[event]
+pub struct CreditAccountOpened {
+    pub owner: Pubkey,
+    pub credit_account: Pubkey,
+}
+
+#[event]
+pub struct CreditsPurchased {
+    pub owner: Pubkey,
     pub amount_covnt: u64,
     pub credits: u64,
 }
 
 #[event]
 pub struct CreditsConsumed {
-    pub payer: Pubkey,
+    pub owner: Pubkey,
     pub amount: u64,
+    pub receipt_hash: [u8; 32],
+}
+
+#[event]
+pub struct StakeOpened {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub lock_until: u64,
+    pub position: Pubkey,
+}
+
+#[event]
+pub struct StakeSlashed {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub reason_hash: [u8; 32],
+}
+
+#[event]
+pub struct TaskCreated {
+    pub task_id: [u8; 32],
+    pub client: Pubkey,
+    pub agent_key: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub task_hash: [u8; 32],
+    pub criteria_hash: [u8; 32],
+    pub deadline: i64,
+}
+
+#[event]
+pub struct TaskReleased {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub result_hash: [u8; 32],
+    pub receipt_hash: [u8; 32],
+}
+
+#[event]
+pub struct CovntBurned {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub reason_hash: [u8; 32],
+}
+
+#[event]
+pub struct ReceiptBatchAnchored {
+    pub batch_id: [u8; 32],
+    pub authority: Pubkey,
+    pub merkle_root: [u8; 32],
+    pub receipt_count: u32,
+    pub created_at: i64,
 }
 
 #[error_code]
-pub enum SettlementError {
+pub enum CovenantError {
     #[msg("amount must be greater than zero")]
     ZeroAmount,
     #[msg("arithmetic overflow")]
     Overflow,
+    #[msg("protocol is paused")]
+    ProtocolPaused,
+    #[msg("unauthorized")]
+    Unauthorized,
+    #[msg("wrong COVNT mint")]
+    WrongMint,
+    #[msg("agent is inactive")]
+    AgentInactive,
+    #[msg("agent mismatch")]
+    AgentMismatch,
+    #[msg("insufficient credits")]
+    InsufficientCredits,
+    #[msg("insufficient stake")]
+    InsufficientStake,
+    #[msg("stake position is inactive")]
+    StakeInactive,
+    #[msg("wrong task status")]
+    WrongTaskStatus,
 }

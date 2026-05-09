@@ -1,17 +1,10 @@
 packages:
-  - contracts
-  - apps/portal
-  - apps/docs
-  - apps/analytics
   - packages/config
   - packages/sdk
   - packages/sdk-ui
   - packages/ui
-  - services/discovery
   - services/proof-gen
-  - services/iacp
   - services/mcp-bridge
-  - services/x402-gateway
+  - services/hermes-mcp-bridge
   - services/compute-broker
   - services/telegram-bot
-  - services/xrpl-bridge

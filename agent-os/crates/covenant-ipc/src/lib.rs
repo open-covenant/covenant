@@ -28,6 +28,29 @@ pub struct VerifyDrift {
     pub message: String,
     pub repair: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChainStatus {
+    pub chain: String,
+    pub cluster: String,
+    pub rpc_url: Option<String>,
+    pub ws_url: Option<String>,
+    pub program_id: Option<String>,
+    pub covnt_mint: Option<String>,
+    pub ready: bool,
+    pub missing: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReceiptBatchSummary {
+    pub batch_id: String,
+    pub merkle_root: String,
+    pub receipt_count: u32,
+    #[serde(default)]
+    pub tx_sig: Option<String>,
+    #[serde(default)]
+    pub slot: Option<u64>,
+}
 // `Receipts` mirrors `Memories`: a list of `SettlementReceipt`. Kept as a
 // distinct response variant so the CLI can format them differently.
 use serde::{Deserialize, Serialize};
@@ -59,6 +82,15 @@ pub enum Request {
         limit: usize,
     },
     RecentReceipts {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
+    ChainStatus,
+    FlushReceipts {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
+    ReceiptBatches {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
@@ -275,6 +307,16 @@ pub enum Response {
     },
     Receipts {
         receipts: Vec<SettlementReceipt>,
+    },
+    ChainStatus {
+        status: ChainStatus,
+    },
+    ReceiptBatchFlushed {
+        batch: ReceiptBatchSummary,
+        receipts_updated: u64,
+    },
+    ReceiptBatches {
+        batches: Vec<ReceiptBatchSummary>,
     },
     VerifyReport {
         window: usize,

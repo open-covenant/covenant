@@ -18,8 +18,8 @@ include "components/merkle_verifier.circom";
 template DomainSeparator() {
     signal output task_tag;
     signal output result_tag;
-    task_tag <== 0x5441534b;      // "TASK"
-    result_tag <== 0x52534c54;    // "RSLT"
+    task_tag <== 1413567307;      // "TASK"
+    result_tag <== 1381190740;    // "RSLT"
 }
 
 // Poseidon in circomlib takes up to 16 inputs per call. For wider preimages we sponge in

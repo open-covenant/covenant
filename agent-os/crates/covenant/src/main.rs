@@ -11,6 +11,9 @@
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N]
+//!   covenant chain status
+//!   covenant chain flush-receipts [--limit N]
+//!   covenant chain receipt-batches [--limit N]
 //!   covenant verify [--window N]
 //!   covenant ignore check <text>
 //!   covenant tools list
@@ -77,6 +80,11 @@ fn print_usage() {
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D)  delete records older than ms epoch / D ms ago"
     );
     eprintln!("  covenant receipts recent [-n N]         list recent settlement receipts");
+    eprintln!("  covenant chain status                   show Solana protocol configuration");
+    eprintln!(
+        "  covenant chain flush-receipts [-n N]    batch local receipts into a Solana receipt root"
+    );
+    eprintln!("  covenant chain receipt-batches [-n N]   list local receipt batches");
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
     eprintln!("  covenant tools list                     list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
@@ -140,6 +148,23 @@ fn parse_tier(s: &str) -> Result<MemoryTier> {
         "longterm" | "long-term" | "long_term" => Ok(MemoryTier::LongTerm),
         other => bail!("unknown tier '{other}' (expected working|episodic|longterm)"),
     }
+}
+
+fn parse_limit_args(args: &[String]) -> Result<usize> {
+    let mut limit = 10;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-n" | "--limit" => {
+                i += 1;
+                let value = args.get(i).context("--limit needs a value")?;
+                limit = value.parse().context("--limit must be an integer")?;
+            }
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    Ok(limit)
 }
 
 #[tokio::main]
@@ -518,7 +543,7 @@ async fn main() -> Result<()> {
                             covenant_types::ResourceKind::Message => "message",
                             covenant_types::ResourceKind::Registration => "registration",
                         };
-                        let onchain = match &r.onchain_sig {
+                        let onchain = match r.tx_sig.as_ref().or(r.onchain_sig.as_ref()) {
                             Some(s) => s.as_str(),
                             None => "(local-only)",
                         };
@@ -530,6 +555,96 @@ async fn main() -> Result<()> {
                 }
                 Response::Error { message } => bail!("daemon error: {message}"),
                 other => bail!("unexpected response: {other:?}"),
+            }
+        }
+        "chain" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "status" => {
+                    write_frame(&mut stream, &Request::ChainStatus).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::ChainStatus { status } => {
+                            println!("chain: {}", status.chain);
+                            println!("cluster: {}", status.cluster);
+                            println!(
+                                "rpc_url: {}",
+                                status.rpc_url.as_deref().unwrap_or("(unset)")
+                            );
+                            println!("ws_url: {}", status.ws_url.as_deref().unwrap_or("(unset)"));
+                            println!(
+                                "program_id: {}",
+                                status.program_id.as_deref().unwrap_or("(unset)")
+                            );
+                            println!(
+                                "covnt_mint: {}",
+                                status.covnt_mint.as_deref().unwrap_or("(unset)")
+                            );
+                            if status.ready {
+                                println!("ready: true");
+                            } else {
+                                println!("ready: false ({})", status.missing.join(", "));
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "flush-receipts" => {
+                    let limit = parse_limit_args(&args[2..])?;
+                    write_frame(&mut stream, &Request::FlushReceipts { limit }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::ReceiptBatchFlushed {
+                            batch,
+                            receipts_updated,
+                        } => {
+                            println!("batch_id: {}", batch.batch_id);
+                            println!("merkle_root: {}", batch.merkle_root);
+                            println!("receipt_count: {}", batch.receipt_count);
+                            println!("receipts_updated: {receipts_updated}");
+                            println!("tx_sig: {}", batch.tx_sig.as_deref().unwrap_or("(pending)"));
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "receipt-batches" => {
+                    let limit = parse_limit_args(&args[2..])?;
+                    write_frame(&mut stream, &Request::ReceiptBatches { limit }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::ReceiptBatches { batches } => {
+                            if batches.is_empty() {
+                                println!("(no receipt batches)");
+                            }
+                            for batch in batches {
+                                let tx_sig = batch.tx_sig.as_deref().unwrap_or("(pending)");
+                                let slot = batch
+                                    .slot
+                                    .map(|slot| slot.to_string())
+                                    .unwrap_or_else(|| "(pending)".to_string());
+                                println!(
+                                    "{} {} receipts root={} tx={} slot={}",
+                                    batch.batch_id,
+                                    batch.receipt_count,
+                                    batch.merkle_root,
+                                    tx_sig,
+                                    slot
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "register-agent" | "stake" | "buy-credits" => {
+                    bail!(
+                        "chain {} is prepared by the Solana SDK; daemon signing is not wired yet",
+                        args[1]
+                    );
+                }
+                other => bail!("unknown chain subcommand '{other}'"),
             }
         }
         "verify" => {

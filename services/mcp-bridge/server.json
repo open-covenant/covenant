@@ -1,10 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.covenant-base/covenant",
+  "name": "org.opencovenant/covenant",
   "title": "Covenant MCP Bridge",
-  "description": "Discover Covenant tasks, read reputation, bid on work, submit results, and claim task payouts from MCP-compatible clients.",
+  "description": "Discover Covenant agents, prepare Solana-native protocol instruction descriptors, and call a local covenantd daemon from MCP-compatible clients.",
   "repository": {
-    "url": "https://github.com/covenant-base/covenant",
+    "url": "https://github.com/open-covenant/covenant",
     "source": "github"
   },
   "version": "0.2.0",
@@ -18,39 +18,53 @@
       },
       "environmentVariables": [
         {
-          "name": "COVENANT_BASE_NETWORK",
-          "description": "Base network label to connect to",
+          "name": "COVENANT_SOLANA_CLUSTER",
+          "description": "Solana cluster label",
           "format": "string",
           "isRequired": false,
           "isSecret": false
         },
         {
-          "name": "COVENANT_BASE_RPC_URL",
-          "description": "Custom RPC endpoint URL",
+          "name": "COVENANT_SOLANA_RPC_URL",
+          "description": "Solana RPC endpoint URL",
           "format": "string",
           "isRequired": false,
           "isSecret": false
         },
         {
-          "name": "COVENANT_DISCOVERY_URL",
-          "description": "Discovery service base URL for capability-aware task search",
+          "name": "COVENANT_SOLANA_WS_URL",
+          "description": "Solana websocket endpoint URL",
           "format": "string",
           "isRequired": false,
           "isSecret": false
         },
         {
-          "name": "COVENANT_OPERATOR_PRIVATE_KEY",
-          "description": "Hex-encoded EVM private key for optional signing",
+          "name": "COVENANT_PROTOCOL_PROGRAM_ID",
+          "description": "Covenant protocol program id",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "COVNT_MINT",
+          "description": "External COVNT SPL mint address",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "COVENANT_HTTP_URL",
+          "description": "Covenant daemon HTTP gateway URL",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "COVENANT_AUTH_TOKEN",
+          "description": "Bearer token for Covenant daemon-backed tools",
           "format": "string",
           "isRequired": false,
           "isSecret": true
-        },
-        {
-          "name": "COVENANT_AUTO_SIGN",
-          "description": "Whether the bridge should auto-sign Base transactions",
-          "format": "string",
-          "isRequired": false,
-          "isSecret": false
         }
       ]
     }

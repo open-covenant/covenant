@@ -1,0 +1,39 @@
+{
+  "name": "@covenant/hermes-mcp-bridge",
+  "version": "0.1.0",
+  "mcpName": "org.opencovenant/hermes-agent",
+  "description": "MCP server exposing Hermes agent runs through the Hermes API server",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "covenant-hermes-mcp": "dist/server.js"
+  },
+  "keywords": ["mcp", "hermes", "agent", "covenant"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-covenant/covenant"
+  },
+  "homepage": "https://opencovenant.org",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": ["dist", "README.md", "server.json"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "echo skip",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

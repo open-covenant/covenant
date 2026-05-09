@@ -133,7 +133,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
 | Landing docs | `pnpm --dir landing build` | Public docs and website changes. |
-| Contracts | `pnpm --filter ./contracts test` or `anchor build` where relevant | EVM and Solana surfaces. |
+| Solana program | `anchor build` from `agent-os/` | Protocol state, staking, credits, escrow, and receipt anchors. |
 
 Live tests are not a substitute for unit tests. They are the signal that a path survives real process and tool boundaries.
 

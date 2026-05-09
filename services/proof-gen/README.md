@@ -17,15 +17,15 @@ API and worker are separate processes so they scale independently. Both need the
 
 ## Endpoints
 
-- `POST /prove` — SIWE-bearer, JSON body (see `src/schema.ts`). 202 with `{ job_id }`, 503 if circuit artifacts aren't built yet.
-- `GET /jobs/:id` — `queued | active | completed | failed`. Completed jobs include the raw Groth16 proof JSON plus `proof_bytes` and `public_inputs_bytes32` for debugging and staging integrations.
+- `POST /prove` — bearer-authenticated JSON body (see `src/schema.ts`). 202 with `{ job_id }`, 503 if circuit artifacts aren't built yet.
+- `GET /jobs/:id` — `queued | active | completed | failed`. Completed jobs include the raw Groth16 proof JSON plus `proof_hex` and `public_input_words` for debugging and staging integrations.
 - `GET /healthz` — liveness + artifact presence.
 
 ## Known pre-mainnet limitations
 
 - Circuit artifacts must be generated before `POST /prove` can accept jobs.
 - The API and worker share Redis-backed queue state; deploy them with the same `REDIS_URL`.
-- The current `task_completion` circuit is not the canonical Base mainnet settlement proof. Its public-signal shape does not match the guardian-attested launch path, and it should not be wired directly to `CovenantTaskMarket.verifyTask(...)`.
+- The current `task_completion` circuit is not the canonical mainnet settlement proof. Its public-signal shape is research-only and should not be wired directly to protocol settlement.
 - Mainnet zk readiness depends on a settlement-specific circuit, a real ceremony, pinned artifact provenance, and an explicit verifier cutover.
 
 ## Artifacts

@@ -18,6 +18,11 @@ const TILES = [
     body: "Intents, agents, capabilities, memory, audit, and settlement.",
   },
   {
+    href: "/autonomy",
+    title: "Autonomous workflow",
+    body: "Task lifecycle, continuation, validation gates, and sprint summaries.",
+  },
+  {
     href: "/architecture",
     title: "Architecture",
     body: "Architecture of the daemon, runtime, and on-chain settlement program.",

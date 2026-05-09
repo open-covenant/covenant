@@ -8,6 +8,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/", label: "Overview" },
       { href: "/getting-started", label: "Getting started" },
       { href: "/concepts", label: "Concepts" },
+      { href: "/autonomy", label: "Autonomous workflow" },
     ],
   },
   {

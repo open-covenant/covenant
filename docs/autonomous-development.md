@@ -12,6 +12,7 @@ Operational helpers:
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-continue.mjs
 node agent-os/scripts/autonomy-seed-next.mjs --dry-run
+node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/install-git-hooks.mjs --dry-run
@@ -22,6 +23,13 @@ node agent-os/scripts/provenance.mjs verify-all
 `autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
 
 `autonomy-continue.mjs` selects the highest-priority unblocked task. If every task is already integrated or blocked, it seeds the next template from `autonomy/backlog.json` through `autonomy-seed-next.mjs` and then returns that new proposed task. This keeps the loop moving without depending on chat history for the next work item.
+
+`autonomy-summary.mjs` renders a deterministic sprint summary from task records and the transition log. Use Markdown for handoff notes and `--format json` for machine-readable monitors:
+
+```bash
+node agent-os/scripts/autonomy-summary.mjs
+node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09 --format json
+```
 
 `provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
 
@@ -138,6 +146,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
 | Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers for project-domain or platform-bot identities. |
+| Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
@@ -161,6 +170,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue for future autonomous tasks.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
+- `node agent-os/scripts/autonomy-summary.mjs`: deterministic sprint and handoff summaries from the public task state.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.
 - [BUILT.md](../BUILT.md): recursive engineering model and honesty boundaries.

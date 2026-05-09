@@ -19,6 +19,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
+- Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs`.
 
 ## Invariants
 
@@ -71,6 +72,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
+- [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
 

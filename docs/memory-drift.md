@@ -28,6 +28,23 @@ Safe handling order:
 3. Prefer a future explicit repair command over ad hoc file edits.
 4. Preserve useful long-term memory unless there is clear evidence it is stale or unsafe.
 
+## Repair Contract
+
+The memory crate defines explicit repair requests with two modes:
+
+- `dry_run`: compute the exact before/after shape without mutating the store.
+- `apply`: perform the mutation after the same checks pass.
+
+Every repair request requires a non-empty reason. Supported crate-level commands are:
+
+| Command | Use | Safety guard |
+| --- | --- | --- |
+| `detach_parent` | Clear a stale `parent` reference after inspection. | Optional `expected_parent` prevents detaching if the record changed since the drift report. |
+| `delete_record` | Remove a memory record confirmed to be unsafe, invalid, or unwanted. | Dry-run reports the deletion without mutating. |
+| `backfill_provenance` | Add provenance evidence under `metadata.provenance`. | Rejects null provenance payloads and preserves existing metadata. |
+
+Daemon, CLI, and audit-log exposure are still pending. Until those surfaces are wired, these repair primitives are available inside the memory crate only.
+
 ## Current Limits
 
 The receipt check compares counts by owner and resource inside the sampled window. Settlement receipts do not yet carry the memory record id, so the verifier cannot prove exact record-to-receipt pairing. A later schema revision should add a direct correlation id.

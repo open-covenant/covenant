@@ -13,6 +13,7 @@ pub use ignore::{IgnorePattern, IgnoreSet, IgnoreVerdict};
 
 use async_trait::async_trait;
 use covenant_types::{MemoryRecord, MemoryTier};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::task;
@@ -28,6 +29,68 @@ pub enum MemoryError {
     Serde(#[from] serde_json::Error),
     #[error("worker: {0}")]
     Worker(String),
+    #[error("memory record {0} not found")]
+    RecordNotFound(Uuid),
+    #[error("parent mismatch for memory {id}: expected {expected:?}, actual {actual:?}")]
+    ParentMismatch {
+        id: Uuid,
+        expected: Option<Uuid>,
+        actual: Option<Uuid>,
+    },
+    #[error("invalid memory repair request: {0}")]
+    InvalidRepair(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRepairMode {
+    DryRun,
+    Apply,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum MemoryRepairCommand {
+    DetachParent {
+        id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_parent: Option<Uuid>,
+    },
+    DeleteRecord {
+        id: Uuid,
+    },
+    BackfillProvenance {
+        id: Uuid,
+        provenance: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryRepairRequest {
+    pub mode: MemoryRepairMode,
+    pub command: MemoryRepairCommand,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRepairAction {
+    DetachParent,
+    DeleteRecord,
+    BackfillProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryRepairOutcome {
+    pub id: Uuid,
+    pub action: MemoryRepairAction,
+    pub mode: MemoryRepairMode,
+    pub would_change: bool,
+    pub changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<MemoryRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<MemoryRecord>,
 }
 
 #[async_trait]
@@ -60,6 +123,110 @@ pub trait MemoryStore: Send + Sync {
         tier: Option<MemoryTier>,
         before_ms: u64,
     ) -> Result<u64, MemoryError>;
+    /// Operator-controlled repair for verifier drift findings. Dry-run
+    /// returns the exact before/after shape without mutating the store;
+    /// apply performs the mutation only after the same checks pass.
+    async fn repair(
+        &self,
+        request: MemoryRepairRequest,
+    ) -> Result<MemoryRepairOutcome, MemoryError> {
+        validate_repair_request(&request)?;
+        let id = request.command.id();
+        let before = self.get(id).await?.ok_or(MemoryError::RecordNotFound(id))?;
+        let action = request.command.action();
+        let after = plan_repair(&before, &request.command)?;
+        let would_change = after.as_ref() != Some(&before);
+
+        if request.mode == MemoryRepairMode::Apply && would_change {
+            match &after {
+                Some(record) => self.put(record.clone()).await?,
+                None => {
+                    let _ = self.delete(id).await?;
+                }
+            }
+        }
+
+        Ok(MemoryRepairOutcome {
+            id,
+            action,
+            mode: request.mode,
+            would_change,
+            changed: request.mode == MemoryRepairMode::Apply && would_change,
+            before: Some(before),
+            after,
+        })
+    }
+}
+
+impl MemoryRepairCommand {
+    fn id(&self) -> Uuid {
+        match self {
+            Self::DetachParent { id, .. } => *id,
+            Self::DeleteRecord { id } => *id,
+            Self::BackfillProvenance { id, .. } => *id,
+        }
+    }
+
+    fn action(&self) -> MemoryRepairAction {
+        match self {
+            Self::DetachParent { .. } => MemoryRepairAction::DetachParent,
+            Self::DeleteRecord { .. } => MemoryRepairAction::DeleteRecord,
+            Self::BackfillProvenance { .. } => MemoryRepairAction::BackfillProvenance,
+        }
+    }
+}
+
+fn validate_repair_request(request: &MemoryRepairRequest) -> Result<(), MemoryError> {
+    if request.reason.trim().is_empty() {
+        return Err(MemoryError::InvalidRepair(
+            "reason must not be empty".into(),
+        ));
+    }
+    if let MemoryRepairCommand::BackfillProvenance { provenance, .. } = &request.command {
+        if provenance.is_null() {
+            return Err(MemoryError::InvalidRepair(
+                "provenance must not be null".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn plan_repair(
+    record: &MemoryRecord,
+    command: &MemoryRepairCommand,
+) -> Result<Option<MemoryRecord>, MemoryError> {
+    match command {
+        MemoryRepairCommand::DetachParent {
+            expected_parent, ..
+        } => {
+            if expected_parent.is_some() && record.parent != *expected_parent {
+                return Err(MemoryError::ParentMismatch {
+                    id: record.id,
+                    expected: *expected_parent,
+                    actual: record.parent,
+                });
+            }
+            let mut after = record.clone();
+            after.parent = None;
+            Ok(Some(after))
+        }
+        MemoryRepairCommand::DeleteRecord { .. } => Ok(None),
+        MemoryRepairCommand::BackfillProvenance { provenance, .. } => {
+            let mut after = record.clone();
+            let mut metadata = match after.metadata {
+                serde_json::Value::Object(map) => map,
+                other => {
+                    let mut map = serde_json::Map::new();
+                    map.insert("previous_metadata".into(), other);
+                    map
+                }
+            };
+            metadata.insert("provenance".into(), provenance.clone());
+            after.metadata = serde_json::Value::Object(metadata);
+            Ok(Some(after))
+        }
+    }
 }
 
 /// Cosine similarity over two equal-length vectors. Returns 0.0 for any
@@ -661,5 +828,135 @@ mod tests {
         let s2 = SqliteStore::open(&path).unwrap();
         let got = s2.get(id).await.unwrap().unwrap();
         assert_eq!(got.text, "persist me");
+    }
+
+    #[tokio::test]
+    async fn repair_dry_run_detach_parent_does_not_mutate() {
+        let s = InMemoryStore::new();
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let mut r = record(id, MemoryTier::Episodic, "child", 10);
+        r.parent = Some(parent);
+        s.put(r).await.unwrap();
+
+        let outcome = s
+            .repair(MemoryRepairRequest {
+                mode: MemoryRepairMode::DryRun,
+                command: MemoryRepairCommand::DetachParent {
+                    id,
+                    expected_parent: Some(parent),
+                },
+                reason: "parent was deleted".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.would_change);
+        assert!(!outcome.changed);
+        assert_eq!(outcome.after.unwrap().parent, None);
+        assert_eq!(s.get(id).await.unwrap().unwrap().parent, Some(parent));
+    }
+
+    #[tokio::test]
+    async fn repair_apply_detaches_parent() {
+        let s = InMemoryStore::new();
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let mut r = record(id, MemoryTier::Episodic, "child", 10);
+        r.parent = Some(parent);
+        s.put(r).await.unwrap();
+
+        let outcome = s
+            .repair(MemoryRepairRequest {
+                mode: MemoryRepairMode::Apply,
+                command: MemoryRepairCommand::DetachParent {
+                    id,
+                    expected_parent: Some(parent),
+                },
+                reason: "parent was deleted".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.changed);
+        assert_eq!(s.get(id).await.unwrap().unwrap().parent, None);
+    }
+
+    #[tokio::test]
+    async fn repair_rejects_parent_mismatch() {
+        let s = InMemoryStore::new();
+        let id = Uuid::new_v4();
+        let actual_parent = Uuid::new_v4();
+        let mut r = record(id, MemoryTier::Episodic, "child", 10);
+        r.parent = Some(actual_parent);
+        s.put(r).await.unwrap();
+
+        let result = s
+            .repair(MemoryRepairRequest {
+                mode: MemoryRepairMode::Apply,
+                command: MemoryRepairCommand::DetachParent {
+                    id,
+                    expected_parent: Some(Uuid::new_v4()),
+                },
+                reason: "stale parent repair".into(),
+            })
+            .await;
+        assert!(matches!(result, Err(MemoryError::ParentMismatch { .. })));
+        assert_eq!(
+            s.get(id).await.unwrap().unwrap().parent,
+            Some(actual_parent)
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_apply_deletes_record() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let id = Uuid::new_v4();
+        s.put(record(id, MemoryTier::Working, "delete me", 10))
+            .await
+            .unwrap();
+
+        let outcome = s
+            .repair(MemoryRepairRequest {
+                mode: MemoryRepairMode::Apply,
+                command: MemoryRepairCommand::DeleteRecord { id },
+                reason: "operator confirmed unsafe memory".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.changed);
+        assert!(outcome.after.is_none());
+        assert!(s.get(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn repair_backfills_provenance_metadata() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let id = Uuid::new_v4();
+        let mut r = record(id, MemoryTier::LongTerm, "needs provenance", 10);
+        r.metadata = serde_json::json!({"source": "import"});
+        s.put(r).await.unwrap();
+
+        let provenance = serde_json::json!({
+            "kind": "manual_backfill",
+            "evidence": "audit window checked"
+        });
+        let outcome = s
+            .repair(MemoryRepairRequest {
+                mode: MemoryRepairMode::Apply,
+                command: MemoryRepairCommand::BackfillProvenance {
+                    id,
+                    provenance: provenance.clone(),
+                },
+                reason: "missing provenance evidence".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.changed);
+        let got = s.get(id).await.unwrap().unwrap();
+        assert_eq!(got.metadata["source"], "import");
+        assert_eq!(got.metadata["provenance"], provenance);
     }
 }

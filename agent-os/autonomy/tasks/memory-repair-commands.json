@@ -1,7 +1,7 @@
 {
   "id": "memory-repair-commands",
   "title": "Add explicit memory repair commands",
-  "state": "proposed",
+  "state": "blocked",
   "priority": "high",
   "ownerRole": "planner",
   "scope": [
@@ -11,7 +11,12 @@
     "docs"
   ],
   "summary": "Turn read-only memory drift reports into explicit operator-controlled repair commands for stale parents, missing provenance, and settlement mismatches.",
-  "expectedFailureModes": [],
+  "expectedFailureModes": [
+    "A repair command mutates memory without a dry-run path or before/after evidence.",
+    "A stale parent repair clears a parent reference that changed after the drift report was generated.",
+    "A destructive delete runs without an explicit apply mode and operator reason.",
+    "A provenance backfill overwrites existing metadata instead of preserving useful record context."
+  ],
   "gates": [
     "plan",
     "security",
@@ -26,6 +31,6 @@
   "humanEscalation": [
     "Approval before destructive automatic memory deletion or settlement backfill"
   ],
-  "nextAction": "Define dry-run and apply semantics for detach-parent, delete-memory, and provenance-backfill repair actions.",
+  "nextAction": "Wire daemon IPC, HTTP, CLI, and audit rows for memory repair primitives once the existing unrelated daemon/CLI worktree changes are safe to edit.",
   "updated": "2026-05-09"
 }

@@ -193,6 +193,36 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
         future autonomous repair command can decide what to mutate.
       </p>
 
+      <h2>Repair primitives</h2>
+      <p>
+        The memory crate defines explicit repair requests with{" "}
+        <code>dry_run</code> and <code>apply</code> modes. Dry-run returns
+        the exact before/after shape without mutating the store; apply
+        performs the same checked operation.
+      </p>
+
+      <ul>
+        <li>
+          <code>detach_parent</code> clears a stale parent reference and
+          can guard against a changed record with{" "}
+          <code>expected_parent</code>.
+        </li>
+        <li>
+          <code>delete_record</code> removes a confirmed invalid or unsafe
+          memory record.
+        </li>
+        <li>
+          <code>backfill_provenance</code> writes provenance evidence under{" "}
+          <code>metadata.provenance</code> while preserving existing
+          metadata.
+        </li>
+      </ul>
+
+      <p>
+        These primitives are implemented in the store layer. Daemon, CLI,
+        and audit-log exposure remain pending.
+      </p>
+
       <h2>The .covenantignore allow/deny list</h2>
       <p>
         Covenant supports a <code>.covenantignore</code> file at{" "}

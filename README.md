@@ -3,9 +3,9 @@
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> Agent- and blockchain-native operating layer for governed autonomous systems.
+> Agent-native operating layer for governed autonomous systems.
 
-Covenant is an agent- and blockchain-native operating layer for autonomous software engineering systems. It coordinates agents, tools, memory, execution, authorization, audit, provenance, and settlement through a local control plane designed for research teams and engineering organizations building agents that operate across real codebases.
+Covenant is an operating layer for autonomous software engineering systems. It coordinates agents, tools, memory, execution, authorization and settlement through a local control plane designed for research teams and engineering organizations building agents that operate across real codebases.
 
 Covenant sits below agent applications and above the host operating system. It gives autonomous systems a disciplined substrate for planning, execution, review, repair, and handoff while keeping privileged actions scoped, inspectable, resumable, and attributable.
 

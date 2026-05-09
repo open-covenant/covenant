@@ -22,7 +22,7 @@ const SURFACES = [
   ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],
   ["Budget enforcement", "covered", "resume success after pause/resume policy"],
   ["Settlement receipts", "covered", "scoped receipt filters"],
-  ["Local model", "external service", "model availability probes"],
+  ["Local model", "external service", "expand live Ollama coverage"],
 ];
 
 export default function LiveCoveragePage() {

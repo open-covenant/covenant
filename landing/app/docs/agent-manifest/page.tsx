@@ -15,8 +15,8 @@ export default function AgentManifestPage() {
         <code>agent.toml</code> file placed under{" "}
         <code>$COVENANT_HOME/agents/</code>. The manifest declares the
         agent&apos;s identity, runtime, executable path, required
-        capabilities, resource budget, and an optional settlement
-        configuration.
+        capabilities, resource budget, sandbox requirement, and optional
+        settlement configuration.
       </p>
 
       <h2>Example</h2>
@@ -37,6 +37,11 @@ cpu_ms_per_task = 30000
 memory_mb       = 512
 disk_mb         = 100
 network         = "outbound-https-only"
+
+[sandbox]
+required   = true
+backend    = "linux-gvisor"
+filesystem = "read-only-package"
 
 [settlement]
 budget_credits_per_hour = 1000
@@ -228,6 +233,62 @@ priority                = "normal"`}</code>
       </table>
 
       <h3>
+        <code>[sandbox]</code>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>required</code>
+            </td>
+            <td>bool</td>
+            <td>
+              <code>false</code>
+            </td>
+            <td>
+              When true, the manifest must name a sandbox-grade backend.
+              Trusted-local subprocess execution is rejected.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>backend</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>trusted-local</code>
+            </td>
+            <td>
+              <code>trusted-local</code> or <code>linux-gvisor</code>.
+              The gVisor runner is the planned first production backend.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>filesystem</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>read-only-package</code>
+            </td>
+            <td>
+              <code>read-only-package</code>, <code>ephemeral</code>, or{" "}
+              <code>host</code>. The field is parsed now and enforced by
+              sandboxed runtimes.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
         <code>[settlement]</code>
       </h3>
       <table>
@@ -311,6 +372,9 @@ runtime = "node"       →   exec node    entry`}</code>
         and surfaces in operator logs. The agent process must terminate
         within <code>resources.cpu_ms_per_task</code>; processes that
         exceed the budget are killed and the dispatch returns an error.
+        The current subprocess runner is trusted-local. If{" "}
+        <code>sandbox.required</code> is true, it fails closed instead of
+        silently running the agent without sandbox-grade isolation.
       </p>
 
       <h2>Validation rules</h2>
@@ -326,6 +390,10 @@ runtime = "node"       →   exec node    entry`}</code>
         <li>
           declare a <code>required</code> or <code>optional</code>{" "}
           capability action outside the reserved namespaces;
+        </li>
+        <li>
+          set <code>sandbox.required = true</code> while keeping{" "}
+          <code>{`backend = "trusted-local"`}</code>;
         </li>
         <li>
           fail to parse as TOML.

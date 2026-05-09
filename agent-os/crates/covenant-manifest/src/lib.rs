@@ -15,6 +15,8 @@ pub struct Manifest {
     #[serde(default)]
     pub resources: Resources,
     #[serde(default)]
+    pub sandbox: Sandbox,
+    #[serde(default)]
     pub settlement: Settlement,
 }
 
@@ -71,6 +73,47 @@ pub enum NetworkPolicy {
     #[default]
     OutboundHttpsOnly,
     Full,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Sandbox {
+    pub required: bool,
+    pub backend: SandboxBackend,
+    pub filesystem: FilesystemPolicy,
+}
+
+impl Default for Sandbox {
+    fn default() -> Self {
+        Self {
+            required: false,
+            backend: SandboxBackend::TrustedLocal,
+            filesystem: FilesystemPolicy::ReadOnlyPackage,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxBackend {
+    #[default]
+    TrustedLocal,
+    LinuxGvisor,
+}
+
+impl SandboxBackend {
+    pub fn is_sandbox_grade(self) -> bool {
+        matches!(self, Self::LinuxGvisor)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilesystemPolicy {
+    #[default]
+    ReadOnlyPackage,
+    Ephemeral,
+    Host,
 }
 
 /// Phase 0 tolerates `0`; enforced from Phase 1.
@@ -148,6 +191,11 @@ impl Manifest {
                 )));
             }
         }
+        if self.sandbox.required && !self.sandbox.backend.is_sandbox_grade() {
+            return Err(ManifestError::Validation(
+                "sandbox.required=true requires a sandbox-grade backend".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -181,6 +229,11 @@ memory_mb = 512
 disk_mb = 100
 network = "outbound-https-only"
 
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "read-only-package"
+
 [settlement]
 budget_credits_per_hour = 10
 priority = "normal"
@@ -204,6 +257,9 @@ entry = "./tiny"
         assert_eq!(m.capabilities.optional, vec!["tool.gpu_inference"]);
         assert_eq!(m.resources.cpu_ms_per_task, 30_000);
         assert_eq!(m.resources.network, NetworkPolicy::OutboundHttpsOnly);
+        assert!(m.sandbox.required);
+        assert_eq!(m.sandbox.backend, SandboxBackend::LinuxGvisor);
+        assert_eq!(m.sandbox.filesystem, FilesystemPolicy::ReadOnlyPackage);
         assert_eq!(m.settlement.budget_credits_per_hour, 10);
         assert_eq!(m.settlement.priority, Priority::Normal);
     }
@@ -218,8 +274,33 @@ entry = "./tiny"
         assert_eq!(m.resources.memory_mb, 512);
         assert_eq!(m.resources.disk_mb, 100);
         assert_eq!(m.resources.network, NetworkPolicy::OutboundHttpsOnly);
+        assert!(!m.sandbox.required);
+        assert_eq!(m.sandbox.backend, SandboxBackend::TrustedLocal);
+        assert_eq!(m.sandbox.filesystem, FilesystemPolicy::ReadOnlyPackage);
         assert_eq!(m.settlement.budget_credits_per_hour, 0);
         assert_eq!(m.settlement.priority, Priority::Normal);
+    }
+
+    #[test]
+    fn rejects_required_trusted_local_sandbox() {
+        let bad = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+
+[sandbox]
+required = true
+backend = "trusted-local"
+"#;
+        match Manifest::parse(bad) {
+            Err(ManifestError::Validation(msg)) => {
+                assert!(msg.contains("sandbox.required=true"), "{msg}");
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]

@@ -5,14 +5,15 @@
 //! stdout, and kills the process if it exceeds the wall-clock budget
 //! declared in the agent's manifest (`resources.cpu_ms_per_task`).
 //!
-//! The base implementation enforces only the wall-clock timeout;
-//! sandboxing layers (gVisor, Firecracker) plug in via the [`Runner`]
-//! trait without changing the dispatch contract.
+//! The base implementation enforces only the wall-clock timeout. It is
+//! `trusted-local` execution, not sandbox-grade isolation. Stronger
+//! backends plug in via the [`Runner`] trait without changing the dispatch
+//! contract.
 
 #![deny(unsafe_code)]
 
 use async_trait::async_trait;
-use covenant_manifest::Runtime as RuntimeKind;
+use covenant_manifest::{Runtime as RuntimeKind, SandboxBackend};
 use covenant_router::AgentCard;
 use covenant_types::Intent;
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,11 @@ pub enum RunnerError {
     NonZeroExit { status: i32, stderr: String },
     #[error("agent {0} has no manifest or package_dir set; cannot execute")]
     NotExecutable(String),
+    #[error("agent {agent} requires sandbox backend {required:?}; active runner is trusted-local")]
+    SandboxRequired {
+        agent: String,
+        required: SandboxBackend,
+    },
 }
 
 #[async_trait]
@@ -50,9 +56,23 @@ pub trait Runner: Send + Sync {
 
 pub struct SubprocessRunner;
 
+impl SubprocessRunner {
+    fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
+        if card.manifest.sandbox.required {
+            return Err(RunnerError::SandboxRequired {
+                agent: card.id.clone(),
+                required: card.manifest.sandbox.backend,
+            });
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Runner for SubprocessRunner {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
+        self.ensure_allowed(card)?;
+
         let entry_path = card.package_dir.join(&card.manifest.agent.entry);
         let timeout = Duration::from_millis(card.manifest.resources.cpu_ms_per_task);
 
@@ -282,6 +302,38 @@ cpu_ms_per_task = 5000
             Err(RunnerError::NonZeroExit { status, stderr }) => {
                 assert_eq!(status, 7);
                 assert!(stderr.contains("boom"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn subprocess_runner_rejects_sandbox_required_agent() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"text\":\"nope\"}'\n").unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "needs-sandbox"
+name = "Needs Sandbox"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let result = SubprocessRunner.run(&card, &dummy_intent()).await;
+        match result {
+            Err(RunnerError::SandboxRequired { agent, required }) => {
+                assert_eq!(agent, "needs-sandbox");
+                assert_eq!(required, SandboxBackend::LinuxGvisor);
             }
             other => panic!("unexpected: {other:?}"),
         }

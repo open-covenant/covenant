@@ -1,7 +1,7 @@
 {
   "id": "runtime-sandboxing",
   "title": "Introduce a real runtime sandbox boundary",
-  "state": "planned",
+  "state": "in_progress",
   "priority": "critical",
   "ownerRole": "planner",
   "scope": [
@@ -34,6 +34,6 @@
     "Hardware and OS target selection for sandbox validation",
     "Approval before claiming sandbox-grade isolation publicly"
   ],
-  "nextAction": "Implement the manifest and runtime abstraction for trusted-local, linux-gvisor, and fail-closed sandbox-required modes.",
+  "nextAction": "Wire daemon backend config and the first GvisorRunner once the existing unrelated daemon/protocol worktree changes are clear enough to edit safely.",
   "updated": "2026-05-09"
 }

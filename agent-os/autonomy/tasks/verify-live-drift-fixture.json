@@ -1,7 +1,7 @@
 {
   "id": "verify-live-drift-fixture",
   "title": "Add live verify drift fixture coverage",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

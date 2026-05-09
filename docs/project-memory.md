@@ -61,6 +61,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/status.md](./status.md): implemented, experimental, and planned capability matrix.
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
+- [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.

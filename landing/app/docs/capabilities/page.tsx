@@ -12,9 +12,9 @@ export default function CapabilitiesPage() {
       <h1>Capability tokens</h1>
       <p>
         A capability token is a typed, signed authorization. It names an
-        action, optionally scopes it to a JSON predicate, and is signed by
-        the granter with their ed25519 key. Covenant enforces agent and
-        tool authorization through capability tokens.
+        action, optionally carries a versioned JSON scope, and is signed
+        by the granter with their ed25519 key. Covenant enforces agent
+        and tool authorization through capability tokens.
       </p>
 
       <h2>Shape</h2>
@@ -29,7 +29,7 @@ export default function CapabilitiesPage() {
   capability: Capability {
     subject:    AgentId,        // who this token authorises
     action:     "tool.web_search",
-    scope:      JSON,           // free-form predicate; e.g. { "host": "example.com" }
+    scope:      JSON,           // signed scope metadata; {} = unscoped
     granted_by: AgentId,        // who issued the token
     expires_at: u64 | null,     // unix milliseconds; null = never
   },
@@ -69,6 +69,38 @@ export default function CapabilitiesPage() {
         Examples in active use:{" "}
         <code>tool.web_search</code>, <code>tool.call.echo</code>,{" "}
         <code>memory.write</code>, <code>memory.read.longterm</code>.
+      </p>
+
+      <h2>Scope contract</h2>
+      <p>
+        Scopes are signed today, so mutating the JSON invalidates the
+        token. Dispatch-time enforcement is currently action-based:
+        the daemon checks signature validity, expiry, subject, action
+        presence, and revocation. It does not yet interpret scope
+        predicates. The scope shapes below are the compatibility
+        contract for grants created before stricter enforcement lands.
+      </p>
+
+      <p>
+        Empty scope <code>{"{}"}</code> means unscoped within the named
+        action. Non-empty scopes should be JSON objects with{" "}
+        <code>{"{ \"version\": 1 }"}</code>.
+      </p>
+
+      <pre>
+        <code>{`tool.*      { "version": 1, "tool": "echo", "arguments": { "allow": { ... } } }
+memory.*    { "version": 1, "tiers": ["working"], "record_id": null, "before_ms": null, "apply": false }
+a2a.*       { "version": 1, "peer_pubkey_b58": "...", "task_id": null, "lease_id": null, "duplicate_risk": "idempotent" }
+audit.*     { "version": 1, "window": 100, "before_ms": null, "include_integrity": true }
+peers.*     { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": false, "force": false }
+chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</code>
+      </pre>
+
+      <p>
+        The repository document <code>docs/capabilities.md</code> tracks
+        the detailed contract. Enforcement hardening should validate
+        known namespaces at grant time first, then add dispatch-time
+        checks for stable predicates.
       </p>
 
       <h2>Canonical encoding</h2>
@@ -146,7 +178,8 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
         <code>action</code>s, and verifies that every required action
         from the matched agent&apos;s manifest is present. Missing
         actions are recorded in the audit event and the dispatch is
-        rejected.
+        rejected. Scope predicates are preserved and signed but not yet
+        interpreted during this check.
       </p>
 
       <h2>Revocation</h2>

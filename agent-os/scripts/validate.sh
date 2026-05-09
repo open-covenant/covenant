@@ -37,6 +37,7 @@ run() {
 
 run cargo fmt --check
 run node ./scripts/validate-autonomy.mjs
+run node ./scripts/validate-live-coverage.mjs
 run node ./scripts/provenance.mjs verify-all
 run node ./scripts/provenance-self-test.mjs
 run ./scripts/check-no-display-form-a2a.sh

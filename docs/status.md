@@ -17,6 +17,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
 | Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log | Signed review artifacts and stronger sprint summaries. |
+| Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests | Add HTTP gateway and CLI revoke live coverage. |
 | Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations` | Signing identity policy, release artifact subjects, transparency-log publication. |
 | Installer and SDK ecosystem | Planned | No stable release path | Define alpha release contract after sandbox and settlement boundaries harden. |
 
@@ -27,5 +28,6 @@ This status matrix separates what exists from what is experimental or planned. U
 - Provenance gate: `node agent-os/scripts/provenance.mjs verify-all`
 - Next task selector: `node agent-os/scripts/autonomy-next.mjs`
 - Live coverage inventory: `bash agent-os/scripts/test-stats.sh`
+- Live coverage matrix gate: `node agent-os/scripts/validate-live-coverage.mjs`
 - Landing docs build: `pnpm --dir landing build`
 - Dependency audit: `bash scripts/audit.sh`

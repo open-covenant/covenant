@@ -17,6 +17,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation is subprocess timeout enforcement, not sandbox-grade isolation.
 - Live tests exist but are opt-in and cover only selected real boundaries.
+- Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 
 ## Invariants
 
@@ -55,6 +56,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
+- [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): validated autonomous maintenance backlog.

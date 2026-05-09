@@ -73,7 +73,8 @@ Implemented and tested in the repository:
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
 - Live opt-in tests for real daemon/CLI boundaries and selected real backends.
-- CI for Rust, landing docs, workflow linting, provenance verification, dependency audits, and CodeQL.
+- Machine-readable live coverage matrix for protocol, CLI, runtime, and model boundaries.
+- CI for Rust, landing docs, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
 
 ## Status
 
@@ -121,6 +122,12 @@ Live tests are opt-in because they may spawn real binaries or require local serv
 ```bash
 cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
+```
+
+Coverage inventory:
+
+```bash
+bash agent-os/scripts/test-stats.sh
 ```
 
 ## Research Direction

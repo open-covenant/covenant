@@ -1,14 +1,15 @@
 {
   "id": "live-test-expansion",
   "title": "Raise live-boundary coverage across protocol surfaces",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "verifier",
   "scope": [
     "agent-os/crates/covenantd/tests",
     "agent-os/crates/covenant-mcp/tests",
     "agent-os/crates/covenant-llm/tests",
-    "agent-os/scripts"
+    "agent-os/scripts",
+    "docs"
   ],
   "summary": "Grow opt-in live coverage for real daemon, CLI, MCP subprocess, A2A restart, and local model boundaries while keeping default CI fast and deterministic.",
   "expectedFailureModes": [
@@ -16,14 +17,20 @@
     "A live test depends on external credentials and gets mistaken for a default CI requirement.",
     "The test ratio improves numerically while the riskiest surfaces remain mock-only."
   ],
-  "gates": ["plan", "test_expansion", "docs"],
+  "gates": [
+    "plan",
+    "test_expansion",
+    "docs"
+  ],
   "verification": [
+    "node agent-os/scripts/validate-live-coverage.mjs",
     "bash agent-os/scripts/test-stats.sh",
-    "bash agent-os/scripts/validate.sh --quick"
+    "bash agent-os/scripts/validate.sh --quick",
+    "pnpm --dir landing build"
   ],
   "humanEscalation": [
     "Credentials for paid or rate-limited external APIs"
   ],
-  "nextAction": "Add a live coverage matrix that maps each protocol surface to mock and live tests before adding more tests.",
+  "nextAction": "Add a real daemon HTTP-gateway smoke test; the matrix now marks HTTP as the only mock-only surface.",
   "updated": "2026-05-09"
 }

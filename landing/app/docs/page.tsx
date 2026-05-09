@@ -57,6 +57,11 @@ const TILES = [
     title: "Provenance",
     body: "Commit-scoped envelopes for autonomy tasks, changed file evidence, and validation records.",
   },
+  {
+    href: "/live-coverage",
+    title: "Live coverage",
+    body: "Opt-in real-boundary test inventory across daemon, CLI, A2A, MCP, runtime, and model surfaces.",
+  },
 ];
 
 export default function DocsIndexPage() {
@@ -104,10 +109,10 @@ export default function DocsIndexPage() {
         Covenant is pre-1.0 infrastructure. The local daemon, CLI, identity,
         permissions, memory, audit, peer auth, and local receipt ledger are
         implemented in the repository. MCP, A2A, the local web console, the
-        autonomous development loop, and public provenance envelopes are
-        experimental. Runtime sandboxing, on-chain settlement, installer, SDK
-        ecosystem, signed releases, and transparency-log publication remain
-        planned work.
+        autonomous development loop, live coverage matrix, and public
+        provenance envelopes are experimental. Runtime sandboxing, on-chain
+        settlement, installer, SDK ecosystem, signed releases, and
+        transparency-log publication remain planned work.
       </p>
 
       <h2>Position in the stack</h2>

@@ -11,6 +11,7 @@ Operational helpers:
 ```bash
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
+node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/provenance.mjs verify-all
 ```
 
@@ -128,6 +129,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 |---|---|---|
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
+| Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
 | Landing docs | `pnpm --dir landing build` | Public docs and website changes. |
@@ -143,6 +145,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [ROADMAP.md](../ROADMAP.md): capability roadmap.
 - [docs/project-memory.md](./project-memory.md): durable project context and invariants.
 - [docs/repo-map.md](./repo-map.md): repository structure.
+- [docs/live-coverage.md](./live-coverage.md): live boundary coverage matrix.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): machine-readable lifecycle, roles, gates, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): machine-readable autonomous maintenance backlog.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.

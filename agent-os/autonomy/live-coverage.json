@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "surfaces": [
+    {
+      "id": "daemon-ipc-core",
+      "name": "Daemon IPC core",
+      "mockTests": [
+        "agent-os/crates/covenantd/tests/end_to_end.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_daemon.rs",
+        "agent-os/crates/covenantd/tests/live_cli_intent_dispatch.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live resume-intent coverage after repair semantics settle."
+    },
+    {
+      "id": "http-gateway",
+      "name": "HTTP gateway",
+      "mockTests": [
+        "agent-os/crates/covenantd/tests/http_gateway.rs"
+      ],
+      "liveTests": [],
+      "status": "mock_only",
+      "nextGap": "Add a real daemon HTTP-gateway smoke test that binds a loopback port and authenticates through the public route surface."
+    },
+    {
+      "id": "cli-capabilities",
+      "name": "CLI capability lifecycle",
+      "mockTests": [
+        "agent-os/crates/covenant/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_capabilities_grant_with_expiry.rs",
+        "agent-os/crates/covenantd/tests/live_cli_capabilities_recent.rs",
+        "agent-os/crates/covenantd/tests/live_cli_grant_expand.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live capability revoke coverage through the CLI."
+    },
+    {
+      "id": "cli-audit",
+      "name": "CLI audit feed",
+      "mockTests": [
+        "agent-os/crates/covenant/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_audit_recent.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live audit purge coverage only after retention policy is documented."
+    },
+    {
+      "id": "peer-auth",
+      "name": "Peer authentication and token lifecycle",
+      "mockTests": [
+        "agent-os/crates/covenant-peer-auth/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_peer_auth.rs",
+        "agent-os/crates/covenantd/tests/live_peers_revoke.rs",
+        "agent-os/crates/covenantd/tests/live_restart_peers_revoke.rs",
+        "agent-os/crates/covenantd/tests/live_rotate_token.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live operator self-revoke rejection coverage through the CLI."
+    },
+    {
+      "id": "peer-listing",
+      "name": "Peer listing and status filters",
+      "mockTests": [
+        "agent-os/crates/covenant/src/main.rs",
+        "agent-os/crates/covenant-peer-auth/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_peers_list.rs",
+        "agent-os/crates/covenantd/tests/live_cli_peers_list_status_filter.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live ambiguous-prefix peer listing coverage if the CLI grows a machine-readable output mode."
+    },
+    {
+      "id": "a2a-mailbox",
+      "name": "A2A mailbox and restart durability",
+      "mockTests": [
+        "agent-os/crates/covenant-a2a/src/lib.rs",
+        "agent-os/crates/covenantd/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_a2a.rs",
+        "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live explicit requeue repair coverage after lease-expiry semantics are implemented."
+    },
+    {
+      "id": "mcp-subprocess",
+      "name": "MCP subprocess transport",
+      "mockTests": [
+        "agent-os/crates/covenant-mcp/src/lib.rs",
+        "agent-os/crates/covenant-mcp/src/transport.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenant-mcp/tests/live_stdio.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live coverage for a nontrivial third-party MCP server once fixture selection is stable."
+    },
+    {
+      "id": "runtime-agent-subprocess",
+      "name": "Runtime and reference agent subprocess",
+      "mockTests": [
+        "agent-os/crates/covenant-runtime/src/lib.rs",
+        "agent-os/agents/research/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/agents/research/tests/live_subprocess.rs",
+        "agent-os/crates/covenantd/tests/live_agent_dispatch.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live failure-path coverage for malformed agent stdout."
+    },
+    {
+      "id": "budget-enforcement",
+      "name": "Budget enforcement",
+      "mockTests": [
+        "agent-os/crates/covenant-budget/src/lib.rs",
+        "agent-os/crates/covenantd/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_budget_enforcement.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live budget resume coverage after pause/resume policy lands."
+    },
+    {
+      "id": "local-model",
+      "name": "Local model and full acceptance path",
+      "mockTests": [
+        "agent-os/crates/covenant-llm/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenant-llm/tests/live_ollama.rs",
+        "agent-os/crates/covenantd/tests/live_full_acceptance.rs"
+      ],
+      "status": "external_service",
+      "nextGap": "Keep Ollama tests opt-in and add explicit model availability probes before expanding model coverage."
+    }
+  ]
+}

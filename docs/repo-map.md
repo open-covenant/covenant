@@ -42,8 +42,8 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/agents/research` | Reference research agent. |
 | `agent-os/programs/settlement` | Experimental Solana settlement program. |
 | `agent-os/covenant-web` | Local operator web console. |
-| `agent-os/autonomy` | Machine-readable autonomous workflow and task backlog. |
-| `agent-os/scripts` | Validation, provenance verification, test inventory, handoff, and regression guards. |
+| `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrix, and task backlog. |
+| `agent-os/scripts` | Validation, live coverage checks, provenance verification, test inventory, handoff, and regression guards. |
 
 ## Public vs Internal State
 

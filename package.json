@@ -22,6 +22,7 @@
     "artifacts:export": "node scripts/export-base-artifacts.mjs",
     "agent-os:validate": "bash agent-os/scripts/validate.sh",
     "agent-os:validate-autonomy": "node agent-os/scripts/validate-autonomy.mjs",
+    "agent-os:validate-live-coverage": "node agent-os/scripts/validate-live-coverage.mjs",
     "agent-os:next": "node agent-os/scripts/autonomy-next.mjs",
     "agent-os:provenance": "node agent-os/scripts/provenance.mjs",
     "build": "pnpm contracts:build && turbo run build --filter=!./contracts",

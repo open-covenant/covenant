@@ -13,6 +13,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+node ./scripts/validate-live-coverage.mjs
+printf '\n'
+
 # State-machine over Rust source: when we see `#[test]` or `#[tokio::test]`
 # on a line, the next `fn <name>(...)` we see is a test. Works under BSD awk
 # (no gawk-only `match($0, re, arr)` array capture).

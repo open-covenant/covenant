@@ -48,7 +48,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | CLI capability lifecycle | Covered | grant, grant with expiry, recent, revoke | Capability purge after retention defaults are decided. |
 | CLI audit feed | Covered | audit recent, audit verify | Audit purge after retention policy defaults are decided. |
 | Peer authentication and token lifecycle | Covered | auth rejection, revoke, CLI self-revoke rejection, restart revoke, token rotation | Forced self-revoke recovery only with isolated temp-home fixtures. |
-| Peer listing and status filters | Covered | list, live-only, revoked-only | Ambiguous-prefix coverage after machine-readable output exists. |
+| Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI repair, restart replay | Stale-lease guard failure coverage after machine-readable status output stabilizes. |
 | MCP subprocess transport | Covered | stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |

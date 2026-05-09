@@ -322,3 +322,11 @@
 {"timestamp":"2026-05-09T15:28:45.388Z","taskId":"peers-revoke-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"validate.sh --quick passes."}
 {"timestamp":"2026-05-09T15:28:45.437Z","taskId":"peers-revoke-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate."}
 {"timestamp":"2026-05-09T15:29:35.134Z","taskId":"peers-revoke-json-output","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated peers revoke --json output and updated live self-revoke test to consume JSON."}
+{"timestamp":"2026-05-09T15:31:01.931Z","taskId":"peers-list-json-live-coverage","from":null,"to":"proposed","actorRole":"planner","note":"Seeded from backlog template."}
+{"timestamp":"2026-05-09T15:31:20.106Z","taskId":"peers-list-json-live-coverage","from":"proposed","to":"triaged","actorRole":"planner","note":"Scope is narrow: add one live CLI JSON test and register it in the coverage matrix and docs."}
+{"timestamp":"2026-05-09T15:31:20.153Z","taskId":"peers-list-json-live-coverage","from":"triaged","to":"planned","actorRole":"planner","note":"Implement a new ignored test that spawns covenantd, runs , parses the JSON, and asserts peers/truncated semantics."}
+{"timestamp":"2026-05-09T15:31:20.198Z","taskId":"peers-list-json-live-coverage","from":"planned","to":"in_progress","actorRole":"implementer","note":"Implement live peers list JSON coverage and matrix update."}
+{"timestamp":"2026-05-09T15:33:50.784Z","taskId":"peers-list-json-live-coverage","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed live peers list JSON test and coverage-matrix update."}
+{"timestamp":"2026-05-09T15:33:50.829Z","taskId":"peers-list-json-live-coverage","from":"self_review","to":"validation","actorRole":"verifier","note":"validate.sh --quick passes with new live test registered."}
+{"timestamp":"2026-05-09T15:33:50.871Z","taskId":"peers-list-json-live-coverage","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate."}
+{"timestamp":"2026-05-09T15:33:50.913Z","taskId":"peers-list-json-live-coverage","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated peers list JSON live coverage and updated live coverage matrix/docs."}

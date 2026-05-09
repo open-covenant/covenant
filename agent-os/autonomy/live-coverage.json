@@ -81,10 +81,11 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_cli_peers_list.rs",
+        "agent-os/crates/covenantd/tests/live_cli_peers_list_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_peers_list_status_filter.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live ambiguous-prefix peer listing coverage if the CLI grows a machine-readable output mode."
+      "nextGap": "Add live prefix-filter JSON coverage if automation begins relying on prefix narrowing for incident triage."
     },
     {
       "id": "a2a-mailbox",

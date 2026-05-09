@@ -22,7 +22,7 @@ const SURFACES = [
   ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],
   ["Budget enforcement", "covered", "resume success after pause/resume policy"],
   ["Settlement receipts", "covered", "scoped receipt filters"],
-  ["Local model", "external service", "expand live Ollama coverage"],
+  ["Local model", "external service", "pin model set before more coverage"],
 ];
 
 export default function LiveCoveragePage() {
@@ -37,6 +37,7 @@ export default function LiveCoveragePage() {
 
       <h2>Commands</h2>
       <code>{`node agent-os/scripts/validate-live-coverage.mjs
+node agent-os/scripts/model-availability.mjs
 bash agent-os/scripts/test-stats.sh
 cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_

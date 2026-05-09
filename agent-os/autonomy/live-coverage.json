@@ -242,7 +242,7 @@
         "agent-os/crates/covenantd/tests/live_full_acceptance.rs"
       ],
       "status": "external_service",
-      "nextGap": "Use probe-ollama.mjs to preflight required models, then expand opt-in live Ollama coverage."
+      "nextGap": "Pin the supported model set and expand coverage once the operator preflight probe is part of release evidence."
     }
   ]
 }

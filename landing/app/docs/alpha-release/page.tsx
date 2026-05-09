@@ -34,6 +34,7 @@ export default function AlphaReleasePage() {
       </p>
 
       <code>{`node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
+node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
 bash agent-os/scripts/validate.sh --quick
 pnpm --dir landing build
 git diff --check`}</code>

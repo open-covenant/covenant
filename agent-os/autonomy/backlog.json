@@ -1728,6 +1728,37 @@
       "humanEscalation": [],
       "nextAction": "Create an alpha release bundle scaffold command, update release docs and landing docs to point at it, and verify the dry-run path.",
       "updated": "2026-05-09"
+    },
+    {
+      "id": "alpha-release-bundle-validator",
+      "title": "Add alpha release bundle validator",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Release bundles can now be scaffolded, but there is no mechanical check that the bundle contains parseable evidence, validation notes, and a recorded decision. Add a small validator so alpha release evidence can fail closed before publication decisions.",
+      "expectedFailureModes": [
+        "A bundle is missing evidence.json or validation.md but still treated as release evidence.",
+        "Evidence JSON is malformed or from the wrong schema kind.",
+        "A bundle with dirty evidence, pending gates, or no decision is accepted silently."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-validate-bundle.mjs --help",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a release bundle validator command, document it in the alpha release runbook, and verify help plus a generated self-test bundle.",
+      "updated": "2026-05-09"
     }
   ]
 }

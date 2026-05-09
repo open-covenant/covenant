@@ -45,9 +45,11 @@ Create the bundle scaffold with:
 
 ```bash
 node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
+node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
 ```
 
 The scaffold writes `evidence.json` and `validation.md`. It refuses to overwrite an existing non-empty bundle unless `--force` is supplied.
+The validator fails accepted release evidence when the bundle is missing files, contains malformed evidence, records dirty files, leaves gates pending, or keeps the decision as `draft`.
 
 ## Minimum Local Gate
 

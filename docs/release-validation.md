@@ -39,6 +39,7 @@ Create the release evidence bundle from the repository root:
 
 ```bash
 node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
+node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
 ```
 
 The bundle scaffold writes `docs/releases/<release-id>/evidence.json` and `docs/releases/<release-id>/validation.md`. It records the current commit, short commit, branch, dirty-file count, recommended validation commands, and release notes. It does not tag, push, publish, sign, or execute validation gates.
@@ -51,7 +52,7 @@ Interpret the output as follows:
 - `commands` are the gates the operator must run and record.
 - `notes` identify non-claims and live-test prerequisites.
 
-Store release evidence under `docs/releases/<release-id>/`. A candidate bundle should contain the `evidence.json` output, validation notes with pass/fail/skipped outcomes, links to provenance envelopes or audit-root attestations, and the release decision. The scaffold refuses to overwrite an existing non-empty bundle unless `--force` is supplied.
+Store release evidence under `docs/releases/<release-id>/`. A candidate bundle should contain the `evidence.json` output, validation notes with pass/fail/skipped outcomes, links to provenance envelopes or audit-root attestations, and the release decision. The scaffold refuses to overwrite an existing non-empty bundle unless `--force` is supplied. The validator rejects accepted release evidence when files are missing, evidence JSON is malformed, dirty-file count is non-zero, gate results remain pending, or the decision is still `draft`.
 
 Signing, tagging, artifact upload, release announcements, and key rotation are human-owned decisions until a project signing and publication policy is implemented.
 

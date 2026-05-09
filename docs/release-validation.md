@@ -16,7 +16,7 @@ The validation profile covers:
 - SQLite-backed memory, ignore rules, repair commands, bounded compaction, and read-only drift verification;
 - ed25519 local identity, peer tokens, token rotation, revocation, and signed capability scopes for implemented namespaces;
 - append-only audit JSONL, local hash-chain integrity reports, recent audit reads, purge controls, and audit-root attestations;
-- durable A2A queue state, lease-age status filters, manual requeue and force-error repair, disabled-by-default retry scans, and repair audit rows;
+- durable A2A queue state, lease-age status filters, manual requeue and force-error repair, disabled-by-default retry scans, opt-in scheduler scans, and repair/scheduler audit rows;
 - local settlement receipts for resource accounting;
 - autonomy task records, transition events, project memory, live coverage matrix, identity guards, and commit-scoped provenance envelopes.
 

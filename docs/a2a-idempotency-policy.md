@@ -79,6 +79,21 @@ The gate follows these rules:
 4. **Make decisions observable.** Each auto-requeue records an `auto_requeue` A2A repair audit row; skipped tasks remain visible in the report.
 5. **Bound duplicate risk.** Operators must set maximum attempts, maximum requeues, minimum lease age, and scan limits.
 
+## Periodic scheduler
+
+The daemon can run the same retry gate on a timer, but only through an explicit environment opt-in:
+
+```bash
+COVENANT_A2A_AUTO_RETRY_SCHEDULER=1
+COVENANT_A2A_AUTO_RETRY_INTERVAL_MS=60000
+COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS=300000
+COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS=3
+COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES=1
+COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100
+```
+
+The scheduler does not bypass the repair capability gate. If the operator identity does not hold `a2a.repair.requeue`, the scan is rejected and recorded as an `a2a_auto_retry_scheduler_scan` audit row with an error. Successful scans record the same audit summary plus per-task `auto_requeue` repair rows for actual mutations.
+
 ## Receiver obligations for `idempotent` tasks
 
 Receivers may claim a task is `idempotent` only when:
@@ -96,4 +111,3 @@ Manual lease repair already requires an explicit duplicate-risk posture (`idempo
 ## Follow-up work
 
 - Add an explicit A2A task-kind field so cache keys no longer depend on intent text.
-- Add an opt-in periodic retry scheduler that reuses the existing retry gate.

@@ -192,6 +192,25 @@ async fn main() -> Result<()> {
         .await
         .context("seed agent budget capacities from manifests")?;
 
+    let a2a_retry_scheduler = covenantd::a2a_auto_retry_scheduler_config_from_env()?;
+    let a2a_retry_scheduler_handle = if a2a_retry_scheduler.enabled {
+        info!(
+            interval_ms = a2a_retry_scheduler.interval_ms,
+            min_lease_age_ms = a2a_retry_scheduler.policy.min_lease_age_ms,
+            max_attempts = a2a_retry_scheduler.policy.max_attempts,
+            max_requeues = a2a_retry_scheduler.policy.max_requeues,
+            scan_limit = a2a_retry_scheduler.policy.scan_limit,
+            "a2a auto retry scheduler enabled"
+        );
+        Some(covenantd::spawn_a2a_auto_retry_scheduler(
+            server.clone(),
+            a2a_retry_scheduler,
+        ))
+    } else {
+        info!("a2a auto retry scheduler disabled");
+        None
+    };
+
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
     // registry the Unix socket uses; only `/health` is open. Operator
@@ -234,6 +253,9 @@ async fn main() -> Result<()> {
     }
 
     http_handle.abort();
+    if let Some(handle) = a2a_retry_scheduler_handle {
+        handle.abort();
+    }
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }

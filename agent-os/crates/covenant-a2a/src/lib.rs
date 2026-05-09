@@ -237,6 +237,22 @@ pub enum A2AAutoRetrySkipReason {
     CapabilityScopeMismatch,
 }
 
+impl A2AAutoRetrySkipReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::NotInFlight => "not_in_flight",
+            Self::MissingLease => "missing_lease",
+            Self::LeaseTooYoung => "lease_too_young",
+            Self::MissingIdempotency => "missing_idempotency",
+            Self::UnsafeDuplicateSafety => "unsafe_duplicate_safety",
+            Self::MaxAttemptsReached => "max_attempts_reached",
+            Self::LimitReached => "limit_reached",
+            Self::CapabilityScopeMismatch => "capability_scope_mismatch",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct A2AAutoRetrySkipped {
     pub task_id: Uuid,

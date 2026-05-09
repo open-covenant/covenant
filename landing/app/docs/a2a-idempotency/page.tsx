@@ -110,6 +110,26 @@ export default function A2AIdempotencyPolicyPage() {
         </li>
       </ol>
 
+      <h2>Periodic scheduler</h2>
+      <p>
+        The daemon can run the same retry gate on a timer through an explicit
+        environment opt-in. It does not bypass the{" "}
+        <code>a2a.repair.requeue</code> capability gate.
+      </p>
+      <pre>
+        <code>{`COVENANT_A2A_AUTO_RETRY_SCHEDULER=1
+COVENANT_A2A_AUTO_RETRY_INTERVAL_MS=60000
+COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS=300000
+COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS=3
+COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES=1
+COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100`}</code>
+      </pre>
+      <p>
+        Every scheduler pass records an{" "}
+        <code>a2a_auto_retry_scheduler_scan</code> audit summary. Actual
+        mutations still produce per-task <code>auto_requeue</code> repair rows.
+      </p>
+
       <h2>Receiver obligations</h2>
       <p>Receivers may claim <code>idempotent</code> only when:</p>
       <ul>

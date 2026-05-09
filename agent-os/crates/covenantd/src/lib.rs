@@ -48,9 +48,9 @@ use covenant_types::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 pub fn covenant_home() -> Result<PathBuf> {
@@ -147,6 +147,145 @@ pub fn runtime_runner_from_config(config: &RuntimeRunnerConfig) -> Arc<dyn Runne
             scratch_root,
         )),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A2AAutoRetrySchedulerConfig {
+    pub enabled: bool,
+    pub interval_ms: u64,
+    pub policy: covenant_a2a::A2AAutoRetryPolicy,
+}
+
+impl Default for A2AAutoRetrySchedulerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_ms: 60_000,
+            policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+        }
+    }
+}
+
+pub fn a2a_auto_retry_scheduler_config_from_env() -> Result<A2AAutoRetrySchedulerConfig> {
+    a2a_auto_retry_scheduler_config_from_values(
+        std::env::var("COVENANT_A2A_AUTO_RETRY_SCHEDULER")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT")
+            .ok()
+            .as_deref(),
+    )
+}
+
+pub fn a2a_auto_retry_scheduler_config_from_values(
+    enabled: Option<&str>,
+    interval_ms: Option<&str>,
+    min_lease_age_ms: Option<&str>,
+    max_attempts: Option<&str>,
+    max_requeues: Option<&str>,
+    scan_limit: Option<&str>,
+) -> Result<A2AAutoRetrySchedulerConfig> {
+    let mut config = A2AAutoRetrySchedulerConfig::default();
+    config.enabled = enabled
+        .map(parse_env_bool)
+        .transpose()?
+        .unwrap_or(config.enabled);
+    config.policy.enabled = config.enabled;
+
+    if let Some(value) = interval_ms {
+        config.interval_ms = parse_env_u64("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS", value)?;
+        if config.interval_ms == 0 {
+            anyhow::bail!("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS must be greater than zero");
+        }
+    }
+    if let Some(value) = min_lease_age_ms {
+        config.policy.min_lease_age_ms =
+            parse_env_u64("COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS", value)?;
+    }
+    if let Some(value) = max_attempts {
+        config.policy.max_attempts = parse_env_u32("COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS", value)?;
+    }
+    if let Some(value) = max_requeues {
+        config.policy.max_requeues =
+            parse_env_usize("COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES", value)?;
+    }
+    if let Some(value) = scan_limit {
+        config.policy.scan_limit = parse_env_usize("COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT", value)?;
+    }
+
+    Ok(config)
+}
+
+fn parse_env_bool(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => anyhow::bail!("expected boolean env value, got {other:?}"),
+    }
+}
+
+fn parse_env_u64(name: &str, value: &str) -> Result<u64> {
+    value
+        .trim()
+        .parse()
+        .with_context(|| format!("{name} must be an integer"))
+}
+
+fn parse_env_u32(name: &str, value: &str) -> Result<u32> {
+    value
+        .trim()
+        .parse()
+        .with_context(|| format!("{name} must be an integer"))
+}
+
+fn parse_env_usize(name: &str, value: &str) -> Result<usize> {
+    value
+        .trim()
+        .parse()
+        .with_context(|| format!("{name} must be an integer"))
+}
+
+pub fn spawn_a2a_auto_retry_scheduler(
+    server: Server,
+    config: A2AAutoRetrySchedulerConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let delay = Duration::from_millis(config.interval_ms);
+        loop {
+            tokio::time::sleep(delay).await;
+            match server
+                .run_a2a_auto_retry_scheduler_once(config.policy)
+                .await
+            {
+                Response::A2AAutoRetried { report } => {
+                    info!(
+                        considered = report.considered,
+                        requeued = report.requeued.len(),
+                        skipped = report.skipped.len(),
+                        "a2a auto retry scheduler scan complete"
+                    );
+                }
+                Response::Error { message } => {
+                    warn!(error = %message, "a2a auto retry scheduler scan rejected");
+                }
+                other => {
+                    warn!(response = ?other, "a2a auto retry scheduler returned unexpected response");
+                }
+            }
+        }
+    })
 }
 
 fn a2a_repair_action(command: &covenant_a2a::A2ARepairCommand) -> &'static str {
@@ -556,6 +695,61 @@ impl Server {
         if let Err(e) = self.audit.record(event).await {
             warn!(error = %e, "audit record failed");
         }
+    }
+
+    pub async fn run_a2a_auto_retry_scheduler_once(
+        &self,
+        policy: covenant_a2a::A2AAutoRetryPolicy,
+    ) -> Response {
+        let peer = self.identity.agent_id();
+        let response = self.retry_a2a_stale(policy, &peer).await;
+        self.record_a2a_auto_retry_scheduler_scan(policy, &response)
+            .await;
+        response
+    }
+
+    async fn record_a2a_auto_retry_scheduler_scan(
+        &self,
+        policy: covenant_a2a::A2AAutoRetryPolicy,
+        response: &Response,
+    ) {
+        let mut skipped_by_reason = BTreeMap::new();
+        let (considered, requeued, skipped, error) = match response {
+            Response::A2AAutoRetried { report } => {
+                for skipped in &report.skipped {
+                    *skipped_by_reason
+                        .entry(skipped.reason.as_str().to_string())
+                        .or_insert(0) += 1;
+                }
+                (
+                    report.considered as u64,
+                    report.requeued.len() as u64,
+                    report.skipped.len() as u64,
+                    None,
+                )
+            }
+            Response::Error { message } => (0, 0, 0, Some(message.clone())),
+            other => (0, 0, 0, Some(format!("unexpected response: {other:?}"))),
+        };
+
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: self.identity.agent_id(),
+            kind: AuditKind::A2AAutoRetrySchedulerScan {
+                enabled: policy.enabled,
+                considered,
+                requeued,
+                skipped,
+                skipped_by_reason,
+                min_lease_age_ms: policy.min_lease_age_ms,
+                max_attempts: policy.max_attempts,
+                max_requeues: policy.max_requeues as u64,
+                scan_limit: policy.scan_limit as u64,
+                error,
+            },
+        };
+        self.record_daemon_event(event).await;
     }
 
     pub async fn respond(&self, req: Request, peer: &AgentId) -> Response {
@@ -4414,6 +4608,27 @@ required = {caps:?}
         )
     }
 
+    fn server_with_audit(audit: Arc<covenant_audit::InMemoryAuditLog>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit,
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     async fn grant_action(s: &Server, action: &str) {
         let resp = s
             .op_respond(Request::GrantCapability {
@@ -4546,6 +4761,61 @@ required = {caps:?}
                     .join("runtime")
                     .join("gvisor"),
             }
+        );
+    }
+
+    #[test]
+    fn a2a_auto_retry_scheduler_config_defaults_disabled() {
+        let config =
+            a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)
+                .unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.interval_ms, 60_000);
+        assert!(!config.policy.enabled);
+        assert_eq!(config.policy.min_lease_age_ms, 300_000);
+        assert_eq!(config.policy.max_attempts, 3);
+        assert_eq!(config.policy.max_requeues, 1);
+        assert_eq!(config.policy.scan_limit, 100);
+    }
+
+    #[test]
+    fn a2a_auto_retry_scheduler_config_parses_opt_in_policy() {
+        let config = a2a_auto_retry_scheduler_config_from_values(
+            Some("true"),
+            Some("5000"),
+            Some("1000"),
+            Some("5"),
+            Some("2"),
+            Some("50"),
+        )
+        .unwrap();
+
+        assert!(config.enabled);
+        assert_eq!(config.interval_ms, 5_000);
+        assert!(config.policy.enabled);
+        assert_eq!(config.policy.min_lease_age_ms, 1_000);
+        assert_eq!(config.policy.max_attempts, 5);
+        assert_eq!(config.policy.max_requeues, 2);
+        assert_eq!(config.policy.scan_limit, 50);
+    }
+
+    #[test]
+    fn a2a_auto_retry_scheduler_config_rejects_zero_interval() {
+        let err = a2a_auto_retry_scheduler_config_from_values(
+            Some("1"),
+            Some("0"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS"),
+            "{err}"
         );
     }
 
@@ -6538,21 +6808,7 @@ required = {caps:?}
     #[tokio::test]
     async fn a2a_auto_retry_requeues_only_safe_idempotent_tasks_and_audits() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
-        let s = Server::new(
-            Arc::new(Router::from_cards(vec![])),
-            Arc::new(MockRunner::new("")),
-            Arc::new(InMemoryStore::new()),
-            Arc::new(InMemorySettlement::new()),
-            audit.clone(),
-            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
-            Arc::new(covenant_llm::MockEmbedder::new(64)),
-            Arc::new(LocalIdentity::generate("user@local")),
-            Arc::new(IgnoreSet::default()),
-            Arc::new(ToolRegistry::default()),
-            Arc::new(covenant_a2a::InMemoryMailbox::new()),
-            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
-            Arc::new(covenant_budget::InMemoryLedger::new()),
-        );
+        let s = server_with_audit(audit.clone());
         let mut safe = loopback_a2a_task_for(&s);
         safe.idempotency = Some(covenant_a2a::A2AIdempotency::new(
             covenant_a2a::A2ADuplicateSafety::Idempotent,
@@ -6647,6 +6903,149 @@ required = {caps:?}
             } => {
                 assert_eq!(*task_id, safe.id);
                 assert_eq!(duplicate_risk.as_deref(), Some("idempotent"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let mut task = loopback_a2a_task_for(&s);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "scheduler-safe-task",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let response = s
+            .run_a2a_auto_retry_scheduler_once(covenant_a2a::A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 0,
+                max_attempts: 3,
+                max_requeues: 1,
+                scan_limit: 10,
+            })
+            .await;
+
+        match response {
+            Response::A2AAutoRetried { report } => {
+                assert_eq!(report.considered, 1);
+                assert_eq!(report.requeued.len(), 1);
+                assert!(report.skipped.is_empty());
+                assert_eq!(report.requeued[0].task_id, task.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        assert!(events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::A2ARepairApplied { action, .. } if action == "auto_requeue"
+            )
+        }));
+        let scan = events
+            .iter()
+            .find(|event| matches!(event.kind, AuditKind::A2AAutoRetrySchedulerScan { .. }))
+            .expect("scheduler scan audit row");
+        match &scan.kind {
+            AuditKind::A2AAutoRetrySchedulerScan {
+                enabled,
+                considered,
+                requeued,
+                skipped,
+                skipped_by_reason,
+                error,
+                ..
+            } => {
+                assert!(*enabled);
+                assert_eq!(*considered, 1);
+                assert_eq!(*requeued, 1);
+                assert_eq!(*skipped, 0);
+                assert!(skipped_by_reason.is_empty());
+                assert_eq!(error, &None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_scheduler_once_audits_missing_capability_error() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let mut task = loopback_a2a_task_for(&s);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "scheduler-safe-task",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let response = s
+            .run_a2a_auto_retry_scheduler_once(covenant_a2a::A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 0,
+                max_attempts: 3,
+                max_requeues: 1,
+                scan_limit: 10,
+            })
+            .await;
+
+        match response {
+            Response::Error { message } => {
+                assert!(message.contains("a2a.repair.requeue"), "{message}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        let scan = events
+            .iter()
+            .find(|event| matches!(event.kind, AuditKind::A2AAutoRetrySchedulerScan { .. }))
+            .expect("scheduler scan audit row");
+        match &scan.kind {
+            AuditKind::A2AAutoRetrySchedulerScan {
+                enabled,
+                considered,
+                requeued,
+                skipped,
+                error,
+                ..
+            } => {
+                assert!(*enabled);
+                assert_eq!(*considered, 0);
+                assert_eq!(*requeued, 0);
+                assert_eq!(*skipped, 0);
+                assert!(
+                    error
+                        .as_deref()
+                        .is_some_and(|message| message.contains("a2a.repair.requeue")),
+                    "{error:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, task.id);
             }
             other => panic!("unexpected: {other:?}"),
         }

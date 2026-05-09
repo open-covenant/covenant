@@ -753,6 +753,15 @@ export default function Home() {
                       missing {e.kind.action}
                     </span>
                   )}
+                  {e.kind.type === "a2a_auto_retry_scheduler_scan" && (
+                    <span className="dim">
+                      {" "}
+                      {e.kind.enabled ? "enabled" : "disabled"} · considered{" "}
+                      {e.kind.considered} · requeued {e.kind.requeued} · skipped{" "}
+                      {e.kind.skipped}
+                      {e.kind.error ? ` · ${e.kind.error}` : ""}
+                    </span>
+                  )}
                   {e.kind.type === "capability_revoke_rejected" && (
                     <span className="dim">
                       {" "}

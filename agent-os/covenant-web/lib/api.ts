@@ -168,6 +168,19 @@ export type AuditKind =
       action: string;
     }
   | {
+      type: "a2a_auto_retry_scheduler_scan";
+      enabled: boolean;
+      considered: number;
+      requeued: number;
+      skipped: number;
+      skipped_by_reason: Record<string, number>;
+      min_lease_age_ms: number;
+      max_attempts: number;
+      max_requeues: number;
+      scan_limit: number;
+      error: string | null;
+    }
+  | {
       type: "capability_revoke_rejected";
       signature_b58: string;
       reason: string;

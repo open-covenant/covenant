@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
@@ -141,6 +142,23 @@ pub enum AuditKind {
         lease_id: Option<Uuid>,
         duplicate_risk: Option<String>,
         attempt: u32,
+    },
+    /// Logged by the disabled-by-default daemon scheduler after each
+    /// automatic A2A retry scan. Requeued tasks still get individual
+    /// [`AuditKind::A2ARepairApplied`] rows; this summary makes skipped
+    /// and rejected scheduler runs visible without duplicating task
+    /// payloads into the audit log.
+    A2AAutoRetrySchedulerScan {
+        enabled: bool,
+        considered: u64,
+        requeued: u64,
+        skipped: u64,
+        skipped_by_reason: BTreeMap<String, u64>,
+        min_lease_age_ms: u64,
+        max_attempts: u32,
+        max_requeues: u64,
+        scan_limit: u64,
+        error: Option<String>,
     },
     /// Logged when an operator completes a memory repair request. The
     /// full before/after record shape is returned to the caller through

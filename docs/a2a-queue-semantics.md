@@ -140,16 +140,27 @@ covenant a2a retry-stale \
 
 Without `--enable`, the CLI returns a report and performs no mutation. With `--enable`, the daemon only requeues entries that are in flight, old enough, below the attempt bound, and marked `duplicate_safety = "idempotent"` with a non-empty key. Each requeue records an `auto_requeue` A2A repair audit row. Entries that are unsafe, too young, exhausted, missing metadata, or outside capability scope remain untouched and appear in the report's `skipped` list.
 
+The daemon also ships an opt-in periodic scheduler that runs the same retry gate. It is disabled by default and has no independent mutation path. Enable it only after granting `a2a.repair.requeue` to the operator identity:
+
+```bash
+COVENANT_A2A_AUTO_RETRY_SCHEDULER=1
+COVENANT_A2A_AUTO_RETRY_INTERVAL_MS=60000
+COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS=300000
+COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS=3
+COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES=1
+COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100
+```
+
 The cache is intentionally conservative: tasks without metadata, tasks marked `unsafe`, and tasks whose sender, recipient, task kind, or idempotency key differ are delivered normally.
 
-Any background retry scheduler must remain:
+The scheduler remains:
 
 - opt-in (disabled by default);
 - limited to tasks marked safe to duplicate with an explicit idempotency key;
-- observable (audit rows and queue status must show retry events and attempt counts);
-- bounded (retry budgets, backoff, and “stop retrying” behavior must be operator-configurable).
+- observable (`a2a_auto_retry_scheduler_scan` audit summaries plus per-requeue `auto_requeue` audit rows);
+- bounded (interval, minimum lease age, max attempts, max requeues, and scan limit are operator-configurable).
 
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Add an opt-in periodic retry scheduler that reuses the explicit retry gate (see `docs/a2a-idempotency-policy.md`).
+- Add an explicit A2A task-kind field so idempotency cache keys no longer depend on intent text.

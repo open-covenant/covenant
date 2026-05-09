@@ -1,0 +1,39 @@
+{
+  "id": "a2a-background-retry-scheduler",
+  "title": "Add bounded A2A background retry scheduler",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant-audit",
+    "docs/a2a-queue-semantics.md",
+    "landing/app/docs"
+  ],
+  "summary": "Turn the explicit stale-lease retry scan into an opt-in periodic scheduler after receiver-side idempotency caching exists.",
+  "expectedFailureModes": [
+    "Background retry repeats externally visible side effects because receiver-side dedupe is absent or bypassed.",
+    "Retry scheduling creates unbounded queue churn when a recipient is down or a task is permanently invalid.",
+    "Operators cannot see why a retry was attempted, skipped, exhausted, or stopped."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenantd a2a --locked",
+    "cd agent-os && cargo test -p covenant-audit --locked",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human approval is required before enabling any background retry scheduler by default."
+  ],
+  "nextAction": "Implement an opt-in periodic scheduler that reuses the existing retry gate, enforces backoff and exhaustion limits, and records audit-visible retry decisions.",
+  "updated": "2026-05-09"
+}

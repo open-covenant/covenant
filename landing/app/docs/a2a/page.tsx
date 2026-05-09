@@ -239,11 +239,10 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         </li>
         <li>
           <strong>Retry posture.</strong> A2A delivery avoids automatic
-          redelivery of leased tasks after restart. A disabled-by-default
-          retry gate can requeue stale in-flight tasks only when an
-          operator enables a bounded scan and the task carries idempotent
-          duplicate-safety metadata. Automatic background retry remains
-          off.
+          redelivery of leased tasks after restart. The explicit retry gate
+          and opt-in scheduler can requeue stale in-flight tasks only when an
+          operator enables bounded policy and the task carries idempotent
+          duplicate-safety metadata.
         </li>
       </ul>
 

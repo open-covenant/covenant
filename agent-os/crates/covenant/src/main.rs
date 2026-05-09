@@ -28,7 +28,7 @@
 
 use anyhow::{bail, Context, Result};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
-use covenant_peer_auth::PeerSummary;
+use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
 use covenant_types::MemoryTier;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
@@ -98,7 +98,7 @@ fn print_usage() {
         "  covenant peers rotate                   mint a fresh operator token and revoke the old one"
     );
     eprintln!(
-        "  covenant peers list [--limit N] [--prefix B58]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix"
+        "  covenant peers list [--limit N] [--prefix B58] [--live-only | --revoked-only]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix; --live-only and --revoked-only narrow by status"
     );
     eprintln!(
         "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard, --limit-matches caps ambiguous-match render"
@@ -363,6 +363,7 @@ async fn main() -> Result<()> {
                                 &Request::ListPeers {
                                     limit: PEER_LOOKUP_LIMIT,
                                     pubkey_prefix: Some(prefix.to_string()),
+                                    status_filter: None,
                                 },
                             )
                             .await?;
@@ -800,6 +801,8 @@ async fn main() -> Result<()> {
                 "list" => {
                     let mut limit: usize = 20;
                     let mut prefix: Option<String> = None;
+                    let mut live_only = false;
+                    let mut revoked_only = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -813,15 +816,19 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--prefix needs a value")?;
                                 prefix = Some(v.clone());
                             }
+                            "--live-only" => live_only = true,
+                            "--revoked-only" => revoked_only = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
                     }
+                    let status_filter = peers_list_status_filter(live_only, revoked_only)?;
                     write_frame(
                         &mut stream,
                         &Request::ListPeers {
                             limit,
                             pubkey_prefix: prefix,
+                            status_filter,
                         },
                     )
                     .await?;
@@ -1087,6 +1094,23 @@ fn expand_a2a_action(
             tail: tail.to_string(),
             matches: live,
         }),
+    }
+}
+
+/// Resolve the two `peers list` status flags into a single filter. The
+/// pair is mutually exclusive — `--live-only && --revoked-only` would
+/// silently empty the result, which is operationally a footgun. Reject
+/// at parse time so the operator's mistake fails loudly with no daemon
+/// round-trip.
+fn peers_list_status_filter(
+    live_only: bool,
+    revoked_only: bool,
+) -> Result<Option<PeerStatusFilter>> {
+    match (live_only, revoked_only) {
+        (true, true) => bail!("--live-only and --revoked-only are mutually exclusive"),
+        (true, false) => Ok(Some(PeerStatusFilter::Live)),
+        (false, true) => Ok(Some(PeerStatusFilter::Revoked)),
+        (false, false) => Ok(None),
     }
 }
 
@@ -1474,6 +1498,27 @@ mod tests {
         assert!(
             hint.contains("longer prefix") && hint.contains("--limit-matches"),
             "hint should suggest both narrowing options: {hint}"
+        );
+    }
+
+    #[test]
+    fn peers_list_status_filter_resolves_three_branches_and_rejects_both() {
+        // No flag → no filter; the wire default that surfaces both halves.
+        assert_eq!(peers_list_status_filter(false, false).unwrap(), None);
+        assert_eq!(
+            peers_list_status_filter(true, false).unwrap(),
+            Some(PeerStatusFilter::Live)
+        );
+        assert_eq!(
+            peers_list_status_filter(false, true).unwrap(),
+            Some(PeerStatusFilter::Revoked)
+        );
+        // Both flags set is operationally a footgun (silently empty
+        // result against the registry); rejected at parse time.
+        let err = peers_list_status_filter(true, true).unwrap_err();
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "error mentions mutual exclusion: {err}"
         );
     }
 }

@@ -9,7 +9,7 @@ use covenant_a2a::{A2ATask, A2ATaskResult};
 use covenant_audit::AuditEvent;
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
-use covenant_peer_auth::{PeerSummary, RevokeOutcome};
+use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
 
@@ -168,17 +168,25 @@ pub enum Request {
     /// drop; HTTP rejects the old token immediately.
     RotateOperatorToken,
     /// Operator-triage view of the peer registry. Returns redacted
-    /// [`PeerSummary`] rows newest-first, including revoked entries
-    /// (with `revoked_at: Some(_)`). `pubkey_prefix` filters server-side
+    /// [`PeerSummary`] rows newest-first. By default surfaces both live
+    /// and revoked entries (with `revoked_at: Some(_)`); `status_filter`
+    /// narrows to a single half. `pubkey_prefix` filters server-side
     /// on `bs58::encode(agent_id.pubkey)` — paste the b58 from an
     /// `OperatorTokenRotationRejected` audit row to find the matching
     /// registry entry. Operator-only; a non-operator peer is rejected
     /// with an `OperatorPeersListRejected` audit row.
+    ///
+    /// `status_filter` carries `#[serde(default)]` so a stale CLI built
+    /// before the field landed sends frames without it; the new daemon
+    /// parses them as `None`, which is the pre-filter behaviour (both
+    /// halves surface).
     ListPeers {
         #[serde(default = "default_recent_limit")]
         limit: usize,
         #[serde(default)]
         pubkey_prefix: Option<String>,
+        #[serde(default)]
+        status_filter: Option<PeerStatusFilter>,
     },
     /// Revoke a single peer registry entry by token-prefix. The
     /// operator pastes the 6-char `token_prefix` they see in `peers

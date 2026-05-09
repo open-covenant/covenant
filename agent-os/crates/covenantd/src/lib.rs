@@ -338,7 +338,11 @@ impl Server {
             Request::ListPeers {
                 limit,
                 pubkey_prefix,
-            } => self.list_peers(limit, pubkey_prefix, peer).await,
+                status_filter,
+            } => {
+                self.list_peers(limit, pubkey_prefix, status_filter, peer)
+                    .await
+            }
             Request::RevokePeer {
                 token_prefix,
                 force,
@@ -797,6 +801,7 @@ impl Server {
         &self,
         limit: usize,
         pubkey_prefix: Option<String>,
+        status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
         peer: &AgentId,
     ) -> Response {
         if peer.pubkey != self.identity.agent_id().pubkey {
@@ -816,7 +821,7 @@ impl Server {
         }
         match self
             .peers
-            .list_summaries(limit, pubkey_prefix.as_deref())
+            .list_summaries(limit, pubkey_prefix.as_deref(), status_filter)
             .await
         {
             Ok((peers, truncated)) => Response::PeerList {
@@ -5211,6 +5216,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         let peers = match resp {
@@ -5245,6 +5251,7 @@ budget_credits_per_hour = {credits}
                 Request::ListPeers {
                     limit: 10,
                     pubkey_prefix: None,
+                    status_filter: None,
                 },
                 &foreign,
             )
@@ -5295,6 +5302,7 @@ budget_credits_per_hour = {credits}
                 Request::ListPeers {
                     limit: 10,
                     pubkey_prefix: None,
+                    status_filter: None,
                 },
                 &foreign,
             )
@@ -5363,6 +5371,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: Some(prefix),
+                status_filter: None,
             })
             .await;
         let peers = match resp {
@@ -5393,6 +5402,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         let json = serde_json::to_string(&resp).expect("serialize PeerList");
@@ -5430,6 +5440,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         match resp {
@@ -5467,12 +5478,14 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         let filtered = s
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: Some("zzzzzz".into()),
+                status_filter: None,
             })
             .await;
         let a = match unfiltered {
@@ -5509,6 +5522,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 10,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         let json = serde_json::to_string(&resp).expect("serialize PeerList");
@@ -5774,6 +5788,7 @@ budget_credits_per_hour = {credits}
             .op_respond(Request::ListPeers {
                 limit: 2,
                 pubkey_prefix: None,
+                status_filter: None,
             })
             .await;
         match resp {
@@ -5784,6 +5799,122 @@ budget_credits_per_hour = {credits}
                 assert!(truncated, "third peer drops; flag set");
             }
             other => panic!("expected PeerList, got {other:?}"),
+        }
+    }
+
+    /// `status_filter: Some(Live)` threads through to
+    /// `PeerRegistry::list_summaries` and drops every revoked row
+    /// before the limit-cap is applied. Regression against a refactor
+    /// that filters in the `Server` boundary after the registry returns
+    /// — that ordering would re-run the truncation logic and could
+    /// under-fill or over-truncate the response.
+    #[tokio::test]
+    async fn list_peers_response_filters_by_live_status() {
+        let s = server_with(vec![], "");
+        let live_token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token: live_token,
+                agent_id: AgentId::new("alive@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let dead_token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token: dead_token,
+                agent_id: AgentId::new("ghost@local", [2u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers.revoke(&dead_token).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+                status_filter: Some(covenant_peer_auth::PeerStatusFilter::Live),
+            })
+            .await;
+        match resp {
+            Response::PeerList {
+                peers, truncated, ..
+            } => {
+                assert!(!truncated);
+                assert_eq!(peers.len(), 1, "only the live row surfaces");
+                assert_eq!(peers[0].agent_id.display, "alive@local");
+                assert!(peers[0].revoked_at.is_none());
+            }
+            other => panic!("expected PeerList, got {other:?}"),
+        }
+    }
+
+    /// `status_filter: Some(Revoked)` is the inverse — drops every live
+    /// row. Pairs with the live-only test to pin both branches of the
+    /// status filter at the daemon boundary.
+    #[tokio::test]
+    async fn list_peers_response_filters_by_revoked_status() {
+        let s = server_with(vec![], "");
+        let live_token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token: live_token,
+                agent_id: AgentId::new("alive@local", [1u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        let dead_token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token: dead_token,
+                agent_id: AgentId::new("ghost@local", [2u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        s.peers.revoke(&dead_token).await.unwrap();
+
+        let resp = s
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+                status_filter: Some(covenant_peer_auth::PeerStatusFilter::Revoked),
+            })
+            .await;
+        match resp {
+            Response::PeerList {
+                peers, truncated, ..
+            } => {
+                assert!(!truncated);
+                assert_eq!(peers.len(), 1, "only the revoked row surfaces");
+                assert_eq!(peers[0].agent_id.display, "ghost@local");
+                assert!(peers[0].revoked_at.is_some());
+            }
+            other => panic!("expected PeerList, got {other:?}"),
+        }
+    }
+
+    /// Stale CLI built before `status_filter` landed sends the field-less
+    /// frame; new daemon parses missing field as `None` (`#[serde(default)]`)
+    /// and returns the pre-filter shape. Forward-compat regression.
+    #[tokio::test]
+    async fn list_peers_request_status_filter_field_is_serde_default_for_forward_compat() {
+        let raw = r#"{"kind":"list_peers","limit":10,"pubkey_prefix":null}"#;
+        let req: Request = serde_json::from_str(raw).unwrap();
+        match req {
+            Request::ListPeers {
+                limit,
+                pubkey_prefix,
+                status_filter,
+            } => {
+                assert_eq!(limit, 10);
+                assert_eq!(pubkey_prefix, None);
+                assert_eq!(status_filter, None, "missing field defaults to None");
+            }
+            other => panic!("expected ListPeers, got {other:?}"),
         }
     }
 

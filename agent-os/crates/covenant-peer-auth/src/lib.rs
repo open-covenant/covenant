@@ -126,6 +126,23 @@ pub struct PeerSummary {
     pub revoked_at: Option<u64>,
 }
 
+/// Filter applied to [`PeerRegistry::list_summaries`]. `None` (the
+/// wire default for [`Request::ListPeers.status_filter`]) means "no
+/// filter" — both live and revoked rows surface; this preserves the
+/// pre-filter behaviour for stale clients that omit the field. The
+/// two explicit variants narrow the result to a single status so an
+/// operator triaging an incident can drop the noise of the other
+/// half. Compares on `revoked_at: Option<u64>` — `None` is live,
+/// `Some(_)` is revoked. The filter runs *before* the registry's
+/// `take(limit + 1)` peek so the resulting `truncated` flag reflects
+/// truncation among the filtered rows, not the full registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerStatusFilter {
+    Live,
+    Revoked,
+}
+
 /// Outcome of [`PeerRegistry::revoke_by_token_prefix`]. The operator
 /// runs `peers list --prefix <pubkey>` to find a registry entry, copies
 /// the 6-char `token_prefix`, then runs `peers revoke <prefix>`. The
@@ -197,14 +214,21 @@ pub trait PeerRegistry: Send + Sync {
     /// Returns only currently-live entries (revoked tokens excluded).
     /// Operator-facing.
     async fn recent(&self, limit: usize) -> Result<Vec<PeerEntry>, PeerError>;
-    /// Operator-triage view, newest-first up to `limit`. Includes both
-    /// live and revoked entries so the operator can answer "is this
-    /// pubkey already revoked?" from a single read; `revoked_at`
+    /// Operator-triage view, newest-first up to `limit`. Defaults to
+    /// both live and revoked entries so the operator can answer "is
+    /// this pubkey already revoked?" from a single read; `revoked_at`
     /// distinguishes them. `pubkey_prefix` filters server-side on
     /// `bs58::encode(agent_id.pubkey)` — the same string that
     /// [`AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`]
     /// records, so an operator can paste the audit row's b58 directly.
-    /// Empty/`None` prefix means "no filter".
+    /// Empty/`None` prefix means "no prefix filter".
+    ///
+    /// `status_filter` narrows by liveness — `None` (the default) keeps
+    /// both halves; [`PeerStatusFilter::Live`] drops every row whose
+    /// `revoked_at` is `Some(_)`; [`PeerStatusFilter::Revoked`] drops
+    /// every row whose `revoked_at` is `None`. The filter runs before
+    /// `take(limit + 1)` so the returned `truncated` reflects truncation
+    /// among the filtered rows.
     ///
     /// Returns `(rows, truncated)`. `rows.len() <= limit`; `truncated`
     /// is `true` when more matches existed than `limit` allowed. The
@@ -214,6 +238,7 @@ pub trait PeerRegistry: Send + Sync {
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
+        status_filter: Option<PeerStatusFilter>,
     ) -> Result<(Vec<PeerSummary>, bool), PeerError>;
     /// Drop revocation tombstones with `revoked_at < before_ms` along
     /// with their matching `Registered` entries. Returns the number of
@@ -299,6 +324,14 @@ fn summary_matches(s: &PeerSummary, prefix: Option<&str>) -> bool {
     }
 }
 
+fn summary_passes_status(s: &PeerSummary, filter: Option<PeerStatusFilter>) -> bool {
+    match filter {
+        None => true,
+        Some(PeerStatusFilter::Live) => s.revoked_at.is_none(),
+        Some(PeerStatusFilter::Revoked) => s.revoked_at.is_some(),
+    }
+}
+
 /// In-process registry suitable for tests.
 pub struct InMemoryPeerRegistry {
     entries: Mutex<Vec<PeerEntry>>,
@@ -368,6 +401,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
+        status_filter: Option<PeerStatusFilter>,
     ) -> Result<(Vec<PeerSummary>, bool), PeerError> {
         let entries = self.entries.lock().await;
         let revoked = self.revoked.lock().await;
@@ -376,6 +410,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
             .rev()
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
+            .filter(|s| summary_passes_status(s, status_filter))
             .take(limit + 1)
             .collect();
         let truncated = peeked.len() > limit;
@@ -602,6 +637,7 @@ impl PeerRegistry for JsonlPeerRegistry {
         &self,
         limit: usize,
         pubkey_prefix: Option<&str>,
+        status_filter: Option<PeerStatusFilter>,
     ) -> Result<(Vec<PeerSummary>, bool), PeerError> {
         let entries = self.entries.lock().await;
         let revoked = self.revoked.lock().await;
@@ -610,6 +646,7 @@ impl PeerRegistry for JsonlPeerRegistry {
             .rev()
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
+            .filter(|s| summary_passes_status(s, status_filter))
             .take(limit + 1)
             .collect();
         let truncated = peeked.len() > limit;
@@ -1139,7 +1176,7 @@ mod tests {
         r.register(dead_ent).await.unwrap();
         r.revoke(&dead_tok).await.unwrap();
 
-        let (s, truncated) = r.list_summaries(10, None).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, None, None).await.unwrap();
         assert!(!truncated, "two entries under cap of ten");
         assert_eq!(s.len(), 2, "live and revoked both surface");
         let dead_summary = s
@@ -1170,7 +1207,7 @@ mod tests {
         r.register(e_mid).await.unwrap();
         r.register(e_new).await.unwrap();
 
-        let (s, truncated) = r.list_summaries(10, None).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, None, None).await.unwrap();
         assert!(!truncated, "three entries under cap of ten");
         let displays: Vec<&str> = s.iter().map(|x| x.agent_id.display.as_str()).collect();
         assert_eq!(
@@ -1193,15 +1230,15 @@ mod tests {
 
         let target_b58 = bs58::encode(e_match.agent_id.pubkey).into_string();
         let prefix: String = target_b58.chars().take(4).collect();
-        let (s, truncated) = r.list_summaries(10, Some(&prefix)).await.unwrap();
+        let (s, truncated) = r.list_summaries(10, Some(&prefix), None).await.unwrap();
         assert!(!truncated);
         assert_eq!(s.len(), 1, "only the matching pubkey surfaces");
         assert_eq!(s[0].agent_id.display, "match@local");
 
-        let (none, _) = r.list_summaries(10, Some("zzzzzz")).await.unwrap();
+        let (none, _) = r.list_summaries(10, Some("zzzzzz"), None).await.unwrap();
         assert!(none.is_empty(), "non-matching prefix returns empty");
 
-        let (all, _) = r.list_summaries(10, Some("")).await.unwrap();
+        let (all, _) = r.list_summaries(10, Some(""), None).await.unwrap();
         assert_eq!(all.len(), 2, "empty prefix is no filter");
     }
 
@@ -1210,7 +1247,7 @@ mod tests {
         let r = InMemoryPeerRegistry::new();
         let (tok, ent) = entry("p@local");
         r.register(ent).await.unwrap();
-        let (s, _) = r.list_summaries(10, None).await.unwrap();
+        let (s, _) = r.list_summaries(10, None, None).await.unwrap();
         let json = serde_json::to_string(&s).unwrap();
         let full_b58 = tok.to_b58();
         assert!(
@@ -1234,7 +1271,7 @@ mod tests {
         }
 
         let r2 = JsonlPeerRegistry::open(path).await.unwrap();
-        let (s, _) = r2.list_summaries(10, None).await.unwrap();
+        let (s, _) = r2.list_summaries(10, None, None).await.unwrap();
         assert_eq!(s.len(), 2);
         let dead = s
             .iter()
@@ -1405,7 +1442,7 @@ mod tests {
         let r2 = JsonlPeerRegistry::open(path).await.unwrap();
         assert_eq!(r2.resolve(&token).await.unwrap(), None);
         // The summary list still surfaces the revoked entry.
-        let (s, _) = r2.list_summaries(10, None).await.unwrap();
+        let (s, _) = r2.list_summaries(10, None, None).await.unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].revoked_at.is_some());
     }
@@ -1423,7 +1460,7 @@ mod tests {
         r.register(e1).await.unwrap();
         r.register(e2).await.unwrap();
         r.register(e3).await.unwrap();
-        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None, None).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
     }
@@ -1439,7 +1476,7 @@ mod tests {
         let (_, e2) = entry("b@local");
         r.register(e1).await.unwrap();
         r.register(e2).await.unwrap();
-        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None, None).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert!(!truncated);
     }
@@ -1457,7 +1494,7 @@ mod tests {
         r.register(e1).await.unwrap();
         r.register(e2).await.unwrap();
         r.register(e3).await.unwrap();
-        let (rows, truncated) = r.list_summaries(2, None).await.unwrap();
+        let (rows, truncated) = r.list_summaries(2, None, None).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
     }
@@ -1557,5 +1594,156 @@ mod tests {
             .expect("unique live match");
         assert_eq!(s.agent_id, ent.agent_id);
         assert!(s.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_summaries_status_filter_live_drops_revoked_rows() {
+        let r = InMemoryPeerRegistry::new();
+        let (live_tok, live_ent) = entry("alive@local");
+        let (dead_tok, dead_ent) = entry("ghost@local");
+        r.register(live_ent).await.unwrap();
+        r.register(dead_ent).await.unwrap();
+        r.revoke(&dead_tok).await.unwrap();
+
+        let (rows, truncated) = r
+            .list_summaries(10, None, Some(PeerStatusFilter::Live))
+            .await
+            .unwrap();
+        assert!(!truncated);
+        assert_eq!(rows.len(), 1, "only the live row surfaces");
+        assert_eq!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
+        assert!(rows[0].revoked_at.is_none());
+        assert_ne!(rows[0].token_prefix, &dead_tok.to_b58()[..6]);
+    }
+
+    #[tokio::test]
+    async fn list_summaries_status_filter_revoked_drops_live_rows() {
+        let r = InMemoryPeerRegistry::new();
+        let (live_tok, live_ent) = entry("alive@local");
+        let (dead_tok, dead_ent) = entry("ghost@local");
+        r.register(live_ent).await.unwrap();
+        r.register(dead_ent).await.unwrap();
+        r.revoke(&dead_tok).await.unwrap();
+
+        let (rows, truncated) = r
+            .list_summaries(10, None, Some(PeerStatusFilter::Revoked))
+            .await
+            .unwrap();
+        assert!(!truncated);
+        assert_eq!(rows.len(), 1, "only the revoked row surfaces");
+        assert_eq!(rows[0].token_prefix, &dead_tok.to_b58()[..6]);
+        assert!(rows[0].revoked_at.is_some());
+        assert_ne!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
+    }
+
+    #[tokio::test]
+    async fn list_summaries_status_filter_none_keeps_both_halves() {
+        // The pre-filter behaviour is preserved when status_filter is
+        // None — the wire default for stale clients that omit the
+        // field. Regression test for forward-compat.
+        let r = InMemoryPeerRegistry::new();
+        let (_live_tok, live_ent) = entry("alive@local");
+        let (dead_tok, dead_ent) = entry("ghost@local");
+        r.register(live_ent).await.unwrap();
+        r.register(dead_ent).await.unwrap();
+        r.revoke(&dead_tok).await.unwrap();
+
+        let (rows, truncated) = r.list_summaries(10, None, None).await.unwrap();
+        assert!(!truncated);
+        assert_eq!(rows.len(), 2);
+    }
+
+    /// Status filter composes with `pubkey_prefix`: rows must match
+    /// both. Regression against a refactor that short-circuits one
+    /// filter when the other is None.
+    #[tokio::test]
+    async fn list_summaries_status_filter_composes_with_pubkey_prefix() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e_live_match) = entry_with_pubkey("live_match@local", 0xff);
+        let (dead_match_tok, e_dead_match) = entry_with_pubkey("dead_match@local", 0xff);
+        let (_, e_other) = entry_with_pubkey("other@local", 0x01);
+        r.register(e_live_match.clone()).await.unwrap();
+        r.register(e_dead_match.clone()).await.unwrap();
+        r.register(e_other).await.unwrap();
+        r.revoke(&dead_match_tok).await.unwrap();
+
+        let target_b58 = bs58::encode(e_live_match.agent_id.pubkey).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+
+        let (live_rows, _) = r
+            .list_summaries(10, Some(&prefix), Some(PeerStatusFilter::Live))
+            .await
+            .unwrap();
+        assert_eq!(live_rows.len(), 1);
+        assert_eq!(live_rows[0].agent_id.display, "live_match@local");
+
+        let (dead_rows, _) = r
+            .list_summaries(10, Some(&prefix), Some(PeerStatusFilter::Revoked))
+            .await
+            .unwrap();
+        assert_eq!(dead_rows.len(), 1);
+        assert_eq!(dead_rows[0].agent_id.display, "dead_match@local");
+    }
+
+    /// `truncated` reflects truncation among the *filtered* rows, not
+    /// the full registry. Regression against a refactor that filters
+    /// after `take(limit + 1)`, which would mark a result truncated
+    /// when only same-status rows exist within the cap.
+    #[tokio::test]
+    async fn list_summaries_status_filter_truncation_reflects_filtered_rows() {
+        let r = InMemoryPeerRegistry::new();
+        // Three live + three revoked.
+        let mut live_tokens = Vec::new();
+        for name in ["L1@local", "L2@local", "L3@local"] {
+            let (t, e) = entry(name);
+            r.register(e).await.unwrap();
+            live_tokens.push(t);
+        }
+        for name in ["R1@local", "R2@local", "R3@local"] {
+            let (t, e) = entry(name);
+            r.register(e).await.unwrap();
+            r.revoke(&t).await.unwrap();
+        }
+
+        // limit=2 with status=Live → exactly 2 rows + truncated, ignoring
+        // the three revoked rows that don't pass the status filter.
+        let (rows, truncated) = r
+            .list_summaries(2, None, Some(PeerStatusFilter::Live))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated, "third live row dropped → truncated");
+        assert!(rows.iter().all(|s| s.revoked_at.is_none()));
+
+        // limit=3 with status=Live → exactly 3 rows, NOT truncated even
+        // though three revoked rows exist (filtered out before peek).
+        let (rows, truncated) = r
+            .list_summaries(3, None, Some(PeerStatusFilter::Live))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            !truncated,
+            "three live rows fit in cap of three; revoked rows are not over-cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_list_summaries_status_filter_live_drops_revoked_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (live_tok, live_ent) = entry("alive@local");
+        let (dead_tok, dead_ent) = entry("ghost@local");
+        r.register(live_ent).await.unwrap();
+        r.register(dead_ent).await.unwrap();
+        r.revoke(&dead_tok).await.unwrap();
+
+        let (rows, _) = r
+            .list_summaries(10, None, Some(PeerStatusFilter::Live))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
     }
 }

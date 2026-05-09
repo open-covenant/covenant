@@ -586,6 +586,20 @@ async fn peers_rotate(
 struct PeersListParams {
     limit: Option<usize>,
     prefix: Option<String>,
+    /// `live` / `revoked`. Anything else (or absent) → no status filter.
+    /// `serde` rejects unknown variant tags by default, so a typo at the
+    /// query layer would 400 the request before it reaches the daemon;
+    /// untyped `String` here is permissive — typos degrade to no-filter
+    /// rather than an error, matching the rest of the query layer's
+    /// "missing field is no filter" posture.
+    status: Option<String>,
+}
+fn parse_status(s: Option<&str>) -> Option<covenant_peer_auth::PeerStatusFilter> {
+    match s {
+        Some("live") => Some(covenant_peer_auth::PeerStatusFilter::Live),
+        Some("revoked") => Some(covenant_peer_auth::PeerStatusFilter::Revoked),
+        _ => None,
+    }
 }
 
 async fn peers_list(
@@ -593,12 +607,14 @@ async fn peers_list(
     Extension(peer): Extension<AgentId>,
     Query(q): Query<PeersListParams>,
 ) -> Result<Json<Response>, ApiError> {
+    let status_filter = parse_status(q.status.as_deref());
     Ok(Json(
         s.server
             .respond(
                 Request::ListPeers {
                     limit: q.limit.unwrap_or(20),
                     pubkey_prefix: q.prefix,
+                    status_filter,
                 },
                 &peer,
             )

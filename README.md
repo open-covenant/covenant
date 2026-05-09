@@ -89,7 +89,13 @@ Implemented and tested in the repository:
 | Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data, and unsigned or locally signed audit-root attestations bind local integrity reports to commits and tasks; public key custody and transparency-log publication are not claimed. |
 | Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage and a repeatable runner guide exist. CI-host automation and Firecracker isolation are future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
-| Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
+| Installer and SDK ecosystem | Planned | The alpha contract is source-built; package installers and stable SDKs are future work. |
+
+## Alpha Release Contract
+
+Covenant may only be presented as alpha when the release matches [docs/alpha-release-contract.md](./docs/alpha-release-contract.md). The current alpha boundary is source-built, local-first infrastructure for engineers and researchers. It does not claim production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, a marketplace, or multi-host production operation.
+
+Human approval is required before creating or publishing any release tag, artifact, package, or announcement.
 
 ## Local Validation
 

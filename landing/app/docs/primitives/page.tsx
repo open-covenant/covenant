@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "The eight primitives",
   description:
-    "Intent, runtime, memory, identity, permissions, comms, compositor, settlement — the OS-level vocabulary Covenant exposes.",
+    "Intent, runtime, memory, identity, permissions, comms, audit, settlement — the OS-level vocabulary Covenant exposes.",
 };
 
 export default function PrimitivesPage() {
@@ -15,7 +15,7 @@ export default function PrimitivesPage() {
         operations required for human users, software agents, and
         external tools to share a host system: dispatch of work, isolated
         execution, persistent context, identity, authorization,
-        communication, presentation, and economic settlement. Every
+        communication, auditability, and economic settlement. Every
         higher-level behavior in the system is composed from these eight.
       </p>
 
@@ -129,23 +129,26 @@ export default function PrimitivesPage() {
         </li>
       </ul>
 
-      <h2>Compositor</h2>
+      <h2>Audit</h2>
       <p>
-        The presentation surface through which an operator interacts with
-        the daemon: the CLI, the web UI, a terminal interface, or a native
-        Wayland compositor on later milestones. Compositors are clients of
-        the daemon, communicating over Local IPC or HTTP, and hold no state
-        beyond user preferences.
+        The evidence layer for privileged actions. Audit events are
+        append-only JSONL rows with structured kinds, issuers, timestamps,
+        and local hash-chain integrity reports. The alpha surface supports
+        recent reads, bounded purges, integrity verification, and unsigned
+        or locally signed audit-root attestations.
+      </p>
+      <p>
+        See <Link href="/audit">Audit log</Link> and{" "}
+        <Link href="/audit-integrity">Audit integrity</Link>.
       </p>
 
       <h2>Settlement</h2>
       <p>
-        How resource consumption is accounted for. Every memory write,
-        every tool call, and (eventually) every external compute or
-        token spent produces a <code>SettlementReceipt</code>. Receipts
-        accumulate locally in JSONL and are batched and flushed to the
-        on-chain program; once flushed, the on-chain signature populates
-        and the receipt is reconcilable from chain state alone.
+        How resource consumption is accounted for. Today Covenant records
+        local <code>SettlementReceipt</code> rows for resources such as
+        memory writes. Chain fields remain empty unless a future settlement
+        integration records them. The Solana program is scaffolded and not
+        part of the alpha runtime claim.
       </p>
       <p>
         See <Link href="/settlement">Settlement</Link>.

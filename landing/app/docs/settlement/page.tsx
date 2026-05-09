@@ -152,8 +152,8 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
         </li>
         <li>
           <Link href="/identity">Identity and keys</Link> — the
-          same key signs settlement transactions and capability
-          grants.
+          same local identity signs capability grants today and is the
+          planned signer boundary for future settlement transactions.
         </li>
         <li>
           <Link href="/audit">Audit log</Link> — settlement

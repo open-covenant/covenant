@@ -2,13 +2,19 @@
 
 Covenant is moving toward an open agent-native operating layer for long-running autonomous software systems. The roadmap is organized by system capability, not by marketing milestones.
 
+## Alpha Release Boundary
+
+The alpha release target is a source-built local control plane, not a production distribution. The release contract is defined in [docs/alpha-release-contract.md](./docs/alpha-release-contract.md).
+
+Alpha may include the local daemon, CLI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and opt-in live validation paths. It must not claim production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, marketplace operation, or multi-host production readiness.
+
 ## Now: Harden the Local Control Plane
 
 The current priority is making the local daemon and CLI reliable under real engineering use.
 
 - Keep identity, peer auth, capability checks, audit rows, and token rotation strict.
 - Expand live tests across daemon, CLI, HTTP, MCP, A2A, and subprocess boundaries.
-- Add explicit A2A requeue and lease-expiry repair commands on top of durable leased delivery.
+- Keep A2A requeue, force-error repair, lease guards, and queue-status semantics covered through live CLI fixtures.
 - Improve memory lifecycle: working-tier cleanup, compaction policy, and drift checks.
 - Keep local validation and CI equivalent through `agent-os/scripts/validate.sh`.
 - Make public docs distinguish implemented, experimental, and planned behavior.

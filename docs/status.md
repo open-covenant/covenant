@@ -19,7 +19,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, sprint summary generator, git identity validator, local pre-push guard | Signed review artifacts and routine publication of sprint summaries. |
 | Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, verifier drift/repair coverage, external-service gVisor coverage entry, `docs/gvisor-live-runner.md` | Promote the documented Linux gVisor runner into CI once host provisioning is stable, and keep adding mutation-edge live tests where policies are stable. |
 | Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations`, audit-root attestation signing/verification support, ADR 0004 audit-root signing policy | Implement key custody, release artifact subjects, and transparency publication. |
-| Installer and SDK ecosystem | Planned | No stable release path | Define alpha release contract after sandbox and settlement boundaries harden. |
+| Installer and SDK ecosystem | Planned, alpha contract defined | `docs/alpha-release-contract.md` defines a source-built alpha boundary, release blockers, non-claims, and human approval requirement | Package installers, stable SDKs, signed release artifacts, and upgrade policy. |
 
 ## Validation Signals
 
@@ -32,3 +32,5 @@ This status matrix separates what exists from what is experimental or planned. U
 - Live coverage matrix gate: `node agent-os/scripts/validate-live-coverage.mjs`
 - Landing docs build: `pnpm --dir landing build`
 - Dependency audit: `bash scripts/audit.sh`
+
+Alpha release boundary: `docs/alpha-release-contract.md`

@@ -168,6 +168,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 
 - [README.md](../README.md): public thesis and status.
 - [ROADMAP.md](../ROADMAP.md): capability roadmap.
+- [docs/alpha-release-contract.md](./alpha-release-contract.md): alpha release boundary, blockers, and non-claims.
 - [docs/project-memory.md](./project-memory.md): durable project context and invariants.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/live-coverage.md](./live-coverage.md): live boundary coverage matrix.

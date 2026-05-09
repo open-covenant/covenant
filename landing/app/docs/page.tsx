@@ -23,9 +23,14 @@ const TILES = [
     body: "Task lifecycle, continuation, validation gates, and sprint summaries.",
   },
   {
+    href: "/alpha-release",
+    title: "Alpha release",
+    body: "Source-built alpha boundary, blockers, non-claims, and post-alpha research split.",
+  },
+  {
     href: "/architecture",
     title: "Architecture",
-    body: "Architecture of the daemon, runtime, and on-chain settlement program.",
+    body: "Architecture of the daemon, runtime, local control plane, and settlement scaffold.",
   },
   {
     href: "/cli",
@@ -81,7 +86,7 @@ export default function DocsIndexPage() {
       <p>
         Covenant is an open, agent-native operating layer. It runs locally on
         the host and exposes eight operating-layer primitives — intent,
-        runtime, memory, identity, permissions, comms, compositor, and
+        runtime, memory, identity, permissions, comms, audit, and
         settlement — through which human users, software agents, and tools
         coordinate work, share state, and settle usage.
       </p>
@@ -124,9 +129,10 @@ export default function DocsIndexPage() {
         has manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, an initial runtime-level
         gVisor runner, opt-in live Linux sandbox coverage, and a documented
-        Linux runner setup. On-chain settlement, installer, SDK ecosystem,
-        signed releases, production sandbox CI, and transparency-log
-        publication remain planned work.
+        Linux runner setup. The alpha release contract is source-built local
+        infrastructure. On-chain settlement, installer, SDK ecosystem, signed
+        releases, production sandbox CI, and transparency-log publication
+        remain planned work.
       </p>
 
       <h2>Position in the stack</h2>

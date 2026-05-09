@@ -4,7 +4,7 @@ import { HeroMesh } from "./HeroMesh";
 import { MobileMenu } from "./MobileMenu";
 import { PixelReveal } from "./PixelReveal";
 
-const RELEASE_DATE = "ALPHA: 13.05.2026";
+const RELEASE_DATE = "ALPHA TARGET: 13.05.2026";
 const X_URL = "https://x.com/OpenCovenant";
 const GITHUB_URL = "https://github.com/open-covenant/covenant";
 

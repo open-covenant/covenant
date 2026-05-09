@@ -6,14 +6,14 @@ import { MobileMenu } from "../MobileMenu";
 export const metadata: Metadata = {
   title: "Roadmap — Covenant",
   description:
-    "Development milestones for Covenant following the alpha release on 13.05.2026: hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
+    "Development milestones for Covenant around the alpha release target on 13.05.2026: hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/roadmap",
     title: "Roadmap — Covenant",
     description:
-      "Development milestones for Covenant following the alpha release on 13.05.2026.",
+      "Development milestones for Covenant around the alpha release target on 13.05.2026.",
   },
 };
 
@@ -68,17 +68,16 @@ const MILESTONES: Milestone[] = [
   {
     code: "M0",
     title: "Alpha",
-    status: "Live · 13.05.2026",
-    live: true,
+    status: "Target · 13.05.2026",
     intro:
-      "All eight primitives in production. Settlement runs on Solana mainnet from the launch date.",
+      "Source-built local control plane for engineers and researchers. The alpha boundary is explicit: local daemon, CLI, policy, memory, audit, A2A, MCP, local receipts, and provenance evidence.",
     bullets: [
-      "Eight primitives: intent, runtime, memory, identity, permissions, comms, compositor, settlement",
-      "Multi-provider LLM support: Anthropic, OpenAI, DeepSeek, and local inference via Ollama",
-      "Solana mainnet settlement with $covnt: credits, treasury buyback, Pyth oracle integration",
-      "MCP and A2A bridges for tool invocation and agent-to-agent delegation",
-      "Local-first architecture: daemon, CLI, and web UI run on the user's machine",
-      "Apache 2.0 core; MIT-licensed SDKs",
+      "Daemon, CLI, IPC, local HTTP gateway, identity, permissions, memory, audit, A2A, MCP, budget, and local receipt ledger",
+      "Trusted-local subprocess runtime plus fail-closed handling for sandbox-required manifests",
+      "Opt-in Linux gVisor validation path where host prerequisites are met",
+      "Autonomous workflow records, live coverage matrix, identity guards, and commit-scoped provenance envelopes",
+      "Explicit non-claims for production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, marketplace, and multi-host production",
+      "Apache 2.0 core",
     ],
   },
   {
@@ -88,7 +87,7 @@ const MILESTONES: Milestone[] = [
     intro:
       "Production hardening across the runtime, tooling, and distribution surface.",
     bullets: [
-      "gVisor sandbox replaces the subprocess runtime",
+      "Linux gVisor runner promoted into repeatable CI with pinned fixtures",
       "Per-agent LLM routing with fallback chains and budget-aware escalation",
       "Terminal user interface (Ratatui)",
       "Live web search enabled by default via Brave or SerpAPI",

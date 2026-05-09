@@ -311,8 +311,8 @@ priority                = "normal"`}</code>
               <code>0</code>
             </td>
             <td>
-              Soft cap; tolerated as <code>0</code> until enforced by
-              the on-chain settlement program.
+              Soft cap; tolerated as <code>0</code> until budget and
+              settlement enforcement are configured for the agent.
             </td>
           </tr>
           <tr>

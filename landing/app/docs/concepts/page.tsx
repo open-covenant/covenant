@@ -224,23 +224,13 @@ export default function ConceptsPage() {
         <strong>settlement receipt</strong> — a UUID, a payer, a resource
         kind, a credits-consumed integer, a timestamp, and an optional
         on-chain signature. Receipts accumulate in{" "}
-        <code>$COVENANT_HOME/receipts/working.jsonl</code> until they are
-        batched and flushed to the on-chain settlement program; at that
-        point <code>onchain_sig</code> is populated.
+        <code>$COVENANT_HOME/receipts/working.jsonl</code>. Chain fields
+        remain empty unless a future settlement integration records them.
       </p>
 
       <p>
-        See <Link href="/settlement">Settlement</Link> for the credit
-        model and the buyback shape.
-      </p>
-
-      <h2>Compositor</h2>
-      <p>
-        The compositor is the surface through which an operator interacts
-        with the daemon: the CLI, the web UI, a terminal interface, or a
-        native Wayland compositor on supported milestones. Compositors
-        communicate with the daemon through the transports listed above;
-        the daemon makes no assumptions about the client surface.
+        See <Link href="/settlement">Settlement</Link> for the current
+        local receipt model and the planned on-chain boundary.
       </p>
 
       <h2>End-to-end intent flow</h2>

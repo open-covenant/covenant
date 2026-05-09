@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# covenant-managed-pre-push
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+node agent-os/scripts/validate-git-identity.mjs

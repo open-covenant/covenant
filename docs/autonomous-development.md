@@ -12,6 +12,7 @@ Operational helpers:
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
 node agent-os/scripts/validate-git-identity.mjs
+node agent-os/scripts/install-git-hooks.mjs --dry-run
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/provenance.mjs verify-all
 ```
@@ -19,6 +20,8 @@ node agent-os/scripts/provenance.mjs verify-all
 `autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
 
 `provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
+
+`install-git-hooks.mjs` installs a local pre-push hook that runs the git identity guard. It refuses to overwrite an unmanaged hook unless `--force` is supplied.
 
 ## Objectives
 

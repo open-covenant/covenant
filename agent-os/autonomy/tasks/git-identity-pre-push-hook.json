@@ -1,0 +1,33 @@
+{
+  "id": "git-identity-pre-push-hook",
+  "title": "Add optional git identity pre-push hook",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "verifier",
+  "scope": [
+    "hooks/pre-push",
+    "agent-os/scripts",
+    "docs/autonomous-development.md"
+  ],
+  "summary": "Add an installer for a local pre-push hook that runs the git identity validator before autonomous workers can push, without overwriting user-managed hooks by default.",
+  "expectedFailureModes": [
+    "The identity validator exists but autonomous workers forget to run it before pushing.",
+    "The installer overwrites an existing user-managed hook.",
+    "The installed hook only works from one working directory instead of resolving the repository root.",
+    "The hook blocks pushes with an opaque failure message."
+  ],
+  "gates": [
+    "security",
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/install-git-hooks.mjs --dry-run",
+    "node agent-os/scripts/install-git-hooks.mjs --check",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Integrated locally; the pre-push hook is installed in this checkout and should remain active through core.hooksPath=hooks.",
+  "updated": "2026-05-09"
+}

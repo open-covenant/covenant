@@ -21,7 +21,7 @@ This chooses inspectability over accidental duplicate work:
 
 - A crash before the receiver observes the response may leave a task in `in_flight`.
 - The task will not disappear silently; it remains visible through `covenant a2a status`, IPC `a2a_queue`, and HTTP `GET /a2a/queue`.
-- Leased tasks are not retried automatically. Requeue and lease-expiry policy must be explicit because autonomous agents may perform non-idempotent external work.
+- Alpha does not auto-retry leased tasks. Requeue and lease-expiry policy must be explicit because autonomous agents may perform non-idempotent external work.
 
 Operators can narrow status views to stale leases with `--min-lease-age-ms`:
 
@@ -102,4 +102,4 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Keep automatic retry disabled until task classes can declare idempotency safely.
+- Keep automatic retry disabled until tasks can declare idempotency per `docs/a2a-idempotency-policy.md`.

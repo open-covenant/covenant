@@ -16,7 +16,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
-- Release language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
+- Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, and human approval before any tag or artifact publication.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
@@ -31,10 +31,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Token bytes, private keys, secrets, hostnames, personal usernames, and machine-local paths should not be logged or committed.
 - Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs`; pre-push should pass the exact pushed ref range to the same validator.
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
-- Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
-- GitHub PushEvent attribution follows the credential that updates the ref; use a repository-owned deploy key, GitHub App, or approved bot account when the web actor must also be neutral.
 - Public docs must distinguish implemented, experimental, and planned behavior.
-- The root README must pass `node agent-os/scripts/validate-readme-copy.mjs` after public copy or status changes.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
 - When the next autonomous task is already selected and no true blocker exists, continue into the next bounded slice instead of stopping at a status report.
 - After each successful commit or push, run `node agent-os/scripts/autonomy-continue.mjs`; if it names an unblocked task, continue immediately. A final status response is allowed only when every candidate is blocked, the user asks to pause, or the execution environment forces a turn boundary.
@@ -49,7 +46,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
 - Audit integrity is local tamper evidence only; immutable retention, public key custody, release publication, and transparency-log publication are not implemented.
-- A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until task classes can declare idempotency safely.
+- A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until tasks can declare idempotency per `docs/a2a-idempotency-policy.md`.
 
 ## Human Authority Boundary
 
@@ -67,7 +64,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [README.md](../README.md): public positioning and status.
 - [ROADMAP.md](../ROADMAP.md): capability roadmap.
 - [docs/status.md](./status.md): implemented, experimental, and planned capability matrix.
-- [docs/release-validation.md](./release-validation.md): release evidence profile and validation requirements.
+- [docs/alpha-release-contract.md](./alpha-release-contract.md): source alpha boundary, blockers, non-claims, and post-alpha research split.
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
@@ -76,13 +73,14 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
-- [docs/provenance/README.md](./provenance/README.md): provenance envelope contract.
+- [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
+- [docs/a2a-idempotency-policy.md](./a2a-idempotency-policy.md): idempotency policy required before automatic A2A retry.
 
 ## Validation
 

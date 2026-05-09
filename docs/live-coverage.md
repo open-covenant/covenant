@@ -43,7 +43,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 
 | Surface | Status | Live coverage | Next gap |
 | --- | --- | --- | --- |
-| Daemon IPC core | Covered | daemon ping/intent, CLI ping JSON, CLI intent, CLI intent JSON, CLI version | Resume-intent coverage after repair semantics settle. |
+| Daemon IPC core | Covered | daemon ping/intent, CLI ping JSON, CLI intent, CLI intent JSON, CLI resume JSON, CLI version | Resume-success fixture once budget refill semantics can be exercised without long sleeps. |
 | State verifier | Covered | CLI `verify --json` on a real daemon | Live drift fixture that asserts non-zero exit with actionable repair hints. |
 | Memory retention | Covered | CLI memory read JSON, CLI memory purge JSON | Live repair and compaction fixtures that assert memory/audit/receipt consistency. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
@@ -56,7 +56,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | MCP subprocess transport | Covered | CLI tools list JSON, CLI tools call JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
 | Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Automate the documented Linux `runsc` runner on a pinned rootfs. |
-| Budget enforcement | Covered | daemon rejection when budget exhausts | Budget resume after pause/resume policy lands. |
+| Budget enforcement | Covered | daemon rejection when budget exhausts, CLI resume, CLI resume JSON | Budget resume success after pause/resume policy lands. |
 | Settlement receipts and chain gates | Covered | daemon dispatch writes/reads receipts after `chain.receipts`, CLI `chain status --json`, CLI `chain flush-receipts --json`, CLI `receipts recent --json`, CLI `chain receipt-batches --json` | Scoped receipt filter coverage once receipt query predicates become user-selectable. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Model availability probes before more model coverage. |
 

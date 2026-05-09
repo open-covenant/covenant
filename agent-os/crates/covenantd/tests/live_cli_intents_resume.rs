@@ -3,6 +3,8 @@
 //! exhausts the budget to mint a `BudgetExhausted` audit row, then runs
 //! `covenant intents resume latest` as a subprocess and asserts the CLI
 //! locates the row (instead of failing with "no BudgetExhausted audit row").
+//! The JSON variant must report that same resolved resume attempt without
+//! forcing automation to scrape stderr.
 //!
 //! Closes the gap between the IPC-level resume plumbing in
 //! `live_budget_enforcement.rs` and the CLI's `intents resume` verb.
@@ -14,6 +16,7 @@
 //! `cargo test -p covenantd --test live_cli_intents_resume -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -204,6 +207,49 @@ budget_credits_per_hour = 1
     assert!(
         !stderr.contains("no BudgetExhausted audit row"),
         "stderr suggests resume did not locate the audit row; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    let cli_out = Command::new(&cli_exe)
+        .arg("intents")
+        .arg("resume")
+        .arg("latest")
+        .arg("--json")
+        .env("COVENANT_HOME", home.path())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("spawn covenant CLI (intents resume latest --json)");
+    let stdout = String::from_utf8_lossy(&cli_out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&cli_out.stderr).to_string();
+
+    assert!(
+        !cli_out.status.success(),
+        "resume latest --json should preserve failure exit status while bucket remains empty; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stderr.trim().is_empty(),
+        "resume latest --json should put the structured daemon rejection on stdout; stderr={stderr:?}"
+    );
+    let body: Value =
+        serde_json::from_str(stdout.trim()).expect("resume latest --json stdout must be JSON");
+    assert_eq!(body["kind"].as_str(), Some("intent_resume"));
+    assert_eq!(body["status"].as_str(), Some("error"));
+    assert!(body["resumed_intent_id"].as_str().is_some());
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("budget exhausted")),
+        "resume latest --json should preserve the daemon rejection: {body:?}"
+    );
+    assert!(
+        !body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no BudgetExhausted audit row"),
+        "resume latest --json should prove the resume lookup succeeded: {body:?}"
     );
 
     let _ = child.kill().await;

@@ -7,7 +7,7 @@ export const metadata = {
 };
 
 const SURFACES = [
-  ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/version"],
+  ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/resume/version"],
   ["State verifier", "covered", "live drift fixture"],
   ["Memory retention", "covered", "memory repair/compaction consistency"],
   ["HTTP gateway", "covered", "version, auth, and tools-call round trip"],
@@ -20,7 +20,7 @@ const SURFACES = [
   ["MCP subprocess", "covered", "third-party fixture"],
   ["Runtime subprocess", "covered", "daemon dispatch failure receipts"],
   ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],
-  ["Budget enforcement", "covered", "budget resume"],
+  ["Budget enforcement", "covered", "resume success after pause/resume policy"],
   ["Settlement receipts", "covered", "scoped receipt filters"],
   ["Local model", "external service", "model availability probes"],
 ];

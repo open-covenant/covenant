@@ -22,6 +22,8 @@ export default function CliPage() {
         <code>{`covenant <subcommand> [args]
 
   intent [--json] <text>             Submit an intent and print the result.
+  intents resume (<intent-id>|latest)
+        [--json]                     Re-dispatch a budget-rejected intent.
   ping [--json]                      Check the daemon is responsive.
   version                            Print daemon protocol metadata as JSON.
 
@@ -169,6 +171,12 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <pre>
         <code>{`$ covenant intent --json "summarise recent work on agent memory"
 {"kind":"intent_result","intent_id":"...","status":"ok","text":"...","sources":[],"settlement":null}`}</code>
+      </pre>
+
+      <h3>Resume a budget-rejected intent</h3>
+      <pre>
+        <code>{`$ covenant intents resume latest --json
+{"kind":"intent_resume","resumed_intent_id":"...","status":"error","result":null,"message":"budget exhausted: ..."}`}</code>
       </pre>
 
       <h3>Inspect daemon protocol metadata</h3>

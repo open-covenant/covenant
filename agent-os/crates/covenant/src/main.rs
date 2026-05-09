@@ -5,7 +5,7 @@
 //!   covenant intent <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
 //!   covenant memory search <query>
-//!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>)
+//!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
@@ -98,7 +98,7 @@ fn print_usage() {
         "  covenant memory search <query> [--tier T] [-n N]       semantic search via embeddings"
     );
     eprintln!(
-        "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D)  delete records older than ms epoch / D ms ago"
+        "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D) [--json]  delete records older than ms epoch / D ms ago"
     );
     eprintln!(
         "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M] [--delete-episodic-before-ms M] [--mark-longterm-stale-before-ms M]"
@@ -174,17 +174,21 @@ async fn print_memory_response(stream: &mut UnixStream) -> Result<()> {
                 println!("(no records)");
             }
             for r in records {
-                let tier = match r.tier {
-                    MemoryTier::Working => "working",
-                    MemoryTier::Episodic => "episodic",
-                    MemoryTier::LongTerm => "longterm",
-                };
+                let tier = memory_tier_slug(r.tier);
                 println!("[{}] {tier}: {}", r.created_at, r.text);
             }
             Ok(())
         }
         Response::Error { message } => bail!("daemon error: {message}"),
         other => bail!("unexpected response: {other:?}"),
+    }
+}
+
+fn memory_tier_slug(tier: MemoryTier) -> &'static str {
+    match tier {
+        MemoryTier::Working => "working",
+        MemoryTier::Episodic => "episodic",
+        MemoryTier::LongTerm => "longterm",
     }
 }
 
@@ -323,6 +327,7 @@ async fn main() -> Result<()> {
                 "purge" => {
                     let mut tier: Option<MemoryTier> = None;
                     let mut before_ms: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -346,6 +351,7 @@ async fn main() -> Result<()> {
                                     v.parse().context("--older-than-ms must be an integer")?;
                                 before_ms = Some(epoch_ms().saturating_sub(dur));
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -354,7 +360,16 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::PurgeMemory { tier, before_ms }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::MemoryPurged { purged } => {
-                            println!("purged {purged} record(s)");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&memory_purge_json(
+                                        tier, before_ms, purged
+                                    ))?
+                                );
+                            } else {
+                                println!("purged {purged} record(s)");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2000,6 +2015,15 @@ fn audit_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     })
 }
 
+fn memory_purge_json(tier: Option<MemoryTier>, before_ms: u64, purged: u64) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "memory_purged",
+        "tier": tier.map(memory_tier_slug),
+        "before_ms": before_ms,
+        "purged": purged,
+    })
+}
+
 fn ignore_report_json(
     ignored: bool,
     matched_pattern: Option<&str>,
@@ -2536,6 +2560,18 @@ mod tests {
         assert_eq!(value["kind"], "audit_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn memory_purge_json_renders_stable_shape() {
+        let value = memory_purge_json(Some(MemoryTier::Working), 1_700_000_000_000, 3);
+        assert_eq!(value["kind"], "memory_purged");
+        assert_eq!(value["tier"], "working");
+        assert_eq!(value["before_ms"], 1_700_000_000_000u64);
+        assert_eq!(value["purged"], 3);
+
+        let all_tiers = memory_purge_json(None, 1_700_000_000_000, 0);
+        assert!(all_tiers["tier"].is_null());
     }
 
     #[test]

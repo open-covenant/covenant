@@ -159,13 +159,16 @@ curl -s '127.0.0.1:8421/memory/search?q=agent+memory&tier=longterm&limit=5'`}</c
 
       <pre>
         <code>{`# Purge working-tier records older than 24 hours.
-covenant memory purge --tier working --older-than-ms 86400000
+covenant memory purge --tier working --older-than-ms 86400000 --json
 
 # Purge anything before an explicit epoch.
 covenant memory purge --before-ms 1714938000000
 
 # Purge all tiers older than seven days.
-covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
+covenant memory purge --older-than-ms $((7*24*60*60*1000))
+
+# Machine-readable output:
+{"kind":"memory_purged","tier":"working","before_ms":1714938000000,"purged":0}`}</code>
       </pre>
 
       <p>

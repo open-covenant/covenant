@@ -29,6 +29,19 @@
       "nextGap": "Add a live drift fixture that asserts verify --json exits non-zero with actionable repair hints."
     },
     {
+      "id": "memory-retention",
+      "name": "Memory retention",
+      "mockTests": [
+        "agent-os/crates/covenant-memory/src/lib.rs",
+        "agent-os/crates/covenant/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_memory_purge_json.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live repair and compaction fixtures that assert memory/audit/receipt consistency."
+    },
+    {
       "id": "http-gateway",
       "name": "HTTP gateway",
       "mockTests": [

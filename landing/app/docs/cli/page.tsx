@@ -30,7 +30,8 @@ export default function CliPage() {
         [--tier T] [-n N]            Cosine-similarity search via embeddings.
   memory purge [--tier T]
         (--before-ms M
-         | --older-than-ms D)        Delete records older than the threshold.
+         | --older-than-ms D) [--json]
+                                     Delete records older than the threshold.
 
   capabilities recent [-n N] [--json]
                                      List recent capability tokens.
@@ -169,6 +170,12 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <pre>
         <code>{`$ covenant memory search "agent memory" -n 5
 # (records ordered by cosine similarity, descending)`}</code>
+      </pre>
+
+      <h3>Purge old memory records</h3>
+      <pre>
+        <code>{`$ covenant memory purge --tier working --before-ms 1714938191234 --json
+{"kind":"memory_purged","tier":"working","before_ms":1714938191234,"purged":0}`}</code>
       </pre>
 
       <h3>Grant and revoke a capability</h3>

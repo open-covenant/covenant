@@ -66,7 +66,7 @@ The tracked protocol is in [docs/autonomous-development.md](./docs/autonomous-de
 Implemented and tested in the repository:
 
 - Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
-- Signed capability lifecycle: grant, verify, expire, revoke, list, and enforce.
+- Signed capability lifecycle: grant, validate known scopes, verify, expire, revoke, list, and enforce.
 - Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
 - Append-only audit log with structured event types, bounded recent reads, retention purge, and local hash-chain verification.
 - SQLite-backed memory records with working, episodic, and long-term tiers.
@@ -82,7 +82,7 @@ Implemented and tested in the repository:
 | Area | Status | Notes |
 |---|---|---|
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
-| Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation, audit rows, and local audit hash-chain verification. |
+| Identity, permissions, audit | Implemented | Signed ed25519 capability model with grant-time scope validation, revocation, audit rows, and local audit hash-chain verification. |
 | Memory | Implemented, hardening | SQLite, embeddings, read-only drift reports, explicit repair commands, and bounded compaction dry-run/apply policy are present; automatic schedules and exact receipt correlation are not claimed. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, review gates, continuation, and deterministic sprint summaries exist; full benchmarked self-improvement is not claimed. |

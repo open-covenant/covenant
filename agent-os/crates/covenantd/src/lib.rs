@@ -19,7 +19,9 @@ use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
-use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
+use covenant_permissions::{
+    sign as sign_capability, validate_scope, verify_with_clock, CapabilityStore,
+};
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
 use covenant_settlement::{
@@ -1806,10 +1808,28 @@ impl Server {
         peer: &AgentId,
     ) -> Response {
         let granted_by = self.identity.agent_id();
+        let scope = scope.unwrap_or_else(|| serde_json::json!({}));
+        if let Err(e) = validate_scope(&action, &scope) {
+            let reason = e.to_string();
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::CapabilityGrantRejected {
+                    subject_display: peer.display.clone(),
+                    action: action.clone(),
+                    reason: reason.clone(),
+                },
+            };
+            self.record_peer_event(peer, event).await;
+            return Response::Error {
+                message: format!("permissions: {reason}"),
+            };
+        }
         let cap = Capability {
             subject: peer.clone(),
             action: action.clone(),
-            scope: scope.unwrap_or_else(|| serde_json::json!({})),
+            scope,
             granted_by: granted_by.clone(),
             expires_at,
         };
@@ -3456,6 +3476,74 @@ required = {caps:?}
                 assert_eq!(capabilities[0].capability.action, "tool.web_search");
                 assert!(verify_with_clock(&capabilities[0], epoch_ms()).is_ok());
             }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn grant_capability_accepts_valid_scope() {
+        let s = server_with(vec![], "");
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "record_id": null,
+            "before_ms": null,
+            "apply": false
+        });
+        let resp = s
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: Some(scope.clone()),
+                expires_at: None,
+            })
+            .await;
+        match resp {
+            Response::CapabilityGranted { action, .. } => assert_eq!(action, "memory.write"),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await
+        {
+            Response::Capabilities { capabilities } => {
+                assert_eq!(capabilities.len(), 1);
+                assert_eq!(capabilities[0].capability.scope, scope);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn grant_capability_rejects_invalid_scope() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: Some(serde_json::json!({ "version": 2 })),
+                expires_at: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("invalid capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await
+        {
+            Response::Capabilities { capabilities } => assert!(capabilities.is_empty()),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityGrantRejected { action, .. } if action == "memory.write"
+                )
+            })),
             other => panic!("unexpected: {other:?}"),
         }
     }

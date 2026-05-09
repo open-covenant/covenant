@@ -1,12 +1,12 @@
 # Capability Scope Contract
 
-Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature already covers `scope`, so scope fields are tamper-evident today.
+Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon enforces action presence, expiry, signature validity, subject matching, and revocation. It does not yet interpret scope predicates at dispatch time. Scope schemas below are the compatibility contract for grants created now and the target for later enforcement.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, and revocation at dispatch. It does not yet interpret scope predicates at dispatch time. Scope schemas below are the compatibility contract for grants created now and the target for later enforcement.
 
 ## Scope Envelope
 
-Every non-empty scope should be a JSON object with a version field:
+Every non-empty scope for a known action namespace must be a JSON object with a version field:
 
 ```json
 {
@@ -14,9 +14,13 @@ Every non-empty scope should be a JSON object with a version field:
 }
 ```
 
-`{}` remains valid and means unscoped within the named action. Consumers must reject non-object scopes when strict enforcement lands.
+`{}` remains valid and means unscoped within the named action. Grant requests for known namespaces reject non-object scopes, missing versions, unsupported versions, and malformed known fields. Unknown future fields are preserved as signed metadata until dispatch-time enforcement defines them.
 
 ## Namespaces
+
+### `intent.*` and `agent.*`
+
+Use the base envelope for intent routing and agent lifecycle actions. Predicate fields are not stable yet, so grant-time validation enforces only the versioned object shape and preserves any extra fields as signed metadata.
 
 ### `tool.*`
 
@@ -141,9 +145,9 @@ Rules:
 ## Enforcement Path
 
 1. Keep accepting `{}` for existing broad grants.
-2. Add schema validation at grant time for known action namespaces.
+2. Validate non-empty scopes at grant time for known action namespaces.
 3. Add dispatch-time checks that interpret scope only for actions with stable predicates.
 4. Fail closed for malformed versioned scopes after a migration window.
 5. Keep action-only checks as the fallback only for unscoped operator grants.
 
-Until step 3 lands, public docs must describe scopes as signed metadata and compatibility preparation, not as enforced least-privilege predicates.
+Until step 3 lands, public docs must describe scopes as validated signed metadata and compatibility preparation, not as enforced least-privilege predicates.

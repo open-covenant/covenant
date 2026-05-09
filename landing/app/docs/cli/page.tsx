@@ -33,7 +33,9 @@ export default function CliPage() {
          | --older-than-ms D)        Delete records older than the threshold.
 
   capabilities recent [-n N]         List recent capability tokens.
-  capabilities grant <action>        Sign and persist a new capability.
+  capabilities grant <action>
+        [--scope <json>]
+        [--expires-at <ms>]          Sign and persist a new capability.
   capabilities revoke <signature-b58>
                                      Tombstone a previously granted token.
 
@@ -149,11 +151,18 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <h3>Grant and revoke a capability</h3>
       <pre>
         <code>{`$ covenant capabilities grant tool.web_search
-granted tool.web_search to user@local
+granted: user@local → tool.web_search
 signature: 4qXP...8tF1
 
 $ covenant capabilities revoke 4qXP...8tF1
 revoked 4qXP...8tF1 (removed=true)`}</code>
+      </pre>
+
+      <h3>Grant a scoped capability</h3>
+      <pre>
+        <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":false}'
+granted: user@local → memory.write
+signature: 4qXP...8tF1`}</code>
       </pre>
 
       <h3>Verify state</h3>

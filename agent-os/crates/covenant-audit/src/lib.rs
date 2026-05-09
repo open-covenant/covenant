@@ -77,6 +77,11 @@ pub enum AuditKind {
         granted_by_display: String,
         signature_b58: String,
     },
+    CapabilityGrantRejected {
+        subject_display: String,
+        action: String,
+        reason: String,
+    },
     IntentIgnored {
         intent_id: Uuid,
         intent_text: String,

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use covenant_types::Capability;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
@@ -36,6 +37,8 @@ pub enum PermissionError {
     Expired(u64),
     #[error("signature does not verify against granted_by pubkey")]
     BadSignature,
+    #[error("invalid capability scope: {0}")]
+    InvalidScope(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,6 +68,264 @@ mod sig_b58 {
         arr.copy_from_slice(&bytes);
         Ok(arr)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ScopeNamespace {
+    Intent,
+    Tool,
+    Memory,
+    Agent,
+    A2a,
+    Audit,
+    Peers,
+    Identity,
+    Chain,
+}
+
+impl ScopeNamespace {
+    fn from_action(action: &str) -> Option<Self> {
+        if action.starts_with("intent.") {
+            Some(Self::Intent)
+        } else if action.starts_with("tool.") {
+            Some(Self::Tool)
+        } else if action.starts_with("memory.") {
+            Some(Self::Memory)
+        } else if action.starts_with("agent.") {
+            Some(Self::Agent)
+        } else if action.starts_with("a2a.") {
+            Some(Self::A2a)
+        } else if action.starts_with("audit.") {
+            Some(Self::Audit)
+        } else if action.starts_with("peers.") {
+            Some(Self::Peers)
+        } else if action.starts_with("identity.") {
+            Some(Self::Identity)
+        } else if action.starts_with("chain.") {
+            Some(Self::Chain)
+        } else {
+            None
+        }
+    }
+}
+
+pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError> {
+    let Some(namespace) = ScopeNamespace::from_action(action) else {
+        return Ok(());
+    };
+    let Some(obj) = scope.as_object() else {
+        return Err(invalid_scope(action, "scope must be a JSON object"));
+    };
+    if obj.is_empty() {
+        return Ok(());
+    }
+    match obj.get("version").and_then(Value::as_u64) {
+        Some(1) => {}
+        Some(version) => {
+            return Err(invalid_scope(
+                action,
+                format!("unsupported scope version {version}"),
+            ));
+        }
+        None => return Err(invalid_scope(action, "non-empty scopes must set version 1")),
+    }
+
+    match namespace {
+        ScopeNamespace::Intent | ScopeNamespace::Agent => Ok(()),
+        ScopeNamespace::Tool => validate_tool_scope(action, obj),
+        ScopeNamespace::Memory => validate_memory_scope(action, obj),
+        ScopeNamespace::A2a => validate_a2a_scope(action, obj),
+        ScopeNamespace::Audit => validate_audit_scope(action, obj),
+        ScopeNamespace::Peers | ScopeNamespace::Identity => validate_peer_scope(action, obj),
+        ScopeNamespace::Chain => validate_chain_scope(action, obj),
+    }
+}
+
+fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_string_or_null(action, obj, "tool")?;
+    if let (Some(expected), Some(tool)) = (
+        action.strip_prefix("tool.call."),
+        obj.get("tool").and_then(Value::as_str),
+    ) {
+        if tool != expected {
+            return Err(invalid_scope(
+                action,
+                format!("tool must match action suffix {expected:?}"),
+            ));
+        }
+    }
+    if let Some(arguments) = obj.get("arguments") {
+        let Some(arguments) = arguments.as_object() else {
+            return Err(invalid_scope(action, "arguments must be an object"));
+        };
+        if let Some(allow) = arguments.get("allow") {
+            if !allow.is_object() {
+                return Err(invalid_scope(action, "arguments.allow must be an object"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_memory_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_string_array(action, obj, "tiers", &["working", "episodic", "longterm"])?;
+    optional_string_or_null(action, obj, "record_id")?;
+    optional_non_negative_integer_or_null(action, obj, "before_ms")?;
+    optional_bool(action, obj, "apply")?;
+    Ok(())
+}
+
+fn validate_a2a_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_string_or_null(action, obj, "peer_pubkey_b58")?;
+    optional_string_or_null(action, obj, "task_id")?;
+    optional_string_or_null(action, obj, "lease_id")?;
+    optional_string_enum(
+        action,
+        obj,
+        "duplicate_risk",
+        &["idempotent", "operator-accepted"],
+    )?;
+    Ok(())
+}
+
+fn validate_audit_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_positive_integer(action, obj, "window")?;
+    optional_non_negative_integer_or_null(action, obj, "before_ms")?;
+    optional_bool(action, obj, "include_integrity")?;
+    Ok(())
+}
+
+fn validate_peer_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_string_or_null(action, obj, "peer_pubkey_b58")?;
+    optional_string_or_null(action, obj, "token_prefix")?;
+    optional_bool(action, obj, "self")?;
+    optional_bool(action, obj, "force")?;
+    Ok(())
+}
+
+fn validate_chain_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_positive_integer(action, obj, "limit")?;
+    optional_string_or_null(action, obj, "mint")?;
+    optional_string_or_null(action, obj, "cluster")?;
+    Ok(())
+}
+
+fn optional_string_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    if let Some(value) = obj.get(field) {
+        if !value.is_null() && !value.is_string() {
+            return Err(invalid_scope(
+                action,
+                format!("{field} must be a string or null"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn optional_bool(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    if let Some(value) = obj.get(field) {
+        if !value.is_boolean() {
+            return Err(invalid_scope(action, format!("{field} must be a boolean")));
+        }
+    }
+    Ok(())
+}
+
+fn optional_non_negative_integer_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    if let Some(value) = obj.get(field) {
+        if !value.is_null() && value.as_u64().is_none() {
+            return Err(invalid_scope(
+                action,
+                format!("{field} must be a non-negative integer or null"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn optional_positive_integer(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    if let Some(value) = obj.get(field) {
+        match value.as_u64() {
+            Some(value) if value > 0 => {}
+            _ => {
+                return Err(invalid_scope(
+                    action,
+                    format!("{field} must be a positive integer"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optional_string_array(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+    allowed: &[&str],
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(invalid_scope(action, format!("{field} must be an array")));
+    };
+    for value in values {
+        let Some(value) = value.as_str() else {
+            return Err(invalid_scope(
+                action,
+                format!("{field} entries must be strings"),
+            ));
+        };
+        if !allowed.contains(&value) {
+            return Err(invalid_scope(
+                action,
+                format!("{field} contains unsupported value {value:?}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn optional_string_enum(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+    allowed: &[&str],
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    let Some(value) = value.as_str() else {
+        return Err(invalid_scope(action, format!("{field} must be a string")));
+    };
+    if !allowed.contains(&value) {
+        return Err(invalid_scope(
+            action,
+            format!("{field} contains unsupported value {value:?}"),
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_scope(action: &str, detail: impl Into<String>) -> PermissionError {
+    PermissionError::InvalidScope(format!("{action}: {}", detail.into()))
 }
 
 /// Deterministic byte encoding of a capability — what the signer signs.
@@ -495,6 +756,144 @@ mod tests {
             granted_by,
             expires_at,
         }
+    }
+
+    fn assert_invalid_scope(action: &str, scope: serde_json::Value) {
+        assert!(matches!(
+            validate_scope(action, &scope),
+            Err(PermissionError::InvalidScope(_))
+        ));
+    }
+
+    #[test]
+    fn validate_scope_accepts_empty_and_unknown_scopes() {
+        assert!(validate_scope("tool.web_search", &serde_json::json!({})).is_ok());
+        assert!(validate_scope("custom.action", &serde_json::json!("opaque")).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_accepts_known_versioned_shapes() {
+        let cases = [
+            (
+                "intent.delegate",
+                serde_json::json!({
+                    "version": 1,
+                    "priority": "normal"
+                }),
+            ),
+            (
+                "tool.call.echo",
+                serde_json::json!({
+                    "version": 1,
+                    "tool": "echo",
+                    "arguments": { "allow": { "text": "hello" } }
+                }),
+            ),
+            (
+                "memory.write",
+                serde_json::json!({
+                    "version": 1,
+                    "tiers": ["working", "episodic"],
+                    "record_id": null,
+                    "before_ms": null,
+                    "apply": false
+                }),
+            ),
+            (
+                "agent.spawn",
+                serde_json::json!({
+                    "version": 1,
+                    "agent_id": "research"
+                }),
+            ),
+            (
+                "a2a.requeue",
+                serde_json::json!({
+                    "version": 1,
+                    "peer_pubkey_b58": "peer",
+                    "task_id": null,
+                    "lease_id": null,
+                    "duplicate_risk": "idempotent"
+                }),
+            ),
+            (
+                "audit.verify",
+                serde_json::json!({
+                    "version": 1,
+                    "window": 100,
+                    "before_ms": null,
+                    "include_integrity": true
+                }),
+            ),
+            (
+                "peers.revoke",
+                serde_json::json!({
+                    "version": 1,
+                    "peer_pubkey_b58": null,
+                    "token_prefix": "abc123",
+                    "self": false,
+                    "force": true
+                }),
+            ),
+            (
+                "chain.flush",
+                serde_json::json!({
+                    "version": 1,
+                    "limit": 10,
+                    "mint": null,
+                    "cluster": "localnet"
+                }),
+            ),
+        ];
+
+        for (action, scope) in cases {
+            assert!(validate_scope(action, &scope).is_ok(), "{action}");
+        }
+    }
+
+    #[test]
+    fn validate_scope_rejects_known_non_object_scopes() {
+        assert_invalid_scope("tool.web_search", serde_json::json!("bad"));
+        assert_invalid_scope("memory.write", serde_json::json!(["bad"]));
+    }
+
+    #[test]
+    fn validate_scope_rejects_missing_or_unsupported_version() {
+        assert_invalid_scope("memory.write", serde_json::json!({ "tiers": ["working"] }));
+        assert_invalid_scope("memory.write", serde_json::json!({ "version": 2 }));
+        assert_invalid_scope("memory.write", serde_json::json!({ "version": "1" }));
+    }
+
+    #[test]
+    fn validate_scope_rejects_invalid_known_fields() {
+        assert_invalid_scope(
+            "tool.call.echo",
+            serde_json::json!({ "version": 1, "tool": "search" }),
+        );
+        assert_invalid_scope(
+            "tool.call.echo",
+            serde_json::json!({ "version": 1, "arguments": { "allow": ["text"] } }),
+        );
+        assert_invalid_scope(
+            "memory.write",
+            serde_json::json!({ "version": 1, "tiers": ["archive"] }),
+        );
+        assert_invalid_scope(
+            "a2a.requeue",
+            serde_json::json!({ "version": 1, "duplicate_risk": "unknown" }),
+        );
+        assert_invalid_scope(
+            "audit.verify",
+            serde_json::json!({ "version": 1, "window": 0 }),
+        );
+        assert_invalid_scope(
+            "peers.revoke",
+            serde_json::json!({ "version": 1, "force": "yes" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "limit": -1 }),
+        );
     }
 
     #[test]

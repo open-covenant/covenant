@@ -73,22 +73,24 @@ export default function CapabilitiesPage() {
 
       <h2>Scope contract</h2>
       <p>
-        Scopes are signed today, so mutating the JSON invalidates the
-        token. Dispatch-time enforcement is currently action-based:
-        the daemon checks signature validity, expiry, subject, action
-        presence, and revocation. It does not yet interpret scope
-        predicates. The scope shapes below are the compatibility
-        contract for grants created before stricter enforcement lands.
+        Scopes are signed, so mutating the JSON invalidates the token.
+        Grant-time validation rejects malformed non-empty scopes for
+        known action namespaces. Dispatch-time enforcement is currently
+        action-based: the daemon checks signature validity, expiry,
+        subject, action presence, and revocation. It does not yet
+        interpret scope predicates.
       </p>
 
       <p>
         Empty scope <code>{"{}"}</code> means unscoped within the named
-        action. Non-empty scopes should be JSON objects with{" "}
-        <code>{"{ \"version\": 1 }"}</code>.
+        action. Non-empty scopes for known namespaces must be JSON
+        objects with <code>{"{ \"version\": 1 }"}</code>.
       </p>
 
       <pre>
-        <code>{`tool.*      { "version": 1, "tool": "echo", "arguments": { "allow": { ... } } }
+        <code>{`intent.*    { "version": 1, ... }
+agent.*     { "version": 1, ... }
+tool.*      { "version": 1, "tool": "echo", "arguments": { "allow": { ... } } }
 memory.*    { "version": 1, "tiers": ["working"], "record_id": null, "before_ms": null, "apply": false }
 a2a.*       { "version": 1, "peer_pubkey_b58": "...", "task_id": null, "lease_id": null, "duplicate_risk": "idempotent" }
 audit.*     { "version": 1, "window": 100, "before_ms": null, "include_integrity": true }
@@ -98,9 +100,8 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
 
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
-        the detailed contract. Enforcement hardening should validate
-        known namespaces at grant time first, then add dispatch-time
-        checks for stable predicates.
+        the detailed contract. Enforcement hardening should next add
+        dispatch-time checks for stable predicates.
       </p>
 
       <h2>Canonical encoding</h2>
@@ -141,8 +142,8 @@ expires_at_be        [8 bytes, u64 big-endian; zero if expires_tag = 0]`}</code>
 
       <pre>
         <code>{`covenant capabilities grant tool.web_search
-covenant capabilities grant tool.web_search --scope '{"host":"example.com"}'
-covenant capabilities grant tool.web_search --expires-in 86400`}</code>
+covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":false}'
+covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
       </pre>
 
       <p>
@@ -178,8 +179,9 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
         <code>action</code>s, and verifies that every required action
         from the matched agent&apos;s manifest is present. Missing
         actions are recorded in the audit event and the dispatch is
-        rejected. Scope predicates are preserved and signed but not yet
-        interpreted during this check.
+        rejected. Scope predicates are validated when granted and
+        preserved by signature, but not yet interpreted during this
+        check.
       </p>
 
       <h2>Revocation</h2>

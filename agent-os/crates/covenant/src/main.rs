@@ -11,7 +11,7 @@
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
 //!   covenant capabilities recent [--limit N]
-//!   covenant capabilities grant <action>          (auto-expands `a2a.{send,recv,respond}.<pubkey-prefix>` to full b58)
+//!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>]
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N]
@@ -630,10 +630,17 @@ async fn main() -> Result<()> {
                         std::process::exit(2);
                     }
                     let action = args[2].clone();
+                    let mut scope: Option<serde_json::Value> = None;
                     let mut expires_at: Option<u64> = None;
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
+                            "--scope" => {
+                                i += 1;
+                                let v = args.get(i).context("--scope needs a JSON value")?;
+                                scope =
+                                    Some(serde_json::from_str(v).context("--scope must be JSON")?);
+                            }
                             "--expires-at" => {
                                 i += 1;
                                 let v = args.get(i).context("--expires-at needs a value")?;
@@ -684,7 +691,7 @@ async fn main() -> Result<()> {
                         &mut stream,
                         &Request::GrantCapability {
                             action,
-                            scope: None,
+                            scope,
                             expires_at,
                         },
                     )

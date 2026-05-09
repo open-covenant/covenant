@@ -6,22 +6,25 @@ const recordSeparator = "\x1e";
 const fieldSeparator = "\x1f";
 
 const usage = () => {
-  console.error("usage: scripts/validate-git-identity.mjs [--ref <ref>]... [--recent <count>]");
+  console.error(
+    "usage: scripts/validate-git-identity.mjs [--ref <ref-or-range>]... [--rev <ref-or-range>]... [--recent <count>]"
+  );
 };
 
 const args = process.argv.slice(2);
-const refs = [];
+const revs = [];
 let recent = 200;
+let recentExplicit = false;
 
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
-  if (arg === "--ref") {
-    const ref = args[index + 1];
-    if (!ref) {
+  if (arg === "--rev" || arg === "--ref") {
+    const rev = args[index + 1];
+    if (!rev) {
       usage();
       process.exit(2);
     }
-    refs.push(ref);
+    revs.push(rev);
     index += 1;
     continue;
   }
@@ -32,6 +35,7 @@ for (let index = 0; index < args.length; index += 1) {
       process.exit(2);
     }
     recent = parsed;
+    recentExplicit = true;
     index += 1;
     continue;
   }
@@ -53,8 +57,8 @@ const gitText = (args) => {
   return result.stdout.trim();
 };
 
-const commitExists = (ref) => {
-  const result = git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+const commitExists = (rev) => {
+  const result = git(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
   return result.status === 0;
 };
 
@@ -67,11 +71,41 @@ const defaultRefs = () => {
   return selected;
 };
 
-const scanRef = (ref) => {
+const isZeroSha = (value) => /^0{40}$/.test(value);
+
+const splitRange = (rev) => {
+  if (rev.includes("...")) {
+    const [from, to] = rev.split("...");
+    return { from, to };
+  }
+  const [from, to] = rev.split("..");
+  return { from, to };
+};
+
+const revisionExists = (rev) => {
+  if (!rev.includes("..")) {
+    return commitExists(rev);
+  }
+  const { from, to } = splitRange(rev);
+  if (!to || !commitExists(to)) {
+    return false;
+  }
+  if (from && !isZeroSha(from) && !commitExists(from)) {
+    return false;
+  }
+  return true;
+};
+
+const scanRev = (rev) => {
   const format = ["%H", "%an", "%ae", "%cn", "%ce", "%s"].join(fieldSeparator) + recordSeparator;
-  const result = git(["log", `-${recent}`, `--format=${format}`, ref]);
+  const logArgs = ["log", `--format=${format}`];
+  if (recentExplicit || (!rev.includes("..") && recent)) {
+    logArgs.push(`-${recent}`);
+  }
+  logArgs.push(rev);
+  const result = git(logArgs);
   if (result.status !== 0) {
-    throw new Error(`git log failed for ${ref}: ${(result.stderr || result.stdout).trim()}`);
+    throw new Error(`git log failed for ${rev}: ${(result.stderr || result.stdout).trim()}`);
   }
   return result.stdout
     .split(recordSeparator)
@@ -91,9 +125,9 @@ const scanRef = (ref) => {
     });
 };
 
-const selectedRefs = [...new Set(refs.length > 0 ? refs : defaultRefs())].filter(commitExists);
+const selectedRevs = [...new Set(revs.length > 0 ? revs : defaultRefs())].filter(revisionExists);
 
-if (selectedRefs.length === 0) {
+if (selectedRevs.length === 0) {
   console.error("validate-git-identity: no commit refs to scan");
   process.exit(1);
 }
@@ -101,16 +135,16 @@ if (selectedRefs.length === 0) {
 const failures = [];
 let checked = 0;
 
-for (const ref of selectedRefs) {
-  for (const commit of scanRef(ref)) {
+for (const rev of selectedRevs) {
+  for (const commit of scanRev(rev)) {
     checked += 1;
     const authorViolation = identityViolation(commit.authorName, commit.authorEmail);
     if (authorViolation) {
-      failures.push(`${ref} ${commit.sha.slice(0, 12)} author identity ${authorViolation}`);
+      failures.push(`${rev} ${commit.sha.slice(0, 12)} author identity ${authorViolation}`);
     }
     const committerViolation = identityViolation(commit.committerName, commit.committerEmail);
     if (committerViolation) {
-      failures.push(`${ref} ${commit.sha.slice(0, 12)} committer identity ${committerViolation}`);
+      failures.push(`${rev} ${commit.sha.slice(0, 12)} committer identity ${committerViolation}`);
     }
   }
 }
@@ -127,4 +161,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`validate-git-identity: ok (${checked} commits across ${selectedRefs.length} refs)`);
+console.log(`validate-git-identity: ok (${checked} commits across ${selectedRevs.length} revs)`);

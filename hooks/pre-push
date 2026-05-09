@@ -15,7 +15,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
     continue
   fi
-  refs+=(--ref "$local_sha")
+  if [ "${remote_sha:-}" = "0000000000000000000000000000000000000000" ] || [ -z "${remote_sha:-}" ]; then
+    refs+=(--rev "$local_sha")
+  else
+    refs+=(--rev "${remote_sha}..${local_sha}")
+  fi
 done
 
 if [ "${#refs[@]}" -eq 0 ]; then

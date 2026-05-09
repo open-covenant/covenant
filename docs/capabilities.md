@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, and stable memory mutation predicates for `memory.purge`, `memory.repair.*`, and `memory.compact.*` at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, and stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*` at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -61,9 +61,11 @@ Use for memory reads, writes, repair, compaction, and purge.
 Rules:
 
 - `tiers` is optional; absent means every tier allowed by the action.
-- `record_id` narrows repair operations to one record.
-- `before_ms` narrows purge and compaction cutoffs. On repair scopes it means the target record must be older than the cutoff.
-- `apply` distinguishes dry-run grants from mutation grants. `memory.purge` is always a mutation and requires `apply: true` when the field is present.
+- `record_id` narrows read, write, and repair operations to one record when the action has a concrete record id.
+- `before_ms` narrows purge and compaction cutoffs. On read, write, and repair scopes it means the target record must be older than the cutoff.
+- `apply` distinguishes dry-run/read grants from mutation grants. Reads require `apply: false` when the field is present. `memory.write` and `memory.purge` are always mutations and require `apply: true` when the field is present.
+- `memory.read` and `memory.read.<tier>` gate recent-memory and semantic-search responses. The daemon still filters returned records by authenticated owner, signed tier scope, optional `record_id`, and optional `before_ms`.
+- `memory.write` is required before successful intent dispatch writes a working-tier memory record. The scope is checked before agent execution or fallback dispatch.
 - A tier-scoped `memory.purge` grant only permits purging that tier. An un-tiered purge request requires the scope to include all tiers.
 - A tier-scoped `memory.compact.*` grant only permits policies that touch the listed tiers. `detach_stale_parents` with an explicit tier scope requires all tiers because parent detaches are not tier-isolated.
 
@@ -150,7 +152,7 @@ Rules:
 2. Validate non-empty scopes at grant time for known action namespaces.
 3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
-5. Interpret stable `memory.purge`, `memory.repair.*`, and `memory.compact.*` scope predicates at dispatch.
+5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Fail closed for malformed versioned scopes after a migration window.
 7. Keep action-only checks as the fallback only for unscoped operator grants.
 

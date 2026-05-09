@@ -121,19 +121,23 @@ required = ["tool.web_search"]
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    // Grant the research agent's required capability.
-    write_frame(
-        &mut stream,
-        &Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    let g: Response = read_frame(&mut stream).await.unwrap();
-    assert!(matches!(g, Response::CapabilityGranted { .. }), "{g:?}");
+    for action in ["tool.web_search", "memory.write", "memory.read"] {
+        write_frame(
+            &mut stream,
+            &Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        let g: Response = read_frame(&mut stream).await.unwrap();
+        assert!(
+            matches!(g, Response::CapabilityGranted { .. }),
+            "grant {action} failed: {g:?}"
+        );
+    }
 
     // Submit an intent that matches the agent's keywords ("papers" maps
     // to tool.web_search → research agent).

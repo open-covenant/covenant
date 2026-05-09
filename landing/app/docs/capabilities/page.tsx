@@ -80,10 +80,12 @@ export default function CapabilitiesPage() {
         revocation, the <code>tool.call.*</code>{" "}
         <code>arguments.allow</code> predicate, and the{" "}
         <code>audit.purge</code> <code>before_ms</code> cutoff. It
-        also enforces stable memory mutation predicates for{" "}
-        <code>memory.purge</code>, <code>memory.repair.*</code>, and{" "}
-        <code>memory.compact.*</code>. Other scope predicates remain
-        compatibility metadata until their dispatch semantics stabilize.
+        also enforces stable memory predicates for{" "}
+        <code>memory.read</code>, <code>memory.read.&lt;tier&gt;</code>,{" "}
+        <code>memory.write</code>, <code>memory.purge</code>,{" "}
+        <code>memory.repair.*</code>, and <code>memory.compact.*</code>.
+        Other scope predicates remain compatibility metadata until their
+        dispatch semantics stabilize.
       </p>
 
       <p>
@@ -106,8 +108,7 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
         the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for peer, A2A, settlement, and memory
-        read/write predicates.
+        dispatch-time checks for peer, A2A, and settlement predicates.
       </p>
 
       <h2>Canonical encoding</h2>
@@ -146,9 +147,9 @@ expires_at_be        [8 bytes, u64 big-endian; zero if expires_tag = 0]`}</code>
         <code>POST /capabilities/grant</code>.
       </p>
 
-      <pre>
+<pre>
         <code>{`covenant capabilities grant tool.web_search
-covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":false}'
+covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":true}'
 covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
       </pre>
 

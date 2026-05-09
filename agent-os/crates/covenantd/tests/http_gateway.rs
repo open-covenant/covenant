@@ -234,10 +234,7 @@ async fn intent_rejects_when_capabilities_missing() {
         .await
         .unwrap();
     assert_eq!(r["kind"], "error");
-    assert!(r["message"]
-        .as_str()
-        .unwrap()
-        .contains("missing capabilities"));
+    assert!(r["message"].as_str().unwrap().contains("memory.write"));
 }
 
 #[tokio::test]
@@ -253,7 +250,7 @@ async fn intent_round_trip_after_grant() {
         .build()
         .unwrap();
 
-    // Grant the cap the matched agent requires.
+    // Grant the caps the matched agent and memory surfaces require.
     let g: serde_json::Value = client
         .post(format!("{base}/capabilities/grant"))
         .json(&json!({ "action": "tool.web_search" }))
@@ -265,6 +262,18 @@ async fn intent_round_trip_after_grant() {
         .unwrap();
     assert_eq!(g["kind"], "capability_granted");
     let sig = g["signature_b58"].as_str().unwrap().to_string();
+    for action in ["memory.write", "memory.read"] {
+        let g: serde_json::Value = client
+            .post(format!("{base}/capabilities/grant"))
+            .json(&json!({ "action": action }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(g["kind"], "capability_granted");
+    }
 
     // Submit intent — should pass now.
     let r: serde_json::Value = client
@@ -301,7 +310,7 @@ async fn intent_round_trip_after_grant() {
         .unwrap();
     assert_eq!(recv["receipts"].as_array().unwrap().len(), 1);
 
-    // Capabilities recent should show the granted one.
+    // Capabilities recent should show the dispatch, write, and read grants.
     let caps: serde_json::Value = client
         .get(format!("{base}/capabilities/recent?limit=10"))
         .send()
@@ -310,7 +319,7 @@ async fn intent_round_trip_after_grant() {
         .json()
         .await
         .unwrap();
-    assert_eq!(caps["capabilities"].as_array().unwrap().len(), 1);
+    assert_eq!(caps["capabilities"].as_array().unwrap().len(), 3);
 
     // Semantic search: with the deterministic-but-pseudo-random `MockEmbedder`,
     // cosine between two arbitrary strings is ~0. Querying the exact stored

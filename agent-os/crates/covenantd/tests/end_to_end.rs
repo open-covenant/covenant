@@ -108,21 +108,21 @@ async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
         Response::Pong
     );
 
-    // Grant the cap the matched agent requires; otherwise the daemon's hard
-    // capability check rejects the dispatch.
-    write_frame(
-        &mut stream,
-        &Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    match read_frame::<_, Response>(&mut stream).await.unwrap() {
-        Response::CapabilityGranted { .. } => {}
-        other => panic!("unexpected grant response: {other:?}"),
+    for action in ["tool.web_search", "memory.write", "memory.read"] {
+        write_frame(
+            &mut stream,
+            &Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        match read_frame::<_, Response>(&mut stream).await.unwrap() {
+            Response::CapabilityGranted { .. } => {}
+            other => panic!("unexpected grant response for {action}: {other:?}"),
+        }
     }
 
     write_frame(

@@ -160,7 +160,7 @@ revoked 4qXP...8tF1 (removed=true)`}</code>
 
       <h3>Grant a scoped capability</h3>
       <pre>
-        <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":false}'
+        <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":true}'
 granted: user@local → memory.write
 signature: 4qXP...8tF1`}</code>
       </pre>

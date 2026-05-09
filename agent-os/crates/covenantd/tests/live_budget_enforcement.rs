@@ -118,18 +118,23 @@ budget_credits_per_hour = 1
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    write_frame(
-        &mut stream,
-        &Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    let g: Response = read_frame(&mut stream).await.unwrap();
-    assert!(matches!(g, Response::CapabilityGranted { .. }), "{g:?}");
+    for action in ["tool.web_search", "memory.write"] {
+        write_frame(
+            &mut stream,
+            &Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        let g: Response = read_frame(&mut stream).await.unwrap();
+        assert!(
+            matches!(g, Response::CapabilityGranted { .. }),
+            "grant {action} failed: {g:?}"
+        );
+    }
 
     // Dispatch 1: passes — bucket goes from 1 to 0.
     write_frame(

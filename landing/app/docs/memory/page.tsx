@@ -120,6 +120,12 @@ model    = "nomic-embed-text"`}</code>
       </p>
 
       <h2>Reading recent memory</h2>
+      <p>
+        Recent reads and semantic search require <code>memory.read</code>{" "}
+        or a tier-specific <code>memory.read.&lt;tier&gt;</code>{" "}
+        capability. Results are filtered to the authenticated owner and
+        the signed memory scope before they are returned.
+      </p>
       <pre>
         <code>{`covenant memory recent
 covenant memory recent --tier longterm

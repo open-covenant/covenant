@@ -23,7 +23,10 @@ use covenant_permissions::{
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
-    memory_repair_scope_allows as permission_memory_repair_scope_allows, sign as sign_capability,
+    memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
+    memory_read_scope_allows as permission_memory_read_scope_allows,
+    memory_repair_scope_allows as permission_memory_repair_scope_allows,
+    memory_write_scope_allows as permission_memory_write_scope_allows, sign as sign_capability,
     tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
     CapabilityStore, MemoryCompactionScopeRequest,
 };
@@ -194,6 +197,39 @@ fn memory_tier_name(tier: MemoryTier) -> &'static str {
         MemoryTier::Episodic => "episodic",
         MemoryTier::LongTerm => "longterm",
     }
+}
+
+fn memory_read_actions(tier: Option<MemoryTier>) -> Vec<String> {
+    match tier {
+        Some(tier) => vec![
+            "memory.read".into(),
+            format!("memory.read.{}", memory_tier_name(tier)),
+        ],
+        None => vec![
+            "memory.read".into(),
+            "memory.read.working".into(),
+            "memory.read.episodic".into(),
+            "memory.read.longterm".into(),
+        ],
+    }
+}
+
+fn memory_read_record_allowed(
+    scopes: &[(String, serde_json::Value)],
+    record: &MemoryRecord,
+) -> bool {
+    let tier = memory_tier_name(record.tier);
+    let record_id = record.id.to_string();
+    scopes.iter().any(|(action, scope)| {
+        permission_memory_read_record_scope_allows(
+            action,
+            scope,
+            &record_id,
+            tier,
+            record.created_at,
+        )
+        .unwrap_or(false)
+    })
 }
 
 fn a2a_entry_visible_to_peer(entry: &covenant_a2a::A2ATaskQueueEntry, peer: &AgentId) -> bool {
@@ -512,7 +548,7 @@ impl Server {
                 self.revoke_capability(signature_b58, peer).await
             }
             Request::SearchMemory { query, tier, limit } => {
-                self.search_memory(query, tier, limit).await
+                self.search_memory(query, tier, limit, peer).await
             }
             Request::PurgeMemory { tier, before_ms } => {
                 self.purge_memory(tier, before_ms, peer).await
@@ -1646,13 +1682,68 @@ impl Server {
             .as_ref()
             .and_then(|m| self.router.find_by_id(&m.agent_id));
 
+        let write_check = self
+            .check_capabilities("memory:write".into(), vec!["memory.write".into()], peer)
+            .await;
+        if !write_check.passed {
+            return Response::Error {
+                message: "intent dispatch requires capability \"memory.write\" because successful dispatch writes working memory. \
+                     Grant it with `covenant capabilities grant memory.write`."
+                    .into(),
+            };
+        }
+        match self
+            .memory_write_scope_allows(&intent_id.to_string(), MemoryTier::Working, issued_at, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason =
+                    "record, tier, mode, or age does not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("memory-write:{intent_id}"),
+                        action: "memory.write".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory write rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("memory-write:{intent_id}"),
+                        action: "memory.write".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory write rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
+
         let (text_out, sources_out) = if let Some(card) = card {
+            let required = card
+                .manifest
+                .capabilities
+                .required
+                .iter()
+                .filter(|action| action.as_str() != "memory.write")
+                .cloned()
+                .collect::<Vec<_>>();
             let check = self
-                .check_capabilities(
-                    card.id.clone(),
-                    card.manifest.capabilities.required.clone(),
-                    peer,
-                )
+                .check_capabilities(card.id.clone(), required, peer)
                 .await;
             if !check.passed {
                 return Response::Error {
@@ -1778,7 +1869,7 @@ impl Server {
                 "agent_id": card.map(|c| c.id.clone()),
                 "status": "ok",
             }),
-            created_at: epoch_ms(),
+            created_at: issued_at,
             parent: None,
         };
         let bytes_written = record.text.len();
@@ -2033,11 +2124,61 @@ impl Server {
         limit: usize,
         peer: &AgentId,
     ) -> Response {
+        let actions = memory_read_actions(tier);
+        let check = self
+            .check_capabilities_any_of("memory:recent".into(), vec![actions], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "memory read requires capability \"memory.read\" or a tier-specific memory.read.<tier> capability. \
+                     Grant it with `covenant capabilities grant memory.read`."
+                    .into(),
+            };
+        }
+
+        let scopes = match self.memory_read_scopes(tier, peer).await {
+            Ok(scopes) if !scopes.is_empty() => scopes,
+            Ok(_) => {
+                let reason =
+                    "tier, record, mode, or age does not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:recent".into(),
+                        action: "memory.read".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory read rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:recent".into(),
+                        action: "memory.read".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory read rejected by invalid capability scope: {reason}"),
+                };
+            }
+        };
         match self.memory.recent(tier, limit).await {
             Ok(records) => {
                 let records = records
                     .into_iter()
                     .filter(|r| r.owner.pubkey == peer.pubkey)
+                    .filter(|r| memory_read_record_allowed(&scopes, r))
                     .collect();
                 Response::Memories { records }
             }
@@ -2181,7 +2322,59 @@ impl Server {
         query: String,
         tier: Option<MemoryTier>,
         limit: usize,
+        peer: &AgentId,
     ) -> Response {
+        let actions = memory_read_actions(tier);
+        let check = self
+            .check_capabilities_any_of("memory:search".into(), vec![actions], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "memory search requires capability \"memory.read\" or a tier-specific memory.read.<tier> capability. \
+                     Grant it with `covenant capabilities grant memory.read`."
+                    .into(),
+            };
+        }
+
+        let scopes = match self.memory_read_scopes(tier, peer).await {
+            Ok(scopes) if !scopes.is_empty() => scopes,
+            Ok(_) => {
+                let reason =
+                    "tier, record, mode, or age does not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:search".into(),
+                        action: "memory.read".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory search rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:search".into(),
+                        action: "memory.read".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!(
+                        "memory search rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        };
         let q_emb = match self.embedder.embed(&query).await {
             Ok(v) => v,
             Err(e) => {
@@ -2191,7 +2384,13 @@ impl Server {
             }
         };
         match self.memory.search_similar(q_emb, tier, limit).await {
-            Ok(records) => Response::Memories { records },
+            Ok(records) => Response::Memories {
+                records: records
+                    .into_iter()
+                    .filter(|record| record.owner.pubkey == peer.pubkey)
+                    .filter(|record| memory_read_record_allowed(&scopes, record))
+                    .collect(),
+            },
             Err(e) => Response::Error {
                 message: format!("memory: {e}"),
             },
@@ -2535,6 +2734,71 @@ impl Server {
         let tier_name = tier.map(memory_tier_name);
         self.memory_scope_allows("memory.purge", peer, |scope| {
             permission_memory_purge_scope_allows("memory.purge", scope, tier_name, before_ms)
+        })
+        .await
+    }
+
+    async fn memory_read_scopes(
+        &self,
+        tier: Option<MemoryTier>,
+        peer: &AgentId,
+    ) -> Result<Vec<(String, serde_json::Value)>, String> {
+        let actions = memory_read_actions(tier);
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut scopes = Vec::new();
+        let mut invalid_scope = None;
+        let tier_name = tier.map(memory_tier_name);
+
+        for cap in user_caps.iter().filter(|cap| {
+            actions
+                .iter()
+                .any(|action| action == &cap.capability.action)
+                && verify_with_clock(cap, now).is_ok()
+        }) {
+            match permission_memory_read_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                tier_name,
+            ) {
+                Ok(true) => {
+                    scopes.push((cap.capability.action.clone(), cap.capability.scope.clone()))
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+
+        if scopes.is_empty() {
+            if let Some(reason) = invalid_scope {
+                return Err(reason);
+            }
+        }
+        Ok(scopes)
+    }
+
+    async fn memory_write_scope_allows(
+        &self,
+        record_id: &str,
+        tier: MemoryTier,
+        created_at_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let tier_name = memory_tier_name(tier);
+        self.memory_scope_allows("memory.write", peer, |scope| {
+            permission_memory_write_scope_allows(
+                "memory.write",
+                scope,
+                record_id,
+                tier_name,
+                created_at_ms,
+            )
         })
         .await
     }
@@ -3148,6 +3412,20 @@ required = {caps:?}
         )
     }
 
+    async fn grant_action(s: &Server, action: &str) {
+        let resp = s
+            .op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        assert!(
+            matches!(resp, Response::CapabilityGranted { .. }),
+            "grant {action} failed: {resp:?}"
+        );
+    }
+
     #[test]
     fn runtime_runner_config_defaults_to_trusted_local() {
         let config =
@@ -3245,12 +3523,8 @@ required = {caps:?}
             "mocked summary",
         );
         // Hard enforcement: grant the required cap up-front.
-        s.op_respond(Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        })
-        .await;
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
@@ -3268,12 +3542,8 @@ required = {caps:?}
             vec![stub_card("research", vec!["tool.web_search"])],
             "mocked summary",
         );
-        s.op_respond(Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        })
-        .await;
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
         })
@@ -3947,6 +4217,7 @@ required = {caps:?}
             vec![stub_card("research", vec!["tool.web_search"])],
             "mocked summary",
         );
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
@@ -3967,6 +4238,7 @@ required = {caps:?}
             vec![stub_card("research", vec!["tool.web_search"])],
             "mocked summary",
         );
+        grant_action(&s, "memory.write").await;
         let grant = s
             .op_respond(Request::GrantCapability {
                 action: "tool.web_search".into(),
@@ -4007,6 +4279,7 @@ required = {caps:?}
     #[tokio::test]
     async fn submit_intent_falls_back_to_echo_when_no_match() {
         let s = server_with(vec![stub_card("research", vec!["tool.web_search"])], "");
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "zzz no keywords".into(),
@@ -4016,6 +4289,41 @@ required = {caps:?}
             Response::IntentResult { text, .. } => assert!(text.contains("no agent matched")),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn submit_intent_rejects_memory_write_scope_mismatch_and_audits() {
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.write".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["episodic"],
+                "apply": true
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers".into(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("memory write rejected")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::CapabilityScopeRejected { action, .. } if action == "memory.write"
+        )));
     }
 
     #[tokio::test]
@@ -4137,6 +4445,7 @@ required = {caps:?}
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
             Arc::new(covenant_budget::InMemoryLedger::new()),
         );
+        grant_action(&s, "memory.write").await;
         // Dispatch will be rejected, but the capability check event is still recorded.
         s.op_respond(Request::SubmitIntent {
             text: "find papers".into(),
@@ -4145,7 +4454,12 @@ required = {caps:?}
         let events = audit.recent(10).await.unwrap();
         let cap_check = events
             .iter()
-            .find(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. }))
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    AuditKind::CapabilityCheck { agent_id, .. } if agent_id == "research"
+                )
+            })
             .expect("capability check audit event present");
         match &cap_check.kind {
             AuditKind::CapabilityCheck {
@@ -4154,8 +4468,8 @@ required = {caps:?}
                 required_actions,
                 ..
             } => {
-                assert_eq!(required_actions.len(), 2);
-                assert_eq!(missing_actions.len(), 2);
+                assert_eq!(required_actions, &vec!["tool.web_search".to_string()]);
+                assert_eq!(missing_actions, &vec!["tool.web_search".to_string()]);
                 assert!(!passed);
             }
             other => panic!("unexpected: {other:?}"),
@@ -6170,6 +6484,7 @@ required = {caps:?}
     #[tokio::test]
     async fn recent_memory_scrubs_other_peers_records() {
         let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
         let alien = AgentId::new("alice@local", [9u8; 32]);
         let alien_record = MemoryRecord {
             id: Uuid::new_v4(),
@@ -6220,17 +6535,173 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn recent_memory_rejects_without_read_capability() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("memory read requires")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_memory_filters_to_scoped_tier() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::new_v4(),
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "working memory".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::new_v4(),
+                tier: MemoryTier::Episodic,
+                owner: me,
+                text: "episodic memory".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.read".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "apply": false
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+            })
+            .await;
+        match resp {
+            Response::Memories { records } => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].tier, MemoryTier::Working);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let rejected = s
+            .op_respond(Request::RecentMemory {
+                tier: Some(MemoryTier::Episodic),
+                limit: 10,
+            })
+            .await;
+        match rejected {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::CapabilityScopeRejected { action, .. } if action == "memory.read"
+        )));
+    }
+
+    #[tokio::test]
+    async fn search_memory_filters_owner_and_scope() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        let embedding = s.embedder.embed("note").await.unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::new_v4(),
+                tier: MemoryTier::Working,
+                owner: me,
+                text: "operator working note".into(),
+                embedding: embedding.clone(),
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::new_v4(),
+                tier: MemoryTier::Working,
+                owner: alien,
+                text: "alien working note".into(),
+                embedding: embedding.clone(),
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::new_v4(),
+                tier: MemoryTier::Episodic,
+                owner: s.identity.agent_id(),
+                text: "operator episodic note".into(),
+                embedding,
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.read".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "apply": false
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::SearchMemory {
+                query: "note".into(),
+                tier: None,
+                limit: 10,
+            })
+            .await;
+        match resp {
+            Response::Memories { records } => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].text, "operator working note");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_memory_v0_operator_sees_own_records() {
         let s = server_with(
             vec![stub_card("research", vec!["tool.web_search"])],
             "summary",
         );
-        s.op_respond(Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        })
-        .await;
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        grant_action(&s, "memory.read").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
         })
@@ -6321,12 +6792,8 @@ required = {caps:?}
             vec![stub_card("research", vec!["tool.web_search"])],
             "summary",
         );
-        s.op_respond(Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        })
-        .await;
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
         })
@@ -6662,6 +7129,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
@@ -6713,6 +7181,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
 
         let first = s
             .op_respond(Request::SubmitIntent {
@@ -6817,6 +7286,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers".into(),
@@ -6898,6 +7368,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
 
         // Synthesise a BudgetExhausted row as if a previous dispatch had
         // been rejected. The resume verb scans recent audit, finds this
@@ -6980,6 +7451,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
@@ -7125,6 +7597,7 @@ budget_credits_per_hour = {credits}
             expires_at: None,
         })
         .await;
+        grant_action(&s, "memory.write").await;
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),

@@ -231,6 +231,90 @@ pub fn memory_purge_scope_allows(
     }
 }
 
+pub fn memory_read_scope_allows(
+    action: &str,
+    scope: &Value,
+    tier: Option<&str>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if !memory_read_action_allows(action, tier) {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, false) {
+        return Ok(false);
+    }
+    match tier {
+        Some(tier) => Ok(scope_allows_tiers(obj, &[tier])),
+        None => Ok(true),
+    }
+}
+
+pub fn memory_read_record_scope_allows(
+    action: &str,
+    scope: &Value,
+    record_id: &str,
+    tier: &str,
+    created_at_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if !memory_read_action_allows(action, Some(tier)) {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, false)
+        || !scope_allows_record_id(obj, record_id)
+        || !scope_allows_tiers(obj, &[tier])
+    {
+        return Ok(false);
+    }
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => Ok(true),
+        Some(value) => Ok(created_at_ms < value.as_u64().unwrap_or(0)),
+        None => Ok(true),
+    }
+}
+
+pub fn memory_write_scope_allows(
+    action: &str,
+    scope: &Value,
+    record_id: &str,
+    tier: &str,
+    created_at_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "memory.write" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, true)
+        || !scope_allows_record_id(obj, record_id)
+        || !scope_allows_tiers(obj, &[tier])
+    {
+        return Ok(false);
+    }
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => Ok(true),
+        Some(value) => Ok(created_at_ms < value.as_u64().unwrap_or(0)),
+        None => Ok(true),
+    }
+}
+
 pub fn memory_repair_scope_allows(
     action: &str,
     scope: &Value,
@@ -318,6 +402,16 @@ pub fn memory_compaction_scope_allows(
         return Ok(false);
     }
     Ok(true)
+}
+
+fn memory_read_action_allows(action: &str, tier: Option<&str>) -> bool {
+    if action == "memory.read" {
+        return true;
+    }
+    let Some(action_tier) = action.strip_prefix("memory.read.") else {
+        return false;
+    };
+    tier.is_some_and(|tier| tier == action_tier)
 }
 
 fn scope_allows_apply(obj: &Map<String, Value>, apply: bool) -> bool {
@@ -1218,6 +1312,82 @@ mod tests {
             !memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_001).unwrap()
         );
         assert!(!memory_purge_scope_allows("memory.purge", &scope, None, 999).unwrap());
+    }
+
+    #[test]
+    fn memory_read_scope_allows_tier_mode_and_record_filters() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "record_id": "record-1",
+            "before_ms": 1_000,
+            "apply": false
+        });
+        assert!(memory_read_scope_allows("memory.read", &scope, Some("working")).unwrap());
+        assert!(!memory_read_scope_allows("memory.read", &scope, Some("episodic")).unwrap());
+        assert!(memory_read_scope_allows("memory.read.working", &scope, Some("working")).unwrap());
+        assert!(
+            !memory_read_scope_allows("memory.read.episodic", &scope, Some("working")).unwrap()
+        );
+        assert!(
+            memory_read_record_scope_allows("memory.read", &scope, "record-1", "working", 999)
+                .unwrap()
+        );
+        assert!(!memory_read_record_scope_allows(
+            "memory.read",
+            &scope,
+            "record-2",
+            "working",
+            999
+        )
+        .unwrap());
+        assert!(!memory_read_record_scope_allows(
+            "memory.read",
+            &scope,
+            "record-1",
+            "working",
+            1_000
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn memory_write_scope_allows_tier_record_mode_and_cutoff() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "record_id": "record-1",
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            memory_write_scope_allows("memory.write", &scope, "record-1", "working", 999).unwrap()
+        );
+        assert!(
+            !memory_write_scope_allows("memory.write", &scope, "record-2", "working", 999).unwrap()
+        );
+        assert!(
+            !memory_write_scope_allows("memory.write", &scope, "record-1", "episodic", 999)
+                .unwrap()
+        );
+        assert!(
+            !memory_write_scope_allows("memory.write", &scope, "record-1", "working", 1_000)
+                .unwrap()
+        );
+
+        let dry_run_scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "apply": false
+        });
+        assert!(!memory_write_scope_allows(
+            "memory.write",
+            &dry_run_scope,
+            "record-1",
+            "working",
+            999
+        )
+        .unwrap());
     }
 
     #[test]

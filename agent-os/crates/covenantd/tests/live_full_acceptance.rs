@@ -125,17 +125,19 @@ cpu_ms_per_task = 60000
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    write_frame(
-        &mut stream,
-        &Request::GrantCapability {
-            action: "tool.web_search".into(),
-            scope: None,
-            expires_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    let _: Response = read_frame(&mut stream).await.unwrap();
+    for action in ["tool.web_search", "memory.write"] {
+        write_frame(
+            &mut stream,
+            &Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        let _: Response = read_frame(&mut stream).await.unwrap();
+    }
 
     write_frame(
         &mut stream,

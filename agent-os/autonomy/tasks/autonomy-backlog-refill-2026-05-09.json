@@ -1,0 +1,29 @@
+{
+  "id": "autonomy-backlog-refill-2026-05-09",
+  "title": "Refill the autonomous backlog from current system gaps",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/autonomy/backlog.json",
+    "agent-os/autonomy/tasks",
+    "docs/autonomous-development.md"
+  ],
+  "summary": "Replenish the durable autonomous backlog after every prior seed template was consumed, using current live coverage, status, and roadmap gaps as the source of truth.",
+  "expectedFailureModes": [
+    "The continuation loop stops because every backlog template already has a task file.",
+    "New task templates are chosen from chat context instead of durable status and coverage evidence.",
+    "Agents treat backlog exhaustion as a blocker even though unblocked system hardening work remains."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-next.mjs --seed --json",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Integrated; run the continuation loop and seed the next refreshed backlog task.",
+  "updated": "2026-05-09"
+}

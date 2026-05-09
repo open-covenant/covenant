@@ -24,6 +24,8 @@ node agent-os/scripts/provenance.mjs verify-all
 
 `autonomy-continue.mjs` selects the highest-priority unblocked task. If every task is already integrated or blocked, it seeds the next template from `autonomy/backlog.json` through `autonomy-seed-next.mjs` and then returns that new proposed task. This keeps the loop moving without depending on chat history for the next work item.
 
+If `autonomy-continue.mjs` reports that the backlog is exhausted, do not treat that as a blocker by itself. Refill `agent-os/autonomy/backlog.json` from durable project evidence: `docs/status.md`, `docs/live-coverage.md`, `ROADMAP.md`, open task `nextAction` fields, and validated implementation gaps. Add concrete templates with scoped files, failure modes, gates, and verification commands, validate the autonomy records, then rerun the continuation command.
+
 `autonomy-summary.mjs` renders a deterministic sprint summary from task records and the transition log. Use Markdown for handoff notes and `--format json` for machine-readable monitors:
 
 ```bash

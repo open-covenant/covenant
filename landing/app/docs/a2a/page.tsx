@@ -106,7 +106,7 @@ A2ATaskResult {
         observed <code>lease_id</code> as a guard against repairing a
         newer lease than the operator inspected. Daemon, HTTP, and CLI
         exposure are the next hardening step; automatic retry remains
-        disabled.
+        disabled until tasks carry explicit idempotency metadata (key + policy).
       </p>
 
       <h2>Daemon-mediated flow</h2>

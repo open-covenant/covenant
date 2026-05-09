@@ -1,0 +1,31 @@
+{
+  "id": "a2a-idempotency-policy",
+  "title": "Define A2A retry idempotency policy",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "planner",
+  "scope": [
+    "docs/a2a-queue-semantics.md",
+    "docs",
+    "landing/app/docs",
+    "agent-os/autonomy/backlog.json"
+  ],
+  "summary": "Define the idempotency metadata and operator policy required before automatic A2A retry can be implemented.",
+  "expectedFailureModes": [
+    "Automatic retry work begins before task classes can declare duplicate safety.",
+    "Requeue policy hides duplicate-work risk from operators.",
+    "Docs imply retries are safe while only manual repair is implemented."
+  ],
+  "gates": [
+    "plan",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Write the A2A idempotency policy and convert automatic retry into concrete implementation tasks.",
+  "updated": "2026-05-09"
+}

@@ -32,9 +32,9 @@ const stateRank = new Map([
   ["validation", 90],
   ["cross_review", 80],
   ["self_review", 70],
-  ["planned", 60],
-  ["triaged", 50],
-  ["in_progress", 40],
+  ["in_progress", 60],
+  ["planned", 50],
+  ["triaged", 40],
   ["proposed", 30]
 ]);
 

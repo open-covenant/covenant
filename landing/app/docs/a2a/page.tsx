@@ -54,12 +54,13 @@ A2ATaskResult {
         <code>{`trait Mailbox {
   async fn send_task(&self, task: A2ATask)         -> Result<()>;
   async fn recv_task(&self)                        -> Result<A2ATask>;
-  async fn try_recv_task(&self)                    -> Result<Option<A2ATask>>;
+  async fn try_recv_task_for(&self, recipient)     -> Result<Option<A2ATask>>;
   async fn recent_tasks(&self, limit: usize)       -> Result<Vec<A2ATask>>;
+  async fn task_queue(&self, limit: usize)         -> Result<Vec<A2ATaskQueueEntry>>;
 
   async fn send_result(&self, result: A2ATaskResult)   -> Result<()>;
   async fn recv_result(&self)                          -> Result<A2ATaskResult>;
-  async fn try_recv_result(&self)                      -> Result<Option<A2ATaskResult>>;
+  async fn try_recv_result_for(&self, peer)             -> Result<Option<A2ATaskResult>>;
   async fn recent_results(&self, limit: usize)         -> Result<Vec<A2ATaskResult>>;
 }`}</code>
       </pre>
@@ -69,8 +70,15 @@ A2ATaskResult {
         in-process agents on long-lived connections. The non-blocking{" "}
         <code>try_recv_*</code> variants are appropriate for RPC-style
         callers that poll over a single round-trip. The non-consuming{" "}
-        <code>recent_*</code> variants support operator dashboards that
-        inspect the queue without draining it.
+        <code>recent_*</code> and <code>task_queue</code> variants support
+        operator dashboards that inspect the queue without draining it.
+      </p>
+
+      <p>
+        A received task becomes an explicit <code>in_flight</code> lease.
+        Leases survive daemon restart and are not automatically
+        redelivered; operators inspect them through the queue-status
+        surface and repair them explicitly when needed.
       </p>
 
       <h2>Daemon-mediated flow</h2>
@@ -78,7 +86,7 @@ A2ATaskResult {
         <code>{`POST /a2a/tasks                   # body: A2ATask JSON
   → 200 { "kind": "a2a_task_queued", "task_id": "uuid" }
 
-GET  /a2a/tasks/next              # consumes the next queued task
+GET  /a2a/tasks/next              # leases the next queued task
   → 200 { "kind": "a2a_task_opt", "task": { ... } | null }
 
 GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
@@ -87,18 +95,21 @@ GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
 POST /a2a/results                 # body: A2ATaskResult JSON
   → 200 { "kind": "a2a_result_posted", "task_id": "uuid" }
 
-GET  /a2a/results/next            # consumes the next queued result
+GET  /a2a/results/next            # drains the next queued result
   → 200 { "kind": "a2a_result_opt", "result": { ... } | null }
 
 GET  /a2a/results/recent?limit=N  # non-consuming snapshot
-  → 200 { "kind": "a2a_results", "results": [ ... ] }`}</code>
+  → 200 { "kind": "a2a_results", "results": [ ... ] }
+
+GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results
+  → 200 { "kind": "a2a_queue", "tasks": [ ... ], "results": [ ... ] }`}</code>
       </pre>
 
       <p>
         Equivalent IPC variants exist: <code>SendA2ATask</code>,{" "}
         <code>TryRecvA2ATask</code>, <code>RecentA2ATasks</code>,{" "}
         <code>PostA2AResult</code>, <code>TryRecvA2AResult</code>,{" "}
-        <code>RecentA2AResults</code>. See{" "}
+        <code>RecentA2AResults</code>, <code>A2AQueue</code>. See{" "}
         <Link href="/ipc">Local IPC</Link> for the full request/
         response shapes.
       </p>
@@ -156,16 +167,14 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
       <h2>Implementation notes</h2>
       <ul>
         <li>
-          <strong>Persistence.</strong> The default mailbox is
-          in-memory; a daemon restart discards every queued task and
-          result. A disk-backed mailbox is scheduled for a subsequent
-          milestone.
+          <strong>Persistence.</strong> The daemon uses an append-only
+          JSONL mailbox. Queued tasks, in-flight leases, sender lookup
+          state, and pending results replay after restart.
         </li>
         <li>
-          <strong>Routing.</strong> The default mailbox is global FIFO:
-          every <code>recv_task</code> caller pulls from the same queue
-          regardless of <code>recipient</code>. Per-recipient routing
-          is scheduled for a subsequent milestone.
+          <strong>Routing.</strong> Peer-scoped receives only drain
+          tasks addressed to the authenticated recipient. Global FIFO
+          receives remain available for in-process orchestrators.
         </li>
         <li>
           <strong>Authentication.</strong> Both write paths are gated by
@@ -176,12 +185,9 @@ GET  /a2a/results/recent?limit=N  # non-consuming snapshot
           tracked separately.
         </li>
         <li>
-          <strong>Sender record.</strong> The mailbox retains a
-          permanent record of the sender for every dispatched task so
-          that respond capabilities remain sender-scoped after the task
-          has been received. For long-running daemons this map grows
-          unboundedly; a TTL or LRU policy is introduced with the
-          disk-backed mailbox.
+          <strong>Retry posture.</strong> Alpha does not auto-redeliver
+          leased tasks after restart. This avoids duplicate non-idempotent
+          work; explicit operator requeue is the next hardening step.
         </li>
       </ul>
 

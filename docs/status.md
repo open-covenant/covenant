@@ -12,7 +12,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite and embedding tests | Drift repair, compaction, stale-context handling. |
 | Runtime execution | Implemented, trusted-local | `covenant-runtime`, subprocess timeout tests | gVisor sandbox for untrusted Linux agents. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
-| A2A messaging | Experimental | `covenant-a2a`, restart live tests | Durable queue semantics and stuck-task visibility. |
+| A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, restart live tests | Explicit requeue and lease-expiry repair commands. |
 | Budget ledger | Implemented | `covenant-budget`, daemon budget tests | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |

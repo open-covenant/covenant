@@ -139,12 +139,13 @@ POST /tools/call
       <h3>Agent-to-agent</h3>
       <pre>
         <code>{`POST /a2a/tasks                   # body: A2ATask JSON
-GET  /a2a/tasks/next              # consumes the next queued task
+GET  /a2a/tasks/next              # leases the next queued task
 GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
 
 POST /a2a/results                 # body: A2ATaskResult JSON
-GET  /a2a/results/next            # consumes the next queued result
-GET  /a2a/results/recent?limit=N  # non-consuming snapshot`}</code>
+GET  /a2a/results/next            # drains the next queued result
+GET  /a2a/results/recent?limit=N  # non-consuming snapshot
+GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results`}</code>
       </pre>
       <p>
         Write paths (<code>POST</code>) require capability tokens —

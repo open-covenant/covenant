@@ -16,6 +16,7 @@
 //!   covenant tools list
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
+//!   covenant a2a status [--limit N]
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
@@ -87,6 +88,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant a2a status [-n N]            list queued tasks, in-flight leases, and pending results"
     );
     eprintln!(
         "  covenant a2a compact                  drop event-log lines for fully-resolved a2a tasks"
@@ -723,17 +727,63 @@ async fn main() -> Result<()> {
             }
         }
         "a2a" => {
-            if args.len() < 2 || args[1] != "compact" {
-                eprintln!("covenant a2a: expected `compact`");
+            if args.len() < 2 {
+                eprintln!("covenant a2a: expected `status` or `compact`");
                 std::process::exit(2);
             }
-            write_frame(&mut stream, &Request::CompactA2A).await?;
-            match read_frame::<_, Response>(&mut stream).await? {
-                Response::A2ACompacted { dropped } => {
-                    println!("dropped {dropped} a2a event(s)");
+            match args[1].as_str() {
+                "status" => {
+                    let mut limit: usize = 10;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "-n" | "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(&mut stream, &Request::A2AQueue { limit }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::A2AQueue { tasks, results } => {
+                            if tasks.is_empty() && results.is_empty() {
+                                println!("(a2a queue empty)");
+                            }
+                            for entry in tasks {
+                                println!(
+                                    "{}",
+                                    serde_json::json!({ "type": "task", "entry": entry })
+                                );
+                            }
+                            for result in results {
+                                println!(
+                                    "{}",
+                                    serde_json::json!({ "type": "result", "result": result })
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
                 }
-                Response::Error { message } => bail!("daemon error: {message}"),
-                other => bail!("unexpected response: {other:?}"),
+                "compact" => {
+                    write_frame(&mut stream, &Request::CompactA2A).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::A2ACompacted { dropped } => {
+                            println!("dropped {dropped} a2a event(s)");
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant a2a: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
             }
         }
         "peers" => {

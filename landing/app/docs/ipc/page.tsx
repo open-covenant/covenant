@@ -97,6 +97,7 @@ export default function IpcPage() {
 
 { "kind": "send_a2a_task",      "task":   { ... } }
 { "kind": "try_recv_a2a_task" }
+{ "kind": "a2a_queue",          "limit":  20 }
 
 { "kind": "post_a2a_result",    "result": { ... } }
 { "kind": "try_recv_a2a_result" }`}</code>
@@ -145,6 +146,7 @@ export default function IpcPage() {
 { "kind": "a2a_task_opt",      "task":    null | { ... } }
 { "kind": "a2a_result_posted", "task_id": "uuid" }
 { "kind": "a2a_result_opt",    "result":  null | { ... } }
+{ "kind": "a2a_queue",         "tasks":   [ ... ], "results": [ ... ] }
 
 { "kind": "error", "message": "…" }`}</code>
       </pre>

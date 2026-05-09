@@ -5,7 +5,7 @@
 
 #![deny(unsafe_code)]
 
-use covenant_a2a::{A2ATask, A2ATaskResult};
+use covenant_a2a::{A2ATask, A2ATaskQueueEntry, A2ATaskResult};
 use covenant_audit::AuditEvent;
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
@@ -120,6 +120,13 @@ pub enum Request {
         limit: usize,
     },
     RecentA2AResults {
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
+    /// Inspect queued and in-flight A2A tasks plus pending results.
+    /// In-flight tasks have been leased to a recipient and will not be
+    /// redelivered automatically after restart.
+    A2AQueue {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
@@ -314,6 +321,10 @@ pub enum Response {
         tasks: Vec<A2ATask>,
     },
     A2AResults {
+        results: Vec<A2ATaskResult>,
+    },
+    A2AQueue {
+        tasks: Vec<A2ATaskQueueEntry>,
         results: Vec<A2ATaskResult>,
     },
     A2ACompacted {

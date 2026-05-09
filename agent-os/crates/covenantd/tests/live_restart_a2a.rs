@@ -16,7 +16,7 @@
 //! Hermetic — no external services. Uses two different HTTP ports to
 //! avoid bind contention while the OS releases the first.
 
-use covenant_a2a::{A2ATask, A2ATaskResult};
+use covenant_a2a::{A2ATask, A2ATaskQueueState, A2ATaskResult};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_mcp::Content;
 use covenant_types::AgentId;
@@ -222,6 +222,17 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
                 assert_eq!(t.intent_text, "find recent papers");
             }
             other => panic!("expected replayed task, got {other:?}"),
+        }
+
+        match req(&mut stream, Request::A2AQueue { limit: 10 }).await {
+            Response::A2AQueue { tasks, results } => {
+                assert!(results.is_empty());
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].state, A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, task.id);
+                assert_eq!(tasks[0].leased_to.as_ref(), Some(&peer));
+            }
+            other => panic!("expected A2AQueue after recv, got {other:?}"),
         }
 
         // Replay assertion #2: the senders map replayed. Posting a result

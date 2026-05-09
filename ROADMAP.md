@@ -8,7 +8,7 @@ The current priority is making the local daemon and CLI reliable under real engi
 
 - Keep identity, peer auth, capability checks, audit rows, and token rotation strict.
 - Expand live tests across daemon, CLI, HTTP, MCP, A2A, and subprocess boundaries.
-- Add durable queueing for A2A tasks so daemon restarts do not drop work.
+- Add explicit A2A requeue and lease-expiry repair commands on top of durable leased delivery.
 - Improve memory lifecycle: working-tier cleanup, compaction policy, and drift checks.
 - Keep local validation and CI equivalent through `agent-os/scripts/validate.sh`.
 - Make public docs distinguish implemented, experimental, and planned behavior.

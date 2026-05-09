@@ -136,6 +136,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/results", post(post_a2a_result))
         .route("/a2a/results/next", get(try_recv_a2a_result))
         .route("/a2a/results/recent", get(recent_a2a_results))
+        .route("/a2a/queue", get(a2a_queue))
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
         .route("/peers/rotate", post(peers_rotate))
@@ -536,6 +537,23 @@ async fn recent_a2a_results(
         s.server
             .respond(
                 Request::RecentA2AResults {
+                    limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+async fn a2a_queue(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Query(q): Query<LimitParams>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::A2AQueue {
                     limit: q.limit.unwrap_or(10),
                 },
                 &peer,

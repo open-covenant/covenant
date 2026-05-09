@@ -81,7 +81,7 @@ Implemented and tested in the repository:
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
 | Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation and audit rows. |
 | Memory | Implemented, still hardening | SQLite and embeddings are present; compaction and drift repair need more work. |
-| MCP and A2A | Experimental | Adapter crates and tests exist; multi-peer production operation is not claimed. |
+| MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery and queue-state inspection. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Runtime sandboxing | Planned | Subprocess timeouts exist; gVisor/Firecracker isolation is future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |

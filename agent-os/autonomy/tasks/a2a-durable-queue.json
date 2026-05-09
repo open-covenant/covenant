@@ -1,7 +1,7 @@
 {
   "id": "a2a-durable-queue",
   "title": "Harden A2A durable queue semantics",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [
@@ -16,13 +16,18 @@
     "A result is posted after the sender context has expired and becomes permanently invisible to the intended peer.",
     "Compaction removes unresolved tasks because task and result events are correlated by display identity instead of pubkey identity."
   ],
-  "gates": ["plan", "security", "test_expansion", "docs"],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs"
+  ],
   "verification": [
     "bash agent-os/scripts/validate.sh --quick",
     "cd agent-os && cargo test -p covenant-a2a",
     "cd agent-os && cargo test -p covenantd --test live_restart_a2a -- --ignored live_"
   ],
   "humanEscalation": [],
-  "nextAction": "Specify queue states and duplicate-delivery rules before changing mailbox compaction.",
+  "nextAction": "Continue explicit requeue and lease-expiry repair under a2a-requeue-repair.",
   "updated": "2026-05-09"
 }

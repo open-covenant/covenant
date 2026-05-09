@@ -330,6 +330,7 @@ impl Server {
             Request::TryRecvA2AResult => self.try_recv_a2a_result(peer).await,
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit, peer).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit, peer).await,
+            Request::A2AQueue { limit } => self.a2a_queue(limit, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
@@ -577,6 +578,52 @@ impl Server {
             }
         }
         Response::A2AResults { results: filtered }
+    }
+
+    async fn a2a_queue(&self, limit: usize, peer: &AgentId) -> Response {
+        let tasks = match self.mailbox.task_queue(limit).await {
+            Ok(tasks) => tasks
+                .into_iter()
+                .filter(|entry| {
+                    entry.task.sender.pubkey == peer.pubkey
+                        || entry.task.recipient.pubkey == peer.pubkey
+                        || entry
+                            .leased_to
+                            .as_ref()
+                            .map(|agent| agent.pubkey == peer.pubkey)
+                            .unwrap_or(false)
+                })
+                .collect(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("a2a: {e}"),
+                };
+            }
+        };
+
+        let results = match self.mailbox.recent_results(limit).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("a2a: {e}"),
+                };
+            }
+        };
+        let mut filtered_results = Vec::with_capacity(results.len());
+        for result in results {
+            match self.mailbox.lookup_task_sender(result.task_id).await {
+                Ok(Some(sender)) if sender.pubkey == peer.pubkey => filtered_results.push(result),
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(error = %e, task_id = %result.task_id, "a2a: lookup_task_sender failed; dropping row");
+                }
+            }
+        }
+
+        Response::A2AQueue {
+            tasks,
+            results: filtered_results,
+        }
     }
 
     /// Daemon-side fan-out across `router.agents()` for the operator
@@ -2525,6 +2572,74 @@ required = {caps:?}
         // recent must not consume — try_recv still finds tasks.
         let drained = s.op_respond(Request::TryRecvA2ATask).await;
         assert!(matches!(drained, Response::A2ATaskOpt { task: Some(_) }));
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_surfaces_in_flight_tasks() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: peer.clone(),
+            intent_text: "loopback".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(matches!(drained, Response::A2ATaskOpt { task: Some(_) }));
+
+        let queue = s.op_respond(Request::A2AQueue { limit: 10 }).await;
+        match queue {
+            Response::A2AQueue { tasks, results } => {
+                assert!(results.is_empty());
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, task.id);
+                assert_eq!(tasks[0].leased_to.as_ref(), Some(&peer));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_scrubs_unrelated_in_flight_tasks() {
+        let s = server_with(vec![], "");
+        let alien_sender = AgentId::new("alice@local", [9u8; 32]);
+        let alien_recipient = AgentId::new("bob@local", [8u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: alien_sender,
+            recipient: alien_recipient.clone(),
+            intent_text: "alien".into(),
+            parent: None,
+            deadline_ms: None,
+        };
+        s.mailbox.send_task(task).await.unwrap();
+        assert!(s
+            .mailbox
+            .try_recv_task_for(&alien_recipient)
+            .await
+            .unwrap()
+            .is_some());
+
+        let queue = s.op_respond(Request::A2AQueue { limit: 10 }).await;
+        match queue {
+            Response::A2AQueue { tasks, results } => {
+                assert!(tasks.is_empty());
+                assert!(results.is_empty());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[tokio::test]

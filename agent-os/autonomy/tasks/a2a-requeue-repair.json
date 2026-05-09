@@ -1,0 +1,32 @@
+{
+  "id": "a2a-requeue-repair",
+  "title": "Add explicit A2A requeue and lease repair",
+  "state": "proposed",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant",
+    "docs"
+  ],
+  "summary": "Add an operator-controlled repair path for stale A2A in-flight leases, including requeue, forced resolution, lease-age reporting, and audit rows.",
+  "expectedFailureModes": [],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs",
+    "escalation"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-a2a",
+    "cd agent-os && cargo test -p covenantd a2a"
+  ],
+  "humanEscalation": [
+    "Approval before enabling automatic retry for non-idempotent task classes"
+  ],
+  "nextAction": "Define the operator-visible repair commands and idempotency requirements before adding mutation paths.",
+  "updated": "2026-05-09"
+}

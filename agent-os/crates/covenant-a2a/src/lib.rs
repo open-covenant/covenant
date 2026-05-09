@@ -16,9 +16,10 @@ use async_trait::async_trait;
 use covenant_mcp::Content;
 use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -42,6 +43,27 @@ pub struct A2ATask {
     pub parent: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2ATaskQueueState {
+    Queued,
+    InFlight,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct A2ATaskQueueEntry {
+    pub state: A2ATaskQueueState,
+    pub task: A2ATask,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leased_to: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leased_at_ms: Option<u64>,
+    #[serde(default)]
+    pub attempt: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -84,6 +106,13 @@ pub enum A2AError {
     Io(#[from] std::io::Error),
 }
 
+fn epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Per-agent inbox. Tasks land in `recv_task`; results for tasks the agent
 /// itself dispatched land in `recv_result`. Both `recv_*` are async and
 /// resolve when something is available; impl is responsible for fairness.
@@ -110,6 +139,10 @@ pub trait Mailbox: Send + Sync {
     /// Read-only snapshot of the most recent queued tasks, oldest first up
     /// to `limit`. Does not consume from the queue. Operator-facing.
     async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError>;
+    /// Read-only snapshot of queued and leased tasks. A leased task has
+    /// been delivered to a recipient but has not produced a result yet.
+    /// Leases survive daemon restart and are not automatically redelivered.
+    async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError>;
     /// Read-only snapshot of the most recent queued results, oldest first
     /// up to `limit`. Does not consume from the queue. Operator-facing.
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError>;
@@ -137,11 +170,45 @@ pub trait Mailbox: Send + Sync {
     async fn compact(&self) -> Result<u64, A2AError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskLease {
+    lease_id: Uuid,
+    task: A2ATask,
+    leased_to: AgentId,
+    leased_at_ms: u64,
+    attempt: u32,
+}
+
+impl A2ATaskQueueEntry {
+    fn queued(task: A2ATask) -> Self {
+        Self {
+            state: A2ATaskQueueState::Queued,
+            task,
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        }
+    }
+
+    fn in_flight(lease: TaskLease) -> Self {
+        Self {
+            state: A2ATaskQueueState::InFlight,
+            task: lease.task,
+            lease_id: Some(lease.lease_id),
+            leased_to: Some(lease.leased_to),
+            leased_at_ms: Some(lease.leased_at_ms),
+            attempt: lease.attempt,
+        }
+    }
+}
+
 /// In-process FIFO mailbox. Useful for tests and for orchestrator agents
 /// that fan tasks within the same daemon.
 pub struct InMemoryMailbox {
     tasks: Mutex<VecDeque<A2ATask>>,
     results: Mutex<VecDeque<A2ATaskResult>>,
+    in_flight: Mutex<HashMap<Uuid, TaskLease>>,
     /// Permanent record of who sent each task, populated on
     /// [`Mailbox::send_task`] and never pruned. The daemon uses this map
     /// to attribute `PostA2AResult` calls back to the original sender so
@@ -162,10 +229,23 @@ impl InMemoryMailbox {
         Self {
             tasks: Mutex::new(VecDeque::new()),
             results: Mutex::new(VecDeque::new()),
+            in_flight: Mutex::new(HashMap::new()),
             senders: Mutex::new(HashMap::new()),
             task_notify: Notify::new(),
             result_notify: Notify::new(),
         }
+    }
+
+    fn lease_task(&self, task: A2ATask, leased_to: AgentId) -> A2ATask {
+        let lease = TaskLease {
+            lease_id: Uuid::new_v4(),
+            task: task.clone(),
+            leased_to,
+            leased_at_ms: epoch_ms(),
+            attempt: 1,
+        };
+        self.in_flight.lock().unwrap().insert(task.id, lease);
+        task
     }
 }
 
@@ -184,7 +264,7 @@ impl Mailbox for InMemoryMailbox {
     async fn recv_task(&self) -> Result<A2ATask, A2AError> {
         loop {
             if let Some(t) = self.tasks.lock().unwrap().pop_front() {
-                return Ok(t);
+                return Ok(self.lease_task(t.clone(), t.recipient.clone()));
             }
             self.task_notify.notified().await;
         }
@@ -195,10 +275,13 @@ impl Mailbox for InMemoryMailbox {
         let Some(pos) = tasks.iter().position(|t| t.recipient == *recipient) else {
             return Ok(None);
         };
-        Ok(tasks.remove(pos))
+        let task = tasks.remove(pos);
+        drop(tasks);
+        Ok(task.map(|t| self.lease_task(t, recipient.clone())))
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
+        self.in_flight.lock().unwrap().remove(&result.task_id);
         self.results.lock().unwrap().push_back(result);
         self.result_notify.notify_one();
         Ok(())
@@ -233,6 +316,33 @@ impl Mailbox for InMemoryMailbox {
             .collect())
     }
 
+    async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError> {
+        let mut entries: Vec<A2ATaskQueueEntry> = self
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(A2ATaskQueueEntry::queued)
+            .collect();
+        let mut leased: Vec<A2ATaskQueueEntry> = self
+            .in_flight
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .map(A2ATaskQueueEntry::in_flight)
+            .collect();
+        leased.sort_by(|a, b| {
+            a.leased_at_ms
+                .cmp(&b.leased_at_ms)
+                .then_with(|| a.task.id.cmp(&b.task.id))
+        });
+        entries.extend(leased);
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
         Ok(self
             .results
@@ -265,15 +375,31 @@ impl Mailbox for InMemoryMailbox {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum MailboxEvent {
-    TaskSent { task: A2ATask },
-    TaskRecv { task_id: Uuid },
-    ResultPosted { result: A2ATaskResult },
-    ResultRecv { task_id: Uuid },
+    TaskSent {
+        task: A2ATask,
+    },
+    TaskRecv {
+        task_id: Uuid,
+    },
+    TaskLeased {
+        task_id: Uuid,
+        lease_id: Uuid,
+        leased_to: AgentId,
+        leased_at_ms: u64,
+        attempt: u32,
+    },
+    ResultPosted {
+        result: A2ATaskResult,
+    },
+    ResultRecv {
+        task_id: Uuid,
+    },
 }
 
 struct MailboxState {
     tasks: VecDeque<A2ATask>,
     results: VecDeque<A2ATaskResult>,
+    in_flight: HashMap<Uuid, TaskLease>,
     senders: HashMap<Uuid, AgentId>,
 }
 
@@ -282,6 +408,7 @@ impl MailboxState {
         Self {
             tasks: VecDeque::new(),
             results: VecDeque::new(),
+            in_flight: HashMap::new(),
             senders: HashMap::new(),
         }
     }
@@ -293,11 +420,19 @@ impl MailboxState {
                 self.tasks.push_back(task);
             }
             MailboxEvent::TaskRecv { task_id } => {
-                if let Some(pos) = self.tasks.iter().position(|t| t.id == task_id) {
-                    self.tasks.remove(pos);
-                }
+                self.lease_task(task_id, Uuid::nil(), None, 0, self.next_attempt(task_id));
+            }
+            MailboxEvent::TaskLeased {
+                task_id,
+                lease_id,
+                leased_to,
+                leased_at_ms,
+                attempt,
+            } => {
+                self.lease_task(task_id, lease_id, Some(leased_to), leased_at_ms, attempt);
             }
             MailboxEvent::ResultPosted { result } => {
+                self.in_flight.remove(&result.task_id);
                 self.results.push_back(result);
             }
             MailboxEvent::ResultRecv { task_id } => {
@@ -306,6 +441,57 @@ impl MailboxState {
                 }
             }
         }
+    }
+
+    fn next_attempt(&self, task_id: Uuid) -> u32 {
+        self.in_flight
+            .get(&task_id)
+            .map(|lease| lease.attempt.saturating_add(1))
+            .unwrap_or(1)
+    }
+
+    fn lease_task(
+        &mut self,
+        task_id: Uuid,
+        lease_id: Uuid,
+        leased_to: Option<AgentId>,
+        leased_at_ms: u64,
+        attempt: u32,
+    ) -> Option<A2ATask> {
+        let pos = self.tasks.iter().position(|t| t.id == task_id)?;
+        let task = self.tasks.remove(pos)?;
+        let lease = TaskLease {
+            lease_id,
+            leased_to: leased_to.unwrap_or_else(|| task.recipient.clone()),
+            leased_at_ms,
+            attempt,
+            task: task.clone(),
+        };
+        self.in_flight.insert(task_id, lease);
+        Some(task)
+    }
+
+    fn task_queue(&self, limit: usize) -> Vec<A2ATaskQueueEntry> {
+        let mut entries: Vec<A2ATaskQueueEntry> = self
+            .tasks
+            .iter()
+            .cloned()
+            .map(A2ATaskQueueEntry::queued)
+            .collect();
+        let mut leased: Vec<A2ATaskQueueEntry> = self
+            .in_flight
+            .values()
+            .cloned()
+            .map(A2ATaskQueueEntry::in_flight)
+            .collect();
+        leased.sort_by(|a, b| {
+            a.leased_at_ms
+                .cmp(&b.leased_at_ms)
+                .then_with(|| a.task.id.cmp(&b.task.id))
+        });
+        entries.extend(leased);
+        entries.truncate(limit);
+        entries
     }
 }
 
@@ -393,10 +579,32 @@ impl Mailbox for JsonlMailbox {
         loop {
             {
                 let _g = self.file_lock.lock().await;
-                let front_id = self.state.lock().unwrap().tasks.front().map(|t| t.id);
-                if let Some(id) = front_id {
-                    self.append(&MailboxEvent::TaskRecv { task_id: id }).await?;
-                    if let Some(t) = self.state.lock().unwrap().tasks.pop_front() {
+                let front = self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .tasks
+                    .front()
+                    .map(|t| (t.id, t.recipient.clone()));
+                if let Some((id, recipient)) = front {
+                    let lease_id = Uuid::new_v4();
+                    let leased_at_ms = epoch_ms();
+                    let attempt = self.state.lock().unwrap().next_attempt(id);
+                    self.append(&MailboxEvent::TaskLeased {
+                        task_id: id,
+                        lease_id,
+                        leased_to: recipient,
+                        leased_at_ms,
+                        attempt,
+                    })
+                    .await?;
+                    if let Some(t) = self.state.lock().unwrap().lease_task(
+                        id,
+                        lease_id,
+                        None,
+                        leased_at_ms,
+                        attempt,
+                    ) {
                         return Ok(t);
                     }
                 }
@@ -415,10 +623,19 @@ impl Mailbox for JsonlMailbox {
                 .map(|t| t.id)
         };
         let Some(id) = target_id else { return Ok(None) };
-        self.append(&MailboxEvent::TaskRecv { task_id: id }).await?;
+        let lease_id = Uuid::new_v4();
+        let leased_at_ms = epoch_ms();
+        let attempt = self.state.lock().unwrap().next_attempt(id);
+        self.append(&MailboxEvent::TaskLeased {
+            task_id: id,
+            lease_id,
+            leased_to: recipient.clone(),
+            leased_at_ms,
+            attempt,
+        })
+        .await?;
         let mut s = self.state.lock().unwrap();
-        let pos = s.tasks.iter().position(|t| t.id == id);
-        Ok(pos.and_then(|p| s.tasks.remove(p)))
+        Ok(s.lease_task(id, lease_id, Some(recipient.clone()), leased_at_ms, attempt))
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
@@ -427,7 +644,9 @@ impl Mailbox for JsonlMailbox {
             result: result.clone(),
         })
         .await?;
-        self.state.lock().unwrap().results.push_back(result);
+        let mut s = self.state.lock().unwrap();
+        s.in_flight.remove(&result.task_id);
+        s.results.push_back(result);
         self.result_notify.notify_one();
         Ok(())
     }
@@ -485,6 +704,10 @@ impl Mailbox for JsonlMailbox {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError> {
+        Ok(self.state.lock().unwrap().task_queue(limit))
     }
 
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
@@ -555,17 +778,17 @@ impl Mailbox for JsonlMailbox {
         let mut s = self.state.lock().unwrap();
         for tid in &droppable {
             s.senders.remove(tid);
+            s.in_flight.remove(tid);
         }
         Ok(dropped)
     }
 }
 
-fn compute_droppable_task_ids(events: &[MailboxEvent]) -> std::collections::HashSet<Uuid> {
-    use std::collections::{HashMap, HashSet};
-    // Per task_id: count TaskRecv, ResultPosted, ResultRecv. TaskSent
-    // is implicit from membership in `seen`.
+fn compute_droppable_task_ids(events: &[MailboxEvent]) -> HashSet<Uuid> {
+    // Per task_id: count delivery, ResultPosted, ResultRecv. TaskSent is
+    // implicit from membership in `seen`.
     let mut seen: HashSet<Uuid> = HashSet::new();
-    let mut recv: HashSet<Uuid> = HashSet::new();
+    let mut delivered: HashSet<Uuid> = HashSet::new();
     let mut posted: HashMap<Uuid, u64> = HashMap::new();
     let mut drained: HashMap<Uuid, u64> = HashMap::new();
     for ev in events {
@@ -574,7 +797,10 @@ fn compute_droppable_task_ids(events: &[MailboxEvent]) -> std::collections::Hash
                 seen.insert(task.id);
             }
             MailboxEvent::TaskRecv { task_id } => {
-                recv.insert(*task_id);
+                delivered.insert(*task_id);
+            }
+            MailboxEvent::TaskLeased { task_id, .. } => {
+                delivered.insert(*task_id);
             }
             MailboxEvent::ResultPosted { result } => {
                 *posted.entry(result.task_id).or_insert(0) += 1;
@@ -585,7 +811,7 @@ fn compute_droppable_task_ids(events: &[MailboxEvent]) -> std::collections::Hash
         }
     }
     seen.into_iter()
-        .filter(|tid| recv.contains(tid))
+        .filter(|tid| delivered.contains(tid))
         .filter(|tid| {
             let p = posted.get(tid).copied().unwrap_or(0);
             let d = drained.get(tid).copied().unwrap_or(0);
@@ -594,13 +820,11 @@ fn compute_droppable_task_ids(events: &[MailboxEvent]) -> std::collections::Hash
         .collect()
 }
 
-fn event_belongs_to_droppable(
-    ev: &MailboxEvent,
-    droppable: &std::collections::HashSet<Uuid>,
-) -> bool {
+fn event_belongs_to_droppable(ev: &MailboxEvent, droppable: &HashSet<Uuid>) -> bool {
     match ev {
         MailboxEvent::TaskSent { task } => droppable.contains(&task.id),
         MailboxEvent::TaskRecv { task_id } => droppable.contains(task_id),
+        MailboxEvent::TaskLeased { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::ResultPosted { result } => droppable.contains(&result.task_id),
         MailboxEvent::ResultRecv { task_id } => droppable.contains(task_id),
     }
@@ -820,6 +1044,52 @@ mod tests {
         let recent = m2.recent_tasks(10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, t2.id);
+    }
+
+    #[tokio::test]
+    async fn jsonl_leased_tasks_are_in_flight_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        {
+            let m = JsonlMailbox::open(path.clone()).await.unwrap();
+            m.send_task(task.clone()).await.unwrap();
+            let leased = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+            assert_eq!(leased.id, task.id);
+        }
+
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        assert!(reopened
+            .try_recv_task_for(&task.recipient)
+            .await
+            .unwrap()
+            .is_none());
+
+        let queue = reopened.task_queue(10).await.unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].state, A2ATaskQueueState::InFlight);
+        assert_eq!(queue[0].task.id, task.id);
+        assert_eq!(queue[0].leased_to.as_ref(), Some(&task.recipient));
+        assert_eq!(queue[0].attempt, 1);
+        assert!(queue[0].lease_id.is_some());
+        assert!(queue[0].leased_at_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn result_post_clears_in_flight_queue_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        let result = A2ATaskResult::ok(task.id, vec![Content::text("done")]);
+
+        let m = JsonlMailbox::open(path).await.unwrap();
+        m.send_task(task.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+        assert_eq!(m.task_queue(10).await.unwrap().len(), 1);
+
+        m.send_result(result.clone()).await.unwrap();
+        assert!(m.task_queue(10).await.unwrap().is_empty());
+        assert_eq!(m.recent_results(10).await.unwrap(), vec![result]);
     }
 
     #[tokio::test]

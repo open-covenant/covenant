@@ -12,6 +12,7 @@ name = "covenant"
 path = "src/main.rs"
 
 [dependencies]
+covenant-a2a = { path = "../covenant-a2a" }
 covenant-ipc = { path = "../covenant-ipc" }
 covenant-types = { path = "../covenant-types" }
 covenant-mcp = { path = "../covenant-mcp" }

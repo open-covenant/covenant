@@ -137,6 +137,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/results/next", get(try_recv_a2a_result))
         .route("/a2a/results/recent", get(recent_a2a_results))
         .route("/a2a/queue", get(a2a_queue))
+        .route("/a2a/repair", post(repair_a2a_task))
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
         .route("/peers/rotate", post(peers_rotate))
@@ -561,6 +562,18 @@ async fn a2a_queue(
                 },
                 &peer,
             )
+            .await,
+    ))
+}
+
+async fn repair_a2a_task(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(request): Json<covenant_a2a::A2ARepairRequest>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::RepairA2ATask { request }, &peer)
             .await,
     ))
 }

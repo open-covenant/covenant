@@ -12,7 +12,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports, repair primitives | Daemon/CLI repair surface, audit rows, compaction, stale-context handling. |
 | Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
-| A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, restart live tests, repair primitives | Daemon/CLI repair surface and audit rows. |
+| A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, restart live tests, daemon/HTTP/CLI repair commands, repair audit rows | Lease-age filters for stale in-flight work. |
 | Budget ledger | Implemented | `covenant-budget`, daemon budget tests | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |

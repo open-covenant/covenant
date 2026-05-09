@@ -99,6 +99,19 @@ pub enum AuditKind {
         recipient_display: String,
         action: String,
     },
+    /// Logged when an operator manually repairs an in-flight A2A lease.
+    /// `action` is `requeue` or `force_error`; `duplicate_risk` is
+    /// present only for requeue. Full task payloads stay in the mailbox
+    /// log; the audit row records who acted, why, and which lease they
+    /// intended to mutate.
+    A2ARepairApplied {
+        task_id: Uuid,
+        action: String,
+        reason: String,
+        lease_id: Option<Uuid>,
+        duplicate_risk: Option<String>,
+        attempt: u32,
+    },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
     /// asked to revoke. Enforces the subject-ownership invariant on

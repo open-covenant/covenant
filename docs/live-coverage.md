@@ -27,14 +27,15 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 | Surface | Status | Live coverage | Next gap |
 | --- | --- | --- | --- |
 | Daemon IPC core | Covered | `live_daemon.rs`, `live_cli_intent_dispatch.rs` | Resume-intent coverage after repair semantics settle. |
-| HTTP gateway | Mock only | None | Real daemon HTTP-gateway smoke test. |
+| HTTP gateway | Covered | `live_http_gateway.rs` | `/tools/call` round trip through the daemon. |
 | CLI capability lifecycle | Covered | grant, grant with expiry, recent | Capability revoke through the CLI. |
 | CLI audit feed | Covered | audit recent | Audit purge after retention policy is documented. |
 | Peer authentication and token lifecycle | Covered | auth rejection, revoke, restart revoke, token rotation | Operator self-revoke rejection through the CLI. |
 | Peer listing and status filters | Covered | list, live-only, revoked-only | Ambiguous-prefix coverage after machine-readable output exists. |
-| A2A mailbox and restart durability | Covered | duplex, admission gate, restart replay | Explicit requeue repair after lease-expiry semantics land. |
+| A2A mailbox and restart durability | Covered | duplex, admission gate, restart replay | Lease-age filters for stale in-flight work. |
 | MCP subprocess transport | Covered | stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, daemon dispatch to research agent | Malformed stdout failure path. |
+| Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Linux host with `runsc` and a minimal `/bin/sh` rootfs. |
 | Budget enforcement | Covered | daemon rejection when budget exhausts | Budget resume after pause/resume policy lands. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Model availability probes before more model coverage. |
 

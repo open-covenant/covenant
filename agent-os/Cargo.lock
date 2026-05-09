@@ -647,6 +647,7 @@ name = "covenant"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "covenant-a2a",
  "covenant-ipc",
  "covenant-mcp",
  "covenant-peer-auth",

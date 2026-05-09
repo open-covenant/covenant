@@ -134,6 +134,40 @@ pub fn runtime_runner_from_config(config: &RuntimeRunnerConfig) -> Arc<dyn Runne
     }
 }
 
+fn a2a_repair_action(command: &covenant_a2a::A2ARepairCommand) -> &'static str {
+    match command {
+        covenant_a2a::A2ARepairCommand::Requeue { .. } => "requeue",
+        covenant_a2a::A2ARepairCommand::ForceError { .. } => "force_error",
+    }
+}
+
+fn a2a_repair_lease_id(command: &covenant_a2a::A2ARepairCommand) -> Option<Uuid> {
+    match command {
+        covenant_a2a::A2ARepairCommand::Requeue { lease_id, .. }
+        | covenant_a2a::A2ARepairCommand::ForceError { lease_id, .. } => *lease_id,
+    }
+}
+
+fn a2a_duplicate_risk(command: &covenant_a2a::A2ARepairCommand) -> Option<&'static str> {
+    match command {
+        covenant_a2a::A2ARepairCommand::Requeue { duplicate_risk, .. } => match duplicate_risk {
+            covenant_a2a::A2ADuplicateRisk::Idempotent => Some("idempotent"),
+            covenant_a2a::A2ADuplicateRisk::OperatorAccepted => Some("operator_accepted"),
+        },
+        covenant_a2a::A2ARepairCommand::ForceError { .. } => None,
+    }
+}
+
+fn a2a_entry_visible_to_peer(entry: &covenant_a2a::A2ATaskQueueEntry, peer: &AgentId) -> bool {
+    entry.task.sender.pubkey == peer.pubkey
+        || entry.task.recipient.pubkey == peer.pubkey
+        || entry
+            .leased_to
+            .as_ref()
+            .map(|agent| agent.pubkey == peer.pubkey)
+            .unwrap_or(false)
+}
+
 /// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
 /// registry entries match the operator's prefix, the daemon returns the
 /// first `PEER_MATCH_LIMIT` summaries plus `truncated: true` so the
@@ -428,6 +462,7 @@ impl Server {
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit, peer).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit, peer).await,
             Request::A2AQueue { limit } => self.a2a_queue(limit, peer).await,
+            Request::RepairA2ATask { request } => self.repair_a2a_task(request, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
@@ -720,6 +755,86 @@ impl Server {
         Response::A2AQueue {
             tasks,
             results: filtered_results,
+        }
+    }
+
+    async fn repair_a2a_task(
+        &self,
+        request: covenant_a2a::A2ARepairRequest,
+        peer: &AgentId,
+    ) -> Response {
+        let action = a2a_repair_action(&request.command);
+        let required = format!("a2a.repair.{action}");
+        let check = self
+            .check_capabilities(
+                format!("a2a-repair:{}", request.task_id),
+                vec![required.clone()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "a2a repair {action} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        let queue = match self.mailbox.task_queue(usize::MAX).await {
+            Ok(queue) => queue,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("a2a: {e}"),
+                };
+            }
+        };
+        let visible = queue.iter().find(|entry| {
+            entry.task.id == request.task_id && a2a_entry_visible_to_peer(entry, peer)
+        });
+        let Some(entry) = visible else {
+            return Response::Error {
+                message: format!(
+                    "a2a repair rejected: task {} is not visible to the authenticated peer or is no longer queued",
+                    request.task_id
+                ),
+            };
+        };
+        if entry.state != covenant_a2a::A2ATaskQueueState::InFlight {
+            return Response::Error {
+                message: format!(
+                    "a2a repair rejected: task {} is not currently in flight",
+                    request.task_id
+                ),
+            };
+        }
+
+        let task_id = request.task_id;
+        let reason = request.reason.clone();
+        let lease_id = a2a_repair_lease_id(&request.command);
+        let duplicate_risk = a2a_duplicate_risk(&request.command).map(str::to_string);
+        let action = action.to_string();
+
+        match self.mailbox.repair_task(request).await {
+            Ok(outcome) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::A2ARepairApplied {
+                        task_id,
+                        action,
+                        reason,
+                        lease_id,
+                        duplicate_risk,
+                        attempt: outcome.attempt,
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                Response::A2ARepaired { outcome }
+            }
+            Err(e) => Response::Error {
+                message: format!("a2a: {e}"),
+            },
         }
     }
 
@@ -2943,6 +3058,18 @@ required = {caps:?}
         }
     }
 
+    fn loopback_a2a_task_for(s: &Server) -> covenant_a2a::A2ATask {
+        let peer = s.identity.agent_id();
+        covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: peer,
+            intent_text: "loopback".into(),
+            parent: None,
+            deadline_ms: None,
+        }
+    }
+
     #[tokio::test]
     async fn a2a_task_round_trips_through_server() {
         let s = server_with(vec![], "");
@@ -3205,6 +3332,232 @@ required = {caps:?}
             Response::A2AQueue { tasks, results } => {
                 assert!(tasks.is_empty());
                 assert!(results.is_empty());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let resp = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "worker crashed".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("a2a.repair.requeue"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_requeues_in_flight_task_and_audits() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.repair.requeue".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let lease_id = match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+            Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let reason = "worker heartbeat expired";
+        let repaired = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: reason.into(),
+                },
+            })
+            .await;
+        match repaired {
+            Response::A2ARepaired { outcome } => {
+                assert_eq!(outcome.action, covenant_a2a::A2ARepairAction::Requeued);
+                assert_eq!(outcome.attempt, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::Queued);
+                assert_eq!(tasks[0].attempt, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        let repair = events
+            .iter()
+            .find(|event| matches!(event.kind, AuditKind::A2ARepairApplied { .. }))
+            .expect("repair audit row");
+        match &repair.kind {
+            AuditKind::A2ARepairApplied {
+                task_id,
+                action,
+                reason: logged_reason,
+                lease_id: logged_lease,
+                duplicate_risk,
+                attempt,
+            } => {
+                assert_eq!(*task_id, task.id);
+                assert_eq!(action, "requeue");
+                assert_eq!(logged_reason, reason);
+                assert_eq!(*logged_lease, lease_id);
+                assert_eq!(duplicate_risk.as_deref(), Some("idempotent"));
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_rejects_stale_lease_guard() {
+        let s = server_with(vec![], "");
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.repair.requeue".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let resp = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: Some(Uuid::new_v4()),
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::OperatorAccepted,
+                    },
+                    reason: "operator accepted duplicate risk".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("lease mismatch")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_force_error_posts_sender_result() {
+        let s = server_with(vec![], "");
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", task.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.repair.force_error".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let lease_id = match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+            Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let repaired = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::ForceError {
+                        lease_id,
+                        message: "operator forced stale lease failure".into(),
+                    },
+                    reason: "recipient process exited".into(),
+                },
+            })
+            .await;
+        match repaired {
+            Response::A2ARepaired { outcome } => {
+                assert_eq!(outcome.action, covenant_a2a::A2ARepairAction::ForcedError);
+                assert_eq!(outcome.state, covenant_a2a::A2ARepairState::ResultPending);
+                assert!(outcome.result.is_some());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let recv = s.op_respond(Request::TryRecvA2AResult).await;
+        match recv {
+            Response::A2AResultOpt {
+                result: Some(result),
+            } => {
+                assert_eq!(result.task_id, task.id);
+                assert_eq!(result.status, covenant_a2a::A2ATaskStatus::Error);
+                assert_eq!(
+                    result.error_message.as_deref(),
+                    Some("operator forced stale lease failure")
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }

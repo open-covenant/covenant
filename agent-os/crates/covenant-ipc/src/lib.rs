@@ -5,7 +5,7 @@
 
 #![deny(unsafe_code)]
 
-use covenant_a2a::{A2ATask, A2ATaskQueueEntry, A2ATaskResult};
+use covenant_a2a::{A2ARepairOutcome, A2ARepairRequest, A2ATask, A2ATaskQueueEntry, A2ATaskResult};
 use covenant_audit::AuditEvent;
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
@@ -170,6 +170,12 @@ pub enum Request {
     A2AQueue {
         #[serde(default = "default_recent_limit")]
         limit: usize,
+    },
+    /// Manually repair an in-flight A2A lease. The daemon enforces
+    /// visibility, capability, and audit rules before delegating to the
+    /// mailbox repair primitive.
+    RepairA2ATask {
+        request: A2ARepairRequest,
     },
     /// Drop the on-disk event log lines for fully-resolved A2A tasks
     /// (TaskSent + TaskRecv + ≥1 ResultPosted with matching ResultRecv
@@ -382,6 +388,9 @@ pub enum Response {
     },
     A2ACompacted {
         dropped: u64,
+    },
+    A2ARepaired {
+        outcome: A2ARepairOutcome,
     },
     PeersPurged {
         purged: u64,

@@ -20,6 +20,8 @@
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
 //!   covenant a2a status [--limit N]
+//!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
+//!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
@@ -31,6 +33,7 @@
 #![deny(unsafe_code)]
 
 use anyhow::{bail, Context, Result};
+use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
 use covenant_types::MemoryTier;
@@ -101,6 +104,12 @@ fn print_usage() {
         "  covenant a2a status [-n N]            list queued tasks, in-flight leases, and pending results"
     );
     eprintln!(
+        "  covenant a2a requeue <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted [--lease-id UUID]"
+    );
+    eprintln!(
+        "  covenant a2a force-error <task-id> --reason TEXT --message TEXT [--lease-id UUID]"
+    );
+    eprintln!(
         "  covenant a2a compact                  drop event-log lines for fully-resolved a2a tasks"
     );
     eprintln!(
@@ -165,6 +174,31 @@ fn parse_limit_args(args: &[String]) -> Result<usize> {
         i += 1;
     }
     Ok(limit)
+}
+
+fn parse_duplicate_risk(value: &str) -> Result<A2ADuplicateRisk> {
+    match value {
+        "idempotent" => Ok(A2ADuplicateRisk::Idempotent),
+        "operator-accepted" | "operator_accepted" => Ok(A2ADuplicateRisk::OperatorAccepted),
+        other => bail!("unknown duplicate risk '{other}' (expected idempotent|operator-accepted)"),
+    }
+}
+
+fn parse_uuid(value: &str, name: &str) -> Result<uuid::Uuid> {
+    value
+        .parse()
+        .with_context(|| format!("{name} must be a UUID"))
+}
+
+fn print_a2a_repair_response(response: Response) -> Result<()> {
+    match response {
+        Response::A2ARepaired { outcome } => {
+            println!("{}", serde_json::to_string(&outcome)?);
+            Ok(())
+        }
+        Response::Error { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected response: {other:?}"),
+    }
 }
 
 #[tokio::main]
@@ -852,7 +886,9 @@ async fn main() -> Result<()> {
         }
         "a2a" => {
             if args.len() < 2 {
-                eprintln!("covenant a2a: expected `status` or `compact`");
+                eprintln!(
+                    "covenant a2a: expected `status`, `requeue`, `force-error`, or `compact`"
+                );
                 std::process::exit(2);
             }
             match args[1].as_str() {
@@ -892,6 +928,95 @@ async fn main() -> Result<()> {
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
                     }
+                }
+                "requeue" => {
+                    if args.len() < 3 {
+                        bail!(
+                            "covenant a2a requeue: missing <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted"
+                        );
+                    }
+                    let task_id = parse_uuid(&args[2], "task-id")?;
+                    let mut lease_id = None;
+                    let mut reason = None;
+                    let mut duplicate_risk = None;
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--lease-id" => {
+                                i += 1;
+                                let v = args.get(i).context("--lease-id needs a value")?;
+                                lease_id = Some(parse_uuid(v, "--lease-id")?);
+                            }
+                            "--reason" => {
+                                i += 1;
+                                reason =
+                                    Some(args.get(i).context("--reason needs a value")?.clone());
+                            }
+                            "--duplicate-risk" => {
+                                i += 1;
+                                let v = args.get(i).context("--duplicate-risk needs a value")?;
+                                duplicate_risk = Some(parse_duplicate_risk(v)?);
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let request = A2ARepairRequest {
+                        task_id,
+                        command: A2ARepairCommand::Requeue {
+                            lease_id,
+                            duplicate_risk: duplicate_risk
+                                .context("missing --duplicate-risk idempotent|operator-accepted")?,
+                        },
+                        reason: reason.context("missing --reason")?,
+                    };
+                    write_frame(&mut stream, &Request::RepairA2ATask { request }).await?;
+                    let response = read_frame::<_, Response>(&mut stream).await?;
+                    print_a2a_repair_response(response)?;
+                }
+                "force-error" => {
+                    if args.len() < 3 {
+                        bail!(
+                            "covenant a2a force-error: missing <task-id> --reason TEXT --message TEXT"
+                        );
+                    }
+                    let task_id = parse_uuid(&args[2], "task-id")?;
+                    let mut lease_id = None;
+                    let mut reason = None;
+                    let mut message = None;
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--lease-id" => {
+                                i += 1;
+                                let v = args.get(i).context("--lease-id needs a value")?;
+                                lease_id = Some(parse_uuid(v, "--lease-id")?);
+                            }
+                            "--reason" => {
+                                i += 1;
+                                reason =
+                                    Some(args.get(i).context("--reason needs a value")?.clone());
+                            }
+                            "--message" => {
+                                i += 1;
+                                message =
+                                    Some(args.get(i).context("--message needs a value")?.clone());
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let request = A2ARepairRequest {
+                        task_id,
+                        command: A2ARepairCommand::ForceError {
+                            lease_id,
+                            message: message.context("missing --message")?,
+                        },
+                        reason: reason.context("missing --reason")?,
+                    };
+                    write_frame(&mut stream, &Request::RepairA2ATask { request }).await?;
+                    let response = read_frame::<_, Response>(&mut stream).await?;
+                    print_a2a_repair_response(response)?;
                 }
                 "compact" => {
                     write_frame(&mut stream, &Request::CompactA2A).await?;
@@ -1463,6 +1588,23 @@ mod tests {
             expand_a2a_action("a2a.compact", &[]),
             Ok(ExpandOutcome::Unchanged)
         );
+    }
+
+    #[test]
+    fn a2a_duplicate_risk_accepts_cli_spellings() {
+        assert_eq!(
+            parse_duplicate_risk("idempotent").unwrap(),
+            A2ADuplicateRisk::Idempotent
+        );
+        assert_eq!(
+            parse_duplicate_risk("operator-accepted").unwrap(),
+            A2ADuplicateRisk::OperatorAccepted
+        );
+        assert_eq!(
+            parse_duplicate_risk("operator_accepted").unwrap(),
+            A2ADuplicateRisk::OperatorAccepted
+        );
+        assert!(parse_duplicate_risk("unsafe").is_err());
     }
 
     #[test]

@@ -42,7 +42,7 @@ Queued tasks, leased tasks without results, and pending results are never compac
 
 ## Repair Contract
 
-The mailbox crate now defines explicit repair primitives for in-flight leases. These are operator-controlled mutation paths; they are not automatic retry policy.
+The mailbox crate defines explicit repair primitives for in-flight leases. The daemon exposes them through IPC, HTTP, and CLI surfaces with capability checks, peer-visible task guards, and success audit rows. These are operator-controlled mutation paths; they are not automatic retry policy.
 
 Repair requests require:
 
@@ -58,9 +58,25 @@ Repair requests require:
 
 Both repair actions replay from the JSONL mailbox log after daemon restart.
 
+CLI usage:
+
+```bash
+covenant capabilities grant a2a.repair.requeue
+covenant a2a requeue <task-id> \
+  --lease-id <lease-id> \
+  --reason "worker heartbeat expired" \
+  --duplicate-risk idempotent
+
+covenant capabilities grant a2a.repair.force_error
+covenant a2a force-error <task-id> \
+  --lease-id <lease-id> \
+  --reason "recipient process exited" \
+  --message "operator forced stale lease failure"
+```
+
+HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC. Repair calls are rejected unless the authenticated peer can see the in-flight task and holds `a2a.repair.requeue` or `a2a.repair.force_error`, depending on the command.
+
 ## Remaining Work
 
-- Expose repair commands through the daemon IPC, HTTP, and CLI surfaces.
-- Add audit rows for manual requeue and forced error resolution.
 - Add lease-age filters so operators can find stale in-flight work quickly.
 - Keep automatic retry disabled until task classes can declare idempotency safely.

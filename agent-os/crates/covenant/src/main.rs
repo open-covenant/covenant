@@ -3439,6 +3439,7 @@ mod tests {
             intent_text: "status probe".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let entry = A2ATaskQueueEntry {
             state: A2ATaskQueueState::Queued,

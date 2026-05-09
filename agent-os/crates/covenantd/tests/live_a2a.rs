@@ -110,6 +110,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
         intent_text: "find recent papers".into(),
         parent: None,
         deadline_ms: None,
+        idempotency: None,
     };
 
     // 1. Send before grant — rejected.
@@ -283,6 +284,7 @@ async fn live_covenantd_a2a_recipient_admission_gate_rejects_unallowed() {
         intent_text: "spam".into(),
         parent: None,
         deadline_ms: None,
+        idempotency: None,
     };
 
     // Grant the sender-side cap so the recv gate is the *only* thing

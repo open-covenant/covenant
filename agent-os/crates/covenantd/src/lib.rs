@@ -5742,6 +5742,7 @@ required = {caps:?}
             intent_text: "find recent papers".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         }
     }
 
@@ -5754,6 +5755,7 @@ required = {caps:?}
             intent_text: "loopback".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         }
     }
 
@@ -5771,6 +5773,7 @@ required = {caps:?}
             intent_text: "loopback".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
@@ -5925,6 +5928,7 @@ required = {caps:?}
             intent_text: "loopback".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
@@ -5967,6 +5971,7 @@ required = {caps:?}
             intent_text: "loopback".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
@@ -6090,6 +6095,7 @@ required = {caps:?}
             intent_text: "alien".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task).await.unwrap();
         assert!(s
@@ -6519,6 +6525,7 @@ required = {caps:?}
             intent_text: "stolen identity".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s.op_respond(Request::SendA2ATask { task }).await;
         match resp {
@@ -6564,6 +6571,7 @@ required = {caps:?}
             intent_text: "loopback".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", task.recipient.display),
@@ -6592,6 +6600,7 @@ required = {caps:?}
             intent_text: "spam".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::GrantCapability {
             action: format!("a2a.send.{}", foreign_recipient.display),
@@ -6648,6 +6657,7 @@ required = {caps:?}
             intent_text: "authorised".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s
             .op_respond(Request::SendA2ATask { task: task.clone() })
@@ -6691,6 +6701,7 @@ required = {caps:?}
             intent_text: "spam".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.op_respond(Request::SendA2ATask { task }).await;
 
@@ -6731,6 +6742,7 @@ required = {caps:?}
             intent_text: "no send cap".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s.op_respond(Request::SendA2ATask { task }).await;
         match resp {
@@ -6766,6 +6778,7 @@ required = {caps:?}
             intent_text: "display spoof".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s.op_respond(Request::SendA2ATask { task }).await;
         match resp {
@@ -7005,6 +7018,7 @@ required = {caps:?}
             intent_text: "authorised via b58".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s
             .op_respond(Request::SendA2ATask { task: task.clone() })
@@ -7052,6 +7066,7 @@ required = {caps:?}
             intent_text: "spoofed b58".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let resp = s.op_respond(Request::SendA2ATask { task }).await;
         match resp {
@@ -8259,6 +8274,7 @@ required = {caps:?}
             intent_text: "alien-to-alien".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task).await.unwrap();
         let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
@@ -8285,6 +8301,7 @@ required = {caps:?}
             intent_text: "outbound".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task.clone()).await.unwrap();
         let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
@@ -8310,6 +8327,7 @@ required = {caps:?}
             intent_text: "inbound".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task.clone()).await.unwrap();
         let resp = s.op_respond(Request::RecentA2ATasks { limit: 100 }).await;
@@ -8337,6 +8355,7 @@ required = {caps:?}
             intent_text: "alien-task".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task.clone()).await.unwrap();
         let result = covenant_a2a::A2ATaskResult::ok(
@@ -8369,6 +8388,7 @@ required = {caps:?}
             intent_text: "operator-task".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         s.mailbox.send_task(task.clone()).await.unwrap();
         let result = covenant_a2a::A2ATaskResult::ok(

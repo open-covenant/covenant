@@ -32,7 +32,11 @@ export default function A2APage() {
   recipient:   AgentId,
   intent_text: "do the thing",
   parent:      uuid | null,
-  deadline_ms: u64 | null
+  deadline_ms: u64 | null,
+  idempotency: {
+    duplicate_safety: "unsafe" | "idempotent",
+    key:              string
+  } | null
 }
 
 A2ATaskResult {
@@ -109,10 +113,11 @@ A2ATaskResult {
         disabled.
       </p>
       <p>
-        Automatic retry stays disabled until tasks can declare duplicate
-        safety and carry a stable idempotency key. Without that metadata,
-        retry can double-spend external side effects; the operator must
-        choose <code>idempotent</code> vs <code>operator_accepted</code>{" "}
+        Tasks may carry optional idempotency metadata: duplicate safety
+        plus a stable key. Missing metadata is treated as unsafe. The
+        daemon persists and validates the metadata, but automatic retry
+        remains disabled; the operator must still choose{" "}
+        <code>idempotent</code> vs <code>operator_accepted</code>{" "}
         explicitly when requeueing.
       </p>
 

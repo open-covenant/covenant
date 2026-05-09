@@ -33,6 +33,28 @@ pub enum A2ATaskStatus {
     Partial,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2ADuplicateSafety {
+    Unsafe,
+    Idempotent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct A2AIdempotency {
+    pub duplicate_safety: A2ADuplicateSafety,
+    pub key: String,
+}
+
+impl A2AIdempotency {
+    pub fn new(duplicate_safety: A2ADuplicateSafety, key: impl Into<String>) -> Self {
+        Self {
+            duplicate_safety,
+            key: key.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct A2ATask {
     pub id: Uuid,
@@ -43,6 +65,8 @@ pub struct A2ATask {
     pub parent: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency: Option<A2AIdempotency>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +189,8 @@ pub enum A2AError {
         expected: Option<Uuid>,
         actual: Option<Uuid>,
     },
+    #[error("invalid task: {0}")]
+    InvalidTask(String),
     #[error("invalid repair request: {0}")]
     InvalidRepair(String),
 }
@@ -184,6 +210,17 @@ fn validate_repair_request(request: &A2ARepairRequest) -> Result<(), A2AError> {
         if message.trim().is_empty() {
             return Err(A2AError::InvalidRepair(
                 "force_error message must not be empty".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_task(task: &A2ATask) -> Result<(), A2AError> {
+    if let Some(idempotency) = &task.idempotency {
+        if idempotency.key.trim().is_empty() {
+            return Err(A2AError::InvalidTask(
+                "idempotency key must not be empty".into(),
             ));
         }
     }
@@ -374,6 +411,7 @@ impl InMemoryMailbox {
 #[async_trait]
 impl Mailbox for InMemoryMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
+        validate_task(&task)?;
         self.senders
             .lock()
             .unwrap()
@@ -786,6 +824,7 @@ impl JsonlMailbox {
 #[async_trait]
 impl Mailbox for JsonlMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
+        validate_task(&task)?;
         let _g = self.file_lock.lock().await;
         self.append(&MailboxEvent::TaskSent { task: task.clone() })
             .await?;
@@ -1145,6 +1184,7 @@ mod tests {
             intent_text: "find recent papers on agent memory".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         }
     }
 
@@ -1158,11 +1198,42 @@ mod tests {
     }
 
     #[test]
+    fn task_round_trips_idempotency_metadata() {
+        let mut t = dummy_task();
+        t.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory:2026-05-09",
+        ));
+
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(s.contains("\"duplicate_safety\":\"idempotent\""));
+        assert!(s.contains("\"key\":\"research:agent-memory:2026-05-09\""));
+
+        let back: A2ATask = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.idempotency, t.idempotency);
+    }
+
+    #[test]
+    fn task_deserializes_legacy_without_idempotency_metadata() {
+        let value = serde_json::json!({
+            "id": Uuid::nil(),
+            "sender": dummy_agent("orchestrator@local"),
+            "recipient": dummy_agent("research@local"),
+            "intent_text": "legacy task"
+        });
+
+        let task: A2ATask = serde_json::from_value(value).unwrap();
+        assert_eq!(task.id, Uuid::nil());
+        assert_eq!(task.idempotency, None);
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();
         assert!(!s.contains("parent"));
         assert!(!s.contains("deadline_ms"));
+        assert!(!s.contains("idempotency"));
     }
 
     #[test]
@@ -1186,6 +1257,16 @@ mod tests {
         m.send_task(t.clone()).await.unwrap();
         let got = m.recv_task().await.unwrap();
         assert_eq!(got, t);
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_idempotency_key() {
+        let m = InMemoryMailbox::new();
+        let mut t = dummy_task();
+        t.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "   "));
+
+        let err = m.send_task(t).await.unwrap_err();
+        assert!(matches!(err, A2AError::InvalidTask(_)));
     }
 
     #[tokio::test]
@@ -1302,6 +1383,29 @@ mod tests {
         m.send_task(t.clone()).await.unwrap();
         let got = m.recv_task().await.unwrap();
         assert_eq!(got, t);
+    }
+
+    #[tokio::test]
+    async fn jsonl_preserves_task_idempotency_metadata_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a2a").join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+        let mut t = dummy_task();
+        t.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory:2026-05-09",
+        ));
+        m.send_task(t.clone()).await.unwrap();
+
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        let queue = reopened.task_queue(10).await.unwrap();
+        assert_eq!(queue[0].task.idempotency, t.idempotency);
+        let got = reopened
+            .try_recv_task_for(&t.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.idempotency, t.idempotency);
     }
 
     #[tokio::test]
@@ -1570,6 +1674,7 @@ mod tests {
             intent_text: "1".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let to_carol = A2ATask {
             id: Uuid::new_v4(),
@@ -1578,6 +1683,7 @@ mod tests {
             intent_text: "2".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let to_bob_2 = A2ATask {
             id: Uuid::new_v4(),
@@ -1586,6 +1692,7 @@ mod tests {
             intent_text: "3".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         m.send_task(to_bob_1.clone()).await.unwrap();
         m.send_task(to_carol.clone()).await.unwrap();
@@ -1617,6 +1724,7 @@ mod tests {
             intent_text: "for bob only".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         m.send_task(to_bob.clone()).await.unwrap();
         assert!(m.try_recv_task_for(&stranger).await.unwrap().is_none());
@@ -1637,6 +1745,7 @@ mod tests {
             intent_text: "alice's".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let alice_task_2 = A2ATask {
             id: Uuid::new_v4(),
@@ -1645,6 +1754,7 @@ mod tests {
             intent_text: "alice's other".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         let dan_task = A2ATask {
             id: Uuid::new_v4(),
@@ -1653,6 +1763,7 @@ mod tests {
             intent_text: "dan's".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         };
         m.send_task(alice_task_1.clone()).await.unwrap();
         m.send_task(alice_task_2.clone()).await.unwrap();
@@ -1710,6 +1821,7 @@ mod tests {
             intent_text: "x".into(),
             parent: None,
             deadline_ms: None,
+            idempotency: None,
         }
     }
 

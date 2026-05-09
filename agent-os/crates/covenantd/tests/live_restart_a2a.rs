@@ -123,6 +123,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         intent_text: "find recent papers".into(),
         parent: None,
         deadline_ms: None,
+        idempotency: None,
     };
 
     {

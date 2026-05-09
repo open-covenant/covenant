@@ -101,12 +101,23 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 
 ## Idempotency and Retry Policy
 
-Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Automatic retry is a future feature gated on task-level idempotency metadata.
+Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Tasks can now carry optional task-level idempotency metadata, but automatic retry remains a future feature.
 
-Before any automatic retry loop is enabled, tasks must be able to declare:
+The optional task metadata is:
 
-- **Duplicate safety**: whether re-running the same logical task can create harmful external side effects (network writes, payments, ticket creation, etc.). Default posture is **unsafe**.
-- **Idempotency key**: a stable, caller-chosen key that uniquely identifies the logical work unit across retries. This allows a receiver to dedupe duplicate deliveries and/or return a previously computed result.
+```json
+{
+  "idempotency": {
+    "duplicate_safety": "idempotent",
+    "key": "agent:logical-work-unit"
+  }
+}
+```
+
+- **Duplicate safety** declares whether re-running the same logical task can create harmful external side effects (network writes, payments, ticket creation, etc.). Missing metadata is treated as **unsafe**.
+- **Idempotency key** is a stable, caller-chosen key that uniquely identifies the logical work unit across retries. The daemon validates that a present key is non-empty and persists it through queue/status surfaces and restart replay.
+
+This metadata is evidence, not automatic behavior. Receivers and future retry policy can use it to dedupe duplicate deliveries and/or return a previously computed result, but the current daemon does not retry or dedupe tasks automatically.
 
 Operator policy until that metadata exists:
 
@@ -124,4 +135,4 @@ When automatic retry is introduced, it must be:
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Keep automatic retry disabled until task classes can declare idempotency safely.
+- Keep automatic retry disabled until daemon policy can enforce the metadata safely.

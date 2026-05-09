@@ -1,0 +1,35 @@
+{
+  "id": "provenance-release-subjects",
+  "title": "Define release artifact provenance subjects",
+  "state": "ready",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/provenance.mjs",
+    "docs/provenance",
+    "docs/alpha-release-contract.md",
+    "landing/app/docs"
+  ],
+  "summary": "Extend provenance planning for release artifact subjects so future signed releases can bind tag, commit, artifacts, checksums, and validation evidence without choosing key custody yet.",
+  "expectedFailureModes": [
+    "Release provenance binds commits and tasks but not artifacts.",
+    "Key custody decisions block schema work that can be designed independently.",
+    "Docs imply signed releases before artifact-subject schema exists."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human decision remains required for public signing keys and release publication."
+  ],
+  "nextAction": "Integrate on main, then continue with the next autonomous backlog item.",
+  "updated": "2026-05-09"
+}

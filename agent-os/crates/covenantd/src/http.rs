@@ -323,6 +323,7 @@ async fn verify(
 #[derive(Deserialize, Default)]
 struct LimitParams {
     limit: Option<usize>,
+    min_lease_age_ms: Option<u64>,
 }
 
 async fn receipts_recent(
@@ -559,6 +560,7 @@ async fn a2a_queue(
             .respond(
                 Request::A2AQueue {
                     limit: q.limit.unwrap_or(10),
+                    min_lease_age_ms: q.min_lease_age_ms,
                 },
                 &peer,
             )

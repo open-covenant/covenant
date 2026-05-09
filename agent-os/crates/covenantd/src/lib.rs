@@ -168,6 +168,23 @@ fn a2a_entry_visible_to_peer(entry: &covenant_a2a::A2ATaskQueueEntry, peer: &Age
             .unwrap_or(false)
 }
 
+fn a2a_entry_matches_min_lease_age(
+    entry: &covenant_a2a::A2ATaskQueueEntry,
+    min_lease_age_ms: Option<u64>,
+    now_ms: u64,
+) -> bool {
+    let Some(min_lease_age_ms) = min_lease_age_ms else {
+        return true;
+    };
+    if entry.state != covenant_a2a::A2ATaskQueueState::InFlight {
+        return true;
+    }
+    entry
+        .leased_at_ms
+        .map(|leased_at| now_ms.saturating_sub(leased_at) >= min_lease_age_ms)
+        .unwrap_or(false)
+}
+
 /// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
 /// registry entries match the operator's prefix, the daemon returns the
 /// first `PEER_MATCH_LIMIT` summaries plus `truncated: true` so the
@@ -461,7 +478,10 @@ impl Server {
             Request::TryRecvA2AResult => self.try_recv_a2a_result(peer).await,
             Request::RecentA2ATasks { limit } => self.recent_a2a_tasks(limit, peer).await,
             Request::RecentA2AResults { limit } => self.recent_a2a_results(limit, peer).await,
-            Request::A2AQueue { limit } => self.a2a_queue(limit, peer).await,
+            Request::A2AQueue {
+                limit,
+                min_lease_age_ms,
+            } => self.a2a_queue(limit, min_lease_age_ms, peer).await,
             Request::RepairA2ATask { request } => self.repair_a2a_task(request, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
@@ -712,19 +732,24 @@ impl Server {
         Response::A2AResults { results: filtered }
     }
 
-    async fn a2a_queue(&self, limit: usize, peer: &AgentId) -> Response {
-        let tasks = match self.mailbox.task_queue(limit).await {
+    async fn a2a_queue(
+        &self,
+        limit: usize,
+        min_lease_age_ms: Option<u64>,
+        peer: &AgentId,
+    ) -> Response {
+        let task_limit = if min_lease_age_ms.is_some() {
+            usize::MAX
+        } else {
+            limit
+        };
+        let now_ms = epoch_ms();
+        let tasks = match self.mailbox.task_queue(task_limit).await {
             Ok(tasks) => tasks
                 .into_iter()
-                .filter(|entry| {
-                    entry.task.sender.pubkey == peer.pubkey
-                        || entry.task.recipient.pubkey == peer.pubkey
-                        || entry
-                            .leased_to
-                            .as_ref()
-                            .map(|agent| agent.pubkey == peer.pubkey)
-                            .unwrap_or(false)
-                })
+                .filter(|entry| a2a_entry_visible_to_peer(entry, peer))
+                .filter(|entry| a2a_entry_matches_min_lease_age(entry, min_lease_age_ms, now_ms))
+                .take(limit)
                 .collect(),
             Err(e) => {
                 return Response::Error {
@@ -3293,7 +3318,12 @@ required = {caps:?}
         let drained = s.op_respond(Request::TryRecvA2ATask).await;
         assert!(matches!(drained, Response::A2ATaskOpt { task: Some(_) }));
 
-        let queue = s.op_respond(Request::A2AQueue { limit: 10 }).await;
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await;
         match queue {
             Response::A2AQueue { tasks, results } => {
                 assert!(results.is_empty());
@@ -3301,6 +3331,86 @@ required = {caps:?}
                 assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
                 assert_eq!(tasks[0].task.id, task.id);
                 assert_eq!(tasks[0].leased_to.as_ref(), Some(&peer));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: Some(0),
+            })
+            .await;
+        match queue {
+            Response::A2AQueue { tasks, results } => {
+                assert!(results.is_empty());
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].task.id, task.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_min_lease_age_filters_only_in_flight_tasks() {
+        let s = server_with(vec![], "");
+        let in_flight = loopback_a2a_task_for(&s);
+        let result_task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..in_flight.clone()
+        };
+        let queued = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..in_flight.clone()
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", in_flight.recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.respond.{}", in_flight.sender.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        s.op_respond(Request::SendA2ATask {
+            task: in_flight.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        s.op_respond(Request::SendA2ATask {
+            task: result_task.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let result = covenant_a2a::A2ATaskResult::ok(
+            result_task.id,
+            vec![covenant_mcp::Content::text("done")],
+        );
+        s.op_respond(Request::PostA2AResult { result }).await;
+
+        s.op_respond(Request::SendA2ATask {
+            task: queued.clone(),
+        })
+        .await;
+
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: Some(u64::MAX),
+            })
+            .await;
+        match queue {
+            Response::A2AQueue { tasks, results } => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::Queued);
+                assert_eq!(tasks[0].task.id, queued.id);
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].task_id, result_task.id);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -3327,7 +3437,12 @@ required = {caps:?}
             .unwrap()
             .is_some());
 
-        let queue = s.op_respond(Request::A2AQueue { limit: 10 }).await;
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await;
         match queue {
             Response::A2AQueue { tasks, results } => {
                 assert!(tasks.is_empty());
@@ -3406,7 +3521,13 @@ required = {caps:?}
         s.op_respond(Request::SendA2ATask { task: task.clone() })
             .await;
         let _ = s.op_respond(Request::TryRecvA2ATask).await;
-        let lease_id = match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+        let lease_id = match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
             Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
             other => panic!("unexpected: {other:?}"),
         };
@@ -3431,7 +3552,13 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
-        match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
             Response::A2AQueue { tasks, .. } => {
                 assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::Queued);
                 assert_eq!(tasks[0].attempt, 1);
@@ -3521,7 +3648,13 @@ required = {caps:?}
         s.op_respond(Request::SendA2ATask { task: task.clone() })
             .await;
         let _ = s.op_respond(Request::TryRecvA2ATask).await;
-        let lease_id = match s.op_respond(Request::A2AQueue { limit: 10 }).await {
+        let lease_id = match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
             Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
             other => panic!("unexpected: {other:?}"),
         };

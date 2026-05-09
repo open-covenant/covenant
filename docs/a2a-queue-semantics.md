@@ -23,6 +23,16 @@ This chooses inspectability over accidental duplicate work:
 - The task will not disappear silently; it remains visible through `covenant a2a status`, IPC `a2a_queue`, and HTTP `GET /a2a/queue`.
 - Alpha does not auto-retry leased tasks. Requeue and lease-expiry policy must be explicit because autonomous agents may perform non-idempotent external work.
 
+Operators can narrow status views to stale leases with `--min-lease-age-ms`:
+
+```bash
+covenant a2a status --min-lease-age-ms 300000
+```
+
+HTTP exposes the same discovery-only filter through `GET /a2a/queue?min_lease_age_ms=300000`. IPC callers pass `min_lease_age_ms` on `A2AQueue`.
+
+The filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
+
 ## Result Contract
 
 Posting a result for a known task clears the task's in-flight lease and queues the result for the original sender. Result reads remain sender-scoped through the mailbox sender map, compared by pubkey rather than display string.
@@ -78,5 +88,5 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 
 ## Remaining Work
 
-- Add lease-age filters so operators can find stale in-flight work quickly.
+- Add live CLI coverage for repair commands and stale-work inspection.
 - Keep automatic retry disabled until task classes can declare idempotency safely.

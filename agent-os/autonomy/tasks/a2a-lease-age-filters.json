@@ -1,7 +1,7 @@
 {
   "id": "a2a-lease-age-filters",
   "title": "Add A2A lease-age filters for stale work",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [
@@ -31,6 +31,6 @@
   "humanEscalation": [
     "Approval before enabling automatic retry or time-based repair execution"
   ],
-  "nextAction": "Add min-lease-age filtering to A2A queue/status views and document that it is discovery-only, not automatic retry.",
+  "nextAction": "Integrated; next A2A hardening slice should add live CLI repair coverage for stale in-flight inspection, requeue, and force-error flows.",
   "updated": "2026-05-09"
 }

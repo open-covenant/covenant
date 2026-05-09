@@ -224,7 +224,15 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
             other => panic!("expected replayed task, got {other:?}"),
         }
 
-        match req(&mut stream, Request::A2AQueue { limit: 10 }).await {
+        match req(
+            &mut stream,
+            Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            },
+        )
+        .await
+        {
             Response::A2AQueue { tasks, results } => {
                 assert!(results.is_empty());
                 assert_eq!(tasks.len(), 1);

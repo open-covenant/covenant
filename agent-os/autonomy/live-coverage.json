@@ -93,7 +93,7 @@
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live CLI repair coverage after lease-age filters and stale-work operator UX settle."
+      "nextGap": "Add live CLI repair coverage for stale in-flight inspection, requeue, and force-error flows."
     },
     {
       "id": "mcp-subprocess",

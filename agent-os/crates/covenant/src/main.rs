@@ -19,7 +19,7 @@
 //!   covenant tools list
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
-//!   covenant a2a status [--limit N]
+//!   covenant a2a status [--limit N] [--min-lease-age-ms N]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a compact
@@ -101,7 +101,7 @@ fn print_usage() {
         "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant a2a status [-n N]            list queued tasks, in-flight leases, and pending results"
+        "  covenant a2a status [-n N] [--min-lease-age-ms N]  list queued tasks, in-flight leases, and pending results"
     );
     eprintln!(
         "  covenant a2a requeue <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted [--lease-id UUID]"
@@ -894,6 +894,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "status" => {
                     let mut limit: usize = 10;
+                    let mut min_lease_age_ms: Option<u64> = None;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -902,11 +903,25 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--min-lease-age-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--min-lease-age-ms needs a value")?;
+                                min_lease_age_ms = Some(
+                                    v.parse().context("--min-lease-age-ms must be an integer")?,
+                                );
+                            }
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
                     }
-                    write_frame(&mut stream, &Request::A2AQueue { limit }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::A2AQueue {
+                            limit,
+                            min_lease_age_ms,
+                        },
+                    )
+                    .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::A2AQueue { tasks, results } => {
                             if tasks.is_empty() && results.is_empty() {

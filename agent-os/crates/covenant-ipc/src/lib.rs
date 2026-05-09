@@ -170,6 +170,8 @@ pub enum Request {
     A2AQueue {
         #[serde(default = "default_recent_limit")]
         limit: usize,
+        #[serde(default)]
+        min_lease_age_ms: Option<u64>,
     },
     /// Manually repair an in-flight A2A lease. The daemon enforces
     /// visibility, capability, and audit rules before delegating to the

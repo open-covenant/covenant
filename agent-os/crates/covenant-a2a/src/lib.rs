@@ -143,6 +143,178 @@ pub struct A2ARepairOutcome {
     pub result: Option<A2ATaskResult>,
 }
 
+fn default_auto_retry_min_lease_age_ms() -> u64 {
+    300_000
+}
+
+fn default_auto_retry_max_attempts() -> u32 {
+    3
+}
+
+fn default_auto_retry_max_requeues() -> usize {
+    1
+}
+
+fn default_auto_retry_scan_limit() -> usize {
+    100
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct A2AAutoRetryPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_auto_retry_min_lease_age_ms")]
+    pub min_lease_age_ms: u64,
+    #[serde(default = "default_auto_retry_max_attempts")]
+    pub max_attempts: u32,
+    #[serde(default = "default_auto_retry_max_requeues")]
+    pub max_requeues: usize,
+    #[serde(default = "default_auto_retry_scan_limit")]
+    pub scan_limit: usize,
+}
+
+impl Default for A2AAutoRetryPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_lease_age_ms: default_auto_retry_min_lease_age_ms(),
+            max_attempts: default_auto_retry_max_attempts(),
+            max_requeues: default_auto_retry_max_requeues(),
+            scan_limit: default_auto_retry_scan_limit(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2AAutoRetrySkipReason {
+    Disabled,
+    NotInFlight,
+    MissingLease,
+    LeaseTooYoung,
+    MissingIdempotency,
+    UnsafeDuplicateSafety,
+    MaxAttemptsReached,
+    LimitReached,
+    CapabilityScopeMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2AAutoRetrySkipped {
+    pub task_id: Uuid,
+    pub reason: A2AAutoRetrySkipReason,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2AAutoRetryRequeued {
+    pub task_id: Uuid,
+    pub lease_id: Uuid,
+    pub attempt: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2AAutoRetryReport {
+    pub policy: A2AAutoRetryPolicy,
+    pub considered: usize,
+    #[serde(default)]
+    pub requeued: Vec<A2AAutoRetryRequeued>,
+    #[serde(default)]
+    pub skipped: Vec<A2AAutoRetrySkipped>,
+}
+
+impl A2AAutoRetryReport {
+    pub fn new(policy: A2AAutoRetryPolicy) -> Self {
+        Self {
+            policy,
+            considered: 0,
+            requeued: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum A2AAutoRetryDecision {
+    Requeue {
+        lease_id: Uuid,
+        lease_age_ms: u64,
+        idempotency_key: String,
+    },
+    Skip {
+        reason: A2AAutoRetrySkipReason,
+        lease_age_ms: Option<u64>,
+    },
+}
+
+pub fn evaluate_auto_retry(
+    entry: &A2ATaskQueueEntry,
+    policy: &A2AAutoRetryPolicy,
+    now_ms: u64,
+) -> A2AAutoRetryDecision {
+    if !policy.enabled {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::Disabled,
+            lease_age_ms: None,
+        };
+    }
+
+    if entry.state != A2ATaskQueueState::InFlight {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::NotInFlight,
+            lease_age_ms: None,
+        };
+    }
+
+    let (Some(lease_id), Some(leased_at_ms)) = (entry.lease_id, entry.leased_at_ms) else {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::MissingLease,
+            lease_age_ms: None,
+        };
+    };
+    let lease_age_ms = now_ms.saturating_sub(leased_at_ms);
+    if lease_age_ms < policy.min_lease_age_ms {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::LeaseTooYoung,
+            lease_age_ms: Some(lease_age_ms),
+        };
+    }
+
+    let Some(idempotency) = &entry.task.idempotency else {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::MissingIdempotency,
+            lease_age_ms: Some(lease_age_ms),
+        };
+    };
+    if idempotency.key.trim().is_empty() {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::MissingIdempotency,
+            lease_age_ms: Some(lease_age_ms),
+        };
+    }
+    if idempotency.duplicate_safety != A2ADuplicateSafety::Idempotent {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+            lease_age_ms: Some(lease_age_ms),
+        };
+    }
+    if entry.attempt >= policy.max_attempts {
+        return A2AAutoRetryDecision::Skip {
+            reason: A2AAutoRetrySkipReason::MaxAttemptsReached,
+            lease_age_ms: Some(lease_age_ms),
+        };
+    }
+
+    A2AAutoRetryDecision::Requeue {
+        lease_id,
+        lease_age_ms,
+        idempotency_key: idempotency.key.clone(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct A2ATaskResult {
     pub task_id: Uuid,
@@ -1225,6 +1397,96 @@ mod tests {
         let task: A2ATask = serde_json::from_value(value).unwrap();
         assert_eq!(task.id, Uuid::nil());
         assert_eq!(task.idempotency, None);
+    }
+
+    #[test]
+    fn auto_retry_policy_defaults_disabled() {
+        let policy = A2AAutoRetryPolicy::default();
+        assert!(!policy.enabled);
+        assert_eq!(policy.min_lease_age_ms, 300_000);
+        assert_eq!(policy.max_attempts, 3);
+        assert_eq!(policy.max_requeues, 1);
+        assert_eq!(policy.scan_limit, 100);
+    }
+
+    #[test]
+    fn auto_retry_evaluates_only_old_idempotent_in_flight_tasks() {
+        let mut task = dummy_task();
+        task.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "task:key",
+        ));
+        let entry = A2ATaskQueueEntry {
+            state: A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::nil()),
+            leased_to: Some(dummy_agent("research@local")),
+            leased_at_ms: Some(1_000),
+            attempt: 1,
+        };
+        let policy = A2AAutoRetryPolicy {
+            enabled: true,
+            min_lease_age_ms: 300_000,
+            max_attempts: 3,
+            max_requeues: 1,
+            scan_limit: 100,
+        };
+
+        let decision = evaluate_auto_retry(&entry, &policy, 301_000);
+        match decision {
+            A2AAutoRetryDecision::Requeue {
+                lease_id,
+                lease_age_ms,
+                idempotency_key,
+            } => {
+                assert_eq!(lease_id, Uuid::nil());
+                assert_eq!(lease_age_ms, 300_000);
+                assert_eq!(idempotency_key, "task:key");
+            }
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_retry_rejects_unsafe_or_exhausted_tasks() {
+        let mut task = dummy_task();
+        task.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Unsafe, "task:key"));
+        let mut entry = A2ATaskQueueEntry {
+            state: A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::nil()),
+            leased_to: Some(dummy_agent("research@local")),
+            leased_at_ms: Some(1_000),
+            attempt: 1,
+        };
+        let policy = A2AAutoRetryPolicy {
+            enabled: true,
+            min_lease_age_ms: 0,
+            max_attempts: 3,
+            max_requeues: 1,
+            scan_limit: 100,
+        };
+
+        assert!(matches!(
+            evaluate_auto_retry(&entry, &policy, 1_000),
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+                ..
+            }
+        ));
+
+        entry.task.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "task:key",
+        ));
+        entry.attempt = 3;
+        assert!(matches!(
+            evaluate_auto_retry(&entry, &policy, 1_000),
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::MaxAttemptsReached,
+                ..
+            }
+        ));
     }
 
     #[test]

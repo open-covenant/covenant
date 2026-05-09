@@ -616,6 +616,7 @@ impl Server {
                 min_lease_age_ms,
             } => self.a2a_queue(limit, min_lease_age_ms, peer).await,
             Request::RepairA2ATask { request } => self.repair_a2a_task(request, peer).await,
+            Request::RetryA2AStale { policy } => self.retry_a2a_stale(policy, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
             Request::PurgePeers { before_ms } => self.purge_peers(before_ms, peer).await,
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
@@ -1160,6 +1161,172 @@ impl Server {
                 message: format!("a2a: {e}"),
             },
         }
+    }
+
+    async fn retry_a2a_stale(
+        &self,
+        policy: covenant_a2a::A2AAutoRetryPolicy,
+        peer: &AgentId,
+    ) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "a2a auto retry requires the operator identity".into(),
+            };
+        }
+
+        let required = "a2a.repair.requeue".to_string();
+        if policy.enabled {
+            let check = self
+                .check_capabilities("a2a-auto-retry".into(), vec![required.clone()], peer)
+                .await;
+            if !check.passed {
+                return Response::Error {
+                    message: "a2a auto retry requires capability \"a2a.repair.requeue\". \
+                         Grant it with `covenant capabilities grant a2a.repair.requeue`."
+                        .into(),
+                };
+            }
+        }
+
+        let queue = match self.mailbox.task_queue(policy.scan_limit).await {
+            Ok(queue) => queue,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("a2a: {e}"),
+                };
+            }
+        };
+
+        let now_ms = epoch_ms();
+        let mut report = covenant_a2a::A2AAutoRetryReport::new(policy);
+        for entry in queue {
+            report.considered += 1;
+            let task_id = entry.task.id;
+            let attempt = entry.attempt;
+            match covenant_a2a::evaluate_auto_retry(&entry, &policy, now_ms) {
+                covenant_a2a::A2AAutoRetryDecision::Skip {
+                    reason,
+                    lease_age_ms,
+                } => {
+                    report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+                        task_id,
+                        reason,
+                        attempt,
+                        lease_age_ms,
+                    });
+                }
+                covenant_a2a::A2AAutoRetryDecision::Requeue {
+                    lease_id,
+                    lease_age_ms,
+                    idempotency_key,
+                } => {
+                    if report.requeued.len() >= policy.max_requeues {
+                        report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+                            task_id,
+                            reason: covenant_a2a::A2AAutoRetrySkipReason::LimitReached,
+                            attempt,
+                            lease_age_ms: Some(lease_age_ms),
+                        });
+                        continue;
+                    }
+
+                    let task_id_s = task_id.to_string();
+                    let lease_id_s = lease_id.to_string();
+                    let peer_pubkey_b58 = if peer.pubkey == entry.task.sender.pubkey {
+                        entry.task.recipient.pubkey_base58()
+                    } else if peer.pubkey == entry.task.recipient.pubkey {
+                        entry.task.sender.pubkey_base58()
+                    } else {
+                        entry.task.recipient.pubkey_base58()
+                    };
+                    let repair_scope = A2aScopeRequest {
+                        peer_pubkey_b58: Some(&peer_pubkey_b58),
+                        task_id: Some(&task_id_s),
+                        lease_id: Some(&lease_id_s),
+                        duplicate_risk: Some("idempotent"),
+                    };
+                    match self
+                        .a2a_scope_check(std::slice::from_ref(&required), peer, repair_scope)
+                        .await
+                    {
+                        Ok(A2aScopeCheck { allowed: true, .. }) => {}
+                        Ok(_) => {
+                            report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+                                task_id,
+                                reason:
+                                    covenant_a2a::A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+                                attempt,
+                                lease_age_ms: Some(lease_age_ms),
+                            });
+                            continue;
+                        }
+                        Err(reason) => {
+                            self.record_capability_scope_rejected(
+                                peer,
+                                format!("a2a-auto-retry:{task_id}"),
+                                required.clone(),
+                                reason,
+                            )
+                            .await;
+                            report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+                                task_id,
+                                reason:
+                                    covenant_a2a::A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+                                attempt,
+                                lease_age_ms: Some(lease_age_ms),
+                            });
+                            continue;
+                        }
+                    }
+
+                    let request = covenant_a2a::A2ARepairRequest {
+                        task_id,
+                        command: covenant_a2a::A2ARepairCommand::Requeue {
+                            lease_id: Some(lease_id),
+                            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                        },
+                        reason: "automatic retry policy requeued stale idempotent lease".into(),
+                    };
+                    match self.mailbox.repair_task(request).await {
+                        Ok(outcome) => {
+                            let event = AuditEvent {
+                                id: Uuid::new_v4(),
+                                timestamp_ms: epoch_ms(),
+                                issuer: peer.clone(),
+                                kind: AuditKind::A2ARepairApplied {
+                                    task_id,
+                                    action: "auto_requeue".into(),
+                                    reason:
+                                        "automatic retry policy requeued stale idempotent lease"
+                                            .into(),
+                                    lease_id: Some(lease_id),
+                                    duplicate_risk: Some("idempotent".into()),
+                                    attempt: outcome.attempt,
+                                },
+                            };
+                            self.record_peer_event(peer, event).await;
+                            report.requeued.push(covenant_a2a::A2AAutoRetryRequeued {
+                                task_id,
+                                lease_id,
+                                attempt: outcome.attempt,
+                                idempotency_key,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(error = %e, task_id = %task_id, "a2a auto retry failed after eligibility check");
+                            report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+                                task_id,
+                                reason: covenant_a2a::A2AAutoRetrySkipReason::MissingLease,
+                                attempt,
+                                lease_age_ms: Some(lease_age_ms),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Response::A2AAutoRetried { report }
     }
 
     /// Daemon-side fan-out across `router.agents()` for the operator
@@ -6317,6 +6484,169 @@ required = {caps:?}
                 assert_eq!(*logged_lease, lease_id);
                 assert_eq!(duplicate_risk.as_deref(), Some("idempotent"));
                 assert_eq!(*attempt, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_defaults_to_disabled_without_mutating() {
+        let s = server_with(vec![], "");
+        let mut task = loopback_a2a_task_for(&s);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "safe-task",
+        ));
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => {
+                assert!(!report.policy.enabled);
+                assert_eq!(report.considered, 1);
+                assert!(report.requeued.is_empty());
+                assert_eq!(
+                    report.skipped[0].reason,
+                    covenant_a2a::A2AAutoRetrySkipReason::Disabled
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, task.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_requeues_only_safe_idempotent_tasks_and_audits() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let mut safe = loopback_a2a_task_for(&s);
+        safe.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "safe-task",
+        ));
+        let mut unsafe_task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..safe.clone()
+        };
+        unsafe_task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Unsafe,
+            "unsafe-task",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", safe.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask { task: safe.clone() })
+            .await;
+        s.op_respond(Request::SendA2ATask {
+            task: unsafe_task.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 10,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(report.considered, 2);
+        assert_eq!(report.requeued.len(), 1);
+        assert_eq!(report.requeued[0].task_id, safe.id);
+        assert_eq!(report.requeued[0].idempotency_key, "safe-task");
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].task_id, unsafe_task.id);
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::UnsafeDuplicateSafety
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let safe_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == safe.id)
+                    .expect("safe task entry");
+                assert_eq!(safe_entry.state, covenant_a2a::A2ATaskQueueState::Queued);
+                let unsafe_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == unsafe_task.id)
+                    .expect("unsafe task entry");
+                assert_eq!(
+                    unsafe_entry.state,
+                    covenant_a2a::A2ATaskQueueState::InFlight
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        let repair = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::A2ARepairApplied { action, .. } if action == "auto_requeue"
+                )
+            })
+            .expect("auto retry audit row");
+        match &repair.kind {
+            AuditKind::A2ARepairApplied {
+                task_id,
+                duplicate_risk,
+                ..
+            } => {
+                assert_eq!(*task_id, safe.id);
+                assert_eq!(duplicate_risk.as_deref(), Some("idempotent"));
             }
             other => panic!("unexpected: {other:?}"),
         }

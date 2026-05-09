@@ -101,7 +101,7 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 
 ## Idempotency and Retry Policy
 
-Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Tasks can now carry optional task-level idempotency metadata, but automatic retry remains a future feature.
+Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Tasks can carry optional task-level idempotency metadata, and the daemon exposes a disabled-by-default retry gate that requeues only stale, idempotent in-flight leases when an operator explicitly enables a bounded scan.
 
 The optional task metadata is:
 
@@ -117,7 +117,7 @@ The optional task metadata is:
 - **Duplicate safety** declares whether re-running the same logical task can create harmful external side effects (network writes, payments, ticket creation, etc.). Missing metadata is treated as **unsafe**.
 - **Idempotency key** is a stable, caller-chosen key that uniquely identifies the logical work unit across retries. The daemon validates that a present key is non-empty and persists it through queue/status surfaces and restart replay.
 
-This metadata is evidence, not automatic behavior. Receivers and future retry policy can use it to dedupe duplicate deliveries and/or return a previously computed result, but the current daemon does not retry or dedupe tasks automatically.
+This metadata is evidence, not receiver-side deduplication. Receivers and future retry policy can use it to return a previously computed result, but the current daemon does not persist `idempotency_key → result`.
 
 Operator policy:
 
@@ -125,9 +125,24 @@ Operator policy:
 - Use `a2a requeue` only when the operator can justify `--duplicate-risk idempotent` (or explicitly accepts the risk).
 - Prefer `a2a force-error` when the correct outcome is “stop waiting” rather than “try again”.
 
-Future automatic retry also requires receiver-side de-duplication that persists `idempotency_key → result`, so redelivery can short-circuit without repeating side effects.
+The explicit retry gate is available through CLI/IPC:
 
-When automatic retry is introduced, it must be:
+```bash
+covenant capabilities grant a2a.repair.requeue
+covenant a2a retry-stale \
+  --enable \
+  --min-lease-age-ms 300000 \
+  --max-attempts 3 \
+  --max-requeues 1 \
+  --scan-limit 100 \
+  --json
+```
+
+Without `--enable`, the CLI returns a report and performs no mutation. With `--enable`, the daemon only requeues entries that are in flight, old enough, below the attempt bound, and marked `duplicate_safety = "idempotent"` with a non-empty key. Each requeue records an `auto_requeue` A2A repair audit row. Entries that are unsafe, too young, exhausted, missing metadata, or outside capability scope remain untouched and appear in the report's `skipped` list.
+
+Future autonomous retry also requires receiver-side de-duplication that persists `idempotency_key → result`, so redelivery can short-circuit without repeating side effects.
+
+Any background retry scheduler must remain:
 
 - opt-in (disabled by default);
 - limited to tasks marked safe to duplicate with an explicit idempotency key;
@@ -137,4 +152,4 @@ When automatic retry is introduced, it must be:
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Keep automatic retry disabled until daemon policy can enforce the metadata safely.
+- Add receiver-side idempotency result caching before enabling periodic retry loops.

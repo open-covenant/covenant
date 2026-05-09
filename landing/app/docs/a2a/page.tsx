@@ -109,16 +109,16 @@ A2ATaskResult {
         Both commands require a non-empty reason and may include the
         observed <code>lease_id</code> as a guard against repairing a
         newer lease than the operator inspected. Daemon, HTTP, and CLI
-        exposure are the next hardening step; automatic retry remains
-        disabled until tasks carry explicit idempotency metadata (key + policy).
+        exposure exists for manual repair paths; automatic background retry
+        remains disabled.
       </p>
       <p>
         Tasks may carry optional idempotency metadata: duplicate safety
         plus a stable key. Missing metadata is treated as unsafe. The
-        daemon persists and validates the metadata, but automatic retry
-        remains disabled; the operator must still choose{" "}
-        <code>idempotent</code> vs <code>operator_accepted</code>{" "}
-        explicitly when requeueing.
+        daemon persists and validates the metadata. An explicit{" "}
+        <code>retry-stale</code> scan can requeue only stale idempotent
+        tasks when the operator passes <code>--enable</code>; skipped
+        tasks stay visible in the report.
       </p>
 
       <h2>Daemon-mediated flow</h2>
@@ -238,9 +238,11 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         </li>
         <li>
           <strong>Retry posture.</strong> A2A delivery avoids automatic
-          redelivery of leased tasks after restart. This prevents duplicate
-          non-idempotent work; explicit repair commands carry the
-          operator&apos;s duplicate-work posture.
+          redelivery of leased tasks after restart. A disabled-by-default
+          retry gate can requeue stale in-flight tasks only when an
+          operator enables a bounded scan and the task carries idempotent
+          duplicate-safety metadata. Automatic background retry remains
+          off.
         </li>
       </ul>
 

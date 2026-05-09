@@ -1,0 +1,35 @@
+{
+  "id": "a2a-auto-retry-policy-gate",
+  "title": "Gate automatic A2A retry behind idempotency",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Introduce a disabled-by-default daemon retry gate that can requeue stale leases only when tasks declare duplicate safety and carry an idempotency key, with audit visibility and operator-bounded limits.",
+  "expectedFailureModes": [
+    "Retry silently duplicates non-idempotent external work.",
+    "Retry loops create unbounded queue churn on a broken recipient.",
+    "Operators cannot distinguish manual repair from daemon-initiated retry in audit or status surfaces."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "docs"
+  ],
+  "verification": [
+    "cd agent-os && cargo test --workspace --exclude covenant-settlement-program --locked",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human approval is required before enabling any automatic retry behavior by default."
+  ],
+  "nextAction": "Add a bounded retry gate (disabled by default) plus audit/status visibility and doc the operator controls.",
+  "updated": "2026-05-09"
+}

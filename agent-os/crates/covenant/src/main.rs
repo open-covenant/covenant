@@ -28,6 +28,7 @@
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
+//!   covenant a2a retry-stale [--enable] [--min-lease-age-ms N] [--max-attempts N] [--max-requeues N] [--scan-limit N] [--json]
 //!   covenant a2a compact [--json]
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant peers rotate [--json]
@@ -41,7 +42,8 @@
 
 use anyhow::{bail, Context, Result};
 use covenant_a2a::{
-    A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
+    A2AAutoRetryPolicy, A2AAutoRetryReport, A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest,
+    A2ATaskQueueEntry, A2ATaskResult,
 };
 use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
@@ -144,6 +146,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant a2a force-error <task-id> --reason TEXT --message TEXT [--lease-id UUID]"
+    );
+    eprintln!(
+        "  covenant a2a retry-stale [--enable] [--min-lease-age-ms N] [--max-attempts N] [--max-requeues N] [--scan-limit N] [--json]"
     );
     eprintln!(
         "  covenant a2a compact [--json]          drop event-log lines for fully-resolved a2a tasks"
@@ -1477,7 +1482,7 @@ async fn main() -> Result<()> {
         "a2a" => {
             if args.len() < 2 {
                 eprintln!(
-                    "covenant a2a: expected `status`, `requeue`, `force-error`, or `compact`"
+                    "covenant a2a: expected `status`, `requeue`, `force-error`, `retry-stale`, or `compact`"
                 );
                 std::process::exit(2);
             }
@@ -1636,6 +1641,63 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::RepairA2ATask { request }).await?;
                     let response = read_frame::<_, Response>(&mut stream).await?;
                     print_a2a_repair_response(response)?;
+                }
+                "retry-stale" => {
+                    let mut policy = A2AAutoRetryPolicy::default();
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--enable" => policy.enabled = true,
+                            "--min-lease-age-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--min-lease-age-ms needs a value")?;
+                                policy.min_lease_age_ms =
+                                    v.parse().context("--min-lease-age-ms must be an integer")?;
+                            }
+                            "--max-attempts" => {
+                                i += 1;
+                                let v = args.get(i).context("--max-attempts needs a value")?;
+                                policy.max_attempts =
+                                    v.parse().context("--max-attempts must be an integer")?;
+                            }
+                            "--max-requeues" => {
+                                i += 1;
+                                let v = args.get(i).context("--max-requeues needs a value")?;
+                                policy.max_requeues =
+                                    v.parse().context("--max-requeues must be an integer")?;
+                            }
+                            "--scan-limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--scan-limit needs a value")?;
+                                policy.scan_limit =
+                                    v.parse().context("--scan-limit must be an integer")?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(&mut stream, &Request::RetryA2AStale { policy }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::A2AAutoRetried { report } => {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&a2a_retry_json(&report))?);
+                            } else {
+                                println!(
+                                    "considered {} task(s), requeued {}, skipped {}",
+                                    report.considered,
+                                    report.requeued.len(),
+                                    report.skipped.len()
+                                );
+                                if !report.policy.enabled {
+                                    println!("automatic retry disabled; pass --enable to mutate");
+                                }
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
                 }
                 "compact" => {
                     let mut as_json = false;
@@ -2518,6 +2580,13 @@ fn a2a_status_json(
     })
 }
 
+fn a2a_retry_json(report: &A2AAutoRetryReport) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "a2a_auto_retry",
+        "report": report,
+    })
+}
+
 fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
@@ -3148,6 +3217,43 @@ mod tests {
         let value = a2a_compact_json(3);
         assert_eq!(value["kind"], "a2a_compacted");
         assert_eq!(value["dropped"], 3);
+    }
+
+    #[test]
+    fn a2a_retry_json_renders_stable_shape() {
+        let mut report = A2AAutoRetryReport::new(A2AAutoRetryPolicy {
+            enabled: true,
+            min_lease_age_ms: 300_000,
+            max_attempts: 3,
+            max_requeues: 1,
+            scan_limit: 100,
+        });
+        report.considered = 2;
+        report.requeued.push(covenant_a2a::A2AAutoRetryRequeued {
+            task_id: uuid::Uuid::nil(),
+            lease_id: uuid::Uuid::nil(),
+            attempt: 1,
+            idempotency_key: "task:key".into(),
+        });
+        report.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+            task_id: uuid::Uuid::nil(),
+            reason: covenant_a2a::A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+            attempt: 1,
+            lease_age_ms: Some(300_000),
+        });
+
+        let value = a2a_retry_json(&report);
+        assert_eq!(value["kind"], "a2a_auto_retry");
+        assert_eq!(value["report"]["policy"]["enabled"], true);
+        assert_eq!(value["report"]["considered"], 2);
+        assert_eq!(
+            value["report"]["requeued"][0]["idempotency_key"],
+            "task:key"
+        );
+        assert_eq!(
+            value["report"]["skipped"][0]["reason"],
+            "unsafe_duplicate_safety"
+        );
     }
 
     #[test]

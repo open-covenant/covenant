@@ -5,7 +5,10 @@
 
 #![deny(unsafe_code)]
 
-use covenant_a2a::{A2ARepairOutcome, A2ARepairRequest, A2ATask, A2ATaskQueueEntry, A2ATaskResult};
+use covenant_a2a::{
+    A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
+    A2ATaskQueueEntry, A2ATaskResult,
+};
 use covenant_audit::{AuditEvent, AuditIntegrityReport};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
@@ -215,6 +218,12 @@ pub enum Request {
     /// mailbox repair primitive.
     RepairA2ATask {
         request: A2ARepairRequest,
+    },
+    /// Explicitly scan stale in-flight A2A leases and requeue only
+    /// eligible idempotent tasks when the supplied policy is enabled.
+    /// The default policy is disabled, so callers must opt in.
+    RetryA2AStale {
+        policy: A2AAutoRetryPolicy,
     },
     /// Drop the on-disk event log lines for fully-resolved A2A tasks
     /// (TaskSent + TaskRecv + ≥1 ResultPosted with matching ResultRecv
@@ -442,6 +451,9 @@ pub enum Response {
     },
     A2ARepaired {
         outcome: A2ARepairOutcome,
+    },
+    A2AAutoRetried {
+        report: A2AAutoRetryReport,
     },
     PeersPurged {
         purged: u64,

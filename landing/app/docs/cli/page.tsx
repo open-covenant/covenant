@@ -67,6 +67,12 @@ export default function CliPage() {
         --reason <text>
         --message <text>
         [--lease-id <uuid>]          Resolve an in-flight task as failed.
+  a2a retry-stale [--enable]
+        [--min-lease-age-ms N]
+        [--max-attempts N]
+        [--max-requeues N]
+        [--scan-limit N]
+        [--json]                     Scan stale leases; mutate only with --enable.
   a2a compact [--json]              Drop fully resolved A2A event rows.
 
   verify [--window N] [--json]       Cross-check audit log vs other state.
@@ -323,6 +329,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant a2a status --min-lease-age-ms 300000 --json
 {"kind":"a2a_status","limit":10,"min_lease_age_ms":300000,"tasks":[],"results":[]}`}</code>
+      </pre>
+
+      <h3>Scan stale A2A leases</h3>
+      <pre>
+        <code>{`$ covenant a2a retry-stale --json
+{"kind":"a2a_auto_retry","report":{"policy":{"enabled":false,...},"considered":0,"requeued":[],"skipped":[]}}`}</code>
       </pre>
 
       <h3>Compact resolved A2A events</h3>

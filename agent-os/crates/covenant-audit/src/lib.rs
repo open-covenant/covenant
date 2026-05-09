@@ -129,11 +129,11 @@ pub enum AuditKind {
         recipient_display: String,
         action: String,
     },
-    /// Logged when an operator manually repairs an in-flight A2A lease.
-    /// `action` is `requeue` or `force_error`; `duplicate_risk` is
-    /// present only for requeue. Full task payloads stay in the mailbox
-    /// log; the audit row records who acted, why, and which lease they
-    /// intended to mutate.
+    /// Logged when an operator repairs an in-flight A2A lease. `action`
+    /// is `requeue`, `force_error`, or `auto_requeue`; `duplicate_risk`
+    /// is present only for requeue paths. Full task payloads stay in the
+    /// mailbox log; the audit row records who acted, why, and which lease
+    /// they intended to mutate.
     A2ARepairApplied {
         task_id: Uuid,
         action: String,

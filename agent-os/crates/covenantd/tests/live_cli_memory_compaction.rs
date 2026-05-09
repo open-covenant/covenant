@@ -237,6 +237,25 @@ async fn live_cli_memory_compaction_round_trip() {
     assert_ids(&applied, "stale_marked", &[fixture.longterm]);
     assert_ids(&applied, "parents_detached", &[fixture.child]);
 
+    let mut json_args = base_args.to_vec();
+    json_args.extend(["--reason", "live compaction json envelope", "--json"]);
+    let json_stdout = run_cli(&cli_exe, home.path(), &json_args).await;
+    let envelope: Value =
+        serde_json::from_str(json_stdout.trim()).expect("envelope stdout must be JSON");
+    assert_eq!(
+        envelope["kind"], "memory_compacted",
+        "envelope={envelope:?}"
+    );
+    assert_eq!(
+        envelope["outcome"]["mode"].as_str(),
+        Some("dry_run"),
+        "envelope={envelope:?}"
+    );
+    assert!(
+        envelope["outcome"]["would_change"].is_boolean(),
+        "envelope={envelope:?}"
+    );
+
     let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
     assert!(store.get(fixture.old_working).await.unwrap().is_none());
     assert!(store.get(fixture.old_episodic).await.unwrap().is_none());

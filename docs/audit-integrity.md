@@ -41,6 +41,25 @@ Operators can verify the local chain through all daemon surfaces:
 covenant audit verify
 ```
 
+The CLI prints a bare `AuditIntegrityReport` JSON object by default. Use `--json` for a stable envelope:
+
+```bash
+covenant audit verify --json
+```
+
+```json
+{
+  "kind": "audit_integrity",
+  "report": {
+    "events": 0,
+    "anchors": 0,
+    "valid": true,
+    "root_hash_hex": "<hex>",
+    "failures": []
+  }
+}
+```
+
 ```http
 GET /audit/verify
 Authorization: Bearer <operator-token>

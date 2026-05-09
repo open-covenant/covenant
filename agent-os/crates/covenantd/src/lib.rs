@@ -31,7 +31,7 @@ use covenant_types::{
     SettlementReceipt,
 };
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
@@ -44,6 +44,94 @@ pub fn covenant_home() -> Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeRunnerConfig {
+    TrustedLocal,
+    LinuxGvisor {
+        runsc_path: PathBuf,
+        rootfs: PathBuf,
+        scratch_root: PathBuf,
+    },
+}
+
+impl RuntimeRunnerConfig {
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::TrustedLocal => "trusted-local",
+            Self::LinuxGvisor { .. } => "linux-gvisor",
+        }
+    }
+}
+
+pub fn runtime_runner_config_from_env(home: &Path) -> Result<RuntimeRunnerConfig> {
+    runtime_runner_config_from_values(
+        home,
+        std::env::var("COVENANT_RUNTIME_BACKEND").ok().as_deref(),
+        std::env::var("COVENANT_GVISOR_ROOTFS").ok().as_deref(),
+        std::env::var("COVENANT_RUNSC").ok().as_deref(),
+        std::env::var("COVENANT_GVISOR_SCRATCH").ok().as_deref(),
+    )
+}
+
+pub fn runtime_runner_config_from_values(
+    home: &Path,
+    backend: Option<&str>,
+    rootfs: Option<&str>,
+    runsc_path: Option<&str>,
+    scratch_root: Option<&str>,
+) -> Result<RuntimeRunnerConfig> {
+    let backend = backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("trusted-local");
+
+    match backend {
+        "trusted-local" => Ok(RuntimeRunnerConfig::TrustedLocal),
+        "linux-gvisor" => {
+            let rootfs = rootfs
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .context(
+                    "COVENANT_GVISOR_ROOTFS is required when COVENANT_RUNTIME_BACKEND=linux-gvisor",
+                )?;
+            let runsc_path = runsc_path
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("runsc"));
+            let scratch_root = scratch_root
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("runtime").join("gvisor"));
+            Ok(RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path,
+                rootfs,
+                scratch_root,
+            })
+        }
+        other => anyhow::bail!(
+            "unsupported COVENANT_RUNTIME_BACKEND {other:?}; expected trusted-local or linux-gvisor"
+        ),
+    }
+}
+
+pub fn runtime_runner_from_config(config: &RuntimeRunnerConfig) -> Arc<dyn Runner> {
+    match config {
+        RuntimeRunnerConfig::TrustedLocal => Arc::new(covenant_runtime::SubprocessRunner),
+        RuntimeRunnerConfig::LinuxGvisor {
+            runsc_path,
+            rootfs,
+            scratch_root,
+        } => Arc::new(covenant_runtime::GvisorRunner::with_paths(
+            runsc_path,
+            rootfs,
+            scratch_root,
+        )),
+    }
 }
 
 /// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
@@ -2316,6 +2404,90 @@ required = {caps:?}
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
             Arc::new(covenant_budget::InMemoryLedger::new()),
         )
+    }
+
+    #[test]
+    fn runtime_runner_config_defaults_to_trusted_local() {
+        let config =
+            runtime_runner_config_from_values(Path::new("covenant-home"), None, None, None, None)
+                .unwrap();
+        assert_eq!(config, RuntimeRunnerConfig::TrustedLocal);
+        assert_eq!(config.backend_name(), "trusted-local");
+    }
+
+    #[test]
+    fn runtime_runner_config_rejects_unknown_backend() {
+        let err = runtime_runner_config_from_values(
+            Path::new("covenant-home"),
+            Some("firecracker"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported COVENANT_RUNTIME_BACKEND"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn runtime_runner_config_requires_gvisor_rootfs() {
+        let err = runtime_runner_config_from_values(
+            Path::new("covenant-home"),
+            Some("linux-gvisor"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("COVENANT_GVISOR_ROOTFS"), "{err}");
+    }
+
+    #[test]
+    fn runtime_runner_config_parses_gvisor_paths() {
+        let config = runtime_runner_config_from_values(
+            Path::new("covenant-home"),
+            Some("linux-gvisor"),
+            Some("rootfs"),
+            Some("bin/runsc"),
+            Some("scratch"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("bin/runsc"),
+                rootfs: PathBuf::from("rootfs"),
+                scratch_root: PathBuf::from("scratch"),
+            }
+        );
+        assert_eq!(config.backend_name(), "linux-gvisor");
+    }
+
+    #[test]
+    fn runtime_runner_config_defaults_gvisor_tool_and_scratch() {
+        let config = runtime_runner_config_from_values(
+            Path::new("covenant-home"),
+            Some("linux-gvisor"),
+            Some("rootfs"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("runsc"),
+                rootfs: PathBuf::from("rootfs"),
+                scratch_root: PathBuf::from("covenant-home")
+                    .join("runtime")
+                    .join("gvisor"),
+            }
+        );
     }
 
     #[tokio::test]

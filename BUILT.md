@@ -13,7 +13,7 @@ The repository already contains concrete substrate for agentic operation:
 | Identity | `agent-os/crates/covenant-identity` and peer auth | Local sessions and commits can be tied to scoped identities. |
 | Permissions | `agent-os/crates/covenant-permissions` | Security-sensitive operations are expected to pass capability and review gates. |
 | Audit | `agent-os/crates/covenant-audit` | Engineering cycles record validation, review, and handoff artifacts. |
-| Runtime | `agent-os/crates/covenant-runtime` | Agents run as bounded subprocesses; stronger sandboxing is future work. |
+| Runtime | `agent-os/crates/covenant-runtime` | Agents run as bounded trusted-local subprocesses by default; an opt-in Linux gVisor runner is selectable but still needs live Linux validation. |
 | Memory | `agent-os/crates/covenant-memory` | Project state is persisted through tracked docs and local handoff files. |
 | Comms | IPC, HTTP, MCP, and A2A crates | Tool and peer boundaries are explicit, not implicit process sharing. |
 | Settlement | Local receipts plus Solana scaffold | Resource accounting exists locally; on-chain settlement is not production. |
@@ -77,7 +77,7 @@ The foremost missing piece is public keyless attestation. A future implementatio
 Covenant does not currently claim:
 
 - full autonomous software engineering without human authority;
-- sandbox-grade isolation for arbitrary untrusted agents;
+- production sandbox-grade isolation for arbitrary untrusted agents;
 - production multi-peer operation across untrusted hosts;
 - on-chain settlement in production;
 - public benchmarked self-improvement;

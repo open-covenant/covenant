@@ -65,6 +65,31 @@ Common paths:
 | `audit/events.jsonl` | Append-only audit log. |
 | `memory.db` | SQLite memory store. |
 | `receipts/working.jsonl` | Local settlement receipts. |
+| `runtime/gvisor` | Default scratch root when `COVENANT_RUNTIME_BACKEND=linux-gvisor`. |
+
+## Runtime Backend
+
+`covenantd` defaults to trusted-local subprocess execution:
+
+```bash
+COVENANT_RUNTIME_BACKEND=trusted-local
+```
+
+To opt into the initial Linux gVisor runner:
+
+```bash
+COVENANT_RUNTIME_BACKEND=linux-gvisor
+COVENANT_GVISOR_ROOTFS=/path/to/rootfs
+```
+
+Optional settings:
+
+```bash
+COVENANT_RUNSC=runsc
+COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
+```
+
+The daemon fails startup when `linux-gvisor` is selected without a rootfs. Trusted-local execution refuses manifests that declare `sandbox.required = true`; it does not silently downgrade sandbox-required agents.
 
 ## Crate Groups
 

@@ -29,7 +29,12 @@ async fn main() -> Result<()> {
         "agents loaded"
     );
     let router = Arc::new(covenant_router::Router::from_cards(cards));
-    let runner = Arc::new(covenant_runtime::SubprocessRunner);
+    let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
+    let runner = covenantd::runtime_runner_from_config(&runtime_config);
+    info!(
+        backend = runtime_config.backend_name(),
+        "runtime runner ready"
+    );
 
     let memory_path = home.join("memory.db");
     let memory = Arc::new(

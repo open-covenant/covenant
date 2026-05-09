@@ -1,9 +1,9 @@
 {
   "id": "runtime-sandboxing",
   "title": "Introduce a real runtime sandbox boundary",
-  "state": "blocked",
+  "state": "integrated",
   "priority": "critical",
-  "ownerRole": "planner",
+  "ownerRole": "implementer",
   "scope": [
     "agent-os/crates/covenant-runtime",
     "agent-os/crates/covenantd",
@@ -28,12 +28,13 @@
   "verification": [
     "bash agent-os/scripts/validate.sh --quick",
     "cd agent-os && cargo test -p covenant-runtime",
+    "cd agent-os && cargo test -p covenantd runtime_runner_config --locked",
     "node agent-os/scripts/validate-autonomy.mjs"
   ],
   "humanEscalation": [
     "Hardware and OS target selection for sandbox validation",
     "Approval before claiming sandbox-grade isolation publicly"
   ],
-  "nextAction": "Wire daemon backend config to select trusted-local vs linux-gvisor once the existing unrelated daemon/protocol worktree changes are clear enough to edit safely, then add live runsc coverage.",
+  "nextAction": "Finish validation and integration for daemon backend selection, then add opt-in live Linux runsc coverage.",
   "updated": "2026-05-09"
 }

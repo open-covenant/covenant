@@ -26,6 +26,7 @@ export default function SettlementPage() {
   memory_record_id: uuid | null,         // set for daemon memory writes
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
+  memory_record_id: uuid | null,        // set when resource == "memory"
   onchain_sig:      string | null       // populated when flushed on-chain
 }`}</code>
       </pre>

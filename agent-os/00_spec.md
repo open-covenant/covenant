@@ -81,6 +81,7 @@ struct SettlementReceipt {
     resource: ResourceKind,   // Compute | Memory | Tool | Message | Registration
     credits_consumed: u64,    // USD-pegged credits destroyed at this event
     settled_at: u64,
+    memory_record_id: Option<Uuid>, // set when resource == Memory
     onchain_sig: Option<String>, // None until the batched burn lands on Solana
 }
 ```

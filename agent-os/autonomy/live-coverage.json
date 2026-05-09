@@ -43,7 +43,7 @@
         "agent-os/crates/covenantd/tests/live_cli_memory_compaction.rs"
       ],
       "status": "covered",
-      "nextGap": "Add receipt-correlation backfill coverage for legacy uncorrelated rows."
+      "nextGap": "Add receipt-correlation backfill coverage for legacy uncorrelated rows, then reconcile receipt batches once chain metadata is stable."
     },
     {
       "id": "http-gateway",
@@ -242,7 +242,7 @@
         "agent-os/crates/covenantd/tests/live_full_acceptance.rs"
       ],
       "status": "external_service",
-      "nextGap": "Keep Ollama tests opt-in and add explicit model availability probes before expanding model coverage."
+      "nextGap": "Use probe-ollama.mjs to preflight required models, then expand opt-in live Ollama coverage."
     }
   ]
 }

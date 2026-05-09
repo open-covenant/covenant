@@ -98,14 +98,16 @@ pub fn build_receipt_batch(
 }
 
 fn receipt_hash(receipt: &SettlementReceipt) -> [u8; 32] {
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "id": receipt.id,
         "payer": receipt.payer.pubkey_base58(),
         "resource": receipt.resource,
-        "memory_record_id": receipt.memory_record_id,
         "credits_consumed": receipt.credits_consumed,
         "settled_at": receipt.settled_at,
     });
+    if let Some(id) = receipt.memory_record_id {
+        payload["memory_record_id"] = serde_json::json!(id);
+    }
     Sha256::digest(serde_json::to_vec(&payload).expect("receipt hash payload serializes")).into()
 }
 

@@ -273,3 +273,4 @@
 {"timestamp":"2026-05-09T14:27:00.000Z","taskId":"autonomy-seed-next-metadata","from":"self_review","to":"validation","actorRole":"verifier","note":"Self-review passed: seed events now accept explicit workflow roles and notes while preserving rollback on validation failure."}
 {"timestamp":"2026-05-09T14:27:01.000Z","taskId":"autonomy-seed-next-metadata","from":"validation","to":"ready","actorRole":"verifier","note":"Validation passed: autonomy validator, valid seed dry-run, invalid actor rejection, Node syntax check, quick repository gate, and diff check."}
 {"timestamp":"2026-05-09T14:27:02.000Z","taskId":"autonomy-seed-next-metadata","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated actor and note metadata support for seeded autonomy tasks."}
+{"timestamp":"2026-05-09T14:20:23.248Z","taskId":"audit-root-signature-generation","from":null,"to":"proposed","actorRole":"planner","note":"Seeded from backlog template."}

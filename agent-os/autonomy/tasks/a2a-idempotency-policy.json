@@ -1,7 +1,7 @@
 {
   "id": "a2a-idempotency-policy",
   "title": "Define A2A retry idempotency policy",
-  "state": "ready",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
@@ -26,6 +26,6 @@
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Integrate on main, then continue with the next autonomous backlog item.",
+  "nextAction": "Continue with the next autonomous backlog item.",
   "updated": "2026-05-09"
 }

@@ -63,11 +63,12 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_peer_auth.rs",
         "agent-os/crates/covenantd/tests/live_peers_revoke.rs",
+        "agent-os/crates/covenantd/tests/live_cli_peers_self_revoke.rs",
         "agent-os/crates/covenantd/tests/live_restart_peers_revoke.rs",
         "agent-os/crates/covenantd/tests/live_rotate_token.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live operator self-revoke rejection coverage through the CLI."
+      "nextGap": "Add live forced self-revoke recovery coverage only if recovery fixtures are isolated to temp homes."
     },
     {
       "id": "peer-listing",

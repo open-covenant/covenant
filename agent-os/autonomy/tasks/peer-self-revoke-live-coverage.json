@@ -1,0 +1,37 @@
+{
+  "id": "peer-self-revoke-live-coverage",
+  "title": "Add live CLI coverage for peer self-revoke guard",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "verifier",
+  "scope": [
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs"
+  ],
+  "summary": "Cover the operator self-revoke guard through a real daemon and CLI subprocess by listing the operator token prefix, attempting `covenant peers revoke` without `--force`, verifying the CLI rejects it, and confirming the operator token still authenticates.",
+  "expectedFailureModes": [
+    "The CLI self-revoke guard prints guidance in unit tests but allows the live daemon to revoke the operator token.",
+    "The live test extracts the wrong token prefix from `peers list` output.",
+    "A failed self-revoke attempt breaks subsequent operator authentication.",
+    "The test becomes part of default CI or depends on non-local services."
+  ],
+  "gates": [
+    "plan",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo build -p covenant --locked",
+    "cd agent-os && cargo test -p covenantd live_cli_peers_self_revoke --locked",
+    "cd agent-os && cargo test -p covenantd --test live_cli_peers_self_revoke --locked -- --ignored live_",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [
+    "Approval before exercising `--force` against the operator token outside an isolated temp home"
+  ],
+  "nextAction": "Integrated locally; forced self-revoke recovery coverage should remain temp-home only and requires explicit approval before broader use.",
+  "updated": "2026-05-09"
+}

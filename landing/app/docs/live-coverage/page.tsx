@@ -11,7 +11,7 @@ const SURFACES = [
   ["HTTP gateway", "mock only", "real daemon gateway smoke test"],
   ["CLI capability lifecycle", "covered", "capability purge after retention defaults"],
   ["CLI audit feed", "covered", "audit purge after retention policy defaults"],
-  ["Peer authentication", "covered", "operator self-revoke rejection"],
+  ["Peer authentication", "covered", "forced self-revoke recovery fixture"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
   ["A2A mailbox", "covered", "explicit requeue repair"],
   ["MCP subprocess", "covered", "third-party fixture"],

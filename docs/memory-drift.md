@@ -111,4 +111,4 @@ Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.comp
 
 ## Receipt Correlation
 
-Memory settlement receipts now carry `memory_record_id` when they are produced by daemon memory writes. `covenant verify` joins on that id first, then falls back to owner/resource counts only for older receipt rows that predate the field. Exact drift surfaces as `memory_without_receipt`, `receipt_without_memory_record`, `memory_receipt_duplicate`, or `memory_receipt_owner_mismatch`; aggregate count drift still surfaces as `memory_receipt_mismatch`.
+Memory settlement receipts now carry an optional `memory_record_id` field that points at the originating `MemoryRecord.id` when daemon memory writes produce the receipt. `covenant verify` joins on that id first, then falls back to owner/resource counts only for older receipt rows that predate the field. Exact drift surfaces as `memory_without_receipt`, `receipt_without_memory_record`, `memory_receipt_duplicate`, or `memory_receipt_owner_mismatch`; aggregate count drift still surfaces as `memory_receipt_mismatch` when exact pairing is impossible.

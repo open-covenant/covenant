@@ -119,11 +119,13 @@ The optional task metadata is:
 
 This metadata is evidence, not automatic behavior. Receivers and future retry policy can use it to dedupe duplicate deliveries and/or return a previously computed result, but the current daemon does not retry or dedupe tasks automatically.
 
-Operator policy until that metadata exists:
+Operator policy:
 
 - Treat every stale lease as potentially non-idempotent external work.
 - Use `a2a requeue` only when the operator can justify `--duplicate-risk idempotent` (or explicitly accepts the risk).
 - Prefer `a2a force-error` when the correct outcome is “stop waiting” rather than “try again”.
+
+Future automatic retry also requires receiver-side de-duplication that persists `idempotency_key → result`, so redelivery can short-circuit without repeating side effects.
 
 When automatic retry is introduced, it must be:
 

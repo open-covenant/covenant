@@ -22,8 +22,7 @@ export default function SettlementPage() {
         <code>{`SettlementReceipt {
   id:               uuid,
   payer:            AgentId,            // who consumed resources
-  resource:         "memory" | "compute" | "tool" | "egress",
-  memory_record_id: uuid | null,         // set for daemon memory writes
+  resource:         "memory" | "compute" | "tool" | "message" | "registration",
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
   memory_record_id: uuid | null,        // set when resource == "memory"

@@ -18,7 +18,7 @@
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
-//!   covenant verify [--window N]
+//!   covenant verify [--window N] [--json]
 //!   covenant ignore check <text>
 //!   covenant tools list
 //!   covenant tools call <name> [--args <json>]
@@ -43,7 +43,10 @@ use covenant_a2a::{
     A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
 };
 use covenant_audit::AuditKind;
-use covenant_ipc::{read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response};
+use covenant_ipc::{
+    read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
+    VerifyDrift,
+};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
@@ -110,6 +113,7 @@ fn print_usage() {
         "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
+    eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
     eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
     eprintln!("  covenant tools list                     list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
@@ -968,6 +972,7 @@ async fn main() -> Result<()> {
         }
         "verify" => {
             let mut window: usize = 100;
+            let mut as_json = false;
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -976,6 +981,7 @@ async fn main() -> Result<()> {
                         let v = args.get(i).context("--window needs a value")?;
                         window = v.parse().context("--window must be an integer")?;
                     }
+                    "--json" => as_json = true,
                     other => bail!("unknown flag '{other}'"),
                 }
                 i += 1;
@@ -988,20 +994,32 @@ async fn main() -> Result<()> {
                     drift,
                     orphans_total,
                 } => {
-                    println!("verify (last {window} records):");
-                    for c in &checks {
-                        let mark = if c.passed { "✓" } else { "✗" };
-                        println!("  {mark} {} — {}", c.name, c.message);
-                    }
-                    if !drift.is_empty() {
-                        println!("drift:");
-                        for item in &drift {
-                            let id = item.id.as_deref().unwrap_or("-");
-                            println!("  - {} [{}] — {}", item.kind, id, item.message);
-                            println!("    repair: {}", item.repair);
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&verify_report_json(
+                                window,
+                                &checks,
+                                &drift,
+                                orphans_total
+                            ))?
+                        );
+                    } else {
+                        println!("verify (last {window} records):");
+                        for c in &checks {
+                            let mark = if c.passed { "✓" } else { "✗" };
+                            println!("  {mark} {} — {}", c.name, c.message);
                         }
+                        if !drift.is_empty() {
+                            println!("drift:");
+                            for item in &drift {
+                                let id = item.id.as_deref().unwrap_or("-");
+                                println!("  - {} [{}] — {}", item.kind, id, item.message);
+                                println!("    repair: {}", item.repair);
+                            }
+                        }
+                        println!("orphans total: {orphans_total}");
                     }
-                    println!("orphans total: {orphans_total}");
                     if orphans_total > 0 {
                         std::process::exit(1);
                     }
@@ -1904,6 +1922,21 @@ fn chain_status_json(status: &ChainStatus) -> serde_json::Value {
     })
 }
 
+fn verify_report_json(
+    window: usize,
+    checks: &[VerifyCheck],
+    drift: &[VerifyDrift],
+    orphans_total: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "verify_report",
+        "window": window,
+        "checks": checks,
+        "drift": drift,
+        "orphans_total": orphans_total,
+    })
+}
+
 fn flush_receipts_json(
     limit: usize,
     batch: &ReceiptBatchSummary,
@@ -2374,6 +2407,29 @@ mod tests {
         assert!(value["status"]["ws_url"].is_null());
         assert_eq!(value["status"]["ready"], false);
         assert_eq!(value["status"]["missing"][0], "program_id");
+    }
+
+    #[test]
+    fn verify_report_json_renders_stable_shape() {
+        let checks = vec![VerifyCheck {
+            name: "memory audit".into(),
+            passed: false,
+            message: "1 orphan".into(),
+        }];
+        let drift = vec![VerifyDrift {
+            kind: "memory_without_audit".into(),
+            id: Some("record-1".into()),
+            message: "memory record has no matching audit row".into(),
+            repair: "inspect before deleting".into(),
+        }];
+        let value = verify_report_json(100, &checks, &drift, 1);
+        assert_eq!(value["kind"], "verify_report");
+        assert_eq!(value["window"], 100);
+        assert_eq!(value["orphans_total"], 1);
+        assert_eq!(value["checks"][0]["name"], "memory audit");
+        assert_eq!(value["checks"][0]["passed"], false);
+        assert_eq!(value["drift"][0]["kind"], "memory_without_audit");
+        assert_eq!(value["drift"][0]["id"], "record-1");
     }
 
     #[test]

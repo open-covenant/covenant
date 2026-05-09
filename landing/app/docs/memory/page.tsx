@@ -183,7 +183,7 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
       </p>
 
       <pre>
-        <code>{`covenant verify --window 100
+        <code>{`covenant verify --window 100 --json
 
 # Drift kinds:
 # memory_without_audit

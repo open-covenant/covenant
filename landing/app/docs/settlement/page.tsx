@@ -129,7 +129,7 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
 
       <h2>Verification</h2>
       <p>
-        <code>covenant verify</code> cross-checks memory writes against
+        <code>covenant verify --json</code> cross-checks memory writes against
         settlement receipts: a memory write without a corresponding
         receipt, or the inverse, surfaces as drift. The daemon is
         fail-soft on receipt write — a failed receipt does not cancel

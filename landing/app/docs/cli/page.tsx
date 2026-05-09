@@ -58,7 +58,7 @@ export default function CliPage() {
         --message <text>
         [--lease-id <uuid>]          Resolve an in-flight task as failed.
 
-  verify [--window N]                Cross-check audit log vs other state.
+  verify [--window N] [--json]       Cross-check audit log vs other state.
 
   audit recent [-n N]                List recent audit events as JSONL.
   audit verify                       Verify the local audit hash-chain.
@@ -191,6 +191,11 @@ verify (last 100 records):
   ✓ capability ↔ audit — 0 capabilit(ies) without matching grant audit event
   ✓ memory ↔ receipts — 20 memory record(s) vs 20 receipt(s); diff = 0
 orphans total: 0`}</code>
+      </pre>
+
+      <pre>
+        <code>{`$ covenant verify --window 100 --json
+{"kind":"verify_report","window":100,"checks":[],"drift":[],"orphans_total":0}`}</code>
       </pre>
 
       <h3>Verify the audit chain</h3>

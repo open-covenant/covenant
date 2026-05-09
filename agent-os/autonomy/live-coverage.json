@@ -16,6 +16,19 @@
       "nextGap": "Add a resume-success CLI fixture once budget refill semantics can be exercised without long sleeps."
     },
     {
+      "id": "state-verifier",
+      "name": "State verifier",
+      "mockTests": [
+        "agent-os/crates/covenantd/src/lib.rs",
+        "agent-os/crates/covenant/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_verify_json.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add a live drift fixture that asserts verify --json exits non-zero with actionable repair hints."
+    },
+    {
       "id": "http-gateway",
       "name": "HTTP gateway",
       "mockTests": [

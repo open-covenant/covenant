@@ -1,6 +1,6 @@
 # Memory Drift Reports
 
-`covenant verify` is a read-only consistency check across memory, audit, capability, and settlement state. It does not mutate records.
+`covenant verify` is a read-only consistency check across memory, audit, capability, and settlement state. It does not mutate records. Add `--json` to emit one stable `verify_report` object for supervisors.
 
 The verifier returns two layers:
 

@@ -308,3 +308,4 @@
 {"timestamp":"2026-05-09T15:17:18.291Z","taskId":"peers-list-json-output","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed diff: peers list gains --json output and live tests parse it."}
 {"timestamp":"2026-05-09T15:17:18.335Z","taskId":"peers-list-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"validate.sh --quick passes."}
 {"timestamp":"2026-05-09T15:17:18.379Z","taskId":"peers-list-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Quick gate green; ready to integrate."}
+{"timestamp":"2026-05-09T15:17:41.741Z","taskId":"peers-list-json-output","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated peers list --json output and JSON-parsing live tests."}

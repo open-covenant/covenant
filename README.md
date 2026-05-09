@@ -11,7 +11,6 @@ The project is intentionally recursive: Covenant is being developed through the 
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
-- **Repository:** [open-covenant/covenant](https://github.com/open-covenant/covenant)
 
 ## Thesis
 

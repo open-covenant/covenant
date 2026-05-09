@@ -28,7 +28,7 @@
         "agent-os/crates/covenantd/tests/live_cli_verify_json.rs"
       ],
       "status": "covered",
-      "nextGap": "Add a live repair fixture that applies a verifier-suggested memory repair and proves the next verify run clears the targeted drift."
+      "nextGap": "Add typed repair command hints to verifier drift rows once repair action schemas stabilize."
     },
     {
       "id": "memory-retention",

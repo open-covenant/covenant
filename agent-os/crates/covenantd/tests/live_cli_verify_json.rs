@@ -5,6 +5,7 @@
 //! because it crosses process and socket boundaries. Run from `agent-os/`
 //! after `cargo build -p covenant`.
 
+use covenant_memory::{MemoryStore, SqliteStore};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -12,6 +13,7 @@ use std::time::Duration;
 use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::time::sleep;
+use uuid::Uuid;
 
 fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
@@ -102,6 +104,13 @@ async fn run_cli(cli_exe: &std::path::Path, home: &std::path::Path, args: &[&str
         "CLI command {args:?} must not emit stderr on success: {stderr:?}"
     );
     stdout
+}
+
+fn stale_parent_drift_for(value: &Value, memory_id: Uuid) -> Option<&Value> {
+    value["drift"].as_array()?.iter().find(|item| {
+        item["kind"].as_str() == Some("memory_stale_parent")
+            && item["id"].as_str() == Some(&memory_id.to_string())
+    })
 }
 
 #[tokio::test]
@@ -229,6 +238,132 @@ async fn live_cli_verify_json_reports_drift_after_audit_loss() {
             .any(|check| check["name"].as_str() == Some("memory ↔ audit")
                 && check["passed"].as_bool() == Some(false)),
         "memory/audit check should fail when audit evidence is removed: {value:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, injects stale memory, repairs it through CLI, and verifies again"]
+async fn live_cli_verify_json_repair_clears_stale_parent_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    let intent_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "verify repair fixture"],
+    )
+    .await;
+    let intent: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be JSON");
+    let memory_id: Uuid = intent["intent_id"]
+        .as_str()
+        .expect("intent_id")
+        .parse()
+        .expect("intent_id must be uuid");
+
+    let _ = child.kill().await;
+
+    let missing_parent = Uuid::new_v4();
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let mut record = store
+        .get(memory_id)
+        .await
+        .expect("load memory")
+        .expect("memory record exists");
+    record.parent = Some(missing_parent);
+    store.put(record).await.expect("inject stale parent");
+    drop(store);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify should fail while stale parent drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+    let item = stale_parent_drift_for(&drift, memory_id)
+        .unwrap_or_else(|| panic!("expected stale parent drift for {memory_id}: {drift:?}"));
+    assert!(
+        item["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&missing_parent.to_string())),
+        "stale parent drift should name the missing parent: {item:?}"
+    );
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.repair.apply"],
+    )
+    .await;
+    let memory_id_s = memory_id.to_string();
+    let missing_parent_s = missing_parent.to_string();
+    let repair_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &[
+            "memory",
+            "repair",
+            "detach-parent",
+            &memory_id_s,
+            "--expected-parent",
+            &missing_parent_s,
+            "--reason",
+            "live verifier repair",
+            "--apply",
+        ],
+    )
+    .await;
+    let repair: Value =
+        serde_json::from_str(repair_stdout.trim()).expect("memory repair stdout must be JSON");
+    assert_eq!(repair["id"].as_str(), Some(memory_id_s.as_str()));
+    assert_eq!(repair["action"].as_str(), Some("detach_parent"));
+    assert_eq!(repair["mode"].as_str(), Some("apply"));
+    assert_eq!(repair["changed"].as_bool(), Some(true));
+    assert!(repair["after"]["parent"].is_null(), "{repair:?}");
+
+    let clean_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let clean_stdout = String::from_utf8_lossy(&clean_output.stdout).to_string();
+    let clean_stderr = String::from_utf8_lossy(&clean_output.stderr).to_string();
+    assert!(
+        clean_output.status.success(),
+        "verify should pass after targeted repair: status={:?} stdout={clean_stdout:?} stderr={clean_stderr:?}",
+        clean_output.status
+    );
+    let clean: Value =
+        serde_json::from_str(clean_stdout.trim()).expect("post-repair verify stdout must be JSON");
+    assert!(
+        stale_parent_drift_for(&clean, memory_id).is_none(),
+        "targeted stale parent drift should be gone after repair: {clean:?}"
     );
 
     let _ = restarted.kill().await;

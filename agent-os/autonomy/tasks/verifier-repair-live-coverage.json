@@ -1,7 +1,7 @@
 {
   "id": "verifier-repair-live-coverage",
   "title": "Add live repair coverage after verifier drift",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

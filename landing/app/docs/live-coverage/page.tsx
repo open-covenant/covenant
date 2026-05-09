@@ -8,7 +8,7 @@ export const metadata = {
 
 const SURFACES = [
   ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/resume/version"],
-  ["State verifier", "covered", "repair fixture after drift detection"],
+  ["State verifier", "covered", "typed repair hints"],
   ["Memory retention", "covered", "memory repair/compaction consistency"],
   ["HTTP gateway", "covered", "version, auth, and tools-call round trip"],
   ["CLI capability lifecycle", "covered", "capability purge after retention defaults"],

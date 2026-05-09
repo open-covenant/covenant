@@ -78,6 +78,16 @@ export default function CliPage() {
 
   tools list [--json]                List registered tools.
   tools call <name> [--args <json>]  Invoke a registered tool.
+
+  peers purge
+        (--before-ms M
+         | --older-than-ms D) [--json]
+                                     Delete old revoked peer tombstones.
+  peers rotate                       Rotate the operator peer token.
+  peers list [-n N] [--prefix B58] [--json]
+                                     List peer registry summaries.
+  peers revoke <token-prefix> [--json]
+                                     Revoke a peer token by prefix.
 `}</code>
       </pre>
 
@@ -239,6 +249,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant ignore check --json "summarise ~/.ssh/id_rsa"
 {"kind":"ignore_report","ignored":true,"matched_pattern":"id_rsa","rules_loaded":5}`}</code>
+      </pre>
+
+      <h3>Purge old peer tombstones</h3>
+      <pre>
+        <code>{`$ covenant peers purge --before-ms 1714938191234 --json
+{"kind":"peers_purged","before_ms":1714938191234,"purged":0}`}</code>
       </pre>
 
       <h3>Inspect the A2A queue</h3>

@@ -29,7 +29,7 @@
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a compact
-//!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
+//!   covenant peers purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant peers rotate
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>] [--json]
 //!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] [--json]
@@ -148,7 +148,7 @@ fn print_usage() {
         "  covenant a2a compact                  drop event-log lines for fully-resolved a2a tasks"
     );
     eprintln!(
-        "  covenant peers purge (--before-ms M | --older-than-ms D)  drop revoked peer registrations older than ms epoch / D ms ago"
+        "  covenant peers purge (--before-ms M | --older-than-ms D) [--json]  drop revoked peer registrations older than ms epoch / D ms ago"
     );
     eprintln!(
         "  covenant peers rotate                   mint a fresh operator token and revoke the old one"
@@ -1450,6 +1450,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1472,6 +1473,7 @@ async fn main() -> Result<()> {
                                     .unwrap_or(0);
                                 before_ms = Some(now.saturating_sub(dur));
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1480,7 +1482,14 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::PurgePeers { before_ms }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::PeersPurged { purged } => {
-                            println!("purged {purged} revoked peer(s)");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&peers_purge_json(before_ms, purged))?
+                                );
+                            } else {
+                                println!("purged {purged} revoked peer(s)");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2002,6 +2011,14 @@ fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serd
 fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "capabilities_purged",
+        "before_ms": before_ms,
+        "purged": purged,
+    })
+}
+
+fn peers_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "peers_purged",
         "before_ms": before_ms,
         "purged": purged,
     })
@@ -2550,6 +2567,14 @@ mod tests {
     fn capabilities_purge_json_renders_stable_shape() {
         let value = capabilities_purge_json(1_700_000_000_000, 3);
         assert_eq!(value["kind"], "capabilities_purged");
+        assert_eq!(value["before_ms"], 1_700_000_000_000u64);
+        assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn peers_purge_json_renders_stable_shape() {
+        let value = peers_purge_json(1_700_000_000_000, 3);
+        assert_eq!(value["kind"], "peers_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
     }

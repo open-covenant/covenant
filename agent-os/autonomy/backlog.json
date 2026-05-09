@@ -244,6 +244,95 @@
       "humanEscalation": [],
       "nextAction": "Define the minimal accepted schema per capability, validate on grant creation, and track any compatibility gaps explicitly.",
       "updated": "2026-05-09"
+    },
+    {
+      "id": "peers-list-json-output",
+      "title": "Add JSON output to peers list",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant",
+        "agent-os/crates/covenantd/tests",
+        "docs"
+      ],
+      "summary": "Add a `--json` flag to `covenant peers list` so tooling and live tests can consume a stable machine-readable shape without parsing tab-delimited human output.",
+      "expectedFailureModes": [
+        "Live tests parse `peers list` output and extract the wrong token prefix or pubkey when rendering changes.",
+        "`--json` output omits `truncated` context, causing operators to assume the result set is exhaustive.",
+        "JSON output accidentally leaks token bytes, private key material, or other redacted peer registry fields."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Implement `covenant peers list --json`, update the live tests that currently parse human output, and document the machine output contract.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "peers-revoke-json-output",
+      "title": "Add JSON output to peers revoke",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant",
+        "docs"
+      ],
+      "summary": "Add a `--json` flag to `covenant peers revoke` so automation can distinguish Revoked/AlreadyRevoked/NotFound/Ambiguous without scraping stderr.",
+      "expectedFailureModes": [
+        "Automation scripts scrape stderr and misclassify ambiguous matches as success.",
+        "`--json` output changes exit codes or mixes human + JSON output, breaking parsers.",
+        "JSON output includes full token bytes or other redacted registry data."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Implement `covenant peers revoke --json` with a stable outcome schema and keep human output unchanged by default.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "peers-list-json-live-coverage",
+      "title": "Cover peers list JSON output in live tests",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "verifier",
+      "scope": [
+        "agent-os/crates/covenantd/tests",
+        "agent-os/autonomy/live-coverage.json",
+        "docs/live-coverage.md"
+      ],
+      "summary": "Add an opt-in live CLI test that asserts `covenant peers list --json` returns a stable shape and that `truncated` behaves consistently with `--limit`.",
+      "expectedFailureModes": [
+        "The JSON schema drifts without notice, breaking scripts that rely on it.",
+        "The CLI prints JSON to stdout but also emits human hints, producing invalid JSON.",
+        "`truncated` is incorrect when the daemon returns fewer rows than the limit but still had more peers available."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add live coverage for `--json` output and update the coverage matrix to point at the new test file.",
+      "updated": "2026-05-09"
     }
   ]
 }

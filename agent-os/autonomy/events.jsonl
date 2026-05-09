@@ -301,3 +301,10 @@
 {"timestamp":"2026-05-09T15:08:17.000Z","taskId":"a2a-scope-dispatch","from":"proposed","to":"triaged","actorRole":"planner","note":"Scope fields already exist at grant time; dispatch paths need peer, task, lease, and duplicate-risk predicates."}
 {"timestamp":"2026-05-09T15:08:18.000Z","taskId":"a2a-scope-dispatch","from":"triaged","to":"planned","actorRole":"planner","note":"Plan: add a shared A2A scope request evaluator, apply it to send, recipient admission, respond, and repair, then document the contract."}
 {"timestamp":"2026-05-09T15:08:19.000Z","taskId":"a2a-scope-dispatch","from":"planned","to":"in_progress","actorRole":"implementer","note":"Implementation starting."}
+{"timestamp":"2026-05-09T15:11:55.343Z","taskId":"peers-list-json-output","from":null,"to":"proposed","actorRole":"implementer","note":"Seeded for peers list JSON output."}
+{"timestamp":"2026-05-09T15:12:04.502Z","taskId":"peers-list-json-output","from":"proposed","to":"triaged","actorRole":"planner","note":"Scope and verification are explicit; ready to implement."}
+{"timestamp":"2026-05-09T15:12:04.567Z","taskId":"peers-list-json-output","from":"triaged","to":"planned","actorRole":"planner","note":"Implement --json output as a single JSON object; keep default human output unchanged."}
+{"timestamp":"2026-05-09T15:12:04.616Z","taskId":"peers-list-json-output","from":"planned","to":"in_progress","actorRole":"implementer","note":"Implement CLI flag and update live tests to consume JSON."}
+{"timestamp":"2026-05-09T15:17:18.291Z","taskId":"peers-list-json-output","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed diff: peers list gains --json output and live tests parse it."}
+{"timestamp":"2026-05-09T15:17:18.335Z","taskId":"peers-list-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"validate.sh --quick passes."}
+{"timestamp":"2026-05-09T15:17:18.379Z","taskId":"peers-list-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Quick gate green; ready to integrate."}

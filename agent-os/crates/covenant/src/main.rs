@@ -30,7 +30,7 @@
 //!   covenant a2a compact
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
-//!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>]
+//!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>] [--json]
 //!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>]
 //!   covenant intents resume <intent-id>
 //!   covenant intents resume latest
@@ -140,7 +140,7 @@ fn print_usage() {
         "  covenant peers rotate                   mint a fresh operator token and revoke the old one"
     );
     eprintln!(
-        "  covenant peers list [--limit N] [--prefix B58] [--live-only | --revoked-only]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix; --live-only and --revoked-only narrow by status"
+        "  covenant peers list [--limit N] [--prefix B58] [--live-only | --revoked-only] [--json]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix; add --json for stable machine output"
     );
     eprintln!(
         "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard, --limit-matches caps ambiguous-match render"
@@ -1360,6 +1360,7 @@ async fn main() -> Result<()> {
                     let mut prefix: Option<String> = None;
                     let mut live_only = false;
                     let mut revoked_only = false;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1375,6 +1376,7 @@ async fn main() -> Result<()> {
                             }
                             "--live-only" => live_only = true,
                             "--revoked-only" => revoked_only = true,
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1395,8 +1397,21 @@ async fn main() -> Result<()> {
                             operator_pubkey_b58,
                             truncated,
                         } => {
-                            for line in peer_list_lines(&peers, &operator_pubkey_b58, truncated) {
-                                println!("{line}");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&serde_json::json!({
+                                        "kind": "peer_list",
+                                        "peers": peers,
+                                        "operator_pubkey_b58": operator_pubkey_b58,
+                                        "truncated": truncated,
+                                    }))?
+                                );
+                            } else {
+                                for line in peer_list_lines(&peers, &operator_pubkey_b58, truncated)
+                                {
+                                    println!("{line}");
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

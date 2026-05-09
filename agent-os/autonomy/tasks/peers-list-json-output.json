@@ -1,0 +1,30 @@
+{
+  "id": "peers-list-json-output",
+  "title": "Add JSON output to peers list",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "docs"
+  ],
+  "summary": "Add a `--json` flag to `covenant peers list` so tooling and live tests can consume a stable machine-readable shape without parsing tab-delimited human output.",
+  "expectedFailureModes": [
+    "Live tests parse `peers list` output and extract the wrong token prefix or pubkey when rendering changes.",
+    "`--json` output omits `truncated` context, causing operators to assume the result set is exhaustive.",
+    "JSON output accidentally leaks token bytes, private key material, or other redacted peer registry fields."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Implement `covenant peers list --json`, update the live tests that currently parse human output, and document the machine output contract.",
+  "updated": "2026-05-09"
+}

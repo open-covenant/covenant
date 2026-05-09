@@ -23,15 +23,23 @@ fn covenant_cli_bin() -> PathBuf {
         .expect("covenant CLI binary not built; run `cargo build -p covenant` first")
 }
 
-fn self_token_prefix(list_stdout: &str) -> &str {
-    let line = list_stdout
-        .lines()
-        .find(|line| line.contains("(self)"))
-        .expect("peers list stdout must contain self row");
-    line.split('\t')
-        .nth(2)
-        .and_then(|field| field.strip_suffix('…'))
-        .expect("self row must contain redacted token prefix")
+fn self_token_prefix(list_stdout: &str) -> String {
+    let value: serde_json::Value =
+        serde_json::from_str(list_stdout.trim()).expect("peers list --json must be valid JSON");
+    let operator_pubkey_b58 = value["operator_pubkey_b58"]
+        .as_str()
+        .expect("peers list JSON must include operator_pubkey_b58");
+    let peers = value["peers"]
+        .as_array()
+        .expect("peers list JSON must include peers array");
+    let peer = peers
+        .iter()
+        .find(|peer| peer["agent_id"]["pubkey"].as_str() == Some(operator_pubkey_b58))
+        .expect("peers list JSON must include operator peer row");
+    peer["token_prefix"]
+        .as_str()
+        .expect("operator peer row must include token_prefix")
+        .to_string()
 }
 
 async fn wait_for_sock(path: &std::path::Path) -> bool {
@@ -85,6 +93,7 @@ async fn live_cli_peers_self_revoke_is_rejected() {
     let list = Command::new(&cli_exe)
         .arg("peers")
         .arg("list")
+        .arg("--json")
         .env("COVENANT_HOME", home.path())
         .env("HOME", home.path())
         .stdin(Stdio::null())
@@ -105,7 +114,7 @@ async fn live_cli_peers_self_revoke_is_rejected() {
     let revoke = Command::new(&cli_exe)
         .arg("peers")
         .arg("revoke")
-        .arg(token_prefix)
+        .arg(&token_prefix)
         .env("COVENANT_HOME", home.path())
         .env("HOME", home.path())
         .stdin(Stdio::null())

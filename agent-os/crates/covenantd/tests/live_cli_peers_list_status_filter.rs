@@ -176,6 +176,7 @@ async fn live_cli_peers_list_status_filter_round_trip() {
         .arg("peers")
         .arg("list")
         .arg("--live-only")
+        .arg("--json")
         .env("COVENANT_HOME", home.path())
         .env("HOME", home.path())
         .stdin(Stdio::null())
@@ -192,81 +193,47 @@ async fn live_cli_peers_list_status_filter_round_trip() {
         cli_out.status,
     );
 
-    // The daemon registers the operator with display `user@local`
-    // (`crates/covenantd/src/main.rs::main` — `LocalIdentity::load_or_create(..,
-    // "user@local")`). Find that line and assert it carries `(self)`
-    // and `live` status.
-    let operator_line = stdout_a
-        .lines()
-        .find(|l| l.contains("user@local"))
-        .unwrap_or_else(|| {
-            panic!("(a) stdout missing operator row; got stdout={stdout_a:?} stderr={stderr_a:?}");
-        });
-    assert!(
-        operator_line.contains("(self)"),
-        "(a) operator line missing `(self)` marker: line={operator_line:?}"
-    );
-    assert!(
-        operator_line.contains("\tlive"),
-        "(a) operator line missing `live` status: line={operator_line:?}"
-    );
-
-    // Live guest row: present, carries pubkey b58 + `\tlive`, no
-    // `(self)`. Both pubkey-and-status together pin the row shape end-
-    // to-end — display alone could match a regression that mangles the
-    // pubkey field; pubkey alone could match a regression that mangles
-    // the display field.
-    let live_line = stdout_a
-        .lines()
-        .find(|l| l.contains(live_display))
-        .unwrap_or_else(|| {
-            panic!(
-                "(a) stdout missing live guest row; got stdout={stdout_a:?} stderr={stderr_a:?}"
-            );
-        });
-    assert!(
-        live_line.contains(&live_full_b58),
-        "(a) live guest line missing pubkey b58 {live_full_b58:?}: line={live_line:?}"
-    );
-    assert!(
-        live_line.contains("\tlive"),
-        "(a) live guest line missing `live` status: line={live_line:?}"
-    );
-    assert!(
-        !live_line.contains("(self)"),
-        "(a) live guest line incorrectly carries `(self)` marker: line={live_line:?}"
-    );
-
-    // The load-bearing assertion for `--live-only`: the revoked guest
-    // must be absent. A regression that inverts the filter or fails to
-    // apply it would let `guest-revoked@local` appear in stdout.
-    assert!(
-        !stdout_a.contains(revoked_display),
-        "(a) --live-only must drop revoked guest row; got stdout={stdout_a:?}"
-    );
-    assert!(
-        !stdout_a.contains(&revoked_full_b58),
-        "(a) --live-only must drop revoked guest pubkey {revoked_full_b58:?}; got stdout={stdout_a:?}"
-    );
-    // No `revoked@` status anywhere — a regression that drops the
-    // display string but keeps the b58 row would still be caught here.
-    assert!(
-        !stdout_a.contains("revoked@"),
-        "(a) --live-only must not render any `revoked@` status; got stdout={stdout_a:?}"
-    );
-
-    // Exactly two peer rows render under `--live-only` (operator +
-    // live guest). Counting tab-separated rows (each peer-list line
-    // carries 4 tabs between the 5 fields) catches a regression that
-    // either over-renders or silently drops a live row.
-    let row_lines_a: Vec<&str> = stdout_a
-        .lines()
-        .filter(|l| l.matches('\t').count() == 4)
-        .collect();
+    let value_a: serde_json::Value =
+        serde_json::from_str(stdout_a.trim()).expect("(a) peers list --json must be valid JSON");
     assert_eq!(
-        row_lines_a.len(),
+        value_a["kind"].as_str(),
+        Some("peer_list"),
+        "(a) kind mismatch: {value_a:?}"
+    );
+    let peers_a = value_a["peers"]
+        .as_array()
+        .expect("(a) peers list JSON must include peers array");
+    assert_eq!(
+        peers_a.len(),
         2,
-        "(a) expected exactly 2 peer rows under --live-only; got rows={row_lines_a:?}"
+        "(a) expected exactly 2 peer rows under --live-only; got peers={peers_a:?}"
+    );
+    assert!(
+        peers_a.iter().all(|peer| peer["revoked_at"].is_null()),
+        "(a) --live-only must not include revoked peers: peers={peers_a:?}"
+    );
+    let operator_peer = peers_a
+        .iter()
+        .find(|peer| peer["agent_id"]["display"].as_str() == Some("user@local"))
+        .expect("(a) peers list must include operator row");
+    assert!(
+        operator_peer["agent_id"]["pubkey"].as_str().is_some(),
+        "(a) operator row must include pubkey b58: peer={operator_peer:?}"
+    );
+    let live_peer = peers_a
+        .iter()
+        .find(|peer| peer["agent_id"]["display"].as_str() == Some(live_display))
+        .expect("(a) peers list must include live guest row");
+    assert_eq!(
+        live_peer["agent_id"]["pubkey"].as_str(),
+        Some(live_full_b58.as_str()),
+        "(a) live guest pubkey mismatch: peer={live_peer:?}"
+    );
+    assert!(
+        peers_a
+            .iter()
+            .all(|peer| peer["agent_id"]["display"].as_str() != Some(revoked_display)),
+        "(a) --live-only must drop revoked guest row: peers={peers_a:?}"
     );
 
     // ── Invocation (b): `peers list --revoked-only`. The filter must
@@ -276,6 +243,7 @@ async fn live_cli_peers_list_status_filter_round_trip() {
         .arg("peers")
         .arg("list")
         .arg("--revoked-only")
+        .arg("--json")
         .env("COVENANT_HOME", home.path())
         .env("HOME", home.path())
         .stdin(Stdio::null())
@@ -292,62 +260,35 @@ async fn live_cli_peers_list_status_filter_round_trip() {
         cli_out.status,
     );
 
-    // The revoked guest row must appear, with `revoked@` in its status
-    // column. The render-side helper writes `revoked@<ts>` from the
-    // wire's `revoked_at: Some(_)` — a regression that drops the
-    // tombstone timestamp from the wire would render `live` here and
-    // the assertion would fail.
-    let revoked_line = stdout_b
-        .lines()
-        .find(|l| l.contains(revoked_display))
-        .unwrap_or_else(|| {
-            panic!(
-                "(b) stdout missing revoked guest row; got stdout={stdout_b:?} stderr={stderr_b:?}"
-            );
-        });
-    assert!(
-        revoked_line.contains(&revoked_full_b58),
-        "(b) revoked guest line missing pubkey b58 {revoked_full_b58:?}: line={revoked_line:?}"
-    );
-    assert!(
-        revoked_line.contains("\trevoked@"),
-        "(b) revoked guest line missing `revoked@<ts>` status: line={revoked_line:?}"
-    );
-
-    // The load-bearing negative-substring assertions for
-    // `--revoked-only`: both live rows (operator + live guest) must be
-    // absent. Operator-row absence is the more pointed pin — the
-    // operator is always live, so a regression that fails to apply the
-    // filter would let `user@local` appear in stdout, which the unit-
-    // layer tests can't catch end-to-end.
-    assert!(
-        !stdout_b.contains("user@local"),
-        "(b) --revoked-only must drop operator row; got stdout={stdout_b:?}"
-    );
-    assert!(
-        !stdout_b.contains("(self)"),
-        "(b) --revoked-only must not render `(self)` marker; got stdout={stdout_b:?}"
-    );
-    assert!(
-        !stdout_b.contains(live_display),
-        "(b) --revoked-only must drop live guest row; got stdout={stdout_b:?}"
-    );
-    assert!(
-        !stdout_b.contains(&live_full_b58),
-        "(b) --revoked-only must drop live guest pubkey {live_full_b58:?}; got stdout={stdout_b:?}"
-    );
-
-    // Exactly one peer row renders under `--revoked-only` (the
-    // tombstoned guest). A regression that lets a live row through
-    // would push this count to 2 or 3.
-    let row_lines_b: Vec<&str> = stdout_b
-        .lines()
-        .filter(|l| l.matches('\t').count() == 4)
-        .collect();
+    let value_b: serde_json::Value =
+        serde_json::from_str(stdout_b.trim()).expect("(b) peers list --json must be valid JSON");
     assert_eq!(
-        row_lines_b.len(),
+        value_b["kind"].as_str(),
+        Some("peer_list"),
+        "(b) kind mismatch: {value_b:?}"
+    );
+    let peers_b = value_b["peers"]
+        .as_array()
+        .expect("(b) peers list JSON must include peers array");
+    assert_eq!(
+        peers_b.len(),
         1,
-        "(b) expected exactly 1 peer row under --revoked-only; got rows={row_lines_b:?}"
+        "(b) expected exactly 1 peer row under --revoked-only; got peers={peers_b:?}"
+    );
+    let revoked_peer = &peers_b[0];
+    assert_eq!(
+        revoked_peer["agent_id"]["display"].as_str(),
+        Some(revoked_display),
+        "(b) revoked-only must return revoked guest row: peer={revoked_peer:?}"
+    );
+    assert_eq!(
+        revoked_peer["agent_id"]["pubkey"].as_str(),
+        Some(revoked_full_b58.as_str()),
+        "(b) revoked guest pubkey mismatch: peer={revoked_peer:?}"
+    );
+    assert!(
+        !revoked_peer["revoked_at"].is_null(),
+        "(b) revoked guest must carry revoked_at timestamp: peer={revoked_peer:?}"
     );
 
     let _ = child.kill().await;

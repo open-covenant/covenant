@@ -41,6 +41,14 @@ Tests prefixed `live_` exercise real backends (real network, real subprocesses, 
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
+## Operator triage commands
+
+Some CLI verbs expose machine-readable output to avoid brittle parsing:
+
+```bash
+covenant peers list --json
+```
+
 ## Build the on-chain program (optional)
 
 ```bash

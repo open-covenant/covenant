@@ -13,7 +13,7 @@
 //!   covenant capabilities recent [--limit N] [--json]
 //!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>]
 //!   covenant capabilities revoke <signature-b58>
-//!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
+//!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant receipts recent [--limit N] [--json]
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
@@ -131,7 +131,7 @@ fn print_usage() {
     eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M]");
     eprintln!("  covenant capabilities revoke <signature-b58>");
     eprintln!(
-        "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
+        "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
     );
     eprintln!(
         "  covenant a2a status [-n N] [--min-lease-age-ms N] [--json]  list queued tasks, in-flight leases, and pending results"
@@ -742,6 +742,7 @@ async fn main() -> Result<()> {
                 }
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -764,6 +765,7 @@ async fn main() -> Result<()> {
                                     .unwrap_or(0);
                                 before_ms = Some(now.saturating_sub(dur));
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -772,7 +774,16 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::PurgeCapabilities { before_ms }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::CapabilitiesPurged { purged } => {
-                            println!("purged {purged} revoked capability(ies)");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&capabilities_purge_json(
+                                        before_ms, purged
+                                    ))?
+                                );
+                            } else {
+                                println!("purged {purged} revoked capability(ies)");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -1932,6 +1943,14 @@ fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serd
     })
 }
 
+fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "capabilities_purged",
+        "before_ms": before_ms,
+        "purged": purged,
+    })
+}
+
 fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> serde_json::Value {
     serde_json::json!({
         "kind": "receipt_batch_list",
@@ -2432,6 +2451,14 @@ mod tests {
         assert!(value["capabilities"][0]["signature"]
             .as_str()
             .is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn capabilities_purge_json_renders_stable_shape() {
+        let value = capabilities_purge_json(1_700_000_000_000, 3);
+        assert_eq!(value["kind"], "capabilities_purged");
+        assert_eq!(value["before_ms"], 1_700_000_000_000u64);
+        assert_eq!(value["purged"], 3);
     }
 
     #[test]

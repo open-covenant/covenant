@@ -184,3 +184,15 @@ Until a namespace-specific predicate lands, public docs must describe that names
 ```
 
 Each row is the wire `SignedCapability`, including `capability`, `scope`, optional `expires_at`, and the base58-encoded `signature`. Human output from `covenant capabilities recent` remains unchanged.
+
+Retention maintenance has the same machine-readable convention:
+
+```json
+{
+  "kind": "capabilities_purged",
+  "before_ms": 1700000000000,
+  "purged": 0
+}
+```
+
+`before_ms` is the effective cutoff, including values derived from `--older-than-ms`.

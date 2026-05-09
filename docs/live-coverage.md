@@ -46,7 +46,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | Daemon IPC core | Covered | daemon ping/intent, CLI intent, CLI version | Resume-intent coverage after repair semantics settle. |
 | State verifier | Covered | CLI `verify --json` on a real daemon | Live drift fixture that asserts non-zero exit with actionable repair hints. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
-| CLI capability lifecycle | Covered | grant, grant with expiry, recent, recent JSON, revoke | Capability purge after retention defaults are decided. |
+| CLI capability lifecycle | Covered | grant, grant with expiry, recent, recent JSON, revoke, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit recent, audit verify | Audit purge after retention policy defaults are decided. |
 | Peer authentication and token lifecycle | Covered | auth rejection, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation | Forced self-revoke recovery only with isolated temp-home fixtures. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |

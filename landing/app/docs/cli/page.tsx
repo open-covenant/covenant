@@ -39,6 +39,10 @@ export default function CliPage() {
         [--expires-at <ms>]          Sign and persist a new capability.
   capabilities revoke <signature-b58>
                                      Tombstone a previously granted token.
+  capabilities purge
+        (--before-ms M
+         | --older-than-ms D) [--json]
+                                     Delete old revoked capability tokens.
 
   receipts recent [-n N] [--json]    List recent settlement receipts.
   chain status [--json]               Print configured chain settlement state.
@@ -187,6 +191,12 @@ signature: 4qXP...8tF1`}</code>
       <pre>
         <code>{`$ covenant capabilities recent --limit 5 --json
 {"kind":"capability_list","limit":5,"capabilities":[...]}`}</code>
+      </pre>
+
+      <h3>Purge old capability tombstones</h3>
+      <pre>
+        <code>{`$ covenant capabilities purge --before-ms 1714938191234 --json
+{"kind":"capabilities_purged","before_ms":1714938191234,"purged":0}`}</code>
       </pre>
 
       <h3>Verify state</h3>

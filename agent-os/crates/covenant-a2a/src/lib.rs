@@ -66,6 +66,59 @@ pub struct A2ATaskQueueEntry {
     pub attempt: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2ADuplicateRisk {
+    Idempotent,
+    OperatorAccepted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum A2ARepairCommand {
+    Requeue {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease_id: Option<Uuid>,
+        duplicate_risk: A2ADuplicateRisk,
+    },
+    ForceError {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease_id: Option<Uuid>,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2ARepairRequest {
+    pub task_id: Uuid,
+    pub command: A2ARepairCommand,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2ARepairAction {
+    Requeued,
+    ForcedError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum A2ARepairState {
+    Queued,
+    ResultPending,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct A2ARepairOutcome {
+    pub task_id: Uuid,
+    pub action: A2ARepairAction,
+    pub state: A2ARepairState,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<A2ATaskResult>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct A2ATaskResult {
     pub task_id: Uuid,
@@ -104,6 +157,16 @@ pub enum A2AError {
     Serde(#[from] serde_json::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("task {0} is not currently leased")]
+    TaskNotInFlight(Uuid),
+    #[error("lease mismatch for task {task_id}: expected {expected:?}, actual {actual:?}")]
+    LeaseMismatch {
+        task_id: Uuid,
+        expected: Option<Uuid>,
+        actual: Option<Uuid>,
+    },
+    #[error("invalid repair request: {0}")]
+    InvalidRepair(String),
 }
 
 fn epoch_ms() -> u64 {
@@ -111,6 +174,35 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn validate_repair_request(request: &A2ARepairRequest) -> Result<(), A2AError> {
+    if request.reason.trim().is_empty() {
+        return Err(A2AError::InvalidRepair("reason must not be empty".into()));
+    }
+    if let A2ARepairCommand::ForceError { message, .. } = &request.command {
+        if message.trim().is_empty() {
+            return Err(A2AError::InvalidRepair(
+                "force_error message must not be empty".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_lease_match(
+    task_id: Uuid,
+    expected: Option<Uuid>,
+    actual: Option<Uuid>,
+) -> Result<(), A2AError> {
+    if expected.is_some() && expected != actual {
+        return Err(A2AError::LeaseMismatch {
+            task_id,
+            expected,
+            actual,
+        });
+    }
+    Ok(())
 }
 
 /// Per-agent inbox. Tasks land in `recv_task`; results for tasks the agent
@@ -143,6 +235,10 @@ pub trait Mailbox: Send + Sync {
     /// been delivered to a recipient but has not produced a result yet.
     /// Leases survive daemon restart and are not automatically redelivered.
     async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError>;
+    /// Operator-controlled repair path for an in-flight lease. Repair
+    /// commands never run automatically; callers must provide a reason
+    /// and, for requeue, an explicit duplicate-work risk posture.
+    async fn repair_task(&self, request: A2ARepairRequest) -> Result<A2ARepairOutcome, A2AError>;
     /// Read-only snapshot of the most recent queued results, oldest first
     /// up to `limit`. Does not consume from the queue. Operator-facing.
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError>;
@@ -209,6 +305,7 @@ pub struct InMemoryMailbox {
     tasks: Mutex<VecDeque<A2ATask>>,
     results: Mutex<VecDeque<A2ATaskResult>>,
     in_flight: Mutex<HashMap<Uuid, TaskLease>>,
+    attempts: Mutex<HashMap<Uuid, u32>>,
     /// Permanent record of who sent each task, populated on
     /// [`Mailbox::send_task`] and never pruned. The daemon uses this map
     /// to attribute `PostA2AResult` calls back to the original sender so
@@ -230,6 +327,7 @@ impl InMemoryMailbox {
             tasks: Mutex::new(VecDeque::new()),
             results: Mutex::new(VecDeque::new()),
             in_flight: Mutex::new(HashMap::new()),
+            attempts: Mutex::new(HashMap::new()),
             senders: Mutex::new(HashMap::new()),
             task_notify: Notify::new(),
             result_notify: Notify::new(),
@@ -237,15 +335,39 @@ impl InMemoryMailbox {
     }
 
     fn lease_task(&self, task: A2ATask, leased_to: AgentId) -> A2ATask {
+        let attempt = {
+            let mut attempts = self.attempts.lock().unwrap();
+            let attempt = attempts
+                .get(&task.id)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(1);
+            attempts.insert(task.id, attempt);
+            attempt
+        };
         let lease = TaskLease {
             lease_id: Uuid::new_v4(),
             task: task.clone(),
             leased_to,
             leased_at_ms: epoch_ms(),
-            attempt: 1,
+            attempt,
         };
         self.in_flight.lock().unwrap().insert(task.id, lease);
         task
+    }
+
+    fn queued_entry(&self, task: A2ATask) -> A2ATaskQueueEntry {
+        let attempt = self
+            .attempts
+            .lock()
+            .unwrap()
+            .get(&task.id)
+            .copied()
+            .unwrap_or(0);
+        A2ATaskQueueEntry {
+            attempt,
+            ..A2ATaskQueueEntry::queued(task)
+        }
     }
 }
 
@@ -256,6 +378,7 @@ impl Mailbox for InMemoryMailbox {
             .lock()
             .unwrap()
             .insert(task.id, task.sender.clone());
+        self.attempts.lock().unwrap().entry(task.id).or_insert(0);
         self.tasks.lock().unwrap().push_back(task);
         self.task_notify.notify_one();
         Ok(())
@@ -323,7 +446,7 @@ impl Mailbox for InMemoryMailbox {
             .unwrap()
             .iter()
             .cloned()
-            .map(A2ATaskQueueEntry::queued)
+            .map(|task| self.queued_entry(task))
             .collect();
         let mut leased: Vec<A2ATaskQueueEntry> = self
             .in_flight
@@ -341,6 +464,56 @@ impl Mailbox for InMemoryMailbox {
         entries.extend(leased);
         entries.truncate(limit);
         Ok(entries)
+    }
+
+    async fn repair_task(&self, request: A2ARepairRequest) -> Result<A2ARepairOutcome, A2AError> {
+        validate_repair_request(&request)?;
+
+        match request.command {
+            A2ARepairCommand::Requeue { lease_id, .. } => {
+                let lease = {
+                    let mut in_flight = self.in_flight.lock().unwrap();
+                    let lease = in_flight
+                        .get(&request.task_id)
+                        .cloned()
+                        .ok_or(A2AError::TaskNotInFlight(request.task_id))?;
+                    assert_lease_match(request.task_id, lease_id, Some(lease.lease_id))?;
+                    in_flight.remove(&request.task_id);
+                    lease
+                };
+                self.tasks.lock().unwrap().push_back(lease.task);
+                self.task_notify.notify_one();
+                Ok(A2ARepairOutcome {
+                    task_id: request.task_id,
+                    action: A2ARepairAction::Requeued,
+                    state: A2ARepairState::Queued,
+                    attempt: lease.attempt,
+                    result: None,
+                })
+            }
+            A2ARepairCommand::ForceError { lease_id, message } => {
+                let lease = {
+                    let mut in_flight = self.in_flight.lock().unwrap();
+                    let lease = in_flight
+                        .get(&request.task_id)
+                        .cloned()
+                        .ok_or(A2AError::TaskNotInFlight(request.task_id))?;
+                    assert_lease_match(request.task_id, lease_id, Some(lease.lease_id))?;
+                    in_flight.remove(&request.task_id);
+                    lease
+                };
+                let result = A2ATaskResult::error(request.task_id, message);
+                self.results.lock().unwrap().push_back(result.clone());
+                self.result_notify.notify_one();
+                Ok(A2ARepairOutcome {
+                    task_id: request.task_id,
+                    action: A2ARepairAction::ForcedError,
+                    state: A2ARepairState::ResultPending,
+                    attempt: lease.attempt,
+                    result: Some(result),
+                })
+            }
+        }
     }
 
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
@@ -388,6 +561,22 @@ enum MailboxEvent {
         leased_at_ms: u64,
         attempt: u32,
     },
+    TaskRequeued {
+        task_id: Uuid,
+        lease_id: Uuid,
+        reason: String,
+        duplicate_risk: A2ADuplicateRisk,
+        requeued_at_ms: u64,
+        attempt: u32,
+    },
+    TaskForceErrored {
+        task_id: Uuid,
+        lease_id: Uuid,
+        result: A2ATaskResult,
+        reason: String,
+        forced_at_ms: u64,
+        attempt: u32,
+    },
     ResultPosted {
         result: A2ATaskResult,
     },
@@ -401,6 +590,7 @@ struct MailboxState {
     results: VecDeque<A2ATaskResult>,
     in_flight: HashMap<Uuid, TaskLease>,
     senders: HashMap<Uuid, AgentId>,
+    attempts: HashMap<Uuid, u32>,
 }
 
 impl MailboxState {
@@ -410,6 +600,7 @@ impl MailboxState {
             results: VecDeque::new(),
             in_flight: HashMap::new(),
             senders: HashMap::new(),
+            attempts: HashMap::new(),
         }
     }
 
@@ -417,6 +608,7 @@ impl MailboxState {
         match ev {
             MailboxEvent::TaskSent { task } => {
                 self.senders.insert(task.id, task.sender.clone());
+                self.attempts.entry(task.id).or_insert(0);
                 self.tasks.push_back(task);
             }
             MailboxEvent::TaskRecv { task_id } => {
@@ -431,6 +623,21 @@ impl MailboxState {
             } => {
                 self.lease_task(task_id, lease_id, Some(leased_to), leased_at_ms, attempt);
             }
+            MailboxEvent::TaskRequeued {
+                task_id, attempt, ..
+            } => {
+                self.requeue_task(task_id, attempt);
+            }
+            MailboxEvent::TaskForceErrored {
+                task_id,
+                result,
+                attempt,
+                ..
+            } => {
+                self.in_flight.remove(&task_id);
+                self.attempts.insert(task_id, attempt);
+                self.results.push_back(result);
+            }
             MailboxEvent::ResultPosted { result } => {
                 self.in_flight.remove(&result.task_id);
                 self.results.push_back(result);
@@ -444,10 +651,11 @@ impl MailboxState {
     }
 
     fn next_attempt(&self, task_id: Uuid) -> u32 {
-        self.in_flight
+        self.attempts
             .get(&task_id)
-            .map(|lease| lease.attempt.saturating_add(1))
-            .unwrap_or(1)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1)
     }
 
     fn lease_task(
@@ -468,6 +676,15 @@ impl MailboxState {
             task: task.clone(),
         };
         self.in_flight.insert(task_id, lease);
+        self.attempts.insert(task_id, attempt);
+        Some(task)
+    }
+
+    fn requeue_task(&mut self, task_id: Uuid, attempt: u32) -> Option<A2ATask> {
+        let lease = self.in_flight.remove(&task_id)?;
+        self.attempts.insert(task_id, attempt);
+        let task = lease.task;
+        self.tasks.push_back(task.clone());
         Some(task)
     }
 
@@ -476,7 +693,13 @@ impl MailboxState {
             .tasks
             .iter()
             .cloned()
-            .map(A2ATaskQueueEntry::queued)
+            .map(|task| {
+                let attempt = self.attempts.get(&task.id).copied().unwrap_or(0);
+                A2ATaskQueueEntry {
+                    attempt,
+                    ..A2ATaskQueueEntry::queued(task)
+                }
+            })
             .collect();
         let mut leased: Vec<A2ATaskQueueEntry> = self
             .in_flight
@@ -569,6 +792,7 @@ impl Mailbox for JsonlMailbox {
         {
             let mut s = self.state.lock().unwrap();
             s.senders.insert(task.id, task.sender.clone());
+            s.attempts.entry(task.id).or_insert(0);
             s.tasks.push_back(task);
         }
         self.task_notify.notify_one();
@@ -710,6 +934,74 @@ impl Mailbox for JsonlMailbox {
         Ok(self.state.lock().unwrap().task_queue(limit))
     }
 
+    async fn repair_task(&self, request: A2ARepairRequest) -> Result<A2ARepairOutcome, A2AError> {
+        validate_repair_request(&request)?;
+        let _g = self.file_lock.lock().await;
+
+        match request.command {
+            A2ARepairCommand::Requeue {
+                lease_id,
+                duplicate_risk,
+            } => {
+                let lease = {
+                    let s = self.state.lock().unwrap();
+                    s.in_flight
+                        .get(&request.task_id)
+                        .cloned()
+                        .ok_or(A2AError::TaskNotInFlight(request.task_id))?
+                };
+                assert_lease_match(request.task_id, lease_id, Some(lease.lease_id))?;
+                let event = MailboxEvent::TaskRequeued {
+                    task_id: request.task_id,
+                    lease_id: lease.lease_id,
+                    reason: request.reason,
+                    duplicate_risk,
+                    requeued_at_ms: epoch_ms(),
+                    attempt: lease.attempt,
+                };
+                self.append(&event).await?;
+                self.state.lock().unwrap().apply(event);
+                self.task_notify.notify_one();
+                Ok(A2ARepairOutcome {
+                    task_id: request.task_id,
+                    action: A2ARepairAction::Requeued,
+                    state: A2ARepairState::Queued,
+                    attempt: lease.attempt,
+                    result: None,
+                })
+            }
+            A2ARepairCommand::ForceError { lease_id, message } => {
+                let lease = {
+                    let s = self.state.lock().unwrap();
+                    s.in_flight
+                        .get(&request.task_id)
+                        .cloned()
+                        .ok_or(A2AError::TaskNotInFlight(request.task_id))?
+                };
+                assert_lease_match(request.task_id, lease_id, Some(lease.lease_id))?;
+                let result = A2ATaskResult::error(request.task_id, message);
+                let event = MailboxEvent::TaskForceErrored {
+                    task_id: request.task_id,
+                    lease_id: lease.lease_id,
+                    result: result.clone(),
+                    reason: request.reason,
+                    forced_at_ms: epoch_ms(),
+                    attempt: lease.attempt,
+                };
+                self.append(&event).await?;
+                self.state.lock().unwrap().apply(event);
+                self.result_notify.notify_one();
+                Ok(A2ARepairOutcome {
+                    task_id: request.task_id,
+                    action: A2ARepairAction::ForcedError,
+                    state: A2ARepairState::ResultPending,
+                    attempt: lease.attempt,
+                    result: Some(result),
+                })
+            }
+        }
+    }
+
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
         Ok(self
             .state
@@ -779,6 +1071,7 @@ impl Mailbox for JsonlMailbox {
         for tid in &droppable {
             s.senders.remove(tid);
             s.in_flight.remove(tid);
+            s.attempts.remove(tid);
         }
         Ok(dropped)
     }
@@ -801,6 +1094,10 @@ fn compute_droppable_task_ids(events: &[MailboxEvent]) -> HashSet<Uuid> {
             }
             MailboxEvent::TaskLeased { task_id, .. } => {
                 delivered.insert(*task_id);
+            }
+            MailboxEvent::TaskRequeued { .. } => {}
+            MailboxEvent::TaskForceErrored { result, .. } => {
+                *posted.entry(result.task_id).or_insert(0) += 1;
             }
             MailboxEvent::ResultPosted { result } => {
                 *posted.entry(result.task_id).or_insert(0) += 1;
@@ -825,6 +1122,8 @@ fn event_belongs_to_droppable(ev: &MailboxEvent, droppable: &HashSet<Uuid>) -> b
         MailboxEvent::TaskSent { task } => droppable.contains(&task.id),
         MailboxEvent::TaskRecv { task_id } => droppable.contains(task_id),
         MailboxEvent::TaskLeased { task_id, .. } => droppable.contains(task_id),
+        MailboxEvent::TaskRequeued { task_id, .. } => droppable.contains(task_id),
+        MailboxEvent::TaskForceErrored { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::ResultPosted { result } => droppable.contains(&result.task_id),
         MailboxEvent::ResultRecv { task_id } => droppable.contains(task_id),
     }
@@ -1090,6 +1389,131 @@ mod tests {
         m.send_result(result.clone()).await.unwrap();
         assert!(m.task_queue(10).await.unwrap().is_empty());
         assert_eq!(m.recent_results(10).await.unwrap(), vec![result]);
+    }
+
+    #[tokio::test]
+    async fn in_memory_requeue_restores_in_flight_task_and_increments_attempt() {
+        let m = InMemoryMailbox::new();
+        let task = dummy_task();
+        m.send_task(task.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+
+        let in_flight = m.task_queue(10).await.unwrap();
+        let lease_id = in_flight[0].lease_id;
+        let outcome = m
+            .repair_task(A2ARepairRequest {
+                task_id: task.id,
+                command: A2ARepairCommand::Requeue {
+                    lease_id,
+                    duplicate_risk: A2ADuplicateRisk::Idempotent,
+                },
+                reason: "worker crashed before posting a result".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome.action, A2ARepairAction::Requeued);
+        assert_eq!(outcome.attempt, 1);
+
+        let queued = m.task_queue(10).await.unwrap();
+        assert_eq!(queued[0].state, A2ATaskQueueState::Queued);
+        assert_eq!(queued[0].attempt, 1);
+
+        let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+        let leased_again = m.task_queue(10).await.unwrap();
+        assert_eq!(leased_again[0].attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_repair_rejects_lease_mismatch() {
+        let m = InMemoryMailbox::new();
+        let task = dummy_task();
+        m.send_task(task.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+
+        let result = m
+            .repair_task(A2ARepairRequest {
+                task_id: task.id,
+                command: A2ARepairCommand::Requeue {
+                    lease_id: Some(Uuid::new_v4()),
+                    duplicate_risk: A2ADuplicateRisk::OperatorAccepted,
+                },
+                reason: "operator accepted duplicate risk".into(),
+            })
+            .await;
+        assert!(matches!(result, Err(A2AError::LeaseMismatch { .. })));
+    }
+
+    #[tokio::test]
+    async fn jsonl_requeue_replays_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        {
+            let m = JsonlMailbox::open(path.clone()).await.unwrap();
+            m.send_task(task.clone()).await.unwrap();
+            let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+            let lease_id = m.task_queue(10).await.unwrap()[0].lease_id;
+            m.repair_task(A2ARepairRequest {
+                task_id: task.id,
+                command: A2ARepairCommand::Requeue {
+                    lease_id,
+                    duplicate_risk: A2ADuplicateRisk::OperatorAccepted,
+                },
+                reason: "lease exceeded operator threshold".into(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        let queued = reopened.task_queue(10).await.unwrap();
+        assert_eq!(queued[0].state, A2ATaskQueueState::Queued);
+        assert_eq!(queued[0].attempt, 1);
+        let _ = reopened
+            .try_recv_task_for(&task.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        let leased_again = reopened.task_queue(10).await.unwrap();
+        assert_eq!(leased_again[0].attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_force_error_replays_pending_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        {
+            let m = JsonlMailbox::open(path.clone()).await.unwrap();
+            m.send_task(task.clone()).await.unwrap();
+            let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
+            let lease_id = m.task_queue(10).await.unwrap()[0].lease_id;
+            let outcome = m
+                .repair_task(A2ARepairRequest {
+                    task_id: task.id,
+                    command: A2ARepairCommand::ForceError {
+                        lease_id,
+                        message: "operator forced failure after stale lease".into(),
+                    },
+                    reason: "recipient process exited".into(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(outcome.state, A2ARepairState::ResultPending);
+        }
+
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        assert!(reopened.task_queue(10).await.unwrap().is_empty());
+        let result = reopened
+            .try_recv_result_for(&task.sender)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.status, A2ATaskStatus::Error);
+        assert_eq!(
+            result.error_message.as_deref(),
+            Some("operator forced failure after stale lease")
+        );
     }
 
     #[tokio::test]

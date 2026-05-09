@@ -1,7 +1,7 @@
 {
   "id": "runtime-sandboxing",
   "title": "Introduce a real runtime sandbox boundary",
-  "state": "in_progress",
+  "state": "blocked",
   "priority": "critical",
   "ownerRole": "planner",
   "scope": [

@@ -1,7 +1,7 @@
 {
   "id": "a2a-requeue-repair",
   "title": "Add explicit A2A requeue and lease repair",
-  "state": "proposed",
+  "state": "blocked",
   "priority": "high",
   "ownerRole": "planner",
   "scope": [
@@ -11,7 +11,12 @@
     "docs"
   ],
   "summary": "Add an operator-controlled repair path for stale A2A in-flight leases, including requeue, forced resolution, lease-age reporting, and audit rows.",
-  "expectedFailureModes": [],
+  "expectedFailureModes": [
+    "A stale in-flight lease is requeued without any idempotency posture, causing hidden duplicate external work.",
+    "An operator repairs a task using a stale queue view and accidentally mutates a newer lease.",
+    "A forced resolution drops the original sender attribution, so the result cannot be drained by the correct peer.",
+    "Repair events do not replay after daemon restart, causing the queue to diverge from the event log."
+  ],
   "gates": [
     "plan",
     "security",
@@ -27,6 +32,6 @@
   "humanEscalation": [
     "Approval before enabling automatic retry for non-idempotent task classes"
   ],
-  "nextAction": "Define the operator-visible repair commands and idempotency requirements before adding mutation paths.",
+  "nextAction": "Wire daemon IPC, HTTP, CLI, and audit rows for the mailbox repair primitives once the existing unrelated daemon/CLI worktree changes are safe to edit.",
   "updated": "2026-05-09"
 }

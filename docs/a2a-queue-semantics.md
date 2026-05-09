@@ -40,12 +40,27 @@ Compaction may drop events for a task only when all of the following are true:
 
 Queued tasks, leased tasks without results, and pending results are never compacted. This keeps recovery state available across daemon restarts.
 
-## Future Work
+## Repair Contract
 
-The next queue hardening step is an explicit operator repair surface:
+The mailbox crate now defines explicit repair primitives for in-flight leases. These are operator-controlled mutation paths; they are not automatic retry policy.
 
-- `a2a.requeue.<task>` or an operator-only requeue command.
-- Lease expiry thresholds for stale in-flight work.
-- Attempt counters that survive requeue cycles.
-- Idempotency markers for tasks that can safely auto-retry.
-- Audit rows for manual requeue and forced resolution.
+Repair requests require:
+
+- a `task_id`;
+- a non-empty `reason`;
+- a command of `requeue` or `force_error`;
+- an optional `lease_id` guard to prevent repairing a newer lease than the operator inspected;
+- for `requeue`, an explicit duplicate-work posture: `idempotent` or `operator_accepted`.
+
+`requeue` moves an in-flight task back to `queued`, preserves the last attempt counter, and increments the counter on the next lease. This makes repeated repair visible without hiding the possibility that the original worker may still complete.
+
+`force_error` clears the in-flight lease and posts an error result for the original sender to drain. It is the explicit way to stop waiting on a stale lease without pretending the task succeeded.
+
+Both repair actions replay from the JSONL mailbox log after daemon restart.
+
+## Remaining Work
+
+- Expose repair commands through the daemon IPC, HTTP, and CLI surfaces.
+- Add audit rows for manual requeue and forced error resolution.
+- Add lease-age filters so operators can find stale in-flight work quickly.
+- Keep automatic retry disabled until task classes can declare idempotency safely.

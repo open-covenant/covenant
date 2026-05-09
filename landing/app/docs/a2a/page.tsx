@@ -57,6 +57,7 @@ A2ATaskResult {
   async fn try_recv_task_for(&self, recipient)     -> Result<Option<A2ATask>>;
   async fn recent_tasks(&self, limit: usize)       -> Result<Vec<A2ATask>>;
   async fn task_queue(&self, limit: usize)         -> Result<Vec<A2ATaskQueueEntry>>;
+  async fn repair_task(&self, request)             -> Result<A2ARepairOutcome>;
 
   async fn send_result(&self, result: A2ATaskResult)   -> Result<()>;
   async fn recv_result(&self)                          -> Result<A2ATaskResult>;
@@ -79,6 +80,31 @@ A2ATaskResult {
         Leases survive daemon restart and are not automatically
         redelivered; operators inspect them through the queue-status
         surface and repair them explicitly when needed.
+      </p>
+
+      <h2>Lease repair</h2>
+      <p>
+        Repair is explicit and operator-controlled. The mailbox supports
+        two repair commands for in-flight tasks:
+      </p>
+      <ul>
+        <li>
+          <code>requeue</code> returns a leased task to{" "}
+          <code>queued</code>, preserves the last attempt counter, and
+          requires an explicit duplicate-work posture:{" "}
+          <code>idempotent</code> or <code>operator_accepted</code>.
+        </li>
+        <li>
+          <code>force_error</code> clears the lease and posts an error
+          result for the original sender to drain.
+        </li>
+      </ul>
+      <p>
+        Both commands require a non-empty reason and may include the
+        observed <code>lease_id</code> as a guard against repairing a
+        newer lease than the operator inspected. Daemon, HTTP, and CLI
+        exposure are the next hardening step; automatic retry remains
+        disabled.
       </p>
 
       <h2>Daemon-mediated flow</h2>
@@ -186,8 +212,9 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         </li>
         <li>
           <strong>Retry posture.</strong> Alpha does not auto-redeliver
-          leased tasks after restart. This avoids duplicate non-idempotent
-          work; explicit operator requeue is the next hardening step.
+          leased tasks after restart. This avoids duplicate
+          non-idempotent work; explicit repair commands carry the
+          operator&apos;s duplicate-work posture.
         </li>
       </ul>
 

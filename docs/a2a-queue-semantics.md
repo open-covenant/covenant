@@ -152,4 +152,4 @@ Any background retry scheduler must remain:
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Add receiver-side idempotency result caching before enabling periodic retry loops.
+- Add receiver-side idempotency result caching before enabling periodic retry loops (see `docs/a2a-idempotency-policy.md`).

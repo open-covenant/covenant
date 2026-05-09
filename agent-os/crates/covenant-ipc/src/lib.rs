@@ -12,7 +12,8 @@ use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{
-    MemoryRecord, MemoryRepairOutcome, MemoryRepairRequest, MemoryTier, SettlementReceipt,
+    MemoryCompactionOutcome, MemoryCompactionRequest, MemoryRecord, MemoryRepairOutcome,
+    MemoryRepairRequest, MemoryTier, SettlementReceipt,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,6 +114,10 @@ pub enum Request {
     /// caller choice and daemon capability.
     RepairMemory {
         request: MemoryRepairRequest,
+    },
+    /// Operator-controlled compaction for memory retention and stale-context hygiene.
+    CompactMemory {
+        request: MemoryCompactionRequest,
     },
     RecentCapabilities {
         #[serde(default = "default_recent_limit")]
@@ -323,6 +328,9 @@ pub enum Response {
     },
     MemoryRepaired {
         outcome: MemoryRepairOutcome,
+    },
+    MemoryCompacted {
+        outcome: MemoryCompactionOutcome,
     },
     Receipts {
         receipts: Vec<SettlementReceipt>,

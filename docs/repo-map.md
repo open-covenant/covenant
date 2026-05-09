@@ -23,11 +23,11 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 |---|---|
 | `agent-os/crates/covenantd` | Main daemon library and binary. Owns request handling, auth, routing, audit, memory, settlement, peers, and HTTP. |
 | `agent-os/crates/covenant` | CLI client. |
-| `agent-os/crates/covenant-types` | Shared wire types: intents, agents, capabilities, memory records, receipts. |
+| `agent-os/crates/covenant-types` | Shared wire types: intents, agents, capabilities, memory records, memory repair/compaction requests, receipts. |
 | `agent-os/crates/covenant-identity` | Local ed25519 identity. |
 | `agent-os/crates/covenant-permissions` | Signed capabilities, verification, expiry, and revocation store. |
 | `agent-os/crates/covenant-audit` | Append-only audit log. |
-| `agent-os/crates/covenant-memory` | Memory records, SQLite store, embeddings, ignore rules. |
+| `agent-os/crates/covenant-memory` | Memory records, SQLite store, embeddings, ignore rules, repair planning, and compaction planning. |
 | `agent-os/crates/covenant-runtime` | Agent subprocess runner and timeout handling. |
 | `agent-os/crates/covenant-router` | Agent-card matching and intent routing. |
 | `agent-os/crates/covenant-ipc` | Local socket protocol. |

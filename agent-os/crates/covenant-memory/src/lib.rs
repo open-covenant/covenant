@@ -12,11 +12,12 @@ pub mod ignore;
 pub use ignore::{IgnorePattern, IgnoreSet, IgnoreVerdict};
 
 use async_trait::async_trait;
-use covenant_types::{MemoryRecord, MemoryTier};
 pub use covenant_types::{
-    MemoryRepairAction, MemoryRepairCommand, MemoryRepairMode, MemoryRepairOutcome,
-    MemoryRepairRequest,
+    MemoryCompactionOutcome, MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairAction,
+    MemoryRepairCommand, MemoryRepairMode, MemoryRepairOutcome, MemoryRepairRequest,
 };
+use covenant_types::{MemoryRecord, MemoryTier};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::task;
@@ -42,12 +43,15 @@ pub enum MemoryError {
     },
     #[error("invalid memory repair request: {0}")]
     InvalidRepair(String),
+    #[error("invalid memory compaction request: {0}")]
+    InvalidCompaction(String),
 }
 
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
     async fn put(&self, record: MemoryRecord) -> Result<(), MemoryError>;
     async fn get(&self, id: Uuid) -> Result<Option<MemoryRecord>, MemoryError>;
+    async fn all(&self) -> Result<Vec<MemoryRecord>, MemoryError>;
     async fn recent(
         &self,
         tier: Option<MemoryTier>,
@@ -107,6 +111,30 @@ pub trait MemoryStore: Send + Sync {
             after,
         })
     }
+    /// Deterministic memory compaction. Dry-run and apply compute the
+    /// same plan over a single snapshot: expired working/episodic records
+    /// are deleted, old long-term records are marked stale instead of
+    /// deleted, and parent references are detached when their target is
+    /// absent or deleted by the same plan.
+    async fn compact(
+        &self,
+        request: MemoryCompactionRequest,
+    ) -> Result<MemoryCompactionOutcome, MemoryError> {
+        validate_compaction_request(&request)?;
+        let records = self.all().await?;
+        let (outcome, updates) = plan_compaction(&records, &request);
+
+        if request.mode == MemoryRepairMode::Apply && outcome.would_change {
+            for id in &outcome.deleted {
+                let _ = self.delete(*id).await?;
+            }
+            for record in updates {
+                self.put(record).await?;
+            }
+        }
+
+        Ok(outcome)
+    }
 }
 
 fn validate_repair_request(request: &MemoryRepairRequest) -> Result<(), MemoryError> {
@@ -121,6 +149,20 @@ fn validate_repair_request(request: &MemoryRepairRequest) -> Result<(), MemoryEr
                 "provenance must not be null".into(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_compaction_request(request: &MemoryCompactionRequest) -> Result<(), MemoryError> {
+    if request.reason.trim().is_empty() {
+        return Err(MemoryError::InvalidCompaction(
+            "reason must not be empty".into(),
+        ));
+    }
+    if request.policy.is_empty() {
+        return Err(MemoryError::InvalidCompaction(
+            "policy must enable at least one compaction action".into(),
+        ));
     }
     Ok(())
 }
@@ -160,6 +202,113 @@ fn plan_repair(
             Ok(Some(after))
         }
     }
+}
+
+fn plan_compaction(
+    records: &[MemoryRecord],
+    request: &MemoryCompactionRequest,
+) -> (MemoryCompactionOutcome, Vec<MemoryRecord>) {
+    let mut deleted: BTreeSet<Uuid> = BTreeSet::new();
+    for record in records {
+        match record.tier {
+            MemoryTier::Working
+                if request
+                    .policy
+                    .delete_working_before_ms
+                    .is_some_and(|before| record.created_at < before) =>
+            {
+                deleted.insert(record.id);
+            }
+            MemoryTier::Episodic
+                if request
+                    .policy
+                    .delete_episodic_before_ms
+                    .is_some_and(|before| record.created_at < before) =>
+            {
+                deleted.insert(record.id);
+            }
+            _ => {}
+        }
+    }
+
+    let retained: BTreeSet<Uuid> = records
+        .iter()
+        .filter(|record| !deleted.contains(&record.id))
+        .map(|record| record.id)
+        .collect();
+
+    let mut updates = Vec::new();
+    let mut stale_marked = Vec::new();
+    let mut parents_detached = Vec::new();
+    for record in records {
+        if deleted.contains(&record.id) {
+            continue;
+        }
+
+        let mut after = record.clone();
+        let mut changed = false;
+
+        if request.policy.detach_stale_parents {
+            if let Some(parent) = after.parent {
+                if !retained.contains(&parent) {
+                    after.parent = None;
+                    parents_detached.push(after.id);
+                    changed = true;
+                }
+            }
+        }
+
+        if after.tier == MemoryTier::LongTerm {
+            if let Some(before_ms) = request.policy.mark_longterm_stale_before_ms {
+                if after.created_at < before_ms {
+                    let marked_at_ms = request.policy.marked_at_ms.unwrap_or(before_ms);
+                    let stale_context = serde_json::json!({
+                        "marked_at_ms": marked_at_ms,
+                        "reason": request.reason,
+                    });
+                    let mut metadata = match after.metadata {
+                        serde_json::Value::Object(map) => map,
+                        other => {
+                            let mut map = serde_json::Map::new();
+                            map.insert("previous_metadata".into(), other);
+                            map
+                        }
+                    };
+                    if metadata.get("stale_context") != Some(&stale_context) {
+                        metadata.insert("stale_context".into(), stale_context);
+                        after.metadata = serde_json::Value::Object(metadata);
+                        stale_marked.push(after.id);
+                        changed = true;
+                    } else {
+                        after.metadata = serde_json::Value::Object(metadata);
+                    }
+                }
+            }
+        }
+
+        if changed {
+            updates.push(after);
+        }
+    }
+
+    let mut deleted: Vec<Uuid> = deleted.into_iter().collect();
+    deleted.sort();
+    stale_marked.sort();
+    parents_detached.sort();
+    updates.sort_by_key(|record| record.id);
+    let would_change =
+        !deleted.is_empty() || !stale_marked.is_empty() || !parents_detached.is_empty();
+    (
+        MemoryCompactionOutcome {
+            mode: request.mode,
+            would_change,
+            changed: request.mode == MemoryRepairMode::Apply && would_change,
+            deleted,
+            stale_marked,
+            parents_detached,
+        },
+        updates,
+    )
 }
 
 /// Cosine similarity over two equal-length vectors. Returns 0.0 for any
@@ -212,6 +361,14 @@ impl MemoryStore for InMemoryStore {
             .lock()
             .map_err(|e| MemoryError::Worker(e.to_string()))?;
         Ok(g.iter().find(|r| r.id == id).cloned())
+    }
+
+    async fn all(&self) -> Result<Vec<MemoryRecord>, MemoryError> {
+        let g = self
+            .records
+            .lock()
+            .map_err(|e| MemoryError::Worker(e.to_string()))?;
+        Ok(g.clone())
     }
 
     async fn recent(
@@ -447,6 +604,25 @@ impl MemoryStore for SqliteStore {
             } else {
                 Ok(None)
             }
+        })
+        .await
+        .map_err(|e| MemoryError::Worker(e.to_string()))?
+    }
+
+    async fn all(&self) -> Result<Vec<MemoryRecord>, MemoryError> {
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || -> Result<Vec<MemoryRecord>, MemoryError> {
+            let g = conn.lock().map_err(|e| MemoryError::Worker(e.to_string()))?;
+            let mut stmt = g.prepare(
+                "SELECT id, tier, owner_display, owner_pubkey, text, embedding, metadata, created_at, parent
+                 FROM memories ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map([], SqliteStore::row_to_record)?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
         })
         .await
         .map_err(|e| MemoryError::Worker(e.to_string()))?
@@ -891,5 +1067,130 @@ mod tests {
         let got = s.get(id).await.unwrap().unwrap();
         assert_eq!(got.metadata["source"], "import");
         assert_eq!(got.metadata["provenance"], provenance);
+    }
+
+    #[tokio::test]
+    async fn compaction_dry_run_plans_without_mutating() {
+        let s = InMemoryStore::new();
+        let old_working = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let missing_parent = Uuid::new_v4();
+        s.put(record(old_working, MemoryTier::Working, "old", 10))
+            .await
+            .unwrap();
+        let mut child_record = record(child, MemoryTier::Episodic, "child", 30);
+        child_record.parent = Some(missing_parent);
+        s.put(child_record).await.unwrap();
+
+        let outcome = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::DryRun,
+                policy: MemoryCompactionPolicy {
+                    delete_working_before_ms: Some(20),
+                    detach_stale_parents: true,
+                    ..MemoryCompactionPolicy::default()
+                },
+                reason: "routine dry-run".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.would_change);
+        assert!(!outcome.changed);
+        assert_eq!(outcome.deleted, vec![old_working]);
+        assert_eq!(outcome.parents_detached, vec![child]);
+        assert!(s.get(old_working).await.unwrap().is_some());
+        assert_eq!(
+            s.get(child).await.unwrap().unwrap().parent,
+            Some(missing_parent)
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let old_working = Uuid::new_v4();
+        let old_episodic = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let longterm = Uuid::new_v4();
+        s.put(record(old_working, MemoryTier::Working, "old working", 10))
+            .await
+            .unwrap();
+        s.put(record(
+            old_episodic,
+            MemoryTier::Episodic,
+            "old episodic",
+            10,
+        ))
+        .await
+        .unwrap();
+        let mut child_record = record(child, MemoryTier::Episodic, "child", 50);
+        child_record.parent = Some(old_working);
+        s.put(child_record).await.unwrap();
+        s.put(record(longterm, MemoryTier::LongTerm, "durable fact", 10))
+            .await
+            .unwrap();
+
+        let outcome = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::Apply,
+                policy: MemoryCompactionPolicy {
+                    delete_working_before_ms: Some(20),
+                    delete_episodic_before_ms: Some(20),
+                    mark_longterm_stale_before_ms: Some(20),
+                    detach_stale_parents: true,
+                    marked_at_ms: Some(99),
+                },
+                reason: "age-based compaction".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.changed);
+        let mut expected_deleted = vec![old_working, old_episodic];
+        expected_deleted.sort();
+        assert_eq!(outcome.deleted, expected_deleted);
+        assert_eq!(outcome.parents_detached, vec![child]);
+        assert_eq!(outcome.stale_marked, vec![longterm]);
+        assert!(s.get(old_working).await.unwrap().is_none());
+        assert!(s.get(old_episodic).await.unwrap().is_none());
+        assert_eq!(s.get(child).await.unwrap().unwrap().parent, None);
+        let durable = s.get(longterm).await.unwrap().unwrap();
+        assert_eq!(durable.metadata["stale_context"]["marked_at_ms"], 99);
+        assert_eq!(
+            durable.metadata["stale_context"]["reason"],
+            "age-based compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_rejects_empty_policy_and_reason() {
+        let s = InMemoryStore::new();
+        let empty_policy = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::DryRun,
+                policy: MemoryCompactionPolicy::default(),
+                reason: "no-op".into(),
+            })
+            .await;
+        assert!(matches!(
+            empty_policy,
+            Err(MemoryError::InvalidCompaction(_))
+        ));
+
+        let empty_reason = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::DryRun,
+                policy: MemoryCompactionPolicy {
+                    detach_stale_parents: true,
+                    ..MemoryCompactionPolicy::default()
+                },
+                reason: " ".into(),
+            })
+            .await;
+        assert!(matches!(
+            empty_reason,
+            Err(MemoryError::InvalidCompaction(_))
+        ));
     }
 }

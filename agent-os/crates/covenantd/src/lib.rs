@@ -27,8 +27,8 @@ use covenant_settlement::{
     Settlement,
 };
 use covenant_types::{
-    AgentId, Capability, Intent, MemoryRecord, MemoryRepairCommand, MemoryRepairMode, MemoryTier,
-    Priority, ResourceKind, SettlementReceipt,
+    AgentId, Capability, Intent, MemoryCompactionRequest, MemoryRecord, MemoryRepairCommand,
+    MemoryRepairMode, MemoryTier, Priority, ResourceKind, SettlementReceipt,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -487,6 +487,7 @@ impl Server {
             }
             Request::PurgeMemory { tier, before_ms } => self.purge_memory(tier, before_ms).await,
             Request::RepairMemory { request } => self.repair_memory(request, peer).await,
+            Request::CompactMemory { request } => self.compact_memory(request, peer).await,
             Request::Verify { window } => self.verify_recent(window).await,
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
@@ -2302,6 +2303,64 @@ impl Server {
         }
     }
 
+    async fn compact_memory(
+        &self,
+        mut request: MemoryCompactionRequest,
+        peer: &AgentId,
+    ) -> Response {
+        let mode = memory_repair_mode(request.mode);
+        let required = format!("memory.compact.{mode}");
+        let check = self
+            .check_capabilities("memory-compact".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "memory compaction {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "memory compaction requires the operator identity".into(),
+            };
+        }
+
+        if request.policy.mark_longterm_stale_before_ms.is_some()
+            && request.policy.marked_at_ms.is_none()
+        {
+            request.policy.marked_at_ms = Some(epoch_ms());
+        }
+
+        let reason = request.reason.clone();
+        match self.memory.compact(request).await {
+            Ok(outcome) => {
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::MemoryCompactionApplied {
+                            mode: mode.into(),
+                            changed: outcome.changed,
+                            reason,
+                            deleted: outcome.deleted.clone(),
+                            stale_marked: outcome.stale_marked.clone(),
+                            parents_detached: outcome.parents_detached.clone(),
+                        },
+                    },
+                )
+                .await;
+                Response::MemoryCompacted { outcome }
+            }
+            Err(e) => Response::Error {
+                message: format!("memory: {e}"),
+            },
+        }
+    }
+
     /// Returns capabilities where `peer` is either the subject (caps held
     /// against them) or `granted_by` (caps they granted). Bidirectional
     /// because both ends of a delegation are natural privacy boundaries —
@@ -3014,6 +3073,186 @@ required = {caps:?}
             s.memory.get(id).await.unwrap().unwrap().parent,
             Some(parent)
         );
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        detach_stale_parents: true,
+                        ..covenant_types::MemoryCompactionPolicy::default()
+                    },
+                    reason: "routine compaction".into(),
+                },
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory.compact.dry_run"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_rejects_non_operator_even_with_capability() {
+        let s = server_with(vec![], "");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "memory.compact.dry_run".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::CompactMemory {
+                    request: MemoryCompactionRequest {
+                        mode: MemoryRepairMode::DryRun,
+                        policy: covenant_types::MemoryCompactionPolicy {
+                            detach_stale_parents: true,
+                            ..covenant_types::MemoryCompactionPolicy::default()
+                        },
+                        reason: "routine compaction".into(),
+                    },
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_apply_deletes_marks_detaches_and_audits() {
+        let s = server_with(vec![], "");
+        let old_working = Uuid::new_v4();
+        let old_episodic = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let longterm = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: old_working,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "old working".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: old_episodic,
+                tier: MemoryTier::Episodic,
+                owner: s.identity.agent_id(),
+                text: "old episodic".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: child,
+                tier: MemoryTier::Episodic,
+                owner: s.identity.agent_id(),
+                text: "child".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 50,
+                parent: Some(old_working),
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: longterm,
+                tier: MemoryTier::LongTerm,
+                owner: s.identity.agent_id(),
+                text: "durable context".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.compact.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let reason = "age-based compaction";
+        let resp = s
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::Apply,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        delete_working_before_ms: Some(20),
+                        delete_episodic_before_ms: Some(20),
+                        mark_longterm_stale_before_ms: Some(20),
+                        detach_stale_parents: true,
+                        marked_at_ms: Some(99),
+                    },
+                    reason: reason.into(),
+                },
+            })
+            .await;
+
+        match resp {
+            Response::MemoryCompacted { outcome } => {
+                let mut expected_deleted = vec![old_working, old_episodic];
+                expected_deleted.sort();
+                assert!(outcome.changed);
+                assert_eq!(outcome.deleted, expected_deleted);
+                assert_eq!(outcome.parents_detached, vec![child]);
+                assert_eq!(outcome.stale_marked, vec![longterm]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(s.memory.get(old_working).await.unwrap().is_none());
+        assert!(s.memory.get(old_episodic).await.unwrap().is_none());
+        assert_eq!(s.memory.get(child).await.unwrap().unwrap().parent, None);
+        let durable = s.memory.get(longterm).await.unwrap().unwrap();
+        assert_eq!(durable.metadata["stale_context"]["marked_at_ms"], 99);
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::MemoryCompactionApplied {
+                mode,
+                changed: true,
+                reason: logged_reason,
+                stale_marked,
+                parents_detached,
+                ..
+            } if mode == "apply"
+                && logged_reason == reason
+                && stale_marked == &vec![longterm]
+                && parents_detached == &vec![child]
+        )));
     }
 
     #[tokio::test]

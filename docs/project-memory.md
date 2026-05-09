@@ -37,7 +37,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No public signing identity policy or transparency-log publication for agent-produced artifacts.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
-- Project memory has read-only drift reports and explicit dry-run/apply repair commands; compaction and long-horizon stale-context handling need more work.
+- Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
 - A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until task classes can declare idempotency safely.
 
 ## Human Authority Boundary

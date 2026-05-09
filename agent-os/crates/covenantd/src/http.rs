@@ -121,6 +121,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/memory/search", get(memory_search))
         .route("/memory/purge", post(memory_purge))
         .route("/memory/repair", post(memory_repair))
+        .route("/memory/compact", post(memory_compact))
         .route("/verify", get(verify))
         .route("/receipts/recent", get(receipts_recent))
         .route("/capabilities/recent", get(capabilities_recent))
@@ -307,6 +308,18 @@ async fn memory_repair(
     Ok(Json(
         s.server
             .respond(Request::RepairMemory { request }, &peer)
+            .await,
+    ))
+}
+
+async fn memory_compact(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(request): Json<covenant_types::MemoryCompactionRequest>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::CompactMemory { request }, &peer)
             .await,
     ))
 }

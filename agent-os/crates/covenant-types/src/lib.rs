@@ -263,6 +263,46 @@ impl MemoryRepairCommand {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryCompactionPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_working_before_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_episodic_before_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_longterm_stale_before_ms: Option<u64>,
+    #[serde(default)]
+    pub detach_stale_parents: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marked_at_ms: Option<u64>,
+}
+
+impl MemoryCompactionPolicy {
+    pub fn is_empty(&self) -> bool {
+        self.delete_working_before_ms.is_none()
+            && self.delete_episodic_before_ms.is_none()
+            && self.mark_longterm_stale_before_ms.is_none()
+            && !self.detach_stale_parents
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryCompactionRequest {
+    pub mode: MemoryRepairMode,
+    pub policy: MemoryCompactionPolicy,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryCompactionOutcome {
+    pub mode: MemoryRepairMode,
+    pub would_change: bool,
+    pub changed: bool,
+    pub deleted: Vec<Uuid>,
+    pub stale_marked: Vec<Uuid>,
+    pub parents_detached: Vec<Uuid>,
+}
+
 /// One consumption event recorded by the settlement layer.
 ///
 /// Chain metadata is empty until the receipt is batched and confirmed on

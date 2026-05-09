@@ -372,6 +372,74 @@ async fn memory_repair_round_trip_after_grant() {
 }
 
 #[tokio::test]
+async fn memory_compact_round_trip_after_grant() {
+    let TestServer {
+        base,
+        token,
+        agent_id,
+        memory,
+        ..
+    } = spawn_test_server().await;
+    let id = uuid::Uuid::new_v4();
+    memory
+        .put(covenant_types::MemoryRecord {
+            id,
+            tier: covenant_types::MemoryTier::Working,
+            owner: agent_id,
+            text: "expired working context".into(),
+            embedding: vec![1.0],
+            metadata: json!({}),
+            created_at: 1,
+            parent: None,
+        })
+        .await
+        .unwrap();
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
+
+    let grant: serde_json::Value = client
+        .post(format!("{base}/capabilities/grant"))
+        .json(&json!({ "action": "memory.compact.dry_run" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(grant["kind"], "capability_granted");
+
+    let compacted: serde_json::Value = client
+        .post(format!("{base}/memory/compact"))
+        .json(&json!({
+            "mode": "dry_run",
+            "policy": {
+                "delete_working_before_ms": 10
+            },
+            "reason": "routine compaction"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(compacted["kind"], "memory_compacted");
+    assert_eq!(compacted["outcome"]["mode"], "dry_run");
+    assert_eq!(compacted["outcome"]["would_change"], true);
+    assert_eq!(compacted["outcome"]["changed"], false);
+    assert_eq!(compacted["outcome"]["deleted"], json!([id]));
+    assert!(memory.get(id).await.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn tools_list_and_call_round_trip() {
     let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();

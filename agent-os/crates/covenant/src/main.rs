@@ -6,6 +6,7 @@
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
 //!   covenant memory search <query>
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>)
+//!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -39,7 +40,10 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
-use covenant_types::{MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier};
+use covenant_types::{
+    MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
+    MemoryRepairRequest, MemoryTier,
+};
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 
@@ -84,6 +88,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D)  delete records older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M] [--delete-episodic-before-ms M] [--mark-longterm-stale-before-ms M]"
     );
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
@@ -200,6 +207,13 @@ fn parse_uuid(value: &str, name: &str) -> Result<uuid::Uuid> {
         .with_context(|| format!("{name} must be a UUID"))
 }
 
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn print_a2a_repair_response(response: Response) -> Result<()> {
     match response {
         Response::A2ARepaired { outcome } => {
@@ -214,6 +228,17 @@ fn print_a2a_repair_response(response: Response) -> Result<()> {
 fn print_memory_repair_response(response: Response) -> Result<()> {
     match response {
         Response::MemoryRepaired { outcome } => {
+            println!("{}", serde_json::to_string(&outcome)?);
+            Ok(())
+        }
+        Response::Error { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected response: {other:?}"),
+    }
+}
+
+fn print_memory_compaction_response(response: Response) -> Result<()> {
+    match response {
+        Response::MemoryCompacted { outcome } => {
             println!("{}", serde_json::to_string(&outcome)?);
             Ok(())
         }
@@ -315,11 +340,7 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--older-than-ms needs a value")?;
                                 let dur: u64 =
                                     v.parse().context("--older-than-ms must be an integer")?;
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0);
-                                before_ms = Some(now.saturating_sub(dur));
+                                before_ms = Some(epoch_ms().saturating_sub(dur));
                             }
                             other => bail!("unknown flag '{other}'"),
                         }
@@ -334,6 +355,105 @@ async fn main() -> Result<()> {
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
                     }
+                }
+                "compact" => {
+                    let mut policy = MemoryCompactionPolicy::default();
+                    let mut reason = None;
+                    let mut apply = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--apply" => apply = true,
+                            "--reason" => {
+                                i += 1;
+                                reason =
+                                    Some(args.get(i).context("--reason needs a value")?.clone());
+                            }
+                            "--detach-stale-parents" => policy.detach_stale_parents = true,
+                            "--delete-working-before-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--delete-working-before-ms needs a value")?;
+                                policy.delete_working_before_ms = Some(
+                                    v.parse()
+                                        .context("--delete-working-before-ms must be an integer")?,
+                                );
+                            }
+                            "--delete-working-older-than-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--delete-working-older-than-ms needs a value")?;
+                                let dur: u64 = v
+                                    .parse()
+                                    .context("--delete-working-older-than-ms must be an integer")?;
+                                policy.delete_working_before_ms =
+                                    Some(epoch_ms().saturating_sub(dur));
+                            }
+                            "--delete-episodic-before-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--delete-episodic-before-ms needs a value")?;
+                                policy.delete_episodic_before_ms =
+                                    Some(v.parse().context(
+                                        "--delete-episodic-before-ms must be an integer",
+                                    )?);
+                            }
+                            "--delete-episodic-older-than-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--delete-episodic-older-than-ms needs a value")?;
+                                let dur: u64 = v.parse().context(
+                                    "--delete-episodic-older-than-ms must be an integer",
+                                )?;
+                                policy.delete_episodic_before_ms =
+                                    Some(epoch_ms().saturating_sub(dur));
+                            }
+                            "--mark-longterm-stale-before-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--mark-longterm-stale-before-ms needs a value")?;
+                                policy.mark_longterm_stale_before_ms = Some(v.parse().context(
+                                    "--mark-longterm-stale-before-ms must be an integer",
+                                )?);
+                            }
+                            "--mark-longterm-stale-older-than-ms" => {
+                                i += 1;
+                                let v = args
+                                    .get(i)
+                                    .context("--mark-longterm-stale-older-than-ms needs a value")?;
+                                let dur: u64 = v.parse().context(
+                                    "--mark-longterm-stale-older-than-ms must be an integer",
+                                )?;
+                                policy.mark_longterm_stale_before_ms =
+                                    Some(epoch_ms().saturating_sub(dur));
+                            }
+                            "--marked-at-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--marked-at-ms needs a value")?;
+                                policy.marked_at_ms =
+                                    Some(v.parse().context("--marked-at-ms must be an integer")?);
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let request = MemoryCompactionRequest {
+                        mode: if apply {
+                            MemoryRepairMode::Apply
+                        } else {
+                            MemoryRepairMode::DryRun
+                        },
+                        policy,
+                        reason: reason.context("missing --reason")?,
+                    };
+                    write_frame(&mut stream, &Request::CompactMemory { request }).await?;
+                    let response = read_frame::<_, Response>(&mut stream).await?;
+                    print_memory_compaction_response(response)?;
                 }
                 "repair" => {
                     if args.len() < 4 {

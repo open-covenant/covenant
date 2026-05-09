@@ -123,6 +123,17 @@ pub enum AuditKind {
         changed: bool,
         reason: String,
     },
+    /// Logged when an operator runs bounded memory compaction. The row
+    /// records ids only; memory text and before/after payloads stay out of
+    /// the audit stream.
+    MemoryCompactionApplied {
+        mode: String,
+        changed: bool,
+        reason: String,
+        deleted: Vec<Uuid>,
+        stale_marked: Vec<Uuid>,
+        parents_detached: Vec<Uuid>,
+    },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
     /// asked to revoke. Enforces the subject-ownership invariant on

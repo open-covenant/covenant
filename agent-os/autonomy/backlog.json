@@ -30,6 +30,67 @@
       "updated": "2026-05-10"
     },
     {
+      "id": "autonomy-backlog-template-scaffold-cli",
+      "title": "Add CLI to scaffold new backlog templates",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/autonomy/backlog.json",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Manual editing works, but backlog templates are still easy to get wrong. Add a small CLI that appends a minimal, validator-friendly template skeleton (with safe defaults) and forces the author to fill in the parts that matter before seeding.",
+      "expectedFailureModes": [
+        "Backlog templates are added with missing required fields or invalid enum values, forcing repeated fixups.",
+        "Template IDs collide with existing task files, causing `autonomy-seed-next` to remain exhausted.",
+        "Verification commands drift into machine-local paths or secrets because there is no scaffold guidance."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-seed-next.mjs --dry-run",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Create a script that appends a new backlog template skeleton with a validated `id`, default `state=proposed`, safe empty lists, and a reminder checklist, then update docs to point to it.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-evidence-runbook",
+      "title": "Write alpha release evidence runbook",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-evidence.mjs",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Alpha releases need a repeatable runbook that explains what evidence is generated, where it lands, and how to validate it. Document the end-to-end flow using the existing alpha release evidence script without implying public signing or publication policy.",
+      "expectedFailureModes": [
+        "Release evidence exists but operators cannot reproduce it without reverse-engineering scripts.",
+        "Docs overclaim public verifiability or signing before key custody and publication are decided.",
+        "Evidence artifacts are generated but not checked into the release bundle, leaving the release unverifiable later."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-evidence.mjs --help",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human decision remains required for any public signing keys, key rotation, and release publication."
+      ],
+      "nextAction": "Document the alpha release evidence workflow: prerequisites, commands, output locations, and how to interpret evidence, leaving signing/publishing as explicitly human-owned.",
+      "updated": "2026-05-10"
+    },
+    {
       "id": "live-cli-build-prereq-docs",
       "title": "Document live CLI build prerequisites",
       "state": "proposed",

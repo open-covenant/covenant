@@ -4,7 +4,7 @@
 
 use covenant_types::Priority;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,6 +179,19 @@ impl Manifest {
                 self.agent.id
             )));
         }
+        let entry_path = Path::new(&self.agent.entry);
+        if entry_path.is_absolute()
+            || entry_path.components().any(|c| {
+                matches!(
+                    c,
+                    Component::ParentDir | Component::Prefix(_) | Component::RootDir
+                )
+            })
+        {
+            return Err(ManifestError::Validation(
+                "agent.entry must be a relative path inside the agent package".into(),
+            ));
+        }
         for cap in self
             .capabilities
             .required
@@ -341,6 +354,28 @@ entry = "x.js"
         match Manifest::parse(bad) {
             Err(ManifestError::Validation(msg)) => assert!(msg.contains("agent.id")),
             other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_entry_outside_package() {
+        for entry in ["/bin/sh", "../agent.sh", "subdir/../../agent.sh"] {
+            let bad = format!(
+                r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "{entry}"
+"#
+            );
+            match Manifest::parse(&bad) {
+                Err(ManifestError::Validation(msg)) => {
+                    assert!(msg.contains("agent.entry"), "{msg}");
+                }
+                other => panic!("expected validation error for {entry:?}, got {other:?}"),
+            }
         }
     }
 

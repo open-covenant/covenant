@@ -268,7 +268,8 @@ priority                = "normal"`}</code>
             </td>
             <td>
               <code>trusted-local</code> or <code>linux-gvisor</code>.
-              The gVisor runner is the planned first production backend.
+              The runtime crate has an initial gVisor runner; daemon
+              backend selection and live Linux coverage remain planned.
             </td>
           </tr>
           <tr>

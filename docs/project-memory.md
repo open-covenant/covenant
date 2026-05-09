@@ -15,7 +15,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Solana settlement code is scaffolded, not production.
-- Runtime isolation is trusted-local subprocess timeout enforcement with manifest-level sandbox requirements; gVisor execution is planned, not implemented.
+- Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, and an initial Linux gVisor `runsc` runner in the runtime crate; daemon backend selection and live Linux coverage are not implemented.
 - Live tests exist but are opt-in and cover only selected real boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 

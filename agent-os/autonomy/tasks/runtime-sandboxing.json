@@ -34,6 +34,6 @@
     "Hardware and OS target selection for sandbox validation",
     "Approval before claiming sandbox-grade isolation publicly"
   ],
-  "nextAction": "Wire daemon backend config and the first GvisorRunner once the existing unrelated daemon/protocol worktree changes are clear enough to edit safely.",
+  "nextAction": "Wire daemon backend config to select trusted-local vs linux-gvisor once the existing unrelated daemon/protocol worktree changes are clear enough to edit safely, then add live runsc coverage.",
   "updated": "2026-05-09"
 }

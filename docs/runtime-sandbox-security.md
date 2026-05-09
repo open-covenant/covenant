@@ -1,6 +1,6 @@
 # Runtime Sandbox Security Contract
 
-This document defines the security contract for Covenant runtime isolation. It separates the implemented trusted-local runner from the planned Linux gVisor backend so public claims stay aligned with the code.
+This document defines the security contract for Covenant runtime isolation. It separates trusted-local execution, the initial Linux gVisor runtime runner, and the remaining production work so public claims stay aligned with the code.
 
 ## Current State
 
@@ -9,13 +9,15 @@ Implemented:
 - Agent manifests may declare `[sandbox]`.
 - `sandbox.required = true` is rejected unless the manifest names a sandbox-grade backend.
 - The current subprocess runner is `trusted-local`; it refuses to run agents that require sandbox-grade isolation.
-- Runtime docs and public status identify gVisor execution as planned, not implemented.
+- `GvisorRunner` prepares a restrictive OCI bundle and invokes `runsc`.
+- The initial `GvisorRunner` supports `filesystem = "read-only-package"` and `network = "off"` only.
+- Sandbox stderr redacts configured host-local paths before surfacing failure text.
 
 Not implemented:
 
-- No gVisor runner exists yet.
-- No OCI bundle builder exists yet.
-- No sandbox filesystem, network, environment, or cgroup policy is enforced yet.
+- The daemon does not select or configure sandbox backends yet.
+- Live Linux `runsc` validation is not wired into the test matrix yet.
+- `outbound-https-only`, `full`, `ephemeral`, and `host` sandbox policies are not enforced by the initial runner; they fail closed instead.
 - macOS execution is trusted-local only.
 
 ## Trust Boundary
@@ -52,7 +54,7 @@ This invariant is already enforced by `covenant-manifest` validation and `covena
 
 ## First Production Backend
 
-The accepted first production sandbox backend is Linux gVisor through `runsc`. The backend must meet this minimum contract before Covenant can claim sandbox-grade local execution:
+The accepted first production sandbox backend is Linux gVisor through `runsc`. The runtime crate now contains the first runner boundary, but Covenant cannot claim production sandbox-grade local execution until daemon selection and live Linux coverage are complete. The backend must meet this minimum contract:
 
 - prepare an OCI bundle from the agent package without mounting the host home directory;
 - mount the agent package read-only unless the manifest explicitly requests an ephemeral writable layer;
@@ -65,15 +67,15 @@ The accepted first production sandbox backend is Linux gVisor through `runsc`. T
 
 ## Filesystem Policy
 
-Manifest values are parsed now and enforced by future sandboxed backends:
+Manifest values are parsed now. The initial gVisor runner enforces `read-only-package` with `network = "off"` and rejects other policies until they have real enforcement:
 
 | Policy | Meaning |
 | --- | --- |
 | `read-only-package` | Agent package is visible read-only. This is the default. |
-| `ephemeral` | Agent receives a writable scratch layer that is discarded after dispatch. |
-| `host` | Host filesystem access. This must be treated as privileged and should require explicit operator approval before use by untrusted agents. |
+| `ephemeral` | Planned. Agent receives a writable scratch layer that is discarded after dispatch. |
+| `host` | Planned privileged policy. This must require explicit operator approval before use by untrusted agents. |
 
-Until a sandbox backend exists, these values are declarative only. They must not be described as enforced outside sandboxed runtime paths.
+Policies other than the initial enforced subset must not be described as available sandbox behavior.
 
 ## Security Review Checklist
 

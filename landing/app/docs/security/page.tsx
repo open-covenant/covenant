@@ -17,8 +17,9 @@ export default function SecurityPage() {
         operator. Within that boundary, Covenant provides hard guarantees
         over Covenant-mediated actions: ed25519-signed capability tokens,
         an append-only audit log, and enforcement at dispatch. Trusted-local
-        subprocess execution is not process isolation; sandbox-grade local
-        execution starts with the planned Linux gVisor backend.
+        subprocess execution is not process isolation. The runtime crate has
+        an initial Linux gVisor runner; daemon selection and live Linux
+        coverage are still required before production sandbox claims.
       </p>
 
       <h2>Trust boundaries</h2>
@@ -85,7 +86,8 @@ export default function SecurityPage() {
             <td>
               Manifests can require <code>linux-gvisor</code>, and the
               trusted-local runner fails closed instead of downgrading.
-              gVisor execution is planned, not implemented.
+              The initial runner supports only read-only packages with
+              network disabled until broader policies have real enforcement.
             </td>
           </tr>
         </tbody>

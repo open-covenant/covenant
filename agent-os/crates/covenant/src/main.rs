@@ -15,7 +15,7 @@
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant receipts recent [--limit N] [--json]
-//!   covenant chain status
+//!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N]
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant verify [--window N]
@@ -41,7 +41,7 @@
 use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_audit::AuditKind;
-use covenant_ipc::{read_frame, write_frame, ReceiptBatchSummary, Request, Response};
+use covenant_ipc::{read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
@@ -103,7 +103,7 @@ fn print_usage() {
         "  covenant memory repair backfill-provenance <id> --reason TEXT --provenance JSON [--apply]"
     );
     eprintln!("  covenant receipts recent [-n N] [--json]  list recent settlement receipts");
-    eprintln!("  covenant chain status                   show Solana protocol configuration");
+    eprintln!("  covenant chain status [--json]          show Solana protocol configuration");
     eprintln!(
         "  covenant chain flush-receipts [-n N]    batch local receipts into a Solana receipt root"
     );
@@ -834,28 +834,42 @@ async fn main() -> Result<()> {
             }
             match args[1].as_str() {
                 "status" => {
+                    let mut as_json = false;
+                    for arg in &args[2..] {
+                        match arg.as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                    }
                     write_frame(&mut stream, &Request::ChainStatus).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::ChainStatus { status } => {
-                            println!("chain: {}", status.chain);
-                            println!("cluster: {}", status.cluster);
-                            println!(
-                                "rpc_url: {}",
-                                status.rpc_url.as_deref().unwrap_or("(unset)")
-                            );
-                            println!("ws_url: {}", status.ws_url.as_deref().unwrap_or("(unset)"));
-                            println!(
-                                "program_id: {}",
-                                status.program_id.as_deref().unwrap_or("(unset)")
-                            );
-                            println!(
-                                "covnt_mint: {}",
-                                status.covnt_mint.as_deref().unwrap_or("(unset)")
-                            );
-                            if status.ready {
-                                println!("ready: true");
+                            if as_json {
+                                println!("{}", serde_json::to_string(&chain_status_json(&status))?);
                             } else {
-                                println!("ready: false ({})", status.missing.join(", "));
+                                println!("chain: {}", status.chain);
+                                println!("cluster: {}", status.cluster);
+                                println!(
+                                    "rpc_url: {}",
+                                    status.rpc_url.as_deref().unwrap_or("(unset)")
+                                );
+                                println!(
+                                    "ws_url: {}",
+                                    status.ws_url.as_deref().unwrap_or("(unset)")
+                                );
+                                println!(
+                                    "program_id: {}",
+                                    status.program_id.as_deref().unwrap_or("(unset)")
+                                );
+                                println!(
+                                    "covnt_mint: {}",
+                                    status.covnt_mint.as_deref().unwrap_or("(unset)")
+                                );
+                                if status.ready {
+                                    println!("ready: true");
+                                } else {
+                                    println!("ready: false ({})", status.missing.join(", "));
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1856,6 +1870,13 @@ fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> ser
     })
 }
 
+fn chain_status_json(status: &ChainStatus) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "chain_status",
+        "status": status,
+    })
+}
+
 fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
@@ -2275,6 +2296,28 @@ mod tests {
         assert_eq!(value["batches"][0]["receipt_count"], 2);
         assert!(value["batches"][0]["tx_sig"].is_null());
         assert!(value["batches"][0]["slot"].is_null());
+    }
+
+    #[test]
+    fn chain_status_json_renders_stable_shape() {
+        let status = ChainStatus {
+            chain: "solana".into(),
+            cluster: "localnet".into(),
+            rpc_url: Some("http://127.0.0.1:8899".into()),
+            ws_url: None,
+            program_id: None,
+            covnt_mint: Some("mint".into()),
+            ready: false,
+            missing: vec!["program_id".into()],
+        };
+        let value = chain_status_json(&status);
+        assert_eq!(value["kind"], "chain_status");
+        assert_eq!(value["status"]["chain"], "solana");
+        assert_eq!(value["status"]["cluster"], "localnet");
+        assert_eq!(value["status"]["rpc_url"], "http://127.0.0.1:8899");
+        assert!(value["status"]["ws_url"].is_null());
+        assert_eq!(value["status"]["ready"], false);
+        assert_eq!(value["status"]["missing"][0], "program_id");
     }
 
     #[test]

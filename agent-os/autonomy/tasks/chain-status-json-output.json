@@ -1,0 +1,37 @@
+{
+  "id": "chain-status-json-output",
+  "title": "Add JSON output for chain status",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add stable machine-readable output for `covenant chain status --json` so automation can inspect settlement readiness and missing configuration without parsing human text.",
+  "expectedFailureModes": [
+    "Settlement automation depends on human `chain status` lines that can change without schema review.",
+    "The JSON output omits fields required to determine whether settlement is enabled.",
+    "Live coverage exercises receipt reads and batches but not the public chain-readiness CLI contract."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cargo test -p covenant --locked chain_status",
+    "cargo build -p covenant --locked",
+    "cargo test -p covenantd --test live_cli_chain_status_json --locked -- --ignored live_",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomy backlog item.",
+  "updated": "2026-05-09"
+}

@@ -119,7 +119,8 @@ export default function SettlementPage() {
 
       <h2>Reading recent receipts</h2>
       <pre>
-        <code>{`covenant receipts recent --limit 20 --json
+        <code>{`covenant chain status --json
+covenant receipts recent --limit 20 --json
 covenant chain receipt-batches --limit 20 --json
 # Or via HTTP:
 curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>

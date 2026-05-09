@@ -40,7 +40,7 @@ export default function CliPage() {
                                      Tombstone a previously granted token.
 
   receipts recent [-n N] [--json]    List recent settlement receipts.
-  chain status                        Print configured chain settlement state.
+  chain status [--json]               Print configured chain settlement state.
   chain flush-receipts [-n N]         Batch local receipts into a receipt root.
   chain receipt-batches [-n N] [--json]
                                      List local receipt batches.

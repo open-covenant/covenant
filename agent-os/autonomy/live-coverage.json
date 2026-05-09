@@ -166,6 +166,7 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_agent_dispatch.rs",
+        "agent-os/crates/covenantd/tests/live_cli_chain_status_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_receipts_recent_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_receipt_batches_json.rs"
       ],

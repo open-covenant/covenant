@@ -316,6 +316,9 @@ pub struct SettlementReceipt {
     /// USD-pegged credits destroyed at this event.
     pub credits_consumed: u64,
     pub settled_at: u64,
+    /// When `resource == Memory`, correlates this receipt to the memory record id.
+    #[serde(default)]
+    pub memory_record_id: Option<Uuid>,
     #[serde(default)]
     pub chain: Option<String>,
     #[serde(default)]
@@ -462,6 +465,7 @@ mod tests {
             resource: ResourceKind::Memory,
             credits_consumed: 42,
             settled_at: 0,
+            memory_record_id: None,
             chain: Some("solana".to_string()),
             cluster: Some("devnet".to_string()),
             batch_id: Some("batch-1".to_string()),

@@ -43,7 +43,7 @@
         "agent-os/crates/covenantd/tests/live_cli_memory_compaction.rs"
       ],
       "status": "covered",
-      "nextGap": "Add exact memory-record to settlement-receipt correlation once receipts carry memory ids."
+      "nextGap": "Add receipt-batch and chain reconciliation once on-chain settlement metadata is stable."
     },
     {
       "id": "http-gateway",
@@ -53,10 +53,11 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_http_gateway.rs",
-        "agent-os/crates/covenantd/tests/live_http_tools_call.rs"
+        "agent-os/crates/covenantd/tests/live_http_tools_call.rs",
+        "agent-os/crates/covenantd/tests/live_http_audit_purge.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live coverage for high-risk HTTP mutation endpoints as retention and recovery policies stabilize."
+      "nextGap": "Add live coverage for additional HTTP mutation endpoints (memory/peer lifecycle) as web UI flows stabilize."
     },
     {
       "id": "cli-capabilities",
@@ -241,7 +242,7 @@
         "agent-os/crates/covenantd/tests/live_full_acceptance.rs"
       ],
       "status": "external_service",
-      "nextGap": "Keep Ollama tests opt-in and add explicit model availability probes before expanding model coverage."
+      "nextGap": "Use probe-ollama.mjs to preflight required models, then expand opt-in live Ollama coverage."
     }
   ]
 }

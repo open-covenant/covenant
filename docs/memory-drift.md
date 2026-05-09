@@ -107,4 +107,4 @@ Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.comp
 
 ## Current Limits
 
-The receipt check compares counts by owner and resource inside the sampled window. Settlement receipts do not yet carry the memory record id, so the verifier cannot prove exact record-to-receipt pairing. A later schema revision should add a direct correlation id.
+The receipt check still reports drift at an owner+window granularity, but it now prefers exact pairing when receipts carry `memory_record_id`. Older receipts (or non-memory resources) may omit the field, in which case the verifier falls back to count-based evidence.

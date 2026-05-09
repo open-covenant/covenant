@@ -37,7 +37,7 @@ run() {
 
 run cargo fmt --check
 run node ./scripts/validate-autonomy.mjs
-run node ./scripts/validate-git-identity.mjs
+run node ./scripts/validate-git-identity.mjs --ref HEAD
 run node ./scripts/validate-github-cli-account.mjs
 run node ./scripts/validate-readme-copy.mjs
 run node ./scripts/validate-live-coverage.mjs

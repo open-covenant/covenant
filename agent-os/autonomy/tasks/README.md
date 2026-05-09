@@ -44,6 +44,26 @@ node agent-os/scripts/autonomy-seed-next.mjs --actor planner --note "Seeded for 
 
 The actor must be one of the workflow roles. The note is validated with the rest of the autonomy records, so machine-local identifiers and forbidden public framing are rejected before the task is kept.
 
+## Adding Backlog Templates
+
+The seeded tasks in this directory come from templates in `agent-os/autonomy/backlog.json`.
+
+When `node agent-os/scripts/autonomy-seed-next.mjs` reports backlog exhaustion, it means every template already has a corresponding JSON file in `agent-os/autonomy/tasks`.
+
+Add a new template by appending an object to `agent-os/autonomy/backlog.json` and then validate before seeding:
+
+```bash
+node agent-os/scripts/validate-autonomy.mjs
+node agent-os/scripts/autonomy-next.mjs --seed
+```
+
+Checklist for new templates:
+
+- Pick a unique `id` that does not exist as `agent-os/autonomy/tasks/<id>.json`.
+- Use workflow enums from `agent-os/autonomy/workflow.json` for `priority` and `ownerRole`.
+- Keep `verification` commands deterministic and machine-portable (no local-only paths or secrets).
+- Name at least three concrete `expectedFailureModes` before promoting a task past `proposed`.
+
 ## State Rules
 
 - `proposed`: idea exists; expected failure modes may be empty.

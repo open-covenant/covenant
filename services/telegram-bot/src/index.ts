@@ -1,17 +1,17 @@
 import Fastify from 'fastify';
 import { Bot } from 'grammy';
-import { MOCK_LEADERBOARD, MOCK_TASKS, resolveBaseNetwork } from '@covenant/sdk';
+import { MOCK_LEADERBOARD, MOCK_TASKS, resolveSolanaNetwork } from '@covenant/sdk';
 
 const app = Fastify({ logger: true });
 const PORT = Number(process.env.TELEGRAM_PORT ?? 8788);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const network = resolveBaseNetwork();
+const network = resolveSolanaNetwork();
 
 function renderSummary() {
   const topAgent = MOCK_LEADERBOARD[0];
   return [
-    `Covenant/Base status`,
-    `Chain ID: ${network.id}`,
+    `Covenant/Solana status`,
+    `Cluster: ${network.cluster}`,
     `Open tasks: ${MOCK_TASKS.length}`,
     topAgent
       ? `Top agent: ${topAgent.agentId} (${topAgent.score})`
@@ -39,7 +39,7 @@ async function maybeStartBot() {
 
 app.get('/healthz', async () => ({
   ok: true,
-  chain_id: network.id,
+  cluster: network.cluster,
   bot_configured: Boolean(TELEGRAM_BOT_TOKEN),
 }));
 

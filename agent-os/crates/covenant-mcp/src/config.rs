@@ -7,12 +7,14 @@
 //! name    = "filesystem"
 //! command = "npx"
 //! args    = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
+//! tool_prefix = "fs"
 //! ```
 //!
-//! The `name` is informational (logging + audit); the live tool names come
-//! from the server's own `tools/list`.
+//! The `name` is informational (logging + audit). `tool_prefix` makes remote
+//! tool names stable inside Covenant as `mcp_<prefix>_<upstream_tool>`.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -33,6 +35,20 @@ pub struct McpServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub tool_prefix: Option<String>,
+    #[serde(default)]
+    pub include: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -71,6 +87,7 @@ mod tests {
 name    = "filesystem"
 command = "npx"
 args    = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
+tool_prefix = "fs"
 "#;
         let cfg: McpConfigFile = toml::from_str(s).unwrap();
         let servers = cfg.servers();
@@ -78,6 +95,8 @@ args    = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
         assert_eq!(servers[0].name, "filesystem");
         assert_eq!(servers[0].command, "npx");
         assert_eq!(servers[0].args.len(), 3);
+        assert!(servers[0].enabled);
+        assert_eq!(servers[0].tool_prefix.as_deref(), Some("fs"));
     }
 
     #[test]
@@ -118,5 +137,30 @@ args = []
 "#;
         let cfg: McpConfigFile = toml::from_str(s).unwrap();
         assert_eq!(cfg.servers().len(), 1);
+    }
+
+    #[test]
+    fn parses_server_hygiene_fields() {
+        let s = r#"
+[[mcp.server]]
+name = "hermes-agent"
+command = "pnpm"
+args = ["--filter", "@covenant/hermes-mcp-bridge", "start"]
+enabled = false
+tool_prefix = "hermes_agent"
+include = ["hermes_run", "hermes_run_status"]
+exclude = ["hermes_run_events"]
+env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
+"#;
+        let cfg: McpConfigFile = toml::from_str(s).unwrap();
+        let srv = &cfg.servers()[0];
+        assert!(!srv.enabled);
+        assert_eq!(srv.tool_prefix.as_deref(), Some("hermes_agent"));
+        assert_eq!(srv.include, vec!["hermes_run", "hermes_run_status"]);
+        assert_eq!(srv.exclude, vec!["hermes_run_events"]);
+        assert_eq!(
+            srv.env.get("HERMES_API_BASE_URL").map(String::as_str),
+            Some("http://127.0.0.1:8642/v1")
+        );
     }
 }

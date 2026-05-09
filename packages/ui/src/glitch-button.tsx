@@ -1,15 +1,15 @@
 import type { ButtonHTMLAttributes, AnchorHTMLAttributes, ReactNode } from 'react';
 
-type BaseProps = {
+type SharedProps = {
   children: ReactNode;
   variant?: 'outline' | 'solid' | 'ghost';
   size?: 'sm' | 'md' | 'lg';
 };
 
-type AsButton = BaseProps &
-  Omit<ButtonHTMLAttributes<HTMLButtonElement>, keyof BaseProps> & { as?: 'button'; href?: never };
-type AsAnchor = BaseProps &
-  Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof BaseProps> & { as: 'a' };
+type AsButton = SharedProps &
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, keyof SharedProps> & { as?: 'button'; href?: never };
+type AsAnchor = SharedProps &
+  Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof SharedProps> & { as: 'a' };
 
 type Props = AsButton | AsAnchor;
 

@@ -16,10 +16,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AppConfig::from_env();
-    let events = seed_events(config.chain_id);
+    let events = seed_events(&config.cluster, &config.program_id);
     let state = AppState {
-        chain_id: config.chain_id,
-        rpc_url: config.base_rpc_url.clone(),
+        cluster: config.cluster.clone(),
+        rpc_url: config.solana_rpc_url.clone(),
         confirmations: config.confirmations,
         events: Arc::new(events),
     };
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid bind addr: {}", config.bind_addr))?;
     let listener = TcpListener::bind(address).await?;
-    info!(address = %config.bind_addr, chain_id = config.chain_id, "covenant indexer up");
+    info!(address = %config.bind_addr, cluster = %config.cluster, "covenant indexer up");
     axum::serve(listener, app).await?;
     Ok(())
 }

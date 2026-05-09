@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use covenant_types::SettlementReceipt;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
@@ -25,12 +26,107 @@ pub enum SettlementError {
     Io(#[from] std::io::Error),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("no unsettled receipts")]
+    EmptyBatch,
 }
 
 #[async_trait]
 pub trait Settlement: Send + Sync {
     async fn record(&self, receipt: SettlementReceipt) -> Result<(), SettlementError>;
     async fn recent(&self, limit: usize) -> Result<Vec<SettlementReceipt>, SettlementError>;
+    async fn mark_batch_confirmed(
+        &self,
+        receipt_ids: &[uuid::Uuid],
+        confirmation: ChainConfirmation,
+    ) -> Result<u64, SettlementError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainConfirmation {
+    pub chain: String,
+    pub cluster: String,
+    pub batch_id: String,
+    pub merkle_root: String,
+    pub tx_sig: Option<String>,
+    pub slot: Option<u64>,
+    pub confirmed_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptBatch {
+    pub batch_id: String,
+    pub merkle_root: String,
+    pub receipt_ids: Vec<uuid::Uuid>,
+    pub receipt_count: u32,
+}
+
+pub fn build_receipt_batch(
+    receipts: &[SettlementReceipt],
+) -> Result<ReceiptBatch, SettlementError> {
+    let unsettled: Vec<&SettlementReceipt> = receipts
+        .iter()
+        .filter(|receipt| receipt.batch_id.is_none())
+        .collect();
+    if unsettled.is_empty() {
+        return Err(SettlementError::EmptyBatch);
+    }
+
+    let mut level: Vec<[u8; 32]> = unsettled
+        .iter()
+        .map(|receipt| receipt_hash(receipt))
+        .collect();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        for pair in level.chunks(2) {
+            let right = pair.get(1).copied().unwrap_or(pair[0]);
+            let mut hasher = Sha256::new();
+            hasher.update(pair[0]);
+            hasher.update(right);
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+
+    let merkle_root = hex32(level[0]);
+    let batch_id = hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into());
+    Ok(ReceiptBatch {
+        batch_id,
+        merkle_root,
+        receipt_ids: unsettled.iter().map(|receipt| receipt.id).collect(),
+        receipt_count: unsettled.len() as u32,
+    })
+}
+
+fn receipt_hash(receipt: &SettlementReceipt) -> [u8; 32] {
+    let payload = serde_json::json!({
+        "id": receipt.id,
+        "payer": receipt.payer.pubkey_base58(),
+        "resource": receipt.resource,
+        "credits_consumed": receipt.credits_consumed,
+        "settled_at": receipt.settled_at,
+    });
+    Sha256::digest(serde_json::to_vec(&payload).expect("receipt hash payload serializes")).into()
+}
+
+fn hex32(bytes: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn annotate_receipt(receipt: &mut SettlementReceipt, confirmation: &ChainConfirmation) {
+    receipt.chain = Some(confirmation.chain.clone());
+    receipt.cluster = Some(confirmation.cluster.clone());
+    receipt.batch_id = Some(confirmation.batch_id.clone());
+    receipt.merkle_root = Some(confirmation.merkle_root.clone());
+    receipt.tx_sig = confirmation.tx_sig.clone();
+    receipt.slot = confirmation.slot;
+    receipt.confirmed_at = confirmation.confirmed_at;
+    receipt.onchain_sig = confirmation.tx_sig.clone();
 }
 
 /// Append-only JSONL store. One receipt per line.
@@ -98,6 +194,49 @@ impl Settlement for JsonlReceiptStore {
         let start = all.len().saturating_sub(limit);
         Ok(all.split_off(start))
     }
+
+    async fn mark_batch_confirmed(
+        &self,
+        receipt_ids: &[uuid::Uuid],
+        confirmation: ChainConfirmation,
+    ) -> Result<u64, SettlementError> {
+        let _guard = self.lock.lock().await;
+        let f = match fs::File::open(&self.path).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let mut reader = BufReader::new(f);
+        let mut receipts = Vec::new();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
+            if !trimmed.is_empty() {
+                receipts.push(serde_json::from_str::<SettlementReceipt>(trimmed)?);
+            }
+        }
+
+        let mut updated = 0;
+        for receipt in &mut receipts {
+            if receipt_ids.contains(&receipt.id) {
+                annotate_receipt(receipt, &confirmation);
+                updated += 1;
+            }
+        }
+
+        let mut body = String::new();
+        for receipt in receipts {
+            body.push_str(&serde_json::to_string(&receipt)?);
+            body.push('\n');
+        }
+        fs::write(&self.path, body).await?;
+        Ok(updated)
+    }
 }
 
 /// In-memory test backend.
@@ -124,6 +263,22 @@ impl Settlement for InMemorySettlement {
         let start = g.len().saturating_sub(limit);
         Ok(g[start..].to_vec())
     }
+
+    async fn mark_batch_confirmed(
+        &self,
+        receipt_ids: &[uuid::Uuid],
+        confirmation: ChainConfirmation,
+    ) -> Result<u64, SettlementError> {
+        let mut records = self.records.lock().await;
+        let mut updated = 0;
+        for receipt in &mut *records {
+            if receipt_ids.contains(&receipt.id) {
+                annotate_receipt(receipt, &confirmation);
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
 }
 
 /// No-op fallback (settlement disabled).
@@ -137,6 +292,14 @@ impl Settlement for NoopSettlement {
 
     async fn recent(&self, _limit: usize) -> Result<Vec<SettlementReceipt>, SettlementError> {
         Ok(Vec::new())
+    }
+
+    async fn mark_batch_confirmed(
+        &self,
+        _receipt_ids: &[uuid::Uuid],
+        _confirmation: ChainConfirmation,
+    ) -> Result<u64, SettlementError> {
+        Ok(0)
     }
 }
 
@@ -176,6 +339,13 @@ mod tests {
             resource: ResourceKind::Memory,
             credits_consumed: amount,
             settled_at: amount,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
             onchain_sig: None,
         }
     }
@@ -223,6 +393,45 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let r = s.recent(10).await.unwrap();
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn receipt_batch_uses_only_unsettled_receipts() {
+        let mut settled = receipt(1);
+        settled.batch_id = Some("done".to_string());
+        let pending = receipt(2);
+
+        let batch = build_receipt_batch(&[settled, pending.clone()]).unwrap();
+        assert_eq!(batch.receipt_ids, vec![pending.id]);
+        assert_eq!(batch.receipt_count, 1);
+        assert_eq!(batch.merkle_root.len(), 64);
+        assert_eq!(batch.batch_id.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn in_memory_marks_batch_confirmed() {
+        let s = InMemorySettlement::new();
+        let r = receipt(9);
+        let id = r.id;
+        s.record(r).await.unwrap();
+
+        let confirmation = ChainConfirmation {
+            chain: "solana".to_string(),
+            cluster: "devnet".to_string(),
+            batch_id: "batch".to_string(),
+            merkle_root: "root".to_string(),
+            tx_sig: Some("sig".to_string()),
+            slot: Some(12),
+            confirmed_at: Some(34),
+        };
+        assert_eq!(
+            s.mark_batch_confirmed(&[id], confirmation).await.unwrap(),
+            1
+        );
+
+        let rows = s.recent(10).await.unwrap();
+        assert_eq!(rows[0].chain.as_deref(), Some("solana"));
+        assert_eq!(rows[0].onchain_sig.as_deref(), Some("sig"));
     }
 
     #[tokio::test]

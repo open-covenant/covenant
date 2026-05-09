@@ -1,18 +1,12 @@
 export { useSession, useSignOut, type Session } from './auth/session.js';
-export { useSiweSignIn } from './auth/siwe.js';
+export { useSolanaSignIn } from './auth/solana.js';
 export {
-  useTreasury,
-  useSetLimits,
+  useCredits,
+  useBuyCredits,
   useAllowedMints,
-  useVaultBalances,
-  useAgentStreams,
   useLeaderboard,
-  useBiddingState,
-  useTaskBidsIndexed,
 } from './hooks/data.js';
 export type {
+  CreditSummary,
   LeaderboardRow,
-  StreamSummary,
-  TaskBidSummary,
-  TreasurySummary,
 } from '@covenant/sdk';

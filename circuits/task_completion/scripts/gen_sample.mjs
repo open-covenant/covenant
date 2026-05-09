@@ -8,8 +8,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const poseidon = await buildPoseidon();
 const F = poseidon.F;
 
-const TASK_TAG = BigInt(0x5441534b);
-const RESULT_TAG = BigInt(0x52534c54);
+const TASK_TAG = 1413567307n;
+const RESULT_TAG = 1381190740n;
 
 const task_preimage = Array.from({ length: 16 }, (_, i) => BigInt(i + 1));
 const result_preimage = Array.from({ length: 32 }, (_, i) => BigInt(i + 100));

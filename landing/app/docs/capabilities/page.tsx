@@ -21,7 +21,7 @@ export default function CapabilitiesPage() {
       <p>
         A token is a <code>SignedCapability</code> — a{" "}
         <code>Capability</code> wrapped with a 64-byte ed25519 signature
-        encoded in Base58.
+        encoded in base58.
       </p>
 
       <pre>
@@ -115,7 +115,7 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
 
       <p>
         The grant audit event is written alongside the token, and the
-        daemon returns the Base58 signature so the operator can revoke
+        daemon returns the base58 signature so the operator can revoke
         the token later.
       </p>
 
@@ -153,7 +153,7 @@ covenant capabilities grant tool.web_search --expires-in 86400`}</code>
       <p>
         Revocations are tombstones written to{" "}
         <code>$COVENANT_HOME/capabilities/revoked.jsonl</code>. Each
-        tombstone references a token by its Base58 signature. The
+        tombstone references a token by its base58 signature. The
         active set is the granted set with revocations subtracted —
         tokens can be re-granted after revocation, but the prior
         signature is permanently dead.

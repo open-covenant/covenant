@@ -126,7 +126,7 @@ export function GlitchComposition({ seed, className, style }: Props) {
   const numberLines = Array.from({ length: 3 + Math.floor(rand() * 3) }).map(() => {
     const styleRoll = rand();
     let text: string;
-    if (styleRoll < 0.14) text = `0x${hexStr(4, 8)}`;
+    if (styleRoll < 0.14) text = `SIG.${hexStr(4, 8)}`;
     else if (styleRoll < 0.28) text = `${pick(CYBER_TAGS)}.${hexStr(2, 4)}/${digitStr(2, 3)}`;
     else if (styleRoll < 0.4) text = `${pick(CYBER_TAGS)}[${pick(CYBER_STATUS)}]`;
     else if (styleRoll < 0.52) text = `T-${digitStr(2, 2)}:${digitStr(2, 2)}:${digitStr(2, 2)}`;

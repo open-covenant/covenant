@@ -15,7 +15,7 @@ import {
   type ProveJobResult,
 } from './queue.js';
 import { jobsTotal, proveDuration } from './metrics.js';
-import { encodeGroth16ProofBytes, encodePublicInputsBytes32 } from './proof-format.js';
+import { encodeGroth16ProofHex, encodePublicInputWords } from './proof-format.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -135,9 +135,9 @@ export function startWorker() {
 
       const result: ProveJobResult = {
         proof,
-        proof_bytes: encodeGroth16ProofBytes(proof),
+        proof_hex: encodeGroth16ProofHex(proof),
         public_signals: publicSignals,
-        public_inputs_bytes32: encodePublicInputsBytes32(publicSignals),
+        public_input_words: encodePublicInputWords(publicSignals),
       };
 
       const payload = JSON.stringify({ status: 'completed', ...result });

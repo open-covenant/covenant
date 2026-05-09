@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -115,13 +115,24 @@ impl StdioMcpClient {
     /// Spawn `command` with `args` and start the JSON-RPC reader loop.
     /// Caller is responsible for invoking `initialize` afterwards.
     pub async fn spawn(command: &str, args: &[String]) -> Result<Arc<Self>, McpClientError> {
-        let mut child = Command::new(command)
-            .args(args)
+        Self::spawn_with_env(command, args, &BTreeMap::new()).await
+    }
+
+    /// Spawn `command` with explicit environment overrides for this server.
+    /// The child still inherits the daemon environment.
+    pub async fn spawn_with_env(
+        command: &str,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+    ) -> Result<Arc<Self>, McpClientError> {
+        let mut cmd = Command::new(command);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        cmd.envs(env);
+        let mut child = cmd.spawn()?;
 
         let stdin = child.stdin.take().ok_or(McpClientError::Closed)?;
         let stdout = child.stdout.take().ok_or(McpClientError::Closed)?;

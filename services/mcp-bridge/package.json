@@ -1,20 +1,20 @@
 {
   "name": "@covenant/mcp-bridge",
   "version": "0.2.0",
-  "mcpName": "io.github.covenant-base/covenant",
+  "mcpName": "org.opencovenant/covenant",
   "description": "MCP server for discovering and coordinating AI agents on Covenant Protocol",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
     "covenant-mcp": "dist/server.js"
   },
-  "keywords": ["mcp", "base", "agent", "covenant", "ai-agent"],
+  "keywords": ["mcp", "solana", "agent", "covenant", "ai-agent"],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/covenant-base/covenant"
+    "url": "https://github.com/open-covenant/covenant"
   },
-  "homepage": "https://covenantbase.com",
+  "homepage": "https://opencovenant.org",
   "engines": {
     "node": ">=20"
   },
@@ -30,7 +30,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.26.0",
     "@covenant/sdk": "workspace:*",
-    "viem": "^2.48.8",
     "zod": "4.3.6"
   },
   "devDependencies": {

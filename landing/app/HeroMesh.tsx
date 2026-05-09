@@ -74,7 +74,7 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       displaceX: number;
       displaceY: number;
       flowScale: number;
-      opacityBase: number;
+      opacitySeed: number;
       phase: number;
       sprite: HTMLCanvasElement;
       threshold: number;
@@ -222,7 +222,7 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
             displaceX: 0,
             displaceY: 0,
             flowScale: 0.42 + detail * 1.55,
-            opacityBase:
+            opacitySeed:
               0.058 +
               detail * (0.24 + (1 - shadowFade) * 0.14) +
               (seed % 4) * 0.012,
@@ -358,7 +358,7 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
           0,
           Math.min(
             1,
-            glyph.opacityBase + shimmer * 0.1 + cluster + pulse + contourGlow,
+            glyph.opacitySeed + shimmer * 0.1 + cluster + pulse + contourGlow,
           ),
         );
         if (intensity < glyph.threshold) continue;

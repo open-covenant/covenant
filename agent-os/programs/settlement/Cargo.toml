@@ -1,7 +1,7 @@
 [package]
 name = "covenant-settlement-program"
 version = "0.1.0"
-description = "Covenant on-chain settlement program. Anchor program for Solana implementing credit-mint and buyback PDAs."
+description = "Covenant Solana protocol program for external COVNT staking, credits, escrow, and receipt anchors."
 edition = "2021"
 license = "Apache-2.0"
 
@@ -15,7 +15,8 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
 anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"

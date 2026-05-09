@@ -1,6 +1,6 @@
 # Covenant Circuits
 
-Circom targets for Covenant proof generation and proof-backed settlement on Base.
+Circom targets for Covenant proof generation and proof-backed Solana protocol receipts.
 
 ## Layout
 
@@ -87,10 +87,10 @@ Poseidon is denser per absorb but runs fewer rounds. Final numbers land in
 3. `groth16 setup` + one `zkey contribute` pass.
 
 The exported `verification_key.json` is flagged via `verification_key.meta.json` with
-`"status": "dev-only"`. It exists solely so the rest of the stack (proof-gen service,
-proof_verifier fixtures, portal preview flows) can run end-to-end on devnet.
+`"status": "dev-only"`. It exists solely so the rest of the stack can run
+end-to-end on devnet.
 
-**Do not point production settlement at this VK.** The real ceremony must use published transcripts, external randomness, and pinned artifact provenance before Base mainnet rollout.
+**Do not point production settlement at this VK.** The real ceremony must use published transcripts, external randomness, and pinned artifact provenance before mainnet rollout.
 
 ## Known limitations (M1)
 
@@ -123,6 +123,6 @@ drop-in replacement for the production VK.
 
 ## Circuit catalog
 
-`circuits/catalog/` is the shared metadata layer for the proof-gen service, portal, and future
+`circuits/catalog/` is the shared metadata layer for the proof-gen service and future
 verification-key management. Each manifest records the circuit slug, version, verifier type,
 public-input order, and lifecycle (`live`, `planned`, or `research`).

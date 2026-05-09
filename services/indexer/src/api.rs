@@ -4,14 +4,14 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 use tower_http::cors::CorsLayer;
 
-use crate::model::{BaseEventRecord, IndexerSnapshot};
+use crate::model::{IndexerSnapshot, SolanaEventRecord};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub chain_id: u64,
+    pub cluster: String,
     pub rpc_url: String,
     pub confirmations: u64,
-    pub events: Arc<Vec<BaseEventRecord>>,
+    pub events: Arc<Vec<SolanaEventRecord>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -26,35 +26,48 @@ pub fn router(state: AppState) -> Router {
 #[derive(Serialize)]
 struct HealthzResponse {
     ok: bool,
-    chain_id: u64,
+    chain: &'static str,
+    cluster: String,
     rpc_url: String,
     confirmations: u64,
-    latest_block: u64,
+    latest_slot: u64,
     indexed_events: usize,
 }
 
 async fn healthz(State(state): State<AppState>) -> Json<HealthzResponse> {
-    let latest_block = state.events.iter().map(|event| event.block_number).max().unwrap_or(0);
+    let latest_slot = state
+        .events
+        .iter()
+        .map(|event| event.slot)
+        .max()
+        .unwrap_or(0);
 
     Json(HealthzResponse {
         ok: true,
-        chain_id: state.chain_id,
+        chain: "solana",
+        cluster: state.cluster.clone(),
         rpc_url: state.rpc_url.clone(),
         confirmations: state.confirmations,
-        latest_block,
+        latest_slot,
         indexed_events: state.events.len(),
     })
 }
 
 async fn summary(State(state): State<AppState>) -> Json<IndexerSnapshot> {
-    let latest_block = state.events.iter().map(|event| event.block_number).max().unwrap_or(0);
+    let latest_slot = state
+        .events
+        .iter()
+        .map(|event| event.slot)
+        .max()
+        .unwrap_or(0);
     Json(IndexerSnapshot {
-        chain_id: state.chain_id,
-        latest_block,
+        chain: "solana".to_string(),
+        cluster: state.cluster,
+        latest_slot,
         indexed_events: state.events.len(),
     })
 }
 
-async fn events(State(state): State<AppState>) -> Json<Vec<BaseEventRecord>> {
+async fn events(State(state): State<AppState>) -> Json<Vec<SolanaEventRecord>> {
     Json(state.events.as_ref().clone())
 }

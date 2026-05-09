@@ -195,7 +195,9 @@ pub struct MemoryRecord {
 
 /// One consumption event recorded by the settlement layer.
 ///
-/// `onchain_sig` is `None` until the receipt is batched and flushed to Solana.
+/// Chain metadata is empty until the receipt is batched and confirmed on
+/// Solana. `onchain_sig` remains as a backwards-compatible alias for
+/// `tx_sig` while older clients roll forward.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettlementReceipt {
     pub id: Uuid,
@@ -204,6 +206,20 @@ pub struct SettlementReceipt {
     /// USD-pegged credits destroyed at this event.
     pub credits_consumed: u64,
     pub settled_at: u64,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(default)]
+    pub cluster: Option<String>,
+    #[serde(default)]
+    pub batch_id: Option<String>,
+    #[serde(default)]
+    pub merkle_root: Option<String>,
+    #[serde(default)]
+    pub tx_sig: Option<String>,
+    #[serde(default)]
+    pub slot: Option<u64>,
+    #[serde(default)]
+    pub confirmed_at: Option<u64>,
     #[serde(default)]
     pub onchain_sig: Option<String>,
 }
@@ -336,6 +352,13 @@ mod tests {
             resource: ResourceKind::Memory,
             credits_consumed: 42,
             settled_at: 0,
+            chain: Some("solana".to_string()),
+            cluster: Some("devnet".to_string()),
+            batch_id: Some("batch-1".to_string()),
+            merkle_root: Some("root".to_string()),
+            tx_sig: Some("sig".to_string()),
+            slot: Some(7),
+            confirmed_at: Some(99),
             onchain_sig: None,
         };
         let json = serde_json::to_string(&r).unwrap();
@@ -343,5 +366,28 @@ mod tests {
         let back: SettlementReceipt = serde_json::from_str(&json).unwrap();
         assert!(back.onchain_sig.is_none());
         assert_eq!(back.credits_consumed, 42);
+        assert_eq!(back.chain.as_deref(), Some("solana"));
+        assert_eq!(back.tx_sig.as_deref(), Some("sig"));
+    }
+
+    #[test]
+    fn settlement_receipt_deserializes_pre_chain_metadata_rows() {
+        let pubkey = bs58::encode([7u8; 32]).into_string();
+        let json = format!(
+            r#"{{
+                "id":"{}",
+                "payer":{{"display":"research@local","pubkey":"{}"}},
+                "resource":"memory",
+                "credits_consumed":42,
+                "settled_at":0,
+                "onchain_sig":null
+            }}"#,
+            Uuid::nil(),
+            pubkey
+        );
+        let back: SettlementReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.credits_consumed, 42);
+        assert_eq!(back.chain, None);
+        assert_eq!(back.tx_sig, None);
     }
 }

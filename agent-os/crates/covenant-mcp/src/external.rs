@@ -11,6 +11,7 @@ use crate::{Content, Tool, ToolCallResult, ToolError, ToolSpec};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// MCP protocol version we advertise during `initialize`. The server may
@@ -23,6 +24,15 @@ pub enum BootstrapError {
     Transport(#[from] McpClientError),
     #[error("malformed tools/list response: {0}")]
     BadList(String),
+    #[error("duplicate remote tool name after MCP prefixing: {0}")]
+    DuplicateToolName(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RemoteToolOptions {
+    pub tool_prefix: Option<String>,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
 }
 
 /// Run `initialize` → `notifications/initialized` → `tools/list` against
@@ -30,6 +40,15 @@ pub enum BootstrapError {
 /// same client.
 pub async fn bootstrap_remote_tools(
     client: Arc<dyn McpClient>,
+) -> Result<Vec<Arc<dyn Tool>>, BootstrapError> {
+    bootstrap_remote_tools_with_options(client, RemoteToolOptions::default()).await
+}
+
+/// Like [`bootstrap_remote_tools`], but applies Covenant-side naming hygiene
+/// and include/exclude filters before the remote specs enter the registry.
+pub async fn bootstrap_remote_tools_with_options(
+    client: Arc<dyn McpClient>,
+    options: RemoteToolOptions,
 ) -> Result<Vec<Arc<dyn Tool>>, BootstrapError> {
     let init_params = serde_json::json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -46,13 +65,76 @@ pub async fn bootstrap_remote_tools(
         serde_json::from_value(list).map_err(|e| BootstrapError::BadList(format!("{e}")))?;
 
     let mut out: Vec<Arc<dyn Tool>> = Vec::with_capacity(parsed.tools.len());
+    let mut seen = HashSet::new();
     for spec in parsed.tools {
+        if !options.allows(&spec.name) {
+            continue;
+        }
+        let upstream_name = spec.name.clone();
+        let advertised_name = options.advertised_name(&upstream_name);
+        if !seen.insert(advertised_name.clone()) {
+            return Err(BootstrapError::DuplicateToolName(advertised_name));
+        }
         out.push(Arc::new(RemoteTool {
             client: client.clone(),
-            spec,
+            upstream_name,
+            spec: ToolSpec {
+                name: advertised_name,
+                ..spec
+            },
         }));
     }
     Ok(out)
+}
+
+impl RemoteToolOptions {
+    fn allows(&self, name: &str) -> bool {
+        if !self.include.is_empty() && !self.include.iter().any(|pattern| matches_filter(pattern, name)) {
+            return false;
+        }
+        !self.exclude.iter().any(|pattern| matches_filter(pattern, name))
+    }
+
+    fn advertised_name(&self, upstream_name: &str) -> String {
+        let Some(prefix) = self
+            .tool_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|prefix| !prefix.is_empty())
+        else {
+            return upstream_name.to_string();
+        };
+        format!("mcp_{}_{}", sanitize_prefix(prefix), upstream_name)
+    }
+}
+
+fn matches_filter(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim();
+    if pattern == "*" || pattern == name {
+        return true;
+    }
+    pattern
+        .strip_suffix('*')
+        .is_some_and(|prefix| name.starts_with(prefix))
+}
+
+fn sanitize_prefix(prefix: &str) -> String {
+    let sanitized: String = prefix
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "remote".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[derive(Deserialize)]
@@ -62,6 +144,7 @@ struct ToolsListResponse {
 
 pub struct RemoteTool {
     client: Arc<dyn McpClient>,
+    upstream_name: String,
     spec: ToolSpec,
 }
 
@@ -77,7 +160,7 @@ impl Tool for RemoteTool {
         self.spec.input_schema.clone()
     }
     async fn call(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
-        let params = serde_json::json!({ "name": self.spec.name, "arguments": arguments });
+        let params = serde_json::json!({ "name": self.upstream_name, "arguments": arguments });
         match self.client.request("tools/call", params).await {
             Ok(v) => parse_tool_call_result(v),
             Err(McpClientError::Rpc { code, message }) => {
@@ -175,6 +258,86 @@ mod tests {
         match &r.content[0] {
             Content::Text { text } => assert_eq!(text, "called fs.read"),
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prefixed_remote_tool_forwards_original_name() {
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(happy_handler));
+        let tools = bootstrap_remote_tools_with_options(
+            client,
+            RemoteToolOptions {
+                tool_prefix: Some("hermes.agent".into()),
+                ..RemoteToolOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "mcp_hermes_agent_fs.read".to_string(),
+                "mcp_hermes_agent_fs.write".to_string()
+            ]
+        );
+
+        let r = tools[0].call(serde_json::json!({ "path": "/tmp" })).await.unwrap();
+        match &r.content[0] {
+            Content::Text { text } => assert_eq!(text, "called fs.read"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn filters_remote_tools_before_advertising() {
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(happy_handler));
+        let tools = bootstrap_remote_tools_with_options(
+            client,
+            RemoteToolOptions {
+                include: vec!["fs.*".into()],
+                exclude: vec!["fs.write".into()],
+                ..RemoteToolOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        assert_eq!(names, vec!["fs.read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_remote_names_fail_bootstrap() {
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(|method, _| match method {
+            "initialize" => Ok(serde_json::json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "fake", "version": "0.0.1" }
+            })),
+            "tools/list" => Ok(serde_json::json!({
+                "tools": [
+                    {
+                        "name": "dup",
+                        "description": "first",
+                        "inputSchema": { "type": "object" }
+                    },
+                    {
+                        "name": "dup",
+                        "description": "second",
+                        "inputSchema": { "type": "object" }
+                    }
+                ]
+            })),
+            other => Err(McpClientError::Rpc {
+                code: -32601,
+                message: format!("unknown method {other}"),
+            }),
+        }));
+
+        match bootstrap_remote_tools(client).await {
+            Err(BootstrapError::DuplicateToolName(name)) => assert_eq!(name, "dup"),
+            Err(other) => panic!("unexpected: {other:?}"),
+            Ok(_) => panic!("duplicate remote tool names should fail bootstrap"),
         }
     }
 

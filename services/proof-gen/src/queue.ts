@@ -28,9 +28,9 @@ export type ProveJobData = {
 
 export type ProveJobResult = {
   proof: import('snarkjs').Groth16Proof;
-  proof_bytes: `0x${string}`;
+  proof_hex: string;
   public_signals: string[];
-  public_inputs_bytes32: Array<`0x${string}`>;
+  public_input_words: string[];
 };
 
 export function redisConnection(url: string): IORedis {

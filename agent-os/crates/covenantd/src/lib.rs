@@ -12,7 +12,9 @@ use covenant_a2a::Mailbox;
 use covenant_audit::{hash_hex, AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
 use covenant_identity::LocalIdentity;
-use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
+use covenant_ipc::{
+    read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
+};
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
@@ -20,11 +22,15 @@ use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{sign as sign_capability, verify_with_clock, CapabilityStore};
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
-use covenant_settlement::{intent_dispatch_credits, memory_write_credits, Settlement};
+use covenant_settlement::{
+    build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
+    Settlement,
+};
 use covenant_types::{
     AgentId, Capability, Intent, MemoryRecord, MemoryTier, Priority, ResourceKind,
     SettlementReceipt,
 };
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -302,6 +308,9 @@ impl Server {
             Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
             Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit, peer).await,
             Request::RecentReceipts { limit } => self.recent_receipts(limit, peer).await,
+            Request::ChainStatus => self.chain_status(),
+            Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
+            Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
             Request::GrantCapability {
                 action,
@@ -1337,6 +1346,13 @@ impl Server {
                 resource: ResourceKind::Memory,
                 credits_consumed: memory_write_credits(bytes_written),
                 settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
                 onchain_sig: None,
             };
             if let Err(e) = self.settlement.record(receipt).await {
@@ -1584,6 +1600,116 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("settlement: {e}"),
             },
+        }
+    }
+
+    fn chain_status(&self) -> Response {
+        Response::ChainStatus {
+            status: chain_status_from_env(),
+        }
+    }
+
+    async fn flush_receipts(&self, limit: usize, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "receipt flushing requires the operator identity".into(),
+            };
+        }
+
+        let receipts = match self.settlement.recent(limit).await {
+            Ok(receipts) => receipts
+                .into_iter()
+                .filter(|receipt| receipt.payer.pubkey == peer.pubkey)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("settlement: {e}"),
+                };
+            }
+        };
+
+        let batch = match build_receipt_batch(&receipts) {
+            Ok(batch) => batch,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("receipt batch: {e}"),
+                };
+            }
+        };
+
+        let status = chain_status_from_env();
+        let confirmation = ChainConfirmation {
+            chain: "solana".to_string(),
+            cluster: status.cluster,
+            batch_id: batch.batch_id.clone(),
+            merkle_root: batch.merkle_root.clone(),
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+        };
+        let receipts_updated = match self
+            .settlement
+            .mark_batch_confirmed(&batch.receipt_ids, confirmation)
+            .await
+        {
+            Ok(updated) => updated,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("mark receipt batch: {e}"),
+                };
+            }
+        };
+
+        Response::ReceiptBatchFlushed {
+            batch: ReceiptBatchSummary {
+                batch_id: batch.batch_id,
+                merkle_root: batch.merkle_root,
+                receipt_count: batch.receipt_count,
+                tx_sig: None,
+                slot: None,
+            },
+            receipts_updated,
+        }
+    }
+
+    async fn receipt_batches(&self, limit: usize, peer: &AgentId) -> Response {
+        let receipts = match self.settlement.recent(limit).await {
+            Ok(receipts) => receipts,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("settlement: {e}"),
+                };
+            }
+        };
+
+        let mut batches: BTreeMap<String, ReceiptBatchSummary> = BTreeMap::new();
+        for receipt in receipts
+            .into_iter()
+            .filter(|receipt| receipt.payer.pubkey == peer.pubkey)
+        {
+            let Some(batch_id) = receipt.batch_id.clone() else {
+                continue;
+            };
+            let entry = batches
+                .entry(batch_id.clone())
+                .or_insert_with(|| ReceiptBatchSummary {
+                    batch_id,
+                    merkle_root: receipt.merkle_root.clone().unwrap_or_default(),
+                    receipt_count: 0,
+                    tx_sig: receipt.tx_sig.clone(),
+                    slot: receipt.slot,
+                });
+            entry.receipt_count = entry.receipt_count.saturating_add(1);
+            if entry.tx_sig.is_none() {
+                entry.tx_sig = receipt.tx_sig.clone();
+            }
+            if entry.slot.is_none() {
+                entry.slot = receipt.slot;
+            }
+        }
+
+        Response::ReceiptBatches {
+            batches: batches.into_values().rev().take(limit).collect(),
         }
     }
 
@@ -1981,6 +2107,36 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn chain_status_from_env() -> ChainStatus {
+    let cluster = std::env::var("COVENANT_SOLANA_CLUSTER").unwrap_or_else(|_| "devnet".into());
+    let rpc_url = std::env::var("COVENANT_SOLANA_RPC_URL").ok();
+    let ws_url = std::env::var("COVENANT_SOLANA_WS_URL").ok();
+    let program_id = std::env::var("COVENANT_PROTOCOL_PROGRAM_ID").ok();
+    let covnt_mint = std::env::var("COVNT_MINT").ok();
+
+    let mut missing = Vec::new();
+    if rpc_url.is_none() {
+        missing.push("COVENANT_SOLANA_RPC_URL".to_string());
+    }
+    if program_id.is_none() {
+        missing.push("COVENANT_PROTOCOL_PROGRAM_ID".to_string());
+    }
+    if covnt_mint.is_none() {
+        missing.push("COVNT_MINT".to_string());
+    }
+
+    ChainStatus {
+        chain: "solana".into(),
+        cluster,
+        rpc_url,
+        ws_url,
+        program_id,
+        covnt_mint,
+        ready: missing.is_empty(),
+        missing,
+    }
 }
 
 /// Read a base58-encoded operator token off disk and decode it. The file
@@ -4053,6 +4209,13 @@ required = {caps:?}
                 resource: ResourceKind::Memory,
                 credits_consumed: 7,
                 settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
                 onchain_sig: None,
             })
             .await
@@ -4065,6 +4228,13 @@ required = {caps:?}
                 resource: ResourceKind::Memory,
                 credits_consumed: 3,
                 settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
                 onchain_sig: None,
             })
             .await

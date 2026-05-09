@@ -34,6 +34,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
 - GitHub PushEvent attribution follows the credential that updates the ref; use a repository-owned deploy key, GitHub App, or approved bot account when the web actor must also be neutral.
 - Public docs must distinguish implemented, experimental, and planned behavior.
+- The root README must pass `node agent-os/scripts/validate-readme-copy.mjs` after public copy or status changes.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
 - When the next autonomous task is already selected and no true blocker exists, continue into the next bounded slice instead of stopping at a status report.
 - After each successful commit or push, run `node agent-os/scripts/autonomy-continue.mjs`; if it names an unblocked task, continue immediately. A final status response is allowed only when every candidate is blocked, the user asks to pause, or the execution environment forces a turn boundary.

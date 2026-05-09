@@ -26,6 +26,7 @@ This status matrix separates what exists from what is experimental or planned. U
 - Default Rust gate: `bash agent-os/scripts/validate.sh`
 - Autonomy artifact gate: `node agent-os/scripts/validate-autonomy.mjs`
 - Git identity guard: `node agent-os/scripts/validate-git-identity.mjs`
+- README positioning guard: `node agent-os/scripts/validate-readme-copy.mjs`
 - Provenance gate: `node agent-os/scripts/provenance.mjs verify-all`
 - Next task selector: `node agent-os/scripts/autonomy-next.mjs`
 - Live coverage inventory: `bash agent-os/scripts/test-stats.sh`

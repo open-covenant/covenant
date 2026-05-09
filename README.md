@@ -40,9 +40,11 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 
 The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
-See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
+See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/release-validation.md](./docs/release-validation.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
 
 ## Capabilities
+
+<!-- covenant-readme-status-sha256: 7b2a403ca885204282179de19605a630c5ba86dbf7f00a048d3a163c46b8298e -->
 
 Covenant includes:
 
@@ -77,6 +79,12 @@ Verify committed provenance envelopes:
 
 ```bash
 node agent-os/scripts/provenance.mjs verify-all
+```
+
+Validate README positioning and status coverage:
+
+```bash
+node agent-os/scripts/validate-readme-copy.mjs
 ```
 
 Build the public documentation surface:

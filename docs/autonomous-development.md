@@ -146,7 +146,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
 | Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers by default; pre-push passes the exact pushed ref ranges. |
-| Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes when the active local Git author or committer does not resolve to an approved project identity. |
+| Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes unless the active local Git author and committer resolve to the neutral automation identity. |
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
@@ -157,6 +157,8 @@ Use the narrowest sufficient gate during development, then the full gate before 
 Live tests are not a substitute for unit tests. They are the signal that a path survives real process and tool boundaries.
 
 When running a targeted live CLI test directly, build the CLI first with `cargo build -p covenant --locked`; those tests execute the workspace `target/debug/covenant` binary.
+
+Before autonomous commits, run `node agent-os/scripts/configure-git-identity.mjs` in the repository. The history validator still accepts older project pseudonyms for audit continuity, but the current-identity guard only accepts the neutral automation identity for new local work.
 
 ## Project Memory
 

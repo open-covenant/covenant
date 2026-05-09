@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import {
-  approvedIdentitySummary,
-  identityViolation,
+  approvedCurrentIdentitySummary,
+  currentIdentityViolation,
   parseGitIdent,
 } from "./git-identity-policy.mjs";
 
@@ -31,7 +31,7 @@ for (const kind of ["AUTHOR", "COMMITTER"]) {
     continue;
   }
 
-  const violation = identityViolation(identity.name, identity.email);
+  const violation = currentIdentityViolation(identity.name, identity.email);
   if (violation) {
     failures.push(`${kind.toLowerCase()} identity ${violation}`);
   }
@@ -42,7 +42,7 @@ if (failures.length > 0) {
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
-  console.error(`Approved project identities: ${approvedIdentitySummary()}`);
+  console.error(`Approved current identity: ${approvedCurrentIdentitySummary()}`);
   process.exit(1);
 }
 

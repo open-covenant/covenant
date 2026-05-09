@@ -2,8 +2,7 @@
 # Repo-local pre-commit hook. Two responsibilities:
 #
 #   1. Enforce one-autonomous-session-per-checkout via session-id lock.
-#   2. Chain to the operator's global covenant-hooks/pre-commit so the
-#      existing identity / leakage checks still fire.
+#   2. Enforce the repo-owned Git identity and staged local-leak guards.
 #
 # Activated by `git config core.hooksPath hooks` at the repo root.
 # scripts/handover.sh calls that config command idempotently at every
@@ -47,17 +46,62 @@ if [ -n "${COVENANT_SESSION_ID:-}" ]; then
   fi
 fi
 
-# --- Chain to global covenant-hooks ---
-#
-# `core.hooksPath` is a hard override of the default `.git/hooks/` dir,
-# which means setting it for this repo silently disables the operator's
-# global pre-commit at ~/.config/git/covenant-hooks/pre-commit (author
-# email, $USER/$HOME/hostname leakage, etc.). Re-invoke that hook here
-# so its checks still apply.
+# --- Staged local-leak scan ---
 
-GLOBAL_HOOK="$HOME/.config/git/covenant-hooks/pre-commit"
-if [ -x "$GLOBAL_HOOK" ]; then
-  exec "$GLOBAL_HOOK" "$@"
+tokens=()
+[ -n "${USER:-}" ] && tokens+=("$USER")
+[ -n "${HOME:-}" ] && tokens+=("$HOME")
+
+for h_cmd in "hostname" "hostname -s" "scutil --get LocalHostName" "scutil --get ComputerName"; do
+  h=$(eval "$h_cmd" 2>/dev/null || true)
+  [ -n "$h" ] && [ "$h" != "localhost" ] && tokens+=("$h")
+done
+
+gname=$(git config --global --get user.name 2>/dev/null || true)
+gemail=$(git config --global --get user.email 2>/dev/null || true)
+[ -n "$gname" ] && tokens+=("$gname")
+[ -n "$gemail" ] && tokens+=("$gemail")
+
+unique=()
+for t in "${tokens[@]:-}"; do
+  [ -z "$t" ] && continue
+  skip=0
+  for u in "${unique[@]:-}"; do
+    [ "$t" = "$u" ] && skip=1 && break
+  done
+  [ "$skip" = 0 ] && unique+=("$t")
+done
+
+staged_files=$(git diff --cached --name-only)
+staged_added=$(git diff --cached --no-color -U0 | grep -E '^\+[^+]' || true)
+
+violations=0
+for tok in "${unique[@]:-}"; do
+  [ -z "$tok" ] && continue
+
+  if echo "$staged_files" | grep -F -- "$tok" >/dev/null 2>&1; then
+    {
+      echo "covenant pre-commit: leak detected in staged file path."
+      echo "$staged_files" | grep -F -- "$tok" | sed 's/^/  /'
+    } >&2
+    violations=$((violations + 1))
+  fi
+
+  if [ -n "$staged_added" ] && echo "$staged_added" | grep -F -- "$tok" >/dev/null 2>&1; then
+    echo "covenant pre-commit: leak detected in staged additions." >&2
+    git diff --cached --name-only | while read -r f; do
+      [ -z "$f" ] && continue
+      if git diff --cached --no-color -U0 -- "$f" 2>/dev/null | grep -E '^\+[^+]' | grep -F -- "$tok" >/dev/null 2>&1; then
+        echo "  $f" >&2
+      fi
+    done
+    violations=$((violations + 1))
+  fi
+done
+
+if [ "$violations" -gt 0 ]; then
+  echo "covenant pre-commit: aborting. Redact the listed tokens and re-stage." >&2
+  exit 2
 fi
 
 exit 0

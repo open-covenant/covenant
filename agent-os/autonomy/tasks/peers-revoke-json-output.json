@@ -1,7 +1,7 @@
 {
   "id": "peers-revoke-json-output",
   "title": "Add JSON output to peers revoke",
-  "state": "proposed",
+  "state": "in_progress",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [

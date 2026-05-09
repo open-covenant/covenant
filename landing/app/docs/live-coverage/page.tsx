@@ -16,7 +16,7 @@ const SURFACES = [
   ["Ignore policy gate", "covered", "scoped ignore override policy"],
   ["Peer authentication", "covered", "forced self-revoke recovery fixture"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
-  ["A2A mailbox", "covered", "stale-lease guard failure"],
+  ["A2A mailbox", "covered", "per-peer repair visibility"],
   ["MCP subprocess", "covered", "third-party fixture"],
   ["Runtime subprocess", "covered", "daemon dispatch failure receipts"],
   ["Linux gVisor runtime", "external service", "documented Linux runsc runner"],

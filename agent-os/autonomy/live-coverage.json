@@ -155,7 +155,7 @@
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
       ],
       "status": "covered",
-      "nextGap": "Add CLI stale-lease guard failure coverage now that machine-readable status output is stable."
+      "nextGap": "Add per-peer A2A repair visibility coverage if delegated repair moves beyond operator-owned tasks."
     },
     {
       "id": "mcp-subprocess",

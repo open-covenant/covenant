@@ -8,7 +8,7 @@ use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_types::AgentId;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
@@ -140,8 +140,8 @@ async fn send_and_lease(stream: &mut UnixStream, task: &A2ATask) -> Uuid {
     }
 }
 
-async fn run_cli(home: &Path, cli: &Path, args: &[&str]) -> String {
-    let out = Command::new(cli)
+async fn run_cli_raw(home: &Path, cli: &Path, args: &[&str]) -> Output {
+    Command::new(cli)
         .args(args)
         .env("COVENANT_HOME", home)
         .env("HOME", home)
@@ -150,7 +150,11 @@ async fn run_cli(home: &Path, cli: &Path, args: &[&str]) -> String {
         .stderr(Stdio::piped())
         .output()
         .await
-        .expect("spawn covenant CLI");
+        .expect("spawn covenant CLI")
+}
+
+async fn run_cli(home: &Path, cli: &Path, args: &[&str]) -> String {
+    let out = run_cli_raw(home, cli, args).await;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
@@ -228,6 +232,54 @@ async fn live_cli_a2a_repair_round_trip() {
     let requeue_task_id = requeue_task.id.to_string();
     let requeue_lease_id = requeue_lease.to_string();
     assert_eq!(entry["lease_id"].as_str(), Some(requeue_lease_id.as_str()));
+
+    let stale_lease_id = Uuid::nil().to_string();
+    assert_ne!(stale_lease_id, requeue_lease_id);
+    let rejected = run_cli_raw(
+        home.path(),
+        &cli,
+        &[
+            "a2a",
+            "requeue",
+            &requeue_task_id,
+            "--lease-id",
+            &stale_lease_id,
+            "--reason",
+            "live cli stale lease guard",
+            "--duplicate-risk",
+            "idempotent",
+        ],
+    )
+    .await;
+    let rejected_stdout = String::from_utf8_lossy(&rejected.stdout);
+    let rejected_stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        !rejected.status.success(),
+        "stale lease repair must fail: status={:?} stdout={rejected_stdout:?} stderr={rejected_stderr:?}",
+        rejected.status
+    );
+    assert!(
+        rejected_stdout.trim().is_empty(),
+        "failed stale lease repair must not emit a success outcome: {rejected_stdout:?}"
+    );
+    assert!(
+        rejected_stderr.contains("lease mismatch")
+            && rejected_stderr.contains(&requeue_task_id)
+            && rejected_stderr.contains(&stale_lease_id)
+            && rejected_stderr.contains(&requeue_lease_id),
+        "stale lease repair should be operator-classifiable: {rejected_stderr:?}"
+    );
+
+    let status = run_cli(
+        home.path(),
+        &cli,
+        &["a2a", "status", "--min-lease-age-ms", "0"],
+    )
+    .await;
+    let entry = status_task(&status, requeue_task.id);
+    assert_eq!(entry["state"], "in_flight");
+    assert_eq!(entry["lease_id"].as_str(), Some(requeue_lease_id.as_str()));
+
     let outcome = run_cli(
         home.path(),
         &cli,

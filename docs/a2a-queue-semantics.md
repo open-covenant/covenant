@@ -101,5 +101,5 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 
 ## Remaining Work
 
-- Add stale lease-guard failure coverage once machine-readable CLI status output stabilizes.
+- Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
 - Keep automatic retry disabled until task classes can declare idempotency safely.

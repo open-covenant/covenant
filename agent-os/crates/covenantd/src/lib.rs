@@ -2282,6 +2282,7 @@ impl Server {
                 resource: ResourceKind::Memory,
                 credits_consumed: memory_write_credits(bytes_written),
                 settled_at: epoch_ms(),
+                memory_record_id: Some(intent_id),
                 chain: None,
                 cluster: None,
                 batch_id: None,
@@ -3288,39 +3289,87 @@ impl Server {
         // Check 4: memory writes and settlement receipts should be 1:1.
         // Mismatch means a memory write succeeded but the settlement record
         // failed (or vice versa) — Phase 0 is fail-soft on settlement.
-        let mut memory_by_owner: HashMap<String, usize> = HashMap::new();
+        //
+        // When receipts carry `memory_record_id`, we can validate exact pairing
+        // instead of relying on owner-local counts alone.
+        let mut memory_ids_by_owner: HashMap<String, HashSet<Uuid>> = HashMap::new();
         for record in &memories {
-            *memory_by_owner
+            memory_ids_by_owner
                 .entry(record.owner.pubkey_base58())
-                .or_insert(0) += 1;
+                .or_default()
+                .insert(record.id);
         }
-        let mut receipt_by_owner: HashMap<String, usize> = HashMap::new();
+
+        let mut receipt_count_by_owner: HashMap<String, usize> = HashMap::new();
+        let mut receipt_ids_by_owner: HashMap<String, HashSet<Uuid>> = HashMap::new();
+        let mut uncorrelated_receipts_by_owner: HashMap<String, usize> = HashMap::new();
         for receipt in receipts
             .iter()
             .filter(|receipt| receipt.resource == ResourceKind::Memory)
         {
-            *receipt_by_owner
-                .entry(receipt.payer.pubkey_base58())
-                .or_insert(0) += 1;
+            let owner = receipt.payer.pubkey_base58();
+            *receipt_count_by_owner.entry(owner.clone()).or_insert(0) += 1;
+            match receipt.memory_record_id {
+                Some(id) => {
+                    receipt_ids_by_owner.entry(owner).or_default().insert(id);
+                }
+                None => {
+                    *uncorrelated_receipts_by_owner.entry(owner).or_insert(0) += 1;
+                }
+            }
         }
-        let owners: HashSet<String> = memory_by_owner
+
+        let owners: HashSet<String> = memory_ids_by_owner
             .keys()
-            .chain(receipt_by_owner.keys())
+            .chain(receipt_count_by_owner.keys())
             .cloned()
             .collect();
         let mut pair_diff = 0_u64;
         for owner in owners {
-            let memory_count = memory_by_owner.get(&owner).copied().unwrap_or(0);
-            let receipt_count = receipt_by_owner.get(&owner).copied().unwrap_or(0);
-            if memory_count == receipt_count {
+            let memory_ids = memory_ids_by_owner.get(&owner);
+            let memory_count = memory_ids.map_or(0, |set| set.len());
+            let receipt_count = receipt_count_by_owner.get(&owner).copied().unwrap_or(0);
+            let uncorrelated = uncorrelated_receipts_by_owner
+                .get(&owner)
+                .copied()
+                .unwrap_or(0);
+
+            if uncorrelated > 0 {
+                if memory_count == receipt_count {
+                    continue;
+                }
+                pair_diff += memory_count.abs_diff(receipt_count) as u64;
+                drift.push(VerifyDrift {
+                    kind: "memory_receipt_mismatch".into(),
+                    id: Some(owner),
+                    message: format!(
+                        "{memory_count} memory record(s) vs {receipt_count} memory receipt(s) for owner (uncorrelated receipts: {uncorrelated})"
+                    ),
+                    repair: "reconcile settlement before mutating memory; missing receipts may require backfill, extra receipts may require accounting review".into(),
+                });
                 continue;
             }
-            pair_diff += memory_count.abs_diff(receipt_count) as u64;
+
+            let receipt_ids = receipt_ids_by_owner.get(&owner);
+            let receipt_id_count = receipt_ids.map_or(0, |set| set.len());
+            if memory_count == receipt_count && receipt_count == receipt_id_count {
+                continue;
+            }
+
+            let empty: HashSet<Uuid> = HashSet::new();
+            let memory_set = memory_ids.unwrap_or(&empty);
+            let receipt_set = receipt_ids.unwrap_or(&empty);
+            let missing = memory_set.difference(receipt_set).count() as u64;
+            let extra = receipt_set.difference(memory_set).count() as u64;
+            let duplicates = receipt_count.saturating_sub(receipt_id_count) as u64;
+            let diff = missing + extra + duplicates;
+            pair_diff += diff;
+
             drift.push(VerifyDrift {
                 kind: "memory_receipt_mismatch".into(),
                 id: Some(owner),
                 message: format!(
-                    "{memory_count} memory record(s) vs {receipt_count} memory receipt(s) for owner"
+                    "{memory_count} memory record(s) vs {receipt_count} memory receipt(s): missing={missing}, extra={extra}, duplicate_ids={duplicates}"
                 ),
                 repair: "reconcile settlement before mutating memory; missing receipts may require backfill, extra receipts may require accounting review".into(),
             });
@@ -7716,6 +7765,7 @@ required = {caps:?}
                 resource: ResourceKind::Memory,
                 credits_consumed: 7,
                 settled_at: epoch_ms(),
+                memory_record_id: None,
                 chain: None,
                 cluster: None,
                 batch_id: None,
@@ -7735,6 +7785,7 @@ required = {caps:?}
                 resource: ResourceKind::Memory,
                 credits_consumed: 3,
                 settled_at: epoch_ms(),
+                memory_record_id: None,
                 chain: None,
                 cluster: None,
                 batch_id: None,

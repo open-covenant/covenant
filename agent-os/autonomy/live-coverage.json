@@ -43,7 +43,7 @@
         "agent-os/crates/covenantd/tests/live_cli_memory_compaction.rs"
       ],
       "status": "covered",
-      "nextGap": "Add exact memory-record to settlement-receipt correlation once receipts carry memory ids."
+      "nextGap": "Add receipt-batch and chain reconciliation once on-chain settlement metadata is stable."
     },
     {
       "id": "http-gateway",

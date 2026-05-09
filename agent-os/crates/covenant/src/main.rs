@@ -2992,6 +2992,7 @@ mod tests {
             resource: ResourceKind::Memory,
             credits_consumed: 42,
             settled_at: 1_700_000_000_000,
+            memory_record_id: None,
             chain: None,
             cluster: None,
             batch_id: None,

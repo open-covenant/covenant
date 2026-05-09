@@ -25,6 +25,7 @@ export default function SettlementPage() {
   resource:         "memory" | "compute" | "tool" | "egress",
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
+  memory_record_id: uuid | null,        // set when resource == "memory"
   onchain_sig:      string | null       // populated when flushed on-chain
 }`}</code>
       </pre>

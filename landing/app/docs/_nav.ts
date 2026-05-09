@@ -9,7 +9,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/getting-started", label: "Getting started" },
       { href: "/concepts", label: "Concepts" },
       { href: "/autonomy", label: "Autonomous workflow" },
-      { href: "/validation", label: "Validation profile" },
+      { href: "/alpha-release", label: "Alpha release" },
     ],
   },
   {
@@ -34,6 +34,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/capabilities", label: "Capability tokens" },
       { href: "/mcp", label: "MCP integration" },
       { href: "/a2a", label: "Agent-to-agent" },
+      { href: "/a2a-idempotency", label: "A2A idempotency policy" },
       { href: "/audit", label: "Audit log" },
       { href: "/audit-integrity", label: "Audit integrity" },
       { href: "/settlement", label: "Settlement" },

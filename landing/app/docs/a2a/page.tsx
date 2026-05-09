@@ -108,7 +108,8 @@ A2ATaskResult {
         observed <code>lease_id</code> as a guard against repairing a
         newer lease than the operator inspected. Daemon, HTTP, and CLI
         exposure are the next hardening step; automatic retry remains
-        disabled until tasks carry explicit idempotency metadata (key + policy).
+        disabled until tasks can declare idempotency safely. See{" "}
+        <Link href="/a2a-idempotency">A2A idempotency policy</Link>.
       </p>
 
       <h2>Daemon-mediated flow</h2>
@@ -227,8 +228,8 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
           tracked separately.
         </li>
         <li>
-          <strong>Retry posture.</strong> A2A delivery avoids automatic
-          redelivery of leased tasks after restart. This prevents duplicate
+          <strong>Retry posture.</strong> Alpha does not auto-redeliver
+          leased tasks after restart. This avoids duplicate
           non-idempotent work; explicit repair commands carry the
           operator&apos;s duplicate-work posture.
         </li>

@@ -158,6 +158,19 @@
       "nextGap": "Add live budget resume coverage after pause/resume policy lands."
     },
     {
+      "id": "settlement-receipts",
+      "name": "Settlement receipts and chain gates",
+      "mockTests": [
+        "agent-os/crates/covenant-settlement/src/lib.rs",
+        "agent-os/crates/covenantd/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_agent_dispatch.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live CLI receipt-read coverage for scoped chain.receipts grants once JSON receipt output stabilizes."
+    },
+    {
       "id": "local-model",
       "name": "Local model and full acceptance path",
       "mockTests": [

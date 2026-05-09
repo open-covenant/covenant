@@ -1,0 +1,32 @@
+{
+  "id": "chain-scope-live-coverage",
+  "title": "Cover scoped chain capability gates in live tests",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs/live-coverage.md"
+  ],
+  "summary": "Update live settlement/receipt coverage so real daemon tests grant and exercise the chain.receipts capability required by scoped chain enforcement.",
+  "expectedFailureModes": [
+    "The ignored live dispatch test fails after chain.receipts became required for receipt reads.",
+    "Live coverage metadata claims receipt coverage while the capability gate is not represented.",
+    "Future scope hardening regresses live receipt reads without a real-daemon guard."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cargo test -p covenantd --test live_agent_dispatch --locked -- --ignored live_",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomy backlog item.",
+  "updated": "2026-05-09"
+}

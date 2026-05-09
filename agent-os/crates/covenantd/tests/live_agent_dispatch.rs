@@ -121,7 +121,12 @@ required = ["tool.web_search"]
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    for action in ["tool.web_search", "memory.write", "memory.read"] {
+    for action in [
+        "tool.web_search",
+        "memory.write",
+        "memory.read",
+        "chain.receipts",
+    ] {
         write_frame(
             &mut stream,
             &Request::GrantCapability {

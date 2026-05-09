@@ -2990,6 +2990,7 @@ mod tests {
             id: uuid::Uuid::nil(),
             payer: payer.clone(),
             resource: ResourceKind::Memory,
+            memory_record_id: Some(uuid::Uuid::nil()),
             credits_consumed: 42,
             settled_at: 1_700_000_000_000,
             chain: None,
@@ -3010,6 +3011,10 @@ mod tests {
             payer.pubkey_base58()
         );
         assert_eq!(value["receipts"][0]["resource"], "memory");
+        assert_eq!(
+            value["receipts"][0]["memory_record_id"],
+            uuid::Uuid::nil().to_string()
+        );
         assert_eq!(value["receipts"][0]["credits_consumed"], 42);
         assert!(value["receipts"][0]["tx_sig"].is_null());
     }

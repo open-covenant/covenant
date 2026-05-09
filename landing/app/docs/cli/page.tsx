@@ -269,7 +269,7 @@ verify (last 100 records):
   ✓ memory ↔ audit — 0 memory orphan(s), 0 audit orphan(s)
   ✓ memory parent references — 0 stale parent reference(s)
   ✓ capability ↔ audit — 0 capabilit(ies) without matching grant audit event
-  ✓ memory ↔ receipts — 20 memory record(s) vs 20 receipt(s); diff = 0
+  ✓ memory ↔ receipts — 20 memory record(s) vs 20 receipt(s); count diff = 0; exact drift = 0; legacy fallback = 0
 orphans total: 0`}</code>
       </pre>
 

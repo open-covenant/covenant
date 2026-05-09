@@ -222,8 +222,9 @@ export default function ConceptsPage() {
         memory write, every tool call, and (eventually) every external
         compute or LLM token spent produces a{" "}
         <strong>settlement receipt</strong> — a UUID, a payer, a resource
-        kind, a credits-consumed integer, a timestamp, and an optional
-        on-chain signature. Receipts accumulate in{" "}
+        kind, a credits-consumed integer, a timestamp, a memory record id
+        when the resource is memory, and an optional on-chain signature.
+        Receipts accumulate in{" "}
         <code>$COVENANT_HOME/receipts/working.jsonl</code>. Chain fields
         remain empty unless a future settlement integration records them.
       </p>

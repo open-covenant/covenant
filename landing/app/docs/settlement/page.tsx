@@ -23,6 +23,7 @@ export default function SettlementPage() {
   id:               uuid,
   payer:            AgentId,            // who consumed resources
   resource:         "memory" | "compute" | "tool" | "egress",
+  memory_record_id: uuid | null,         // set for daemon memory writes
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
   onchain_sig:      string | null       // populated when flushed on-chain
@@ -34,8 +35,9 @@ export default function SettlementPage() {
         <code>$COVENANT_HOME/receipts/working.jsonl</code>. The daemon
         writes one receipt per resource event — for example, every
         memory write produces a receipt with{" "}
-        <code>{'resource = "memory"'}</code> and{" "}
-        <code>credits_consumed</code> proportional to bytes written.
+        <code>{'resource = "memory"'}</code>,{" "}
+        <code>memory_record_id</code>, and <code>credits_consumed</code>{" "}
+        proportional to bytes written.
       </p>
 
       <h2>Credit pricing</h2>
@@ -130,11 +132,13 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
       <h2>Verification</h2>
       <p>
         <code>covenant verify --json</code> cross-checks memory writes against
-        settlement receipts: a memory write without a corresponding
-        receipt, or the inverse, surfaces as drift. The daemon is
-        fail-soft on receipt write — a failed receipt does not cancel
-        the memory write — so drift in this dimension is the principal
-        operator-visible indicator of a settlement-side fault.
+        settlement receipts by <code>memory_record_id</code> when the
+        receipt carries one, with owner/resource count fallback for older
+        rows. Missing, duplicate, orphaned, or wrong-payer correlations
+        surface as drift. The daemon is fail-soft on receipt write — a
+        failed receipt does not cancel the memory write — so drift in this
+        dimension is the principal operator-visible indicator of a
+        settlement-side fault.
       </p>
 
       <h2>Release</h2>

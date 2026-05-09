@@ -15,6 +15,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
+- Local memory settlement receipts carry `memory_record_id` for daemon-created memory writes; verifier reconciliation joins exactly when the field exists and falls back to owner/resource counts for legacy receipt rows.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Release language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.

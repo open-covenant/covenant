@@ -100,10 +100,25 @@ async fn live_cli_receipts_recent_json_round_trip() {
     wait_for_operator_token(home.path()).await;
 
     let cli_exe = covenant_cli_bin();
-    for action in ["memory.write", "chain.receipts"] {
+    for action in ["memory.write", "memory.read", "chain.receipts"] {
         run_cli(&cli_exe, home.path(), &["capabilities", "grant", action]).await;
     }
     run_cli(&cli_exe, home.path(), &["intent", "receipt json probe"]).await;
+    let memory_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["memory", "recent", "--json", "--limit", "10"],
+    )
+    .await;
+    let memory: Value = serde_json::from_str(memory_stdout.trim())
+        .expect("memory recent --json must be valid JSON");
+    let records = memory["records"]
+        .as_array()
+        .expect("memory_read must include records array");
+    assert_eq!(records.len(), 1, "expected one memory record: {records:?}");
+    let memory_id = records[0]["id"]
+        .as_str()
+        .expect("memory record must include id");
 
     let stdout = run_cli(
         &cli_exe,
@@ -121,6 +136,7 @@ async fn live_cli_receipts_recent_json_round_trip() {
         .expect("receipt_list must include receipts array");
     assert_eq!(receipts.len(), 1, "expected one receipt: {receipts:?}");
     assert_eq!(receipts[0]["resource"].as_str(), Some("memory"));
+    assert_eq!(receipts[0]["memory_record_id"].as_str(), Some(memory_id));
     assert!(
         receipts[0]["credits_consumed"].as_u64().unwrap_or(0) > 0,
         "receipt must include positive credit consumption: {:?}",

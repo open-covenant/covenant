@@ -16,6 +16,10 @@ The verifier returns two layers:
 | `memory_stale_parent` | A memory record points at a parent memory id that no longer exists. |
 | `capability_without_audit` | A capability grant exists without a matching `CapabilityGranted` audit row. |
 | `memory_receipt_mismatch` | Memory records and memory settlement receipts differ for an owner in the sampled window. |
+| `memory_without_receipt` | A memory record has no exact or legacy-compatible settlement receipt. |
+| `receipt_without_memory_record` | A settlement receipt references a missing memory record. |
+| `memory_receipt_duplicate` | More than one settlement receipt references the same memory record. |
+| `memory_receipt_owner_mismatch` | A receipt references a memory record owned by a different payer. |
 
 ## Operator Posture
 
@@ -105,6 +109,6 @@ covenant memory compact --reason "monthly memory hygiene" --json ...
 
 Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.compact.apply`. Successful dry-runs and mutations record `memory_compaction_applied` audit rows containing the mode, changed flag, operator reason, deleted ids, stale-marked ids, and detached-parent ids. Long-term memory is not deleted by compaction; it is marked stale so future retrieval policy can decide how to treat it.
 
-## Current Limits
+## Receipt Correlation
 
-The receipt check compares counts by owner and resource inside the sampled window. Settlement receipts do not yet carry the memory record id, so the verifier cannot prove exact record-to-receipt pairing. A later schema revision should add a direct correlation id.
+Memory settlement receipts now carry `memory_record_id` when they are produced by daemon memory writes. `covenant verify` joins on that id first, then falls back to owner/resource counts only for older receipt rows that predate the field. Exact drift surfaces as `memory_without_receipt`, `receipt_without_memory_record`, `memory_receipt_duplicate`, or `memory_receipt_owner_mismatch`; aggregate count drift still surfaces as `memory_receipt_mismatch`.

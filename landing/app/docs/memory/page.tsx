@@ -195,7 +195,11 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
 # audit_without_memory
 # memory_stale_parent
 # capability_without_audit
-# memory_receipt_mismatch`}</code>
+# memory_receipt_mismatch
+# memory_without_receipt
+# receipt_without_memory_record
+# memory_receipt_duplicate
+# memory_receipt_owner_mismatch`}</code>
       </pre>
 
       <p>

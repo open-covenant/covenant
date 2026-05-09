@@ -102,6 +102,7 @@ fn receipt_hash(receipt: &SettlementReceipt) -> [u8; 32] {
         "id": receipt.id,
         "payer": receipt.payer.pubkey_base58(),
         "resource": receipt.resource,
+        "memory_record_id": receipt.memory_record_id,
         "credits_consumed": receipt.credits_consumed,
         "settled_at": receipt.settled_at,
     });
@@ -337,6 +338,7 @@ mod tests {
             id: Uuid::new_v4(),
             payer: AgentId::new("user@local", [0u8; 32]),
             resource: ResourceKind::Memory,
+            memory_record_id: None,
             credits_consumed: amount,
             settled_at: amount,
             chain: None,
@@ -406,6 +408,17 @@ mod tests {
         assert_eq!(batch.receipt_count, 1);
         assert_eq!(batch.merkle_root.len(), 64);
         assert_eq!(batch.batch_id.len(), 64);
+    }
+
+    #[test]
+    fn receipt_batch_root_changes_with_memory_record_id() {
+        let a = receipt(1);
+        let mut b = a.clone();
+        b.memory_record_id = Some(Uuid::new_v4());
+
+        let batch_a = build_receipt_batch(&[a]).unwrap();
+        let batch_b = build_receipt_batch(&[b]).unwrap();
+        assert_ne!(batch_a.merkle_root, batch_b.merkle_root);
     }
 
     #[tokio::test]

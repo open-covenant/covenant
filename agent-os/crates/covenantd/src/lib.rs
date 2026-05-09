@@ -2272,6 +2272,7 @@ impl Server {
             created_at: issued_at,
             parent: None,
         };
+        let memory_record_id = record.id;
         let bytes_written = record.text.len();
         if let Err(e) = self.memory.put(record).await {
             warn!(error = %e, "memory write failed");
@@ -2280,6 +2281,7 @@ impl Server {
                 id: receipt_id,
                 payer: issuer.clone(),
                 resource: ResourceKind::Memory,
+                memory_record_id: Some(memory_record_id),
                 credits_consumed: memory_write_credits(bytes_written),
                 settled_at: epoch_ms(),
                 chain: None,
@@ -3286,8 +3288,100 @@ impl Server {
         });
 
         // Check 4: memory writes and settlement receipts should be 1:1.
-        // Mismatch means a memory write succeeded but the settlement record
-        // failed (or vice versa) — Phase 0 is fail-soft on settlement.
+        // New receipts carry `memory_record_id` for exact joins; legacy rows
+        // without it fall back to owner/resource counts so old stores keep
+        // passing when their aggregate accounting is still balanced.
+        let memory_by_id: HashMap<Uuid, &MemoryRecord> =
+            memories.iter().map(|memory| (memory.id, memory)).collect();
+        let memory_receipts: Vec<&SettlementReceipt> = receipts
+            .iter()
+            .filter(|receipt| receipt.resource == ResourceKind::Memory)
+            .collect();
+        let mut receipts_by_memory_id: HashMap<Uuid, Vec<&SettlementReceipt>> = HashMap::new();
+        let mut legacy_receipts_by_owner: HashMap<String, usize> = HashMap::new();
+        for receipt in &memory_receipts {
+            if let Some(memory_record_id) = receipt.memory_record_id {
+                receipts_by_memory_id
+                    .entry(memory_record_id)
+                    .or_default()
+                    .push(*receipt);
+            } else {
+                *legacy_receipts_by_owner
+                    .entry(receipt.payer.pubkey_base58())
+                    .or_insert(0) += 1;
+            }
+        }
+
+        let mut exact_diff = 0_u64;
+        for (memory_id, matched_receipts) in &receipts_by_memory_id {
+            match memory_by_id.get(memory_id) {
+                Some(memory) => {
+                    if matched_receipts.len() > 1 {
+                        exact_diff += matched_receipts.len().saturating_sub(1) as u64;
+                        drift.push(VerifyDrift {
+                            kind: "memory_receipt_duplicate".into(),
+                            id: Some(memory_id.to_string()),
+                            message: format!(
+                                "{} receipts reference memory record {memory_id}",
+                                matched_receipts.len()
+                            ),
+                            repair: "review duplicate settlement receipts and retain only the authoritative accounting row".into(),
+                        });
+                    }
+                    for receipt in matched_receipts {
+                        if receipt.payer.pubkey != memory.owner.pubkey {
+                            exact_diff += 1;
+                            drift.push(VerifyDrift {
+                                kind: "memory_receipt_owner_mismatch".into(),
+                                id: Some(receipt.id.to_string()),
+                                message: format!(
+                                    "receipt {} references memory record {memory_id} but payer differs from memory owner",
+                                    receipt.id
+                                ),
+                                repair: "treat as out-of-band settlement mutation; backfill only after confirming the intended payer".into(),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    exact_diff += matched_receipts.len() as u64;
+                    for receipt in matched_receipts {
+                        drift.push(VerifyDrift {
+                            kind: "receipt_without_memory_record".into(),
+                            id: Some(receipt.id.to_string()),
+                            message: format!(
+                                "receipt {} references missing memory record {memory_id}",
+                                receipt.id
+                            ),
+                            repair: "review the receipt before settlement; missing memory may require accounting reversal or provenance backfill".into(),
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut legacy_fallback_used = 0_usize;
+        for memory in &memories {
+            if receipts_by_memory_id.contains_key(&memory.id) {
+                continue;
+            }
+            let owner = memory.owner.pubkey_base58();
+            let available_legacy = legacy_receipts_by_owner.entry(owner).or_insert(0);
+            if *available_legacy > 0 {
+                *available_legacy -= 1;
+                legacy_fallback_used += 1;
+                continue;
+            }
+
+            exact_diff += 1;
+            drift.push(VerifyDrift {
+                kind: "memory_without_receipt".into(),
+                id: Some(memory.id.to_string()),
+                message: format!("memory record {} has no settlement receipt", memory.id),
+                repair: "reconcile settlement before mutating memory; missing receipts may require backfill".into(),
+            });
+        }
+
         let mut memory_by_owner: HashMap<String, usize> = HashMap::new();
         for record in &memories {
             *memory_by_owner
@@ -3295,10 +3389,7 @@ impl Server {
                 .or_insert(0) += 1;
         }
         let mut receipt_by_owner: HashMap<String, usize> = HashMap::new();
-        for receipt in receipts
-            .iter()
-            .filter(|receipt| receipt.resource == ResourceKind::Memory)
-        {
+        for receipt in &memory_receipts {
             *receipt_by_owner
                 .entry(receipt.payer.pubkey_base58())
                 .or_insert(0) += 1;
@@ -3325,18 +3416,18 @@ impl Server {
                 repair: "reconcile settlement before mutating memory; missing receipts may require backfill, extra receipts may require accounting review".into(),
             });
         }
-        orphans_total += pair_diff;
+        let receipt_drift = exact_diff.max(pair_diff);
+        orphans_total += receipt_drift;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
-            passed: pair_diff == 0,
+            passed: exact_diff == 0 && pair_diff == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); diff = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}",
                 memories.len(),
-                receipts
-                    .iter()
-                    .filter(|receipt| receipt.resource == ResourceKind::Memory)
-                    .count(),
-                pair_diff
+                memory_receipts.len(),
+                pair_diff,
+                exact_diff,
+                legacy_fallback_used
             ),
         });
 
@@ -4298,7 +4389,7 @@ required = {caps:?}
     }
 
     #[tokio::test]
-    async fn submit_intent_writes_memory_and_settlement() {
+    async fn submit_intent_writes_memory_and_correlated_settlement() {
         let s = server_with(
             vec![stub_card("research", vec!["tool.web_search"])],
             "mocked summary",
@@ -4312,7 +4403,14 @@ required = {caps:?}
             })
             .await;
         match resp {
-            Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
+            Response::IntentResult {
+                intent_id, text, ..
+            } => {
+                assert_eq!(text, "mocked summary");
+                let receipts = s.settlement.recent(10).await.unwrap();
+                assert_eq!(receipts.len(), 1);
+                assert_eq!(receipts[0].memory_record_id, Some(intent_id));
+            }
             other => panic!("unexpected: {other:?}"),
         }
     }
@@ -4339,8 +4437,163 @@ required = {caps:?}
                 ..
             } => {
                 assert!(checks.iter().all(|check| check.passed), "{checks:?}");
+                assert!(checks.iter().any(|check| check.name == "memory ↔ receipts"
+                    && check.message.contains("exact drift = 0")));
                 assert!(drift.is_empty(), "{drift:?}");
                 assert_eq!(orphans_total, 0);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_accepts_legacy_receipt_count_fallback() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "legacy receipt".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: memory_id,
+                    intent_text: "legacy receipt".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b"legacy receipt"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: me,
+                resource: ResourceKind::Memory,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                checks,
+                drift,
+                orphans_total,
+                ..
+            } => {
+                assert!(checks.iter().all(|check| check.passed), "{checks:?}");
+                assert!(checks.iter().any(|check| check.name == "memory ↔ receipts"
+                    && check.message.contains("legacy fallback = 1")));
+                assert!(drift.is_empty(), "{drift:?}");
+                assert_eq!(orphans_total, 0);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_exact_receipt_correlation_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "correlated memory".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: memory_id,
+                    intent_text: "correlated memory".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b"correlated memory"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        for memory_record_id in [memory_id, memory_id, Uuid::new_v4()] {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: me.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: Some(memory_record_id),
+                    credits_consumed: 1,
+                    settled_at: epoch_ms(),
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                checks,
+                drift,
+                orphans_total,
+                ..
+            } => {
+                assert!(orphans_total >= 2);
+                assert!(checks.iter().any(|check| {
+                    !check.passed
+                        && check.name == "memory ↔ receipts"
+                        && check.message.contains("exact drift =")
+                }));
+                assert!(drift
+                    .iter()
+                    .any(|item| item.kind == "memory_receipt_duplicate"
+                        && item.id.as_deref() == Some(&memory_id.to_string())));
+                assert!(drift
+                    .iter()
+                    .any(|item| item.kind == "receipt_without_memory_record"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -4986,7 +5239,7 @@ required = {caps:?}
                 }));
                 assert!(drift
                     .iter()
-                    .any(|item| item.kind == "memory_receipt_mismatch"));
+                    .any(|item| item.kind == "memory_without_receipt"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -7714,6 +7967,7 @@ required = {caps:?}
                 id: Uuid::new_v4(),
                 payer: alien,
                 resource: ResourceKind::Memory,
+                memory_record_id: None,
                 credits_consumed: 7,
                 settled_at: epoch_ms(),
                 chain: None,
@@ -7733,6 +7987,7 @@ required = {caps:?}
                 id: Uuid::new_v4(),
                 payer: me.clone(),
                 resource: ResourceKind::Memory,
+                memory_record_id: None,
                 credits_consumed: 3,
                 settled_at: epoch_ms(),
                 chain: None,

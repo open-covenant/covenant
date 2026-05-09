@@ -127,7 +127,8 @@ export default function AuditPage() {
             </li>
             <li>
               memory ↔ receipts — memory writes and settlement
-              receipts pair 1:1.
+              receipts pair by <code>memory_record_id</code>, with
+              legacy count fallback.
             </li>
           </ul>
         </li>

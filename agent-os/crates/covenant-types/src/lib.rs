@@ -313,6 +313,8 @@ pub struct SettlementReceipt {
     pub id: Uuid,
     pub payer: AgentId,
     pub resource: ResourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_record_id: Option<Uuid>,
     /// USD-pegged credits destroyed at this event.
     pub credits_consumed: u64,
     pub settled_at: u64,
@@ -460,6 +462,7 @@ mod tests {
             id: Uuid::nil(),
             payer: dummy_id(),
             resource: ResourceKind::Memory,
+            memory_record_id: Some(Uuid::nil()),
             credits_consumed: 42,
             settled_at: 0,
             chain: Some("solana".to_string()),
@@ -475,6 +478,7 @@ mod tests {
         assert!(json.contains("\"onchain_sig\":null"));
         let back: SettlementReceipt = serde_json::from_str(&json).unwrap();
         assert!(back.onchain_sig.is_none());
+        assert_eq!(back.memory_record_id, Some(Uuid::nil()));
         assert_eq!(back.credits_consumed, 42);
         assert_eq!(back.chain.as_deref(), Some("solana"));
         assert_eq!(back.tx_sig.as_deref(), Some("sig"));
@@ -497,6 +501,7 @@ mod tests {
         );
         let back: SettlementReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(back.credits_consumed, 42);
+        assert_eq!(back.memory_record_id, None);
         assert_eq!(back.chain, None);
         assert_eq!(back.tx_sig, None);
     }

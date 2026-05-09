@@ -1,0 +1,32 @@
+{
+  "id": "audit-root-signature-generation",
+  "title": "Implement audit root signature generation",
+  "state": "proposed",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/scripts/provenance.mjs",
+    "docs",
+    "docs/provenance"
+  ],
+  "summary": "Add deterministic signing and verification for audit-root-attestation.v1 payloads so provenance claims can be verified end-to-end without overclaiming public transparency.",
+  "expectedFailureModes": [
+    "Signatures are generated but the signature metadata format is underspecified and breaks across versions.",
+    "Verification accepts malformed payloads or incorrect subjects, undermining the trust boundary.",
+    "Docs overclaim public verifiability when keys are still local-only and not rotated."
+  ],
+  "gates": [
+    "plan",
+    "docs",
+    "security",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Choose the signing identity and key format, implement signing + verification, and record the security review notes before integration.",
+  "updated": "2026-05-09"
+}

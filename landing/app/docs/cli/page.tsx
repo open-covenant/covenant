@@ -85,7 +85,7 @@ export default function CliPage() {
         (--before-ms M
          | --older-than-ms D) [--json]
                                      Delete old revoked peer tombstones.
-  peers rotate                       Rotate the operator peer token.
+  peers rotate [--json]              Rotate the operator peer token.
   peers list [-n N] [--prefix B58] [--json]
                                      List peer registry summaries.
   peers revoke <token-prefix> [--json]
@@ -265,6 +265,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant peers purge --before-ms 1714938191234 --json
 {"kind":"peers_purged","before_ms":1714938191234,"purged":0}`}</code>
+      </pre>
+
+      <h3>Rotate the operator peer token</h3>
+      <pre>
+        <code>{`$ covenant peers rotate --json
+{"kind":"peer_token_rotated","token_b58":"..."}`}</code>
       </pre>
 
       <h3>Inspect the A2A queue</h3>

@@ -30,7 +30,7 @@
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a compact [--json]
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant peers rotate
+//!   covenant peers rotate [--json]
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>] [--json]
 //!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] [--json]
 //!   covenant intents resume <intent-id>
@@ -151,7 +151,7 @@ fn print_usage() {
         "  covenant peers purge (--before-ms M | --older-than-ms D) [--json]  drop revoked peer registrations older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant peers rotate                   mint a fresh operator token and revoke the old one"
+        "  covenant peers rotate [--json]          mint a fresh operator token and revoke the old one"
     );
     eprintln!(
         "  covenant peers list [--limit N] [--prefix B58] [--live-only | --revoked-only] [--json]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix; add --json for stable machine output"
@@ -1562,6 +1562,15 @@ async fn main() -> Result<()> {
                     }
                 }
                 "rotate" => {
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
                     write_frame(&mut stream, &Request::RotateOperatorToken).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::OperatorTokenRotated { token_b58 } => {
@@ -1572,8 +1581,17 @@ async fn main() -> Result<()> {
                             // `.env.development.local`. Any existing
                             // shells holding the old token need to
                             // re-read the file.
-                            println!("rotated. new token (also written to peers/operator.token):");
-                            println!("{token_b58}");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&peers_rotate_json(&token_b58))?
+                                );
+                            } else {
+                                println!(
+                                    "rotated. new token (also written to peers/operator.token):"
+                                );
+                                println!("{token_b58}");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2087,6 +2105,13 @@ fn peers_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
         "kind": "peers_purged",
         "before_ms": before_ms,
         "purged": purged,
+    })
+}
+
+fn peers_rotate_json(token_b58: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "peer_token_rotated",
+        "token_b58": token_b58,
     })
 }
 
@@ -2667,6 +2692,13 @@ mod tests {
         assert_eq!(value["kind"], "peers_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn peers_rotate_json_renders_stable_shape() {
+        let value = peers_rotate_json("tokenb58");
+        assert_eq!(value["kind"], "peer_token_rotated");
+        assert_eq!(value["token_b58"], "tokenb58");
     }
 
     #[test]

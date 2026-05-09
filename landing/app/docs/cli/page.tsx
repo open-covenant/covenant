@@ -23,6 +23,7 @@ export default function CliPage() {
 
   intent <text>                      Submit an intent and print the result.
   ping                               Check the daemon is responsive.
+  version                            Print daemon protocol metadata as JSON.
 
   memory recent [--tier T] [-n N]    List recent memory records.
   memory search <query>
@@ -123,6 +124,12 @@ export default function CliPage() {
       <pre>
         <code>{`$ covenant intent "summarise recent work on agent memory"
 echo (no agent matched): summarise recent work on agent memory`}</code>
+      </pre>
+
+      <h3>Inspect daemon protocol metadata</h3>
+      <pre>
+        <code>{`$ covenant version
+{"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":1}`}</code>
       </pre>
 
       <h3>Inspect recent memory</h3>

@@ -9,7 +9,8 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_daemon.rs",
-        "agent-os/crates/covenantd/tests/live_cli_intent_dispatch.rs"
+        "agent-os/crates/covenantd/tests/live_cli_intent_dispatch.rs",
+        "agent-os/crates/covenantd/tests/live_cli_version.rs"
       ],
       "status": "covered",
       "nextGap": "Add live resume-intent coverage after repair semantics settle."

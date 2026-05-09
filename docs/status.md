@@ -4,7 +4,7 @@ This status matrix separates what exists from what is experimental or planned. U
 
 | Capability | Status | Evidence | Next hardening step |
 |---|---|---|---|
-| Local daemon and CLI | Implemented | `agent-os/crates/covenantd`, `agent-os/crates/covenant`, daemon/CLI tests | Broaden live CLI coverage for every privileged verb. |
+| Local daemon and CLI | Implemented | `agent-os/crates/covenantd`, `agent-os/crates/covenant`, daemon/CLI tests, CLI protocol metadata probe | Broaden live CLI coverage for every privileged verb. |
 | IPC and HTTP gateway | Implemented | `covenant-ipc`, unauthenticated `protocol_info`, HTTP `/version`, daemon and gateway tests | Compatibility fixtures for stale clients and schema defaults. |
 | Identity and peer auth | Implemented | `covenant-identity`, `covenant-peer-auth`, token rotation tests | Public attestation and key provenance. |
 | Signed capabilities | Implemented | `covenant-permissions`, capability enforcement tests | Formalize scope schemas per action namespace. |

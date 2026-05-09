@@ -2,6 +2,7 @@
 //!
 //! ```text
 //!   covenant ping
+//!   covenant version
 //!   covenant intent <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
 //!   covenant memory search <query>
@@ -81,6 +82,7 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!("  covenant intent <text>                  submit an intent and print the result");
     eprintln!("  covenant ping                           check the daemon is responsive");
+    eprintln!("  covenant version                        print daemon protocol metadata as JSON");
     eprintln!(
         "  covenant memory recent [--tier T] [-n N]               list recent memory records"
     );
@@ -249,6 +251,10 @@ fn print_memory_compaction_response(response: Response) -> Result<()> {
     }
 }
 
+fn protocol_info_json(info: &covenant_ipc::ProtocolInfo) -> Result<String> {
+    Ok(serde_json::to_string(info)?)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -265,6 +271,17 @@ async fn main() -> Result<()> {
             sock.display()
         )
     })?;
+
+    if args[0] == "version" {
+        write_frame(&mut stream, &Request::ProtocolInfo).await?;
+        match read_frame::<_, Response>(&mut stream).await? {
+            Response::ProtocolInfo { info } => println!("{}", protocol_info_json(&info)?),
+            Response::Error { message } => bail!("daemon error: {message}"),
+            other => bail!("unexpected response: {other:?}"),
+        }
+        return Ok(());
+    }
+
     authenticate(&mut stream, &home).await?;
 
     match args[0].as_str() {
@@ -1781,6 +1798,16 @@ mod tests {
                 None
             },
         }
+    }
+
+    #[test]
+    fn version_output_is_stable_json() {
+        let out = protocol_info_json(&covenant_ipc::protocol_info()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["protocol"], "covenant.ipc");
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["min_supported"], 1);
+        assert_eq!(value["max_supported"], 1);
     }
 
     #[test]

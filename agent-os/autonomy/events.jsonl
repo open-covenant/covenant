@@ -675,3 +675,10 @@
 {"timestamp":"2026-05-09T20:30:35.933Z","taskId":"audit-purge-scope-live-coverage","from":"self_review","to":"validation","actorRole":"verifier","note":"Ran validate.sh --quick; gates green."}
 {"timestamp":"2026-05-09T20:30:35.985Z","taskId":"audit-purge-scope-live-coverage","from":"validation","to":"ready","actorRole":"verifier","note":"Ready for main integration."}
 {"timestamp":"2026-05-09T20:30:36.036Z","taskId":"audit-purge-scope-live-coverage","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated on main (commit 36c6dc1)."}
+{"timestamp":"2026-05-09T20:26:17.039Z","taskId":"memory-compact-json-output","from":null,"to":"proposed","actorRole":"planner","note":"Seeded from backlog template."}
+{"timestamp":"2026-05-09T20:27:56.338Z","taskId":"memory-compact-json-output","from":"proposed","to":"triaged","actorRole":"planner","note":"Triaged: add --json envelope while keeping existing human output stable."}
+{"timestamp":"2026-05-09T20:27:59.856Z","taskId":"memory-compact-json-output","from":"triaged","to":"planned","actorRole":"planner","note":"Plan: add memory_compaction outcome envelope, unit + live assertions, docs update."}
+{"timestamp":"2026-05-09T20:28:03.647Z","taskId":"memory-compact-json-output","from":"planned","to":"in_progress","actorRole":"implementer","note":"Implementation starting."}
+{"timestamp":"2026-05-09T20:32:24.999Z","taskId":"memory-compact-json-output","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed: keep legacy outcome output; add --json envelope + docs + live assertion."}
+{"timestamp":"2026-05-09T20:32:33.816Z","taskId":"memory-compact-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"Validation: run unit + live compaction, docs build, autonomy validation, quick gate."}
+{"timestamp":"2026-05-09T20:33:14.348Z","taskId":"memory-compact-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Validation green: unit + live compaction, landing build, autonomy validation, quick gate."}

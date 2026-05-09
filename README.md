@@ -3,11 +3,13 @@
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> Open infrastructure for governed AI agent execution.
+> Agent- and blockchain-native operating layer for governed autonomous systems.
 
-Covenant is an operating layer for autonomous software engineering systems. It coordinates agents, tools, memory, execution, authorization, audit, and provenance through a local control plane designed for research teams and engineering organizations building agents that operate across real codebases.
+Covenant is an agent- and blockchain-native operating layer for autonomous software engineering systems. It coordinates agents, tools, memory, execution, authorization, audit, provenance, and settlement through a local control plane designed for research teams and engineering organizations building agents that operate across real codebases.
 
 Covenant sits below agent applications and above the host operating system. It gives autonomous systems a disciplined substrate for planning, execution, review, repair, and handoff while keeping privileged actions scoped, inspectable, resumable, and attributable.
+
+Covenant is developed through the same governed agent workflows it exposes: agents plan work, produce changes, record validation evidence, and leave provenance for human review. The result is infrastructure shaped around the operational requirements of agents rather than a human-only developer environment retrofitted with automation.
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
@@ -16,13 +18,14 @@ Covenant sits below agent applications and above the host operating system. It g
 
 Software agents are moving from interactive assistance toward long-running engineering work. That shift changes the infrastructure problem. Agents need durable context, explicit authority, reliable tool access, recovery after interruption, and a record of what happened.
 
-Conventional developer environments assume a human operator is present at every step. Covenant provides the missing control plane:
+Conventional developer environments assume a human operator is present at every step. Blockchain systems assume verifiable state transitions, explicit authority, and durable coordination across independent actors. Covenant brings those assumptions into agent infrastructure:
 
 - **Governance:** intents, manifests, scoped permissions, review gates, and policy-aware dispatch.
 - **Continuity:** persistent memory, resumable task state, repair workflows, and structured handoff.
 - **Accountability:** append-only audit logs, integrity reports, signed actions, and commit-scoped provenance.
 - **Interoperability:** native tools, MCP integration, A2A messaging, local gateway APIs, and protocol adapters.
 - **Execution:** daemon-mediated runtime dispatch with timeout enforcement and sandbox-aware agent manifests.
+- **Settlement:** local receipts and protocol scaffolding for accountable resource use and agent coordination economics.
 
 ## Architecture
 

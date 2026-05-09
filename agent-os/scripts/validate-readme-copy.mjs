@@ -78,10 +78,18 @@ if (!readme.startsWith("# Covenant\n\n")) {
   fail("README must start with the Covenant title");
 }
 
-assertIncludes("tagline", "> Open infrastructure for governed AI agent execution.");
-assertIncludes("positioning", "operating layer for autonomous software engineering systems");
+assertIncludes(
+  "tagline",
+  "> Agent- and blockchain-native operating layer for governed autonomous systems.",
+);
+assertIncludes(
+  "positioning",
+  "agent- and blockchain-native operating layer for autonomous software engineering systems",
+);
 assertIncludes("audience", "research teams and engineering organizations");
 assertIncludes("execution posture", "scoped, inspectable, resumable, and attributable");
+assertIncludes("agent-native development posture", "developed through the same governed agent workflows it exposes");
+assertIncludes("blockchain-native coordination posture", "verifiable state transitions, explicit authority, and durable coordination");
 
 for (const heading of [
   "Why Covenant",
@@ -152,7 +160,7 @@ const capabilityCoverage = {
   "A2A messaging": ["A2A mailbox", "A2A messaging"],
   "Budget ledger": ["budget ledger"],
   "Local settlement receipts": ["Local settlement receipts"],
-  "On-chain settlement": ["protocol scaffolding for agent coordination economics"],
+  "On-chain settlement": ["protocol scaffolding for accountable resource use and agent coordination economics"],
   "Autonomous workflow": ["planning, execution, review, repair, and handoff", "resumable task state"],
   "Live boundary coverage": ["live tests", "live coverage inventory"],
   "Public provenance": ["commit-scoped provenance", "provenance envelopes"],

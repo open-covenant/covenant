@@ -5,7 +5,8 @@ The root README is the public first impression of Covenant. It should read like 
 ## Voice
 
 - Lead with what Covenant is, not with release caveats or internal process.
-- Use systems language: operating layer, control plane, governed execution, provenance, capability-scoped authority, durable memory, runtime dispatch.
+- Use systems language: agent- and blockchain-native operating layer, control plane, governed execution, provenance, capability-scoped authority, durable memory, runtime dispatch, settlement.
+- Present "built by agents for agents" as an operational fact: governed agent workflows, recorded validation evidence, and provenance for human review. Do not turn it into a slogan.
 - Keep claims tied to implemented surfaces or clearly named research direction.
 - Prefer compact declarative sentences over narrative project history.
 - Keep validation and status references factual, but do not turn the README into a release checklist.

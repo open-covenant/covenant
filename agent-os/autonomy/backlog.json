@@ -118,6 +118,130 @@
       "humanEscalation": [],
       "nextAction": "Write the repeatable Linux gVisor live-test runner guide and link it from runtime sandbox docs.",
       "updated": "2026-05-09"
+    },
+    {
+      "id": "autonomy-next-seed-fallback",
+      "title": "Let autonomy-next seed a backlog task",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "When every tracked task is integrated or blocked, let autonomy-next optionally seed the next backlog template so autonomous runs can continue without a separate continuation pass.",
+      "expectedFailureModes": [
+        "Automation dead-ends on autonomy-next even though a backlog template exists.",
+        "Seeding produces an invalid task JSON record or bypasses autonomy validation.",
+        "Seed mode mutates the task directory without leaving durable evidence in events."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-next.mjs --seed",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a seed option to autonomy-next, document it, and ensure it keeps autonomy state consistent when invoked in a clean worktree.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "autonomy-seed-next-metadata",
+      "title": "Add actor metadata when seeding tasks",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/autonomy-seed-next.mjs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Allow autonomy-seed-next to record which role seeded a task and why, so events.jsonl can be audited without guessing the actor or intent.",
+      "expectedFailureModes": [
+        "Seed events all look identical, obscuring whether they were seeded by a planner or an automation loop.",
+        "Invalid role strings are accepted and break autonomy validation later.",
+        "Notes capture machine-local identifiers that should never land in public history."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-seed-next.mjs --dry-run",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Teach autonomy-seed-next to accept --actor and --note flags and apply them to the recorded seed event.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "audit-root-signature-generation",
+      "title": "Implement audit root signature generation",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "planner",
+      "scope": [
+        "docs",
+        "packages",
+        "services"
+      ],
+      "summary": "Add deterministic signing and verification for audit-root-attestation.v1 payloads so provenance claims can be verified end-to-end without overclaiming public transparency.",
+      "expectedFailureModes": [
+        "Signatures are generated but the signature metadata format is underspecified and breaks across versions.",
+        "Verification accepts malformed payloads or incorrect subjects, undermining the trust boundary.",
+        "Docs overclaim public verifiability when keys are still local-only and not rotated."
+      ],
+      "gates": [
+        "plan",
+        "docs",
+        "security",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Choose the signing identity and key format, implement signing + verification, and record the security review notes before integration.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "capability-scope-grant-validation",
+      "title": "Validate capability scopes at grant time",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "docs",
+        "packages",
+        "services"
+      ],
+      "summary": "Validate versioned capability scope payloads when creating grants so enforcement can be strict without breaking existing callers or accepting arbitrary JSON.",
+      "expectedFailureModes": [
+        "Invalid scope payloads are accepted and later cause enforcement-time failures.",
+        "A stricter validator rejects existing persisted grants without a migration path.",
+        "Docs imply scoped permissions are enforced even when validation is still permissive."
+      ],
+      "gates": [
+        "plan",
+        "docs",
+        "security",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --quick",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Define the minimal accepted schema per capability, validate on grant creation, and track any compatibility gaps explicitly.",
+      "updated": "2026-05-09"
     }
   ]
 }

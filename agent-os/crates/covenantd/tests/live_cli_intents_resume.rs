@@ -14,6 +14,7 @@
 //! `cargo test -p covenantd --test live_cli_intents_resume -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -204,6 +205,49 @@ budget_credits_per_hour = 1
     assert!(
         !stderr.contains("no BudgetExhausted audit row"),
         "stderr suggests resume did not locate the audit row; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    let cli_out_json = Command::new(&cli_exe)
+        .arg("intents")
+        .arg("resume")
+        .arg("latest")
+        .arg("--json")
+        .env("COVENANT_HOME", home.path())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("spawn covenant CLI (intents resume latest --json)");
+    let json_stdout = String::from_utf8_lossy(&cli_out_json.stdout)
+        .trim()
+        .to_string();
+    let json_stderr = String::from_utf8_lossy(&cli_out_json.stderr)
+        .trim()
+        .to_string();
+
+    assert!(
+        !cli_out_json.status.success(),
+        "resume latest --json should exit non-zero while bucket remains empty; stdout={json_stdout:?} stderr={json_stderr:?}"
+    );
+    assert!(
+        !json_stdout.is_empty(),
+        "resume latest --json should emit a JSON object to stdout; stderr={json_stderr:?}"
+    );
+
+    let value: Value =
+        serde_json::from_str(&json_stdout).expect("resume latest --json stdout must be JSON");
+    assert_eq!(value["kind"], "intents_resume");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["mode"], "latest");
+    assert!(value["intent_id"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(value["error"]["code"], "daemon_error");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("budget")),
+        "expected JSON error message to mention budget; stdout={json_stdout:?} stderr={json_stderr:?}"
     );
 
     let _ = child.kill().await;

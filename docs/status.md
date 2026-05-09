@@ -13,7 +13,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout and malformed-stdout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test, documented Linux runner setup | Automate Linux CI host provisioning and broaden sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
 | A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, lease-age status filters, restart and CLI repair live tests, daemon/HTTP/CLI repair commands, repair audit rows | Explicit idempotency policy before any automatic retry. |
-| Budget ledger | Implemented | `covenant-budget`, daemon budget tests, `covenant intents resume latest`, live CLI resume test | Mid-task pause, save, and resume. |
+| Budget ledger | Implemented | `covenant-budget`, daemon budget tests, `covenant intents resume latest --json`, live CLI resume test | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
 | Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, sprint summary generator, git identity validator, local pre-push guard | Signed review artifacts and routine publication of sprint summaries. |

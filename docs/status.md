@@ -10,14 +10,14 @@ This status matrix separates what exists from what is experimental or planned. U
 | Signed capabilities | Implemented | `covenant-permissions`, capability enforcement tests | Formalize scope schemas per action namespace. |
 | Audit log | Implemented, hardening | `covenant-audit`, daemon audit event tests, local hash-chain sidecar, CLI/HTTP/IPC integrity report | Public root signing, transparency-log publication, and immutable retention policy. |
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports, daemon/HTTP/CLI repair commands, bounded daemon/HTTP/CLI compaction commands, repair and compaction audit rows | Automatic compaction schedules and exact record-to-receipt correlation. |
-| Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
+| Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout and malformed-stdout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
 | A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, lease-age status filters, restart and CLI repair live tests, daemon/HTTP/CLI repair commands, repair audit rows | Explicit idempotency policy before any automatic retry. |
 | Budget ledger | Implemented | `covenant-budget`, daemon budget tests | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
-| Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log | Signed review artifacts and stronger sprint summaries. |
-| Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, external-service gVisor coverage entry | Add CLI revoke live coverage and a documented Linux runner for gVisor validation. |
+| Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, git identity validator, local pre-push guard | Signed review artifacts and stronger sprint summaries. |
+| Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, external-service gVisor coverage entry | Document a repeatable Linux runner for gVisor validation and keep adding mutation-edge live tests where policies are stable. |
 | Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations` | Signing identity policy, release artifact subjects, transparency-log publication. |
 | Installer and SDK ecosystem | Planned | No stable release path | Define alpha release contract after sandbox and settlement boundaries harden. |
 
@@ -25,6 +25,7 @@ This status matrix separates what exists from what is experimental or planned. U
 
 - Default Rust gate: `bash agent-os/scripts/validate.sh`
 - Autonomy artifact gate: `node agent-os/scripts/validate-autonomy.mjs`
+- Git identity guard: `node agent-os/scripts/validate-git-identity.mjs`
 - Provenance gate: `node agent-os/scripts/provenance.mjs verify-all`
 - Next task selector: `node agent-os/scripts/autonomy-next.mjs`
 - Live coverage inventory: `bash agent-os/scripts/test-stats.sh`

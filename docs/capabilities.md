@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, and revocation at dispatch. It does not yet interpret scope predicates at dispatch time. Scope schemas below are the compatibility contract for grants created now and the target for later enforcement.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, and the `tool.call.*` `arguments.allow` predicate at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -41,7 +41,7 @@ Use for tool listing and tool invocation.
 Rules:
 
 - `tool` is optional for broad actions such as `tool.list`; it should match the suffix for `tool.call.<name>`.
-- `arguments.allow` is an optional object of literal argument constraints.
+- `arguments.allow` is an optional exact JSON argument allowlist. When present on `tool.call.<name>`, the daemon rejects calls whose full argument object does not exactly match it.
 - Networked tools should add explicit host or origin fields before enforcement.
 
 ### `memory.*`
@@ -146,8 +146,9 @@ Rules:
 
 1. Keep accepting `{}` for existing broad grants.
 2. Validate non-empty scopes at grant time for known action namespaces.
-3. Add dispatch-time checks that interpret scope only for actions with stable predicates.
-4. Fail closed for malformed versioned scopes after a migration window.
-5. Keep action-only checks as the fallback only for unscoped operator grants.
+3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
+4. Add dispatch-time checks for the next stable action families.
+5. Fail closed for malformed versioned scopes after a migration window.
+6. Keep action-only checks as the fallback only for unscoped operator grants.
 
-Until step 3 lands, public docs must describe scopes as validated signed metadata and compatibility preparation, not as enforced least-privilege predicates.
+Until a namespace-specific predicate lands, public docs must describe that namespace's scope as validated signed metadata and compatibility preparation, not as enforced least-privilege behavior.

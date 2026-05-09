@@ -75,10 +75,12 @@ export default function CapabilitiesPage() {
       <p>
         Scopes are signed, so mutating the JSON invalidates the token.
         Grant-time validation rejects malformed non-empty scopes for
-        known action namespaces. Dispatch-time enforcement is currently
-        action-based: the daemon checks signature validity, expiry,
-        subject, action presence, and revocation. It does not yet
-        interpret scope predicates.
+        known action namespaces. Dispatch-time enforcement checks
+        signature validity, expiry, subject, action presence,
+        revocation, and the <code>tool.call.*</code>{" "}
+        <code>arguments.allow</code> predicate. Other scope predicates
+        remain compatibility metadata until their dispatch semantics
+        stabilize.
       </p>
 
       <p>
@@ -101,7 +103,7 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
         the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for stable predicates.
+        dispatch-time checks for memory and audit mutation predicates.
       </p>
 
       <h2>Canonical encoding</h2>
@@ -179,9 +181,10 @@ covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
         <code>action</code>s, and verifies that every required action
         from the matched agent&apos;s manifest is present. Missing
         actions are recorded in the audit event and the dispatch is
-        rejected. Scope predicates are validated when granted and
-        preserved by signature, but not yet interpreted during this
-        check.
+        rejected. For <code>tool.call.*</code> grants, an{" "}
+        <code>arguments.allow</code> object is enforced as an exact JSON
+        argument match before the tool runs. Scope mismatches emit a
+        separate audit row and return an error.
       </p>
 
       <h2>Revocation</h2>

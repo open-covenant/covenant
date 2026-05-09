@@ -13,7 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
-- Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement still interprets actions rather than scope predicates.
+- Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists and otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned `audit-root-attestation.v1` payload generation/verification.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Solana settlement code is scaffolded, not production.
@@ -41,7 +41,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No public signing identity policy or transparency-log publication for agent-produced artifacts or audit roots.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
-- Dispatch-time capability scope predicates are not implemented.
+- Dispatch-time capability scope predicates exist only for exact `tool.call.*` argument allowlists; memory, audit, peer, A2A, and settlement predicates still need enforcement.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
 - Audit integrity is local tamper evidence only; immutable retention, public root signing, and transparency-log publication are not implemented.
 - A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until task classes can declare idempotency safely.

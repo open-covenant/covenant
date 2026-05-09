@@ -20,7 +20,8 @@ use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
-    sign as sign_capability, validate_scope, verify_with_clock, CapabilityStore,
+    sign as sign_capability, tool_call_scope_allows as permission_tool_call_scope_allows,
+    validate_scope, verify_with_clock, CapabilityStore,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -1410,7 +1411,8 @@ impl Server {
         arguments: serde_json::Value,
         peer: &AgentId,
     ) -> Response {
-        let required = vec![format!("tool.call.{name}")];
+        let action = format!("tool.call.{name}");
+        let required = vec![action.clone()];
         let check = self
             .check_capabilities(format!("tool:{name}"), required, peer)
             .await;
@@ -1423,6 +1425,45 @@ impl Server {
                 ),
             };
         }
+        match self
+            .tool_call_scope_allows(&action, &name, &arguments, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "arguments do not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("tool:{name}"),
+                        action: action.clone(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("tool:{name}"),
+                        action: action.clone(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         match self.tools.call(&name, arguments).await {
             Ok(r) => Response::ToolResult {
                 content: r.content,
@@ -1432,6 +1473,43 @@ impl Server {
                 message: format!("tool: {e}"),
             },
         }
+    }
+
+    async fn tool_call_scope_allows(
+        &self,
+        action: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps
+            .iter()
+            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
+        {
+            match permission_tool_call_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                name,
+                arguments,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
     }
 
     fn check_ignore(&self, text: String) -> Response {
@@ -3656,6 +3734,73 @@ required = {caps:?}
                 };
                 assert_eq!(txt, "hi");
             }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_accepts_matching_scope_arguments() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tool": "echo",
+                "arguments": { "allow": { "text": "hi" } }
+            })),
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await;
+        match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error);
+                let txt = match &content[0] {
+                    covenant_mcp::Content::Text { text } => text.clone(),
+                    other => panic!("unexpected: {other:?}"),
+                };
+                assert_eq!(txt, "hi");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_scope_argument_mismatch() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tool": "echo",
+                "arguments": { "allow": { "text": "hi" } }
+            })),
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "bye" }),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action, .. } if action == "tool.call.echo"
+                )
+            })),
             other => panic!("unexpected: {other:?}"),
         }
     }

@@ -141,6 +141,37 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
     }
 }
 
+pub fn tool_call_scope_allows(
+    action: &str,
+    scope: &Value,
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != format!("tool.call.{tool_name}") {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if let Some(tool) = obj.get("tool").and_then(Value::as_str) {
+        if tool != tool_name {
+            return Ok(false);
+        }
+    }
+    match obj
+        .get("arguments")
+        .and_then(Value::as_object)
+        .and_then(|arguments| arguments.get("allow"))
+    {
+        Some(allow) => Ok(arguments == allow),
+        None => Ok(true),
+    }
+}
+
 fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_string_or_null(action, obj, "tool")?;
     if let (Some(expected), Some(tool)) = (
@@ -894,6 +925,76 @@ mod tests {
             "chain.flush",
             serde_json::json!({ "version": 1, "limit": -1 }),
         );
+    }
+
+    #[test]
+    fn tool_call_scope_allows_unscoped_grants() {
+        assert!(tool_call_scope_allows(
+            "tool.call.echo",
+            &serde_json::json!({}),
+            "echo",
+            &serde_json::json!({ "text": "hi" })
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn tool_call_scope_allows_exact_allowed_arguments() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tool": "echo",
+            "arguments": { "allow": { "text": "hi" } }
+        });
+        assert!(tool_call_scope_allows(
+            "tool.call.echo",
+            &scope,
+            "echo",
+            &serde_json::json!({ "text": "hi" })
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn tool_call_scope_rejects_argument_mismatch() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tool": "echo",
+            "arguments": { "allow": { "text": "hi" } }
+        });
+        assert!(!tool_call_scope_allows(
+            "tool.call.echo",
+            &scope,
+            "echo",
+            &serde_json::json!({ "text": "bye" })
+        )
+        .unwrap());
+        assert!(!tool_call_scope_allows(
+            "tool.call.echo",
+            &scope,
+            "echo",
+            &serde_json::json!({ "text": "hi", "extra": true })
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn tool_call_scope_rejects_action_or_scope_mismatch() {
+        assert!(!tool_call_scope_allows(
+            "tool.call.search",
+            &serde_json::json!({}),
+            "echo",
+            &serde_json::json!({})
+        )
+        .unwrap());
+        assert!(matches!(
+            tool_call_scope_allows(
+                "tool.call.echo",
+                &serde_json::json!({ "version": 2 }),
+                "echo",
+                &serde_json::json!({})
+            ),
+            Err(PermissionError::InvalidScope(_))
+        ));
     }
 
     #[test]

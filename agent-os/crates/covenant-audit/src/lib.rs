@@ -82,6 +82,11 @@ pub enum AuditKind {
         action: String,
         reason: String,
     },
+    CapabilityScopeRejected {
+        agent_id: String,
+        action: String,
+        reason: String,
+    },
     IntentIgnored {
         intent_id: Uuid,
         intent_text: String,

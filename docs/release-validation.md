@@ -33,6 +33,28 @@ Release evidence should include:
 - provenance envelope for the release task or release commit;
 - audit-root attestation when the release process generates one.
 
+## Alpha Release Evidence Runbook
+
+Generate the read-only evidence summary from the repository root:
+
+```bash
+node agent-os/scripts/alpha-release-evidence.mjs --json > docs/releases/<release-id>/evidence.json
+```
+
+The helper records the current commit, short commit, branch, dirty-file count, recommended validation commands, and release notes. It does not tag, push, publish, sign, or execute validation gates.
+
+Interpret the output as follows:
+
+- `commit` is the release candidate under review.
+- `branch` is the local branch used to generate evidence.
+- `dirty_files` must be `0` before evidence is accepted for a release candidate.
+- `commands` are the gates the operator must run and record.
+- `notes` identify non-claims and live-test prerequisites.
+
+Store release evidence under `docs/releases/<release-id>/`. A candidate bundle should contain the `evidence.json` output, validation notes with pass/fail/skipped outcomes, links to provenance envelopes or audit-root attestations, and the release decision.
+
+Signing, tagging, artifact upload, release announcements, and key rotation are human-owned decisions until a project signing and publication policy is implemented.
+
 Minimum validation:
 
 ```bash

@@ -39,6 +39,13 @@ export default function ValidationProfilePage() {
         candidate.
       </p>
 
+      <p>
+        Alpha candidates use the read-only release evidence helper to capture
+        the commit, branch, dirty-file count, recommended gates, and non-claims.
+        Evidence is accepted only after the listed gates are run and recorded in
+        a release bundle.
+      </p>
+
       <code>{`node agent-os/scripts/alpha-release-evidence.mjs
 bash agent-os/scripts/validate.sh --quick
 node agent-os/scripts/validate-autonomy.mjs
@@ -50,6 +57,10 @@ git diff --check`}</code>
 
       <h2>Related</h2>
       <ul>
+        <li>
+          <Link href="/alpha-release">Alpha release contract</Link> — source
+          alpha boundary and release evidence bundle.
+        </li>
         <li>
           <Link href="/security">Security model</Link> — current trust
           boundary.

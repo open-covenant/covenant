@@ -1,0 +1,32 @@
+{
+  "id": "alpha-release-evidence-runbook",
+  "title": "Write alpha release evidence runbook",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/alpha-release-evidence.mjs",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Alpha releases need a repeatable runbook that explains what evidence is generated, where it lands, and how to validate it. Document the end-to-end flow using the existing alpha release evidence script without implying public signing or publication policy.",
+  "expectedFailureModes": [
+    "Release evidence exists but operators cannot reproduce it without reverse-engineering scripts.",
+    "Docs overclaim public verifiability or signing before key custody and publication are decided.",
+    "Evidence artifacts are generated but not checked into the release bundle, leaving the release unverifiable later."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/alpha-release-evidence.mjs --help",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human decision remains required for any public signing keys, key rotation, and release publication."
+  ],
+  "nextAction": "Document the alpha release evidence workflow: prerequisites, commands, output locations, and how to interpret evidence, leaving signing/publishing as explicitly human-owned.",
+  "updated": "2026-05-09"
+}

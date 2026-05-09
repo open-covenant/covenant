@@ -28,6 +28,11 @@ const TILES = [
     body: "Operating surfaces, evidence requirements, and live boundary checks.",
   },
   {
+    href: "/alpha-release",
+    title: "Alpha release contract",
+    body: "Source-alpha boundary, evidence bundle requirements, and human-owned release decisions.",
+  },
+  {
     href: "/architecture",
     title: "Architecture",
     body: "Architecture of the daemon, runtime, local control plane, and settlement scaffold.",

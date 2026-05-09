@@ -11,7 +11,11 @@ function runGit(args, opts = {}) {
 }
 
 function usage() {
-  console.log("usage: alpha-release-evidence [--json]");
+  console.log(`usage: alpha-release-evidence [--json]
+
+Print read-only alpha release evidence for the current Git commit.
+
+This command does not tag, push, publish, sign, or execute validation gates.`);
 }
 
 function fail(message) {

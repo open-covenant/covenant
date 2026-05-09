@@ -34,7 +34,7 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 | Peer listing and status filters | Covered | list, live-only, revoked-only | Ambiguous-prefix coverage after machine-readable output exists. |
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI repair, restart replay | Stale-lease guard failure coverage after machine-readable status output stabilizes. |
 | MCP subprocess transport | Covered | stdio initialize/list/call | Third-party fixture once selection is stable. |
-| Runtime and reference agent subprocess | Covered | research subprocess, daemon dispatch to research agent | Malformed stdout failure path. |
+| Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
 | Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Linux host with `runsc` and a minimal `/bin/sh` rootfs. |
 | Budget enforcement | Covered | daemon rejection when budget exhausts | Budget resume after pause/resume policy lands. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Model availability probes before more model coverage. |

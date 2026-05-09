@@ -42,6 +42,11 @@ pub enum RunnerError {
     Timeout(Duration),
     #[error("agent exited non-zero: status={status}, stderr={stderr}")]
     NonZeroExit { status: i32, stderr: String },
+    #[error("agent stdout was not a valid AgentResult JSON line: {source}")]
+    MalformedStdout {
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("agent {0} has no manifest or package_dir set; cannot execute")]
     NotExecutable(String),
     #[error("agent {agent} requires sandbox backend {required:?}; active runner is trusted-local")]
@@ -67,7 +72,7 @@ fn parse_result(stdout_buf: &[u8]) -> Result<AgentResult, RunnerError> {
         .split(|b| *b == b'\n')
         .find(|l| !l.is_empty())
         .unwrap_or(stdout_buf);
-    Ok(serde_json::from_slice(line)?)
+    serde_json::from_slice(line).map_err(|source| RunnerError::MalformedStdout { source })
 }
 
 fn workspace_entry(entry: &str) -> String {
@@ -536,6 +541,40 @@ cpu_ms_per_task = 5000
         let r = SubprocessRunner.run(&card, &dummy_intent()).await.unwrap();
         assert_eq!(r.text, "sh agent ok");
         assert_eq!(r.sources, vec!["s1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn subprocess_runner_surfaces_malformed_stdout() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("malformed.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'not-json'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "malformed"
+name = "Malformed"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./malformed.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let result = SubprocessRunner.run(&card, &dummy_intent()).await;
+        match result {
+            Err(RunnerError::MalformedStdout { source }) => {
+                assert!(source.is_syntax() || source.is_data());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     /// Long-running script + tight budget → `Timeout`, child killed.

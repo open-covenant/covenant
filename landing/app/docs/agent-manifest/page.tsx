@@ -361,10 +361,8 @@ runtime = "node"       →   exec node    entry`}</code>
 
       <pre>
         <code>{`{
-  "intent_id": "uuid",
-  "status":    "ok" | "error",
-  "text":      "…",
-  "sources":   ["…"]
+  "text":    "…",
+  "sources": ["…"]
 }`}</code>
       </pre>
 
@@ -373,6 +371,8 @@ runtime = "node"       →   exec node    entry`}</code>
         and surfaces in operator logs. The agent process must terminate
         within <code>resources.cpu_ms_per_task</code>; processes that
         exceed the budget are killed and the dispatch returns an error.
+        Successful processes with malformed stdout are rejected as runtime
+        failures, not accepted as successful dispatches.
         The current subprocess runner is trusted-local. If{" "}
         <code>sandbox.required</code> is true, it fails closed instead of
         silently running the agent without sandbox-grade isolation.

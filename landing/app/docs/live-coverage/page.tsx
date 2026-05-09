@@ -15,7 +15,7 @@ const SURFACES = [
   ["Peer listing", "covered", "ambiguous-prefix listing"],
   ["A2A mailbox", "covered", "explicit requeue repair"],
   ["MCP subprocess", "covered", "third-party fixture"],
-  ["Runtime subprocess", "covered", "malformed stdout failure path"],
+  ["Runtime subprocess", "covered", "daemon dispatch failure receipts"],
   ["Budget enforcement", "covered", "budget resume"],
   ["Local model", "external service", "model availability probes"],
 ];

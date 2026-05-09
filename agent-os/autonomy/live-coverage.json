@@ -122,10 +122,11 @@
       ],
       "liveTests": [
         "agent-os/agents/research/tests/live_subprocess.rs",
+        "agent-os/crates/covenant-runtime/tests/live_malformed_stdout.rs",
         "agent-os/crates/covenantd/tests/live_agent_dispatch.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live failure-path coverage for malformed agent stdout."
+      "nextGap": "Add daemon-level live dispatch failure assertions after operator-facing failure receipts are formalized."
     },
     {
       "id": "runtime-linux-gvisor",

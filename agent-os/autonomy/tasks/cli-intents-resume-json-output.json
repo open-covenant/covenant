@@ -1,7 +1,7 @@
 {
   "id": "cli-intents-resume-json-output",
   "title": "Add JSON output for intents resume",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

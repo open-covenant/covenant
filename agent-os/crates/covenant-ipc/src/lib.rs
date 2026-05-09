@@ -19,6 +19,15 @@ pub struct VerifyCheck {
     pub passed: bool,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyDrift {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub message: String,
+    pub repair: String,
+}
 // `Receipts` mirrors `Memories`: a list of `SettlementReceipt`. Kept as a
 // distinct response variant so the CLI can format them differently.
 use serde::{Deserialize, Serialize};
@@ -270,6 +279,8 @@ pub enum Response {
     VerifyReport {
         window: usize,
         checks: Vec<VerifyCheck>,
+        #[serde(default)]
+        drift: Vec<VerifyDrift>,
         orphans_total: u64,
     },
     Capabilities {

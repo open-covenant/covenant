@@ -551,12 +551,21 @@ async fn main() -> Result<()> {
                 Response::VerifyReport {
                     window,
                     checks,
+                    drift,
                     orphans_total,
                 } => {
                     println!("verify (last {window} records):");
                     for c in &checks {
                         let mark = if c.passed { "✓" } else { "✗" };
                         println!("  {mark} {} — {}", c.name, c.message);
+                    }
+                    if !drift.is_empty() {
+                        println!("drift:");
+                        for item in &drift {
+                            let id = item.id.as_deref().unwrap_or("-");
+                            println!("  - {} [{}] — {}", item.kind, id, item.message);
+                            println!("    repair: {}", item.repair);
+                        }
                     }
                     println!("orphans total: {orphans_total}");
                     if orphans_total > 0 {

@@ -168,6 +168,31 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
         should select retention thresholds deliberately.
       </p>
 
+      <h2>Drift reports</h2>
+      <p>
+        <code>covenant verify</code> runs read-only consistency checks
+        across memory, audit, capability, and settlement state. The
+        response includes aggregate checks plus machine-readable drift
+        items that future repair commands can consume.
+      </p>
+
+      <pre>
+        <code>{`covenant verify --window 100
+
+# Drift kinds:
+# memory_without_audit
+# audit_without_memory
+# memory_stale_parent
+# capability_without_audit
+# memory_receipt_mismatch`}</code>
+      </pre>
+
+      <p>
+        The verifier does not delete, detach, or backfill records. It
+        reports the repair posture for each drift item so an operator or
+        future autonomous repair command can decide what to mutate.
+      </p>
+
       <h2>The .covenantignore allow/deny list</h2>
       <p>
         Covenant supports a <code>.covenantignore</code> file at{" "}

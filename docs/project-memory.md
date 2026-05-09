@@ -33,7 +33,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No public transparency-log attestation for agent-produced artifacts.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
-- Project memory compaction, drift repair, and long-horizon stale-context handling need more work.
+- Project memory has read-only drift reports; explicit repair commands, compaction, and long-horizon stale-context handling need more work.
 
 ## Human Authority Boundary
 
@@ -53,6 +53,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/status.md](./status.md): implemented, experimental, and planned capability matrix.
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
+- [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): validated autonomous maintenance backlog.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.

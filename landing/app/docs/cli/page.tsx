@@ -146,12 +146,12 @@ revoked 4qXP...8tF1 (removed=true)`}</code>
       <h3>Verify state</h3>
       <pre>
         <code>{`$ covenant verify --window 100
-window: 100
-checks:
-  memory ↔ audit       PASS  0 memory orphan(s), 0 audit orphan(s)
-  capability ↔ audit   PASS  0 capabilit(ies) without matching grant audit event
-  memory ↔ receipts    PASS  20 memory record(s) vs 20 receipt(s); diff = 0
-orphans_total: 0`}</code>
+verify (last 100 records):
+  ✓ memory ↔ audit — 0 memory orphan(s), 0 audit orphan(s)
+  ✓ memory parent references — 0 stale parent reference(s)
+  ✓ capability ↔ audit — 0 capabilit(ies) without matching grant audit event
+  ✓ memory ↔ receipts — 20 memory record(s) vs 20 receipt(s); diff = 0
+orphans total: 0`}</code>
       </pre>
 
       <h3>Invoke a tool</h3>

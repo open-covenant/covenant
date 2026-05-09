@@ -27,7 +27,7 @@ At a high level, Covenant provides:
 - an **agent control plane** for dispatching intents, routing work, and coordinating peers;
 - an **execution substrate** for spawning agents and bounding their runtime behavior;
 - a **policy layer** based on signed capabilities, expiry, revocation, and peer authentication;
-- **persistent project memory** backed by tiered records, embeddings, ignore rules, and drift checks under development;
+- **persistent project memory** backed by tiered records, embeddings, ignore rules, and read-only drift reports;
 - **audit and provenance** through append-only JSONL logs, signed actions, CI gates, and review artifacts;
 - **tool orchestration** through native tools, MCP integration, A2A messaging, and local gateway APIs;
 - a path toward **economic settlement** through local receipts today and a Solana program scaffold for future on-chain settlement.
@@ -80,7 +80,7 @@ Implemented and tested in the repository:
 |---|---|---|
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
 | Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation and audit rows. |
-| Memory | Implemented, still hardening | SQLite and embeddings are present; compaction and drift repair need more work. |
+| Memory | Implemented, still hardening | SQLite, embeddings, and read-only drift reports are present; explicit repair and compaction need more work. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery and queue-state inspection. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Runtime sandboxing | Planned | Subprocess timeouts exist; gVisor/Firecracker isolation is future work. |

@@ -1614,16 +1614,45 @@ impl Server {
     /// a total orphan count. Useful for paranoid operator inspection.
     async fn verify_recent(&self, window: usize) -> Response {
         use covenant_audit::AuditKind;
-        use covenant_ipc::VerifyCheck;
-        use std::collections::HashSet;
+        use covenant_ipc::{VerifyCheck, VerifyDrift};
+        use std::collections::{HashMap, HashSet};
 
         let mut checks: Vec<VerifyCheck> = Vec::new();
+        let mut drift: Vec<VerifyDrift> = Vec::new();
         let mut orphans_total: u64 = 0;
 
-        let memories = self.memory.recent(None, window).await.unwrap_or_default();
-        let audits = self.audit.recent(window).await.unwrap_or_default();
-        let receipts = self.settlement.recent(window).await.unwrap_or_default();
-        let caps = self.capabilities.recent(window).await.unwrap_or_default();
+        let memories = match self.memory.recent(None, window).await {
+            Ok(records) => records,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("memory: {e}"),
+                };
+            }
+        };
+        let audits = match self.audit.recent(window).await {
+            Ok(events) => events,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                };
+            }
+        };
+        let receipts = match self.settlement.recent(window).await {
+            Ok(receipts) => receipts,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("settlement: {e}"),
+                };
+            }
+        };
+        let caps = match self.capabilities.recent(window).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("capabilities: {e}"),
+                };
+            }
+        };
 
         // Check 1: every memory record's id appears as an IntentDispatched
         // audit event's intent_id. The other direction (audit without memory)
@@ -1640,10 +1669,32 @@ impl Server {
             .iter()
             .filter(|id| !dispatched_intent_ids.contains(id))
             .count() as u64;
+        for id in memory_ids
+            .iter()
+            .filter(|id| !dispatched_intent_ids.contains(id))
+        {
+            drift.push(VerifyDrift {
+                kind: "memory_without_audit".into(),
+                id: Some(id.to_string()),
+                message: "memory record has no matching IntentDispatched audit row".into(),
+                repair: "inspect the record; preserve it if still useful, otherwise delete only through an explicit repair command".into(),
+            });
+        }
         let audit_orphans: u64 = dispatched_intent_ids
             .iter()
             .filter(|id| !memory_ids.contains(id))
             .count() as u64;
+        for id in dispatched_intent_ids
+            .iter()
+            .filter(|id| !memory_ids.contains(id))
+        {
+            drift.push(VerifyDrift {
+                kind: "audit_without_memory".into(),
+                id: Some(id.to_string()),
+                message: "IntentDispatched audit row has no matching memory record".into(),
+                repair: "inspect audit and receipt rows before deciding whether to backfill memory or mark the dispatch intentionally memoryless".into(),
+            });
+        }
         orphans_total += memory_orphans + audit_orphans;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
@@ -1654,7 +1705,39 @@ impl Server {
             ),
         });
 
-        // Check 2: every capability in the granted set has a matching
+        // Check 2: parent references should resolve against the memory store,
+        // even when the parent sits outside the sampled recent window.
+        let mut stale_parent_refs = 0_u64;
+        for record in &memories {
+            let Some(parent) = record.parent else {
+                continue;
+            };
+            match self.memory.get(parent).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    stale_parent_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_stale_parent".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!("memory parent reference {parent} does not resolve"),
+                        repair: "inspect the child record and either restore its parent or detach the parent reference through an explicit repair command".into(),
+                    });
+                }
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("memory: {e}"),
+                    };
+                }
+            }
+        }
+        orphans_total += stale_parent_refs;
+        checks.push(VerifyCheck {
+            name: "memory parent references".into(),
+            passed: stale_parent_refs == 0,
+            message: format!("{stale_parent_refs} stale parent reference(s)"),
+        });
+
+        // Check 3: every capability in the granted set has a matching
         // CapabilityGranted audit event. Mismatch means an out-of-band write
         // to granted.jsonl that didn't go through the daemon.
         let audited_grant_sigs: HashSet<String> = audits
@@ -1671,6 +1754,21 @@ impl Server {
                 !audited_grant_sigs.contains(&s)
             })
             .count() as u64;
+        for cap in caps.iter().filter(|c| {
+            let sig = bs58::encode(c.signature).into_string();
+            !audited_grant_sigs.contains(&sig)
+        }) {
+            let signature_b58 = bs58::encode(cap.signature).into_string();
+            drift.push(VerifyDrift {
+                kind: "capability_without_audit".into(),
+                id: Some(signature_b58),
+                message: format!(
+                    "capability grant for action {} has no matching audit row",
+                    cap.capability.action
+                ),
+                repair: "treat as out-of-band mutation; revoke if untrusted or backfill provenance before retaining".into(),
+            });
+        }
         orphans_total += cap_orphans;
         checks.push(VerifyCheck {
             name: "capability ↔ audit".into(),
@@ -1681,25 +1779,65 @@ impl Server {
             ),
         });
 
-        // Check 3: memory writes and settlement receipts should be 1:1.
+        // Check 4: memory writes and settlement receipts should be 1:1.
         // Mismatch means a memory write succeeded but the settlement record
         // failed (or vice versa) — Phase 0 is fail-soft on settlement.
-        let mem = memories.len();
-        let rec = receipts.len();
-        let pair_diff = mem.abs_diff(rec) as u64;
+        let mut memory_by_owner: HashMap<String, usize> = HashMap::new();
+        for record in &memories {
+            *memory_by_owner
+                .entry(record.owner.pubkey_base58())
+                .or_insert(0) += 1;
+        }
+        let mut receipt_by_owner: HashMap<String, usize> = HashMap::new();
+        for receipt in receipts
+            .iter()
+            .filter(|receipt| receipt.resource == ResourceKind::Memory)
+        {
+            *receipt_by_owner
+                .entry(receipt.payer.pubkey_base58())
+                .or_insert(0) += 1;
+        }
+        let owners: HashSet<String> = memory_by_owner
+            .keys()
+            .chain(receipt_by_owner.keys())
+            .cloned()
+            .collect();
+        let mut pair_diff = 0_u64;
+        for owner in owners {
+            let memory_count = memory_by_owner.get(&owner).copied().unwrap_or(0);
+            let receipt_count = receipt_by_owner.get(&owner).copied().unwrap_or(0);
+            if memory_count == receipt_count {
+                continue;
+            }
+            pair_diff += memory_count.abs_diff(receipt_count) as u64;
+            drift.push(VerifyDrift {
+                kind: "memory_receipt_mismatch".into(),
+                id: Some(owner),
+                message: format!(
+                    "{memory_count} memory record(s) vs {receipt_count} memory receipt(s) for owner"
+                ),
+                repair: "reconcile settlement before mutating memory; missing receipts may require backfill, extra receipts may require accounting review".into(),
+            });
+        }
         orphans_total += pair_diff;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
             passed: pair_diff == 0,
             message: format!(
                 "{} memory record(s) vs {} receipt(s); diff = {}",
-                mem, rec, pair_diff
+                memories.len(),
+                receipts
+                    .iter()
+                    .filter(|receipt| receipt.resource == ResourceKind::Memory)
+                    .count(),
+                pair_diff
             ),
         });
 
         Response::VerifyReport {
             window,
             checks,
+            drift,
             orphans_total,
         }
     }
@@ -2050,6 +2188,108 @@ required = {caps:?}
             .await;
         match resp {
             Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_no_drift_after_successful_dispatch() {
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        s.op_respond(Request::GrantCapability {
+            action: "tool.web_search".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        s.op_respond(Request::SubmitIntent {
+            text: "find recent papers on agent memory".into(),
+        })
+        .await;
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                checks,
+                drift,
+                orphans_total,
+                ..
+            } => {
+                assert!(checks.iter().all(|check| check.passed), "{checks:?}");
+                assert!(drift.is_empty(), "{drift:?}");
+                assert_eq!(orphans_total, 0);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_actionable_memory_drift_items() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        let missing_parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "orphaned memory".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(missing_parent),
+            })
+            .await
+            .unwrap();
+
+        let audit_only_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me,
+                kind: AuditKind::IntentDispatched {
+                    intent_id: audit_only_id,
+                    intent_text: "audit without memory".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b""),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                ..
+            } => {
+                assert!(
+                    orphans_total >= 4,
+                    "expected multiple drift rows: {drift:?}"
+                );
+                assert!(drift.iter().any(|item| {
+                    item.kind == "memory_without_audit"
+                        && item.id.as_deref() == Some(&memory_id.to_string())
+                }));
+                assert!(drift.iter().any(|item| {
+                    item.kind == "audit_without_memory"
+                        && item.id.as_deref() == Some(&audit_only_id.to_string())
+                }));
+                assert!(drift.iter().any(|item| {
+                    item.kind == "memory_stale_parent"
+                        && item.id.as_deref() == Some(&memory_id.to_string())
+                        && item.message.contains(&missing_parent.to_string())
+                }));
+                assert!(drift
+                    .iter()
+                    .any(|item| item.kind == "memory_receipt_mismatch"));
+            }
             other => panic!("unexpected: {other:?}"),
         }
     }

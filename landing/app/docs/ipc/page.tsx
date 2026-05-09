@@ -134,6 +134,7 @@ export default function IpcPage() {
 { "kind": "verify_report",
   "window": 100,
   "checks": [ { "name": "…", "passed": true, "message": "…" } ],
+  "drift":  [ { "kind": "…", "id": "…", "message": "…", "repair": "…" } ],
   "orphans_total": 0 }
 { "kind": "ignore_report",
   "ignored":         false,

@@ -1,0 +1,31 @@
+{
+  "id": "memory-repair-commands",
+  "title": "Add explicit memory repair commands",
+  "state": "proposed",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/crates/covenant-memory",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant",
+    "docs"
+  ],
+  "summary": "Turn read-only memory drift reports into explicit operator-controlled repair commands for stale parents, missing provenance, and settlement mismatches.",
+  "expectedFailureModes": [],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs",
+    "escalation"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenantd verify -- --nocapture"
+  ],
+  "humanEscalation": [
+    "Approval before destructive automatic memory deletion or settlement backfill"
+  ],
+  "nextAction": "Define dry-run and apply semantics for detach-parent, delete-memory, and provenance-backfill repair actions.",
+  "updated": "2026-05-09"
+}

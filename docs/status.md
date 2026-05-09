@@ -9,7 +9,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | Identity and peer auth | Implemented | `covenant-identity`, `covenant-peer-auth`, token rotation tests | Public attestation and key provenance. |
 | Signed capabilities | Implemented | `covenant-permissions`, capability enforcement tests | Formalize scope schemas per action namespace. |
 | Audit log | Implemented | `covenant-audit`, daemon audit event tests | Add retention policy docs and tamper-evidence design. |
-| Memory store | Implemented, hardening | `covenant-memory`, SQLite and embedding tests | Drift repair, compaction, stale-context handling. |
+| Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports | Explicit repair commands, compaction, stale-context handling. |
 | Runtime execution | Implemented, trusted-local | `covenant-runtime`, subprocess timeout tests | gVisor sandbox for untrusted Linux agents. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
 | A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, restart live tests | Explicit requeue and lease-expiry repair commands. |

@@ -105,12 +105,16 @@ export default function AuditPage() {
         </li>
         <li>
           <strong>Cross-checked.</strong>{" "}
-          <code>covenant verify</code> runs three audits over a
+          <code>covenant verify</code> runs four audits over a
           rolling window:
           <ul>
             <li>
               memory ↔ audit — every memory record has a matching{" "}
               <code>IntentDispatched</code>.
+            </li>
+            <li>
+              memory parent references — every parent id resolves in
+              the memory store.
             </li>
             <li>
               capability ↔ audit — every granted capability has a

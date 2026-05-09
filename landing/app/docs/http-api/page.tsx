@@ -113,8 +113,17 @@ POST /capabilities/revoke
     "window": 100,
     "checks": [
       { "name": "memory ↔ audit",     "passed": true,  "message": "…" },
+      { "name": "memory parent references", "passed": true, "message": "…" },
       { "name": "capability ↔ audit", "passed": true,  "message": "…" },
       { "name": "memory ↔ receipts",  "passed": true,  "message": "…" }
+    ],
+    "drift": [
+      {
+        "kind": "memory_stale_parent",
+        "id": "uuid",
+        "message": "…",
+        "repair": "…"
+      }
     ],
     "orphans_total": 0
   }`}</code>

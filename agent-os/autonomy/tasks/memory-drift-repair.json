@@ -1,7 +1,7 @@
 {
   "id": "memory-drift-repair",
   "title": "Implement project memory drift detection and repair",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [
@@ -16,12 +16,16 @@
     "Repair logic deletes useful long-term records because it cannot distinguish stale facts from archived context.",
     "Verification reads too much project state and becomes slow enough that agents skip it during sprint close."
   ],
-  "gates": ["plan", "test_expansion", "docs"],
+  "gates": [
+    "plan",
+    "test_expansion",
+    "docs"
+  ],
   "verification": [
     "bash agent-os/scripts/validate.sh --quick",
     "cargo test -p covenantd verify -- --nocapture"
   ],
   "humanEscalation": [],
-  "nextAction": "Design the drift report shape and add read-only checks before implementing mutating repair.",
+  "nextAction": "Continue explicit memory repair commands under memory-repair-commands.",
   "updated": "2026-05-09"
 }

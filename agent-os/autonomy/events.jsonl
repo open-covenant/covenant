@@ -682,3 +682,4 @@
 {"timestamp":"2026-05-09T20:32:24.999Z","taskId":"memory-compact-json-output","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed: keep legacy outcome output; add --json envelope + docs + live assertion."}
 {"timestamp":"2026-05-09T20:32:33.816Z","taskId":"memory-compact-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"Validation: run unit + live compaction, docs build, autonomy validation, quick gate."}
 {"timestamp":"2026-05-09T20:33:14.348Z","taskId":"memory-compact-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Validation green: unit + live compaction, landing build, autonomy validation, quick gate."}
+{"timestamp":"2026-05-09T20:35:00.034Z","taskId":"memory-compact-json-output","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated memory compact --json envelope with docs + live coverage."}

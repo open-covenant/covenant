@@ -39,7 +39,7 @@ export default function CliPage() {
   capabilities revoke <signature-b58>
                                      Tombstone a previously granted token.
 
-  receipts recent [-n N]             List recent settlement receipts.
+  receipts recent [-n N] [--json]    List recent settlement receipts.
 
   verify [--window N]                Cross-check audit log vs other state.
 

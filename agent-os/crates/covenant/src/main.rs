@@ -14,7 +14,7 @@
 //!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>]
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
-//!   covenant receipts recent [--limit N]
+//!   covenant receipts recent [--limit N] [--json]
 //!   covenant chain status
 //!   covenant chain flush-receipts [--limit N]
 //!   covenant chain receipt-batches [--limit N]
@@ -45,7 +45,7 @@ use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
-    MemoryRepairRequest, MemoryTier,
+    MemoryRepairRequest, MemoryTier, ResourceKind, SettlementReceipt,
 };
 use std::path::PathBuf;
 use tokio::net::UnixStream;
@@ -102,7 +102,7 @@ fn print_usage() {
     eprintln!(
         "  covenant memory repair backfill-provenance <id> --reason TEXT --provenance JSON [--apply]"
     );
-    eprintln!("  covenant receipts recent [-n N]         list recent settlement receipts");
+    eprintln!("  covenant receipts recent [-n N] [--json]  list recent settlement receipts");
     eprintln!("  covenant chain status                   show Solana protocol configuration");
     eprintln!(
         "  covenant chain flush-receipts [-n N]    batch local receipts into a Solana receipt root"
@@ -785,6 +785,7 @@ async fn main() -> Result<()> {
                 std::process::exit(2);
             }
             let mut limit: usize = 10;
+            let mut as_json = false;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -793,6 +794,7 @@ async fn main() -> Result<()> {
                         let v = args.get(i).context("--limit needs a value")?;
                         limit = v.parse().context("--limit must be an integer")?;
                     }
+                    "--json" => as_json = true,
                     other => bail!("unknown flag '{other}'"),
                 }
                 i += 1;
@@ -800,25 +802,25 @@ async fn main() -> Result<()> {
             write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::Receipts { receipts } => {
-                    if receipts.is_empty() {
-                        println!("(no receipts)");
-                    }
-                    for r in receipts {
-                        let resource = match r.resource {
-                            covenant_types::ResourceKind::Compute => "compute",
-                            covenant_types::ResourceKind::Memory => "memory",
-                            covenant_types::ResourceKind::Tool => "tool",
-                            covenant_types::ResourceKind::Message => "message",
-                            covenant_types::ResourceKind::Registration => "registration",
-                        };
-                        let onchain = match r.tx_sig.as_ref().or(r.onchain_sig.as_ref()) {
-                            Some(s) => s.as_str(),
-                            None => "(local-only)",
-                        };
+                    if as_json {
                         println!(
-                            "[{}] {resource}: {} credits — {onchain}",
-                            r.settled_at, r.credits_consumed
+                            "{}",
+                            serde_json::to_string(&receipt_list_json(limit, &receipts))?
                         );
+                    } else if receipts.is_empty() {
+                        println!("(no receipts)");
+                    } else {
+                        for r in receipts {
+                            let resource = resource_name(r.resource);
+                            let onchain = match r.tx_sig.as_ref().or(r.onchain_sig.as_ref()) {
+                                Some(s) => s.as_str(),
+                                None => "(local-only)",
+                            };
+                            println!(
+                                "[{}] {resource}: {} credits — {onchain}",
+                                r.settled_at, r.credits_consumed
+                            );
+                        }
                     }
                 }
                 Response::Error { message } => bail!("daemon error: {message}"),
@@ -1806,6 +1808,24 @@ fn peer_revoke_ambiguous_lines(matches: &[PeerSummary], truncated: bool) -> Vec<
     out
 }
 
+fn resource_name(resource: ResourceKind) -> &'static str {
+    match resource {
+        ResourceKind::Compute => "compute",
+        ResourceKind::Memory => "memory",
+        ResourceKind::Tool => "tool",
+        ResourceKind::Message => "message",
+        ResourceKind::Registration => "registration",
+    }
+}
+
+fn receipt_list_json(limit: usize, receipts: &[SettlementReceipt]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "receipt_list",
+        "limit": limit,
+        "receipts": receipts,
+    })
+}
+
 fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
@@ -2176,6 +2196,37 @@ mod tests {
         );
         let text = serde_json::to_string(&value).unwrap();
         assert!(!text.contains("PeerToken"), "{text}");
+    }
+
+    #[test]
+    fn receipt_list_json_renders_stable_shape() {
+        let payer = AgentId::new("payer@local", [3u8; 32]);
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::nil(),
+            payer: payer.clone(),
+            resource: ResourceKind::Memory,
+            credits_consumed: 42,
+            settled_at: 1_700_000_000_000,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let value = receipt_list_json(10, &[receipt]);
+        assert_eq!(value["kind"], "receipt_list");
+        assert_eq!(value["limit"], 10);
+        assert_eq!(value["receipts"][0]["payer"]["display"], "payer@local");
+        assert_eq!(
+            value["receipts"][0]["payer"]["pubkey"],
+            payer.pubkey_base58()
+        );
+        assert_eq!(value["receipts"][0]["resource"], "memory");
+        assert_eq!(value["receipts"][0]["credits_consumed"], 42);
+        assert!(value["receipts"][0]["tx_sig"].is_null());
     }
 
     #[test]

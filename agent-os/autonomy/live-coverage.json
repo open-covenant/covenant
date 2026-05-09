@@ -165,10 +165,11 @@
         "agent-os/crates/covenantd/src/lib.rs"
       ],
       "liveTests": [
-        "agent-os/crates/covenantd/tests/live_agent_dispatch.rs"
+        "agent-os/crates/covenantd/tests/live_agent_dispatch.rs",
+        "agent-os/crates/covenantd/tests/live_cli_receipts_recent_json.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live CLI receipt-read coverage for scoped chain.receipts grants once JSON receipt output stabilizes."
+      "nextGap": "Add live scoped receipt filter coverage once receipt query predicates become user-selectable."
     },
     {
       "id": "local-model",

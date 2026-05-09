@@ -1,0 +1,34 @@
+{
+  "id": "receipts-recent-json-output",
+  "title": "Add JSON output for recent receipts",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add stable machine-readable output for `covenant receipts recent --json` so automation can verify scoped receipt reads without parsing human text.",
+  "expectedFailureModes": [
+    "Receipt-read automation depends on human output that can change without schema review.",
+    "The chain.receipts gate has daemon coverage but no stable CLI contract.",
+    "Live CLI coverage cannot assert receipt redaction and scoped-read behavior without a JSON shape."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cargo test -p covenant --locked receipt",
+    "cargo test -p covenantd --test live_cli_receipts_recent_json --locked -- --ignored live_",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomy backlog item.",
+  "updated": "2026-05-09"
+}

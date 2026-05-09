@@ -115,6 +115,7 @@ async fn live_cli_peers_self_revoke_is_rejected() {
         .arg("peers")
         .arg("revoke")
         .arg(&token_prefix)
+        .arg("--json")
         .env("COVENANT_HOME", home.path())
         .env("HOME", home.path())
         .stdin(Stdio::null())
@@ -130,12 +131,22 @@ async fn live_cli_peers_self_revoke_is_rejected() {
         "self revoke unexpectedly succeeded: stdout={revoke_stdout:?} stderr={revoke_stderr:?}"
     );
     assert!(
-        revoke_stderr.contains("refused to revoke the operator's own bootstrap token"),
-        "self revoke stderr missing refusal: stdout={revoke_stdout:?} stderr={revoke_stderr:?}"
+        revoke_stderr.trim().is_empty(),
+        "peers revoke --json must not mix human stderr with JSON stdout: stderr={revoke_stderr:?}"
+    );
+    let revoke_json: serde_json::Value =
+        serde_json::from_str(revoke_stdout.trim()).expect("peers revoke --json must be valid JSON");
+    assert_eq!(
+        revoke_json.get("kind").and_then(serde_json::Value::as_str),
+        Some("peer_revoke")
     );
     assert!(
-        revoke_stderr.contains("covenant peers rotate"),
-        "self revoke stderr missing rotation guidance: stderr={revoke_stderr:?}"
+        revoke_json
+            .get("outcome")
+            .and_then(|outcome| outcome.get("type"))
+            .and_then(serde_json::Value::as_str)
+            == Some("self_revoke_forbidden"),
+        "self revoke JSON had unexpected shape: {revoke_json}"
     );
 
     let ping = Command::new(&cli_exe)

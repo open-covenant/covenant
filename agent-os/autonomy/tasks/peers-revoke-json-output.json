@@ -1,11 +1,12 @@
 {
   "id": "peers-revoke-json-output",
   "title": "Add JSON output to peers revoke",
-  "state": "in_progress",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
     "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
     "docs"
   ],
   "summary": "Add a `--json` flag to `covenant peers revoke` so automation can distinguish Revoked/AlreadyRevoked/NotFound/Ambiguous without scraping stderr.",

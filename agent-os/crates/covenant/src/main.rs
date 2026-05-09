@@ -31,7 +31,7 @@
 //!   covenant peers purge (--before-ms <M> | --older-than-ms <D>)
 //!   covenant peers rotate
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>] [--json]
-//!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>]
+//!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] [--json]
 //!   covenant intents resume <intent-id>
 //!   covenant intents resume latest
 //! ```
@@ -42,7 +42,7 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_audit::AuditKind;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
-use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
+use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
     MemoryRepairRequest, MemoryTier,
@@ -143,7 +143,7 @@ fn print_usage() {
         "  covenant peers list [--limit N] [--prefix B58] [--live-only | --revoked-only] [--json]  list registered peers (operator-only) — match audit `peer_pubkey_b58` via --prefix; add --json for stable machine output"
     );
     eprintln!(
-        "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N]  revoke a single peer by its token prefix (operator-only); --force overrides the self-revoke guard, --limit-matches caps ambiguous-match render"
+        "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N] [--json]  revoke a single peer by its token prefix (operator-only); --json emits one stable machine-readable outcome"
     );
     eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
@@ -1422,10 +1422,12 @@ async fn main() -> Result<()> {
                     let force = args.iter().any(|a| a == "--force");
                     let mut match_limit: Option<usize> = None;
                     let mut token_prefix: Option<String> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
                             "--force" => {}
+                            "--json" => as_json = true,
                             "--limit-matches" => {
                                 i += 1;
                                 let v = args.get(i).context("--limit-matches needs a value")?;
@@ -1456,54 +1458,63 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::PeerRevoked { outcome } => match outcome {
-                            covenant_peer_auth::RevokeOutcome::Revoked(s) => {
-                                println!(
-                                    "revoked\t{display}\t{pubkey}\t{prefix}…\trevoked@{revoked}",
-                                    display = s.agent_id.display,
-                                    pubkey = s.agent_id.pubkey_base58(),
-                                    prefix = s.token_prefix,
-                                    revoked = s.revoked_at.unwrap_or(0),
-                                );
-                            }
-                            covenant_peer_auth::RevokeOutcome::AlreadyRevoked(s) => {
-                                println!(
-                                    "already revoked at {revoked}: {display}\t{pubkey}\t{prefix}…",
-                                    display = s.agent_id.display,
-                                    pubkey = s.agent_id.pubkey_base58(),
-                                    prefix = s.token_prefix,
-                                    revoked = s.revoked_at.unwrap_or(0),
-                                );
-                            }
-                            covenant_peer_auth::RevokeOutcome::NotFound => {
-                                eprintln!("no peer matched the supplied prefix");
-                                std::process::exit(1);
-                            }
-                            covenant_peer_auth::RevokeOutcome::Ambiguous { matches, truncated } => {
-                                for line in peer_revoke_ambiguous_lines(&matches, truncated) {
-                                    eprintln!("{line}");
+                        Response::PeerRevoked { outcome } => {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&peer_revoke_json(&outcome))?);
+                                if peer_revoke_is_failure(&outcome) {
+                                    std::process::exit(1);
                                 }
-                                std::process::exit(1);
+                                return Ok(());
                             }
-                            covenant_peer_auth::RevokeOutcome::SelfRevokeForbidden(s) => {
-                                eprintln!(
-                                    "refused to revoke the operator's own bootstrap token: {display}\t{pubkey}\t{prefix}…",
-                                    display = s.agent_id.display,
-                                    pubkey = s.agent_id.pubkey_base58(),
-                                    prefix = s.token_prefix,
-                                );
-                                eprintln!(
-                                    "  use `covenant peers rotate` to retire the current token without bricking auth,"
-                                );
-                                eprintln!(
-                                    "  or pass --force to override (this WILL brick auth; recover by deleting"
-                                );
-                                eprintln!(
-                                    "  $COVENANT_HOME/peers/operator.token and restarting the daemon)."
-                                );
-                                std::process::exit(1);
+                            match outcome {
+                                RevokeOutcome::Revoked(s) => {
+                                    println!(
+                                        "revoked\t{display}\t{pubkey}\t{prefix}…\trevoked@{revoked}",
+                                        display = s.agent_id.display,
+                                        pubkey = s.agent_id.pubkey_base58(),
+                                        prefix = s.token_prefix,
+                                        revoked = s.revoked_at.unwrap_or(0),
+                                    );
+                                }
+                                RevokeOutcome::AlreadyRevoked(s) => {
+                                    println!(
+                                        "already revoked at {revoked}: {display}\t{pubkey}\t{prefix}…",
+                                        display = s.agent_id.display,
+                                        pubkey = s.agent_id.pubkey_base58(),
+                                        prefix = s.token_prefix,
+                                        revoked = s.revoked_at.unwrap_or(0),
+                                    );
+                                }
+                                RevokeOutcome::NotFound => {
+                                    eprintln!("no peer matched the supplied prefix");
+                                    std::process::exit(1);
+                                }
+                                RevokeOutcome::Ambiguous { matches, truncated } => {
+                                    for line in peer_revoke_ambiguous_lines(&matches, truncated) {
+                                        eprintln!("{line}");
+                                    }
+                                    std::process::exit(1);
+                                }
+                                RevokeOutcome::SelfRevokeForbidden(s) => {
+                                    eprintln!(
+                                        "refused to revoke the operator's own bootstrap token: {display}\t{pubkey}\t{prefix}…",
+                                        display = s.agent_id.display,
+                                        pubkey = s.agent_id.pubkey_base58(),
+                                        prefix = s.token_prefix,
+                                    );
+                                    eprintln!(
+                                        "  use `covenant peers rotate` to retire the current token without bricking auth,"
+                                    );
+                                    eprintln!(
+                                        "  or pass --force to override (this WILL brick auth; recover by deleting"
+                                    );
+                                    eprintln!(
+                                        "  $COVENANT_HOME/peers/operator.token and restarting the daemon)."
+                                    );
+                                    std::process::exit(1);
+                                }
                             }
-                        },
+                        }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
                     }
@@ -1793,6 +1804,22 @@ fn peer_revoke_ambiguous_lines(matches: &[PeerSummary], truncated: bool) -> Vec<
         ));
     }
     out
+}
+
+fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "peer_revoke",
+        "outcome": outcome,
+    })
+}
+
+fn peer_revoke_is_failure(outcome: &RevokeOutcome) -> bool {
+    matches!(
+        outcome,
+        RevokeOutcome::NotFound
+            | RevokeOutcome::Ambiguous { .. }
+            | RevokeOutcome::SelfRevokeForbidden(_)
+    )
 }
 
 fn print_expand_error(err: &ExpandError) {
@@ -2131,6 +2158,41 @@ mod tests {
             hint.contains("longer prefix") && hint.contains("--limit-matches"),
             "hint should suggest both narrowing options: {hint}"
         );
+    }
+
+    #[test]
+    fn peer_revoke_json_renders_stable_ambiguous_shape() {
+        let p = make_peer(7, "alice@host", false);
+        let value = peer_revoke_json(&RevokeOutcome::Ambiguous {
+            matches: vec![p.clone()],
+            truncated: true,
+        });
+        assert_eq!(value["kind"], "peer_revoke");
+        assert_eq!(value["outcome"]["type"], "ambiguous");
+        assert_eq!(value["outcome"]["truncated"], true);
+        assert_eq!(
+            value["outcome"]["matches"][0]["token_prefix"],
+            p.token_prefix
+        );
+        let text = serde_json::to_string(&value).unwrap();
+        assert!(!text.contains("PeerToken"), "{text}");
+    }
+
+    #[test]
+    fn peer_revoke_json_exit_classification_matches_human_cli() {
+        let p = make_peer(7, "alice@host", false);
+        assert!(!peer_revoke_is_failure(&RevokeOutcome::Revoked(p.clone())));
+        assert!(!peer_revoke_is_failure(&RevokeOutcome::AlreadyRevoked(
+            p.clone()
+        )));
+        assert!(peer_revoke_is_failure(&RevokeOutcome::NotFound));
+        assert!(peer_revoke_is_failure(&RevokeOutcome::Ambiguous {
+            matches: vec![p.clone()],
+            truncated: false,
+        }));
+        assert!(peer_revoke_is_failure(&RevokeOutcome::SelfRevokeForbidden(
+            p
+        )));
     }
 
     #[test]

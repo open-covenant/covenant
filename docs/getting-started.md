@@ -47,6 +47,7 @@ Some CLI verbs expose machine-readable output to avoid brittle parsing:
 
 ```bash
 covenant peers list --json
+covenant peers revoke <token-prefix> --json
 ```
 
 ## Build the on-chain program (optional)

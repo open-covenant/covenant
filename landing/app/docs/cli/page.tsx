@@ -80,7 +80,8 @@ export default function CliPage() {
                                      .covenantignore rules.
 
   tools list [--json]                List registered tools.
-  tools call <name> [--args <json>]  Invoke a registered tool.
+  tools call <name> [--args <json>] [--json]
+                                      Invoke a registered tool.
 
   peers purge
         (--before-ms M
@@ -311,7 +312,10 @@ orphans total: 0`}</code>
 
 $ covenant capabilities grant tool.call.echo
 $ covenant tools call echo --args '{"text":"hello"}'
-hello`}</code>
+hello
+
+$ covenant tools call echo --args '{"text":"hello"}' --json
+{"kind":"tool_result","name":"echo","content":[{"type":"text","text":"hello"}],"is_error":false}`}</code>
       </pre>
 
       <h2>Environment</h2>

@@ -21,7 +21,7 @@
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
-//!   covenant tools call <name> [--args <json>]
+//!   covenant tools call <name> [--args <json>] [--json]
 //!   covenant audit recent [--limit N]
 //!   covenant audit verify
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
@@ -119,7 +119,7 @@ fn print_usage() {
     eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
     eprintln!("  covenant ignore check [--json] <text>   test text against .covenantignore rules");
     eprintln!("  covenant tools list [--json]            list registered tools");
-    eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
+    eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
     eprintln!(
         "  covenant audit recent [-n N]            list recent audit events as JSON lines (one per row, jq-friendly)"
     );
@@ -1250,6 +1250,7 @@ async fn main() -> Result<()> {
                     }
                     let name = args[2].clone();
                     let mut arguments = serde_json::Value::Null;
+                    let mut as_json = false;
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1259,6 +1260,7 @@ async fn main() -> Result<()> {
                                 arguments =
                                     serde_json::from_str(v).context("--args must be valid JSON")?;
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1273,11 +1275,20 @@ async fn main() -> Result<()> {
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::ToolResult { content, is_error } => {
-                            for c in &content {
-                                match c {
-                                    covenant_mcp::Content::Text { text } => println!("{text}"),
-                                    covenant_mcp::Content::Json { value } => {
-                                        println!("{}", serde_json::to_string_pretty(value)?);
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&tool_result_json(
+                                        &name, &content, is_error,
+                                    ))?
+                                );
+                            } else {
+                                for c in &content {
+                                    match c {
+                                        covenant_mcp::Content::Text { text } => println!("{text}"),
+                                        covenant_mcp::Content::Json { value } => {
+                                            println!("{}", serde_json::to_string_pretty(value)?);
+                                        }
                                     }
                                 }
                             }
@@ -2309,6 +2320,19 @@ fn tool_list_json(tools: &[ToolSpec]) -> serde_json::Value {
     })
 }
 
+fn tool_result_json(
+    name: &str,
+    content: &[covenant_mcp::Content],
+    is_error: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "tool_result",
+        "name": name,
+        "content": content,
+        "is_error": is_error,
+    })
+}
+
 fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> serde_json::Value {
     serde_json::json!({
         "kind": "receipt_batch_list",
@@ -2993,6 +3017,27 @@ mod tests {
             value["tools"][0]["inputSchema"]["properties"]["text"]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn tool_result_json_renders_stable_shape() {
+        let content = vec![
+            covenant_mcp::Content::Text {
+                text: "hello".into(),
+            },
+            covenant_mcp::Content::Json {
+                value: serde_json::json!({ "ok": true }),
+            },
+        ];
+
+        let value = tool_result_json("echo", &content, false);
+        assert_eq!(value["kind"], "tool_result");
+        assert_eq!(value["name"], "echo");
+        assert_eq!(value["is_error"], false);
+        assert_eq!(value["content"][0]["type"], "text");
+        assert_eq!(value["content"][0]["text"], "hello");
+        assert_eq!(value["content"][1]["type"], "json");
+        assert_eq!(value["content"][1]["value"]["ok"], true);
     }
 
     #[test]

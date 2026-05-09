@@ -162,6 +162,7 @@
         "agent-os/crates/covenant-mcp/src/transport.rs"
       ],
       "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_tools_call_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_tools_list_json.rs",
         "agent-os/crates/covenant-mcp/tests/live_stdio.rs"
       ],

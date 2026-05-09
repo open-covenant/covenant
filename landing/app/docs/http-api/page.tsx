@@ -62,6 +62,12 @@ GET /version
     }
   }`}</code>
       </pre>
+      <p>
+        <code>/version</code> mirrors the unauthenticated{" "}
+        <code>protocol_info</code> IPC probe. The response is intentionally
+        minimal and stable for protocol version 1; adding required fields
+        implies a protocol version bump.
+      </p>
 
       <h3>Intents</h3>
       <pre>

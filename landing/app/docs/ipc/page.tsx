@@ -208,6 +208,12 @@ export default function IpcPage() {
           <code>authenticate</code>. After authentication, the resolved
           identity is bound to the connection.
         </li>
+        <li>
+          <strong>Compatibility.</strong> <code>protocol_info</code> is
+          intentionally minimal and treated as stable for protocol
+          version 1. Clients should ignore unknown fields; adding new
+          required fields implies a protocol version bump.
+        </li>
       </ul>
 
       <h2>Reference implementation</h2>

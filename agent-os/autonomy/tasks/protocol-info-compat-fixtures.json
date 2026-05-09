@@ -1,0 +1,34 @@
+{
+  "id": "protocol-info-compat-fixtures",
+  "title": "Add protocol info compatibility fixtures",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-ipc",
+    "agent-os/crates/covenantd",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Lock protocol_info wire compatibility with explicit JSON fixtures and tests so stale clients can probe IPC/HTTP version metadata without guessing schema drift.",
+  "expectedFailureModes": [
+    "A refactor changes protocol_info JSON keys and stale clients break during the unauthenticated probe.",
+    "Newer daemons add required protocol info fields without defaults, causing older CLIs to fail deserializing the probe response.",
+    "Docs describe protocol negotiation while leaving compatibility rules implicit, leading to accidental breaking changes."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-ipc --locked",
+    "cd agent-os && cargo test -p covenantd protocol_info --locked",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Integrated fixture-backed protocol_info contract; keep v1 fixtures stable and bump protocol version before introducing required schema changes.",
+  "updated": "2026-05-09"
+}

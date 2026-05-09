@@ -582,16 +582,18 @@ mod tests {
     }
 
     #[test]
-    fn protocol_info_serialises_stable_shape() {
+    fn protocol_info_matches_v1_fixture() {
         let response = Response::ProtocolInfo {
             info: protocol_info(),
         };
         let json = serde_json::to_value(response).unwrap();
-        assert_eq!(json["kind"], "protocol_info");
-        assert_eq!(json["info"]["protocol"], PROTOCOL_NAME);
-        assert_eq!(json["info"]["version"], PROTOCOL_VERSION);
-        assert_eq!(json["info"]["min_supported"], MIN_PROTOCOL_VERSION);
-        assert_eq!(json["info"]["max_supported"], MAX_PROTOCOL_VERSION);
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("protocol-info.v1.json");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fixture_path).unwrap()).unwrap();
+        assert_eq!(json, fixture);
     }
 
     #[tokio::test]

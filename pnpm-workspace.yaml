@@ -3,6 +3,7 @@ packages:
   - packages/sdk
   - packages/sdk-ui
   - packages/ui
+  - landing
   - services/proof-gen
   - services/mcp-bridge
   - services/hermes-mcp-bridge

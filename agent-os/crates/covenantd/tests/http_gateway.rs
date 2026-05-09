@@ -19,6 +19,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+fn protocol_info_fixture_v1() -> serde_json::Value {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = root
+        .join("..")
+        .join("covenant-ipc")
+        .join("tests")
+        .join("fixtures")
+        .join("protocol-info.v1.json");
+    let text = std::fs::read_to_string(&fixture_path).expect("read protocol info fixture");
+    serde_json::from_str(&text).expect("parse protocol info fixture")
+}
+
 fn stub_card() -> AgentCard {
     let toml = r#"
 [agent]
@@ -110,11 +122,7 @@ async fn version_endpoint_returns_protocol_info_without_bearer() {
     let r = reqwest::get(format!("{}/version", s.base)).await.unwrap();
     assert_eq!(r.status(), 200);
     let body: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(body["kind"], "protocol_info");
-    assert_eq!(body["info"]["protocol"], "covenant.ipc");
-    assert_eq!(body["info"]["version"], 1);
-    assert_eq!(body["info"]["min_supported"], 1);
-    assert_eq!(body["info"]["max_supported"], 1);
+    assert_eq!(body, protocol_info_fixture_v1());
 }
 
 #[tokio::test]

@@ -83,9 +83,10 @@ export default function CapabilitiesPage() {
         also enforces stable memory predicates for{" "}
         <code>memory.read</code>, <code>memory.read.&lt;tier&gt;</code>,{" "}
         <code>memory.write</code>, <code>memory.purge</code>,{" "}
-        <code>memory.repair.*</code>, and <code>memory.compact.*</code>.
-        Other scope predicates remain compatibility metadata until their
-        dispatch semantics stabilize.
+        <code>memory.repair.*</code>, and <code>memory.compact.*</code>,
+        plus stable A2A predicates for send, receive-admission, respond,
+        and repair flows. Peer and settlement scope predicates remain
+        compatibility metadata until their dispatch semantics stabilize.
       </p>
 
       <p>
@@ -108,7 +109,7 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
         the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for peer, A2A, and settlement predicates.
+        dispatch-time checks for peer and settlement predicates.
       </p>
 
       <h2>Canonical encoding</h2>

@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, and stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*` at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, and stable A2A predicates for send, receive-admission, respond, and repair flows at dispatch. Peer and settlement scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -85,9 +85,10 @@ Use for agent-to-agent send, receive, respond, repair, and compaction actions.
 
 Rules:
 
-- `peer_pubkey_b58` is the canonical peer selector. Display names are not stable authority.
-- `task_id` and `lease_id` narrow repair or response flows.
-- `duplicate_risk` is required for automatic requeue policy and should be either `idempotent` or `operator-accepted`.
+- `peer_pubkey_b58` is the canonical peer selector. On `a2a.send.*` it is the recipient. On `a2a.recv.*` and `a2a.respond.*` it is the sender. On `a2a.repair.*` it is the task counterparty visible to the authenticated peer.
+- `task_id` narrows send, receive-admission, response, and repair flows to one task.
+- `lease_id` narrows manual repair to one in-flight lease.
+- `duplicate_risk` narrows `a2a.repair.requeue` posture and should be either `idempotent` or `operator-accepted`; the daemon also accepts the wire spelling `operator_accepted`.
 
 ### `audit.*`
 
@@ -153,6 +154,7 @@ Rules:
 3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
+6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
 6. Fail closed for malformed versioned scopes after a migration window.
 7. Keep action-only checks as the fallback only for unscoped operator grants.
 

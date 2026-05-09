@@ -166,6 +166,13 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         </li>
       </ul>
       <p>
+        Non-empty A2A scopes are enforced at dispatch.{" "}
+        <code>peer_pubkey_b58</code> pins the counterparty,{" "}
+        <code>task_id</code> pins one task, <code>lease_id</code> pins
+        manual repair to one in-flight lease, and{" "}
+        <code>duplicate_risk</code> pins requeue posture.
+      </p>
+      <p>
         Read paths (<code>TryRecv*</code>, <code>Recent*</code>) are not
         gated. Drain operations on the operator&apos;s own daemon are
         treated as local-trust actions.

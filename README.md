@@ -66,7 +66,7 @@ The tracked protocol is in [docs/autonomous-development.md](./docs/autonomous-de
 Implemented and tested in the repository:
 
 - Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
-- Signed capability lifecycle: grant, validate known scopes, enforce tool-call argument scopes, enforce audit purge cutoffs, enforce memory read/write and mutation scopes, verify, expire, revoke, and list.
+- Signed capability lifecycle: grant, validate known scopes, enforce tool-call argument scopes, enforce audit purge cutoffs, enforce memory and A2A dispatch scopes, verify, expire, revoke, and list.
 - Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
 - Append-only audit log with structured event types, bounded recent reads, retention purge, and local hash-chain verification.
 - SQLite-backed memory records with working, episodic, and long-term tiers.

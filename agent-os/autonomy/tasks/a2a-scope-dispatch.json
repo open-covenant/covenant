@@ -1,7 +1,7 @@
 {
   "id": "a2a-scope-dispatch",
   "title": "Enforce A2A capability scope predicates",
-  "state": "in_progress",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

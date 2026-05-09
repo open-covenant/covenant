@@ -194,6 +194,38 @@ pub fn audit_purge_scope_allows(
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct A2aScopeRequest<'a> {
+    pub peer_pubkey_b58: Option<&'a str>,
+    pub task_id: Option<&'a str>,
+    pub lease_id: Option<&'a str>,
+    pub duplicate_risk: Option<&'a str>,
+}
+
+pub fn a2a_scope_allows(
+    action: &str,
+    scope: &Value,
+    expected_action: &str,
+    request: A2aScopeRequest<'_>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(
+        scope_allows_string(obj, "peer_pubkey_b58", request.peer_pubkey_b58)
+            && scope_allows_string(obj, "task_id", request.task_id)
+            && scope_allows_string(obj, "lease_id", request.lease_id)
+            && scope_allows_duplicate_risk(obj, request.duplicate_risk),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryCompactionScopeRequest {
     pub apply: bool,
@@ -436,6 +468,30 @@ fn scope_allows_before_ms(obj: &Map<String, Value>, before_ms: u64) -> bool {
     }
 }
 
+fn scope_allows_string(obj: &Map<String, Value>, field: &str, actual: Option<&str>) -> bool {
+    match obj.get(field) {
+        Some(value) if value.is_null() => true,
+        Some(value) => value.as_str() == actual,
+        None => true,
+    }
+}
+
+fn scope_allows_duplicate_risk(obj: &Map<String, Value>, actual: Option<&str>) -> bool {
+    match obj.get("duplicate_risk") {
+        Some(value) if value.is_null() => true,
+        Some(value) => {
+            let Some(actual) = actual else {
+                return false;
+            };
+            value
+                .as_str()
+                .map(|expected| expected.replace('_', "-") == actual.replace('_', "-"))
+                .unwrap_or(false)
+        }
+        None => true,
+    }
+}
+
 fn scope_allows_tiers(obj: &Map<String, Value>, requested: &[&str]) -> bool {
     let Some(tiers) = obj.get("tiers").and_then(Value::as_array) else {
         return true;
@@ -490,7 +546,7 @@ fn validate_a2a_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Perm
         action,
         obj,
         "duplicate_risk",
-        &["idempotent", "operator-accepted"],
+        &["idempotent", "operator-accepted", "operator_accepted"],
     )?;
     Ok(())
 }
@@ -1296,6 +1352,98 @@ mod tests {
         });
         assert!(!audit_purge_scope_allows("audit.purge", &scope, 1_001).unwrap());
         assert!(!audit_purge_scope_allows("audit.verify", &serde_json::json!({}), 1_000).unwrap());
+    }
+
+    #[test]
+    fn a2a_scope_allows_peer_task_lease_and_duplicate_risk() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "peer_pubkey_b58": "peer-1",
+            "task_id": "task-1",
+            "lease_id": "lease-1",
+            "duplicate_risk": "idempotent"
+        });
+        let request = A2aScopeRequest {
+            peer_pubkey_b58: Some("peer-1"),
+            task_id: Some("task-1"),
+            lease_id: Some("lease-1"),
+            duplicate_risk: Some("idempotent"),
+        };
+        assert!(
+            a2a_scope_allows("a2a.repair.requeue", &scope, "a2a.repair.requeue", request).unwrap()
+        );
+
+        let wrong_peer = A2aScopeRequest {
+            peer_pubkey_b58: Some("peer-2"),
+            ..request
+        };
+        assert!(!a2a_scope_allows(
+            "a2a.repair.requeue",
+            &scope,
+            "a2a.repair.requeue",
+            wrong_peer
+        )
+        .unwrap());
+
+        let wrong_task = A2aScopeRequest {
+            task_id: Some("task-2"),
+            ..request
+        };
+        assert!(!a2a_scope_allows(
+            "a2a.repair.requeue",
+            &scope,
+            "a2a.repair.requeue",
+            wrong_task
+        )
+        .unwrap());
+
+        let wrong_lease = A2aScopeRequest {
+            lease_id: Some("lease-2"),
+            ..request
+        };
+        assert!(!a2a_scope_allows(
+            "a2a.repair.requeue",
+            &scope,
+            "a2a.repair.requeue",
+            wrong_lease
+        )
+        .unwrap());
+
+        let wrong_risk = A2aScopeRequest {
+            duplicate_risk: Some("operator-accepted"),
+            ..request
+        };
+        assert!(!a2a_scope_allows(
+            "a2a.repair.requeue",
+            &scope,
+            "a2a.repair.requeue",
+            wrong_risk
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn a2a_scope_allows_unscoped_and_rejects_action_mismatch() {
+        let request = A2aScopeRequest {
+            peer_pubkey_b58: Some("peer-1"),
+            task_id: Some("task-1"),
+            lease_id: None,
+            duplicate_risk: None,
+        };
+        assert!(a2a_scope_allows(
+            "a2a.send.peer",
+            &serde_json::json!({}),
+            "a2a.send.peer",
+            request
+        )
+        .unwrap());
+        assert!(!a2a_scope_allows(
+            "a2a.send.peer",
+            &serde_json::json!({}),
+            "a2a.send.other",
+            request
+        )
+        .unwrap());
     }
 
     #[test]

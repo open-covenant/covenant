@@ -20,6 +20,7 @@ use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
+    a2a_scope_allows as permission_a2a_scope_allows,
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
@@ -28,7 +29,7 @@ use covenant_permissions::{
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
     memory_write_scope_allows as permission_memory_write_scope_allows, sign as sign_capability,
     tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
-    CapabilityStore, MemoryCompactionScopeRequest,
+    A2aScopeRequest, CapabilityStore, MemoryCompactionScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -639,6 +640,42 @@ impl Server {
                 ),
             };
         }
+        let task_id_s = task_id.to_string();
+        let recipient_b58 = task.recipient.pubkey_base58();
+        let send_scope = A2aScopeRequest {
+            peer_pubkey_b58: Some(&recipient_b58),
+            task_id: Some(&task_id_s),
+            lease_id: None,
+            duplicate_risk: None,
+        };
+        match self.a2a_scope_check(&alternatives, peer, send_scope).await {
+            Ok(A2aScopeCheck { allowed: true, .. }) => {}
+            Ok(_) => {
+                let reason = "peer_pubkey_b58 or task_id does not match capability scope";
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-send:{recipient}"),
+                    display_action.clone(),
+                    reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a send rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-send:{recipient}"),
+                    display_action.clone(),
+                    reason.clone(),
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a send rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         // Recipient admission gate: when sender ≠ recipient (cross-peer
         // send), the recipient peer must have granted `a2a.recv.<sender>`
         // to themselves. v0 single-peer is loopback (peer == recipient),
@@ -648,25 +685,73 @@ impl Server {
         if peer.pubkey != task.recipient.pubkey {
             let recv_alternatives = peer.scoped_action_alternatives("a2a.recv");
             let recv_display_action = recv_alternatives[0].clone();
-            if !self.recipient_has_recv_for(&task.recipient, peer).await {
-                let event = AuditEvent {
-                    id: Uuid::new_v4(),
-                    timestamp_ms: epoch_ms(),
-                    issuer: peer.clone(),
-                    kind: AuditKind::A2ARecipientRejected {
-                        sender_display: peer.display.clone(),
-                        recipient_display: task.recipient.display.clone(),
-                        action: recv_display_action.clone(),
-                    },
-                };
-                self.record_peer_event(peer, event).await;
-                return Response::Error {
-                    message: format!(
-                        "a2a send to {} rejected: recipient has not granted \
-                         capability {recv_display_action:?}",
-                        task.recipient.display
-                    ),
-                };
+            let sender_b58 = peer.pubkey_base58();
+            let recv_scope = A2aScopeRequest {
+                peer_pubkey_b58: Some(&sender_b58),
+                task_id: Some(&task_id_s),
+                lease_id: None,
+                duplicate_risk: None,
+            };
+            match self
+                .recipient_has_recv_for(&task.recipient, &recv_alternatives, recv_scope)
+                .await
+            {
+                Ok(A2aScopeCheck { allowed: true, .. }) => {}
+                Ok(A2aScopeCheck {
+                    has_matching_action: true,
+                    ..
+                }) => {
+                    let reason =
+                        "peer_pubkey_b58 or task_id does not match recipient capability scope";
+                    self.record_capability_scope_rejected(
+                        peer,
+                        format!("a2a-recv-gate:{}", task.recipient.display),
+                        recv_display_action.clone(),
+                        reason,
+                    )
+                    .await;
+                    return Response::Error {
+                        message: format!(
+                            "a2a send to {} rejected by recipient capability scope: {reason}",
+                            task.recipient.display
+                        ),
+                    };
+                }
+                Err(reason) => {
+                    self.record_capability_scope_rejected(
+                        peer,
+                        format!("a2a-recv-gate:{}", task.recipient.display),
+                        recv_display_action.clone(),
+                        reason.clone(),
+                    )
+                    .await;
+                    return Response::Error {
+                        message: format!(
+                            "a2a send to {} rejected by invalid recipient capability scope: {reason}",
+                            task.recipient.display
+                        ),
+                    };
+                }
+                Ok(A2aScopeCheck { .. }) => {
+                    let event = AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::A2ARecipientRejected {
+                            sender_display: peer.display.clone(),
+                            recipient_display: task.recipient.display.clone(),
+                            action: recv_display_action.clone(),
+                        },
+                    };
+                    self.record_peer_event(peer, event).await;
+                    return Response::Error {
+                        message: format!(
+                            "a2a send to {} rejected: recipient has not granted \
+                             capability {recv_display_action:?}",
+                            task.recipient.display
+                        ),
+                    };
+                }
             }
         }
         match self.mailbox.send_task(task).await {
@@ -677,23 +762,21 @@ impl Server {
         }
     }
 
-    /// Returns true iff the capability store has a non-revoked,
+    /// Checks whether the capability store has a non-revoked,
     /// non-expired grant for `a2a.recv.<sender>` (under either the
     /// display or pubkey-b58 form — both equivalent action shapes are
-    /// accepted) with `subject = recipient.pubkey`. Used by the
-    /// recipient admission gate. The subject lookup keys on the 32-byte
-    /// pubkey, not the wire-supplied display.
-    async fn recipient_has_recv_for(&self, recipient: &AgentId, sender: &AgentId) -> bool {
-        let now = epoch_ms();
-        let alternatives = sender.scoped_action_alternatives("a2a.recv");
-        let caps = self
-            .capabilities
-            .list_for_subject(recipient.pubkey)
+    /// accepted) with `subject = recipient.pubkey`, and whether its
+    /// signed scope admits this concrete task. Used by the recipient
+    /// admission gate. The subject lookup keys on the 32-byte pubkey, not
+    /// the wire-supplied display.
+    async fn recipient_has_recv_for(
+        &self,
+        recipient: &AgentId,
+        alternatives: &[String],
+        request: A2aScopeRequest<'_>,
+    ) -> Result<A2aScopeCheck, String> {
+        self.a2a_scope_check_for_subject(recipient.pubkey, alternatives, request)
             .await
-            .unwrap_or_default();
-        caps.iter()
-            .filter(|c| verify_with_clock(c, now).is_ok())
-            .any(|c| alternatives.iter().any(|a| a == &c.capability.action))
     }
 
     async fn try_recv_a2a_task(&self, peer: &AgentId) -> Response {
@@ -754,6 +837,45 @@ impl Server {
                     sender.display
                 ),
             };
+        }
+        let sender_b58 = sender.pubkey_base58();
+        let task_id_s = task_id.to_string();
+        let respond_scope = A2aScopeRequest {
+            peer_pubkey_b58: Some(&sender_b58),
+            task_id: Some(&task_id_s),
+            lease_id: None,
+            duplicate_risk: None,
+        };
+        match self
+            .a2a_scope_check(&alternatives, peer, respond_scope)
+            .await
+        {
+            Ok(A2aScopeCheck { allowed: true, .. }) => {}
+            Ok(_) => {
+                let reason = "peer_pubkey_b58 or task_id does not match capability scope";
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-respond:{task_id}"),
+                    display_action.clone(),
+                    reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a respond rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-respond:{task_id}"),
+                    display_action.clone(),
+                    reason.clone(),
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a respond rejected by invalid capability scope: {reason}"),
+                };
+            }
         }
         match self.mailbox.send_result(result).await {
             Ok(()) => Response::A2AResultPosted { task_id },
@@ -930,6 +1052,51 @@ impl Server {
         let reason = request.reason.clone();
         let lease_id = a2a_repair_lease_id(&request.command);
         let duplicate_risk = a2a_duplicate_risk(&request.command).map(str::to_string);
+        let task_id_s = task_id.to_string();
+        let lease_id_s = lease_id.map(|id| id.to_string());
+        let peer_pubkey_b58 = if peer.pubkey == entry.task.sender.pubkey {
+            entry.task.recipient.pubkey_base58()
+        } else {
+            entry.task.sender.pubkey_base58()
+        };
+        let repair_scope = A2aScopeRequest {
+            peer_pubkey_b58: Some(&peer_pubkey_b58),
+            task_id: Some(&task_id_s),
+            lease_id: lease_id_s.as_deref(),
+            duplicate_risk: duplicate_risk.as_deref(),
+        };
+        let repair_actions = [required.clone()];
+        match self
+            .a2a_scope_check(&repair_actions, peer, repair_scope)
+            .await
+        {
+            Ok(A2aScopeCheck { allowed: true, .. }) => {}
+            Ok(_) => {
+                let reason = "peer_pubkey_b58, task_id, lease_id, or duplicate_risk does not match capability scope";
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-repair:{task_id}"),
+                    required.clone(),
+                    reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a repair rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    format!("a2a-repair:{task_id}"),
+                    required.clone(),
+                    reason.clone(),
+                )
+                .await;
+                return Response::Error {
+                    message: format!("a2a repair rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         let action = action.to_string();
 
         match self.mailbox.repair_task(request).await {
@@ -2052,6 +2219,86 @@ impl Server {
         }
     }
 
+    async fn record_capability_scope_rejected(
+        &self,
+        peer: &AgentId,
+        agent_id: impl Into<String>,
+        action: impl Into<String>,
+        reason: impl Into<String>,
+    ) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::CapabilityScopeRejected {
+                agent_id: agent_id.into(),
+                action: action.into(),
+                reason: reason.into(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+    }
+
+    async fn a2a_scope_check_for_subject(
+        &self,
+        subject_pubkey: [u8; 32],
+        alternatives: &[String],
+        request: A2aScopeRequest<'_>,
+    ) -> Result<A2aScopeCheck, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(subject_pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        let mut has_matching_action = false;
+
+        for cap in user_caps.iter().filter(|cap| {
+            alternatives
+                .iter()
+                .any(|action| action == &cap.capability.action)
+                && verify_with_clock(cap, now).is_ok()
+        }) {
+            has_matching_action = true;
+            match permission_a2a_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                &cap.capability.action,
+                request,
+            ) {
+                Ok(true) => {
+                    return Ok(A2aScopeCheck {
+                        allowed: true,
+                        has_matching_action: true,
+                    });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(A2aScopeCheck {
+            allowed: false,
+            has_matching_action,
+        })
+    }
+
+    async fn a2a_scope_check(
+        &self,
+        alternatives: &[String],
+        peer: &AgentId,
+        request: A2aScopeRequest<'_>,
+    ) -> Result<A2aScopeCheck, String> {
+        self.a2a_scope_check_for_subject(peer.pubkey, alternatives, request)
+            .await
+    }
+
     async fn grant_capability(
         &self,
         action: String,
@@ -3170,6 +3417,11 @@ struct CapabilityCheckOutcome {
     missing: Vec<String>,
 }
 
+struct A2aScopeCheck {
+    allowed: bool,
+    has_matching_action: bool,
+}
+
 /// Wraps a [`BudgetError`] from [`Server::register_agent_budgets`] with
 /// the manifest id that failed, so startup error messages name the
 /// offending agent instead of dropping a bare `serde:` line on the
@@ -3417,6 +3669,20 @@ required = {caps:?}
             .op_respond(Request::GrantCapability {
                 action: action.into(),
                 scope: None,
+                expires_at: None,
+            })
+            .await;
+        assert!(
+            matches!(resp, Response::CapabilityGranted { .. }),
+            "grant {action} failed: {resp:?}"
+        );
+    }
+
+    async fn grant_scoped_action(s: &Server, action: &str, scope: serde_json::Value) {
+        let resp = s
+            .op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: Some(scope),
                 expires_at: None,
             })
             .await;
@@ -5116,6 +5382,69 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_repair_rejects_scope_lease_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let task = loopback_a2a_task_for(&s);
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let lease_id = match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let wrong_lease = Uuid::new_v4();
+        assert_ne!(lease_id, Some(wrong_lease));
+        let action = "a2a.repair.requeue";
+        grant_scoped_action(
+            &s,
+            action,
+            serde_json::json!({
+                "version": 1,
+                "peer_pubkey_b58": task.recipient.pubkey_base58(),
+                "task_id": task.id.to_string(),
+                "lease_id": wrong_lease.to_string(),
+                "duplicate_risk": "idempotent"
+            }),
+        )
+        .await;
+
+        let resp = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "worker crashed".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 30 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action: got, .. } if got == action
+                )
+            })),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_repair_requeues_in_flight_task_and_audits() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = Server::new(
@@ -5841,6 +6170,42 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_send_rejects_scope_peer_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task_for(&s);
+        let action = format!("a2a.send.{}", task.recipient.display);
+        let other_peer = AgentId::new("other@local", [11u8; 32]);
+        grant_scoped_action(
+            &s,
+            &action,
+            serde_json::json!({
+                "version": 1,
+                "peer_pubkey_b58": other_peer.pubkey_base58(),
+                "task_id": task.id.to_string()
+            }),
+        )
+        .await;
+
+        let resp = s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 20 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action: got, .. } if got == &action
+                )
+            })),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_recv_gate_accepts_pubkey_b58_grant() {
         let s = server_with(vec![], "");
         let peer = s.identity.agent_id();
@@ -5956,6 +6321,45 @@ required = {caps:?}
         match resp {
             Response::A2AResultPosted { task_id } => assert_eq!(task_id, task.id),
             other => panic!("b58 grant must satisfy respond-cap, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_respond_rejects_scope_task_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let task = dummy_a2a_task_for(&s);
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+
+        let action = format!("a2a.respond.{}", task.sender.display);
+        grant_scoped_action(
+            &s,
+            &action,
+            serde_json::json!({
+                "version": 1,
+                "peer_pubkey_b58": task.sender.pubkey_base58(),
+                "task_id": Uuid::new_v4().to_string()
+            }),
+        )
+        .await;
+
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        let resp = s.op_respond(Request::PostA2AResult { result }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        match s.op_respond(Request::RecentAudit { limit: 30 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action: got, .. } if got == &action
+                )
+            })),
+            other => panic!("unexpected: {other:?}"),
         }
     }
 

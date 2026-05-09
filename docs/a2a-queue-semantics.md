@@ -84,7 +84,7 @@ covenant a2a force-error <task-id> \
   --message "operator forced stale lease failure"
 ```
 
-HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC. Repair calls are rejected unless the authenticated peer can see the in-flight task and holds `a2a.repair.requeue` or `a2a.repair.force_error`, depending on the command.
+HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC. Repair calls are rejected unless the authenticated peer can see the in-flight task and holds `a2a.repair.requeue` or `a2a.repair.force_error`, depending on the command. Non-empty A2A scopes are enforced at dispatch: `task_id`, `lease_id`, `peer_pubkey_b58`, and `duplicate_risk` must match the concrete repair request.
 
 ## Remaining Work
 

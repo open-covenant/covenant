@@ -309,3 +309,8 @@
 {"timestamp":"2026-05-09T15:17:18.335Z","taskId":"peers-list-json-output","from":"self_review","to":"validation","actorRole":"verifier","note":"validate.sh --quick passes."}
 {"timestamp":"2026-05-09T15:17:18.379Z","taskId":"peers-list-json-output","from":"validation","to":"ready","actorRole":"verifier","note":"Quick gate green; ready to integrate."}
 {"timestamp":"2026-05-09T15:17:41.741Z","taskId":"peers-list-json-output","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated peers list --json output and JSON-parsing live tests."}
+{"timestamp":"2026-05-09T15:23:08.144Z","taskId":"a2a-scope-dispatch","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed A2A scope enforcement: send/recv/respond/repair now consult signed scopes and audit scope rejections."}
+{"timestamp":"2026-05-09T15:23:08.188Z","taskId":"a2a-scope-dispatch","from":"self_review","to":"validation","actorRole":"verifier","note":"cargo test a2a_ suites and validate.sh --quick pass."}
+{"timestamp":"2026-05-09T15:23:08.233Z","taskId":"a2a-scope-dispatch","from":"validation","to":"ready","actorRole":"verifier","note":"Validation green; ready to integrate."}
+{"timestamp":"2026-05-09T15:23:49.164Z","taskId":"a2a-scope-dispatch","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated A2A peer/task/lease/duplicate-risk capability scope enforcement for send, receive admission, respond, and repair."}
+{"timestamp":"2026-05-09T15:24:02.440Z","taskId":"a2a-scope-dispatch","from":"integrated","to":"integrated","actorRole":"release_operator","note":"Integrated A2A scope enforcement across send/recv/respond/repair with audit rejections and docs."}

@@ -28,6 +28,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
 - When the next autonomous task is already selected and no true blocker exists, continue into the next bounded slice instead of stopping at a status report.
+- After each successful commit or push, run `node agent-os/scripts/autonomy-continue.mjs`; if it names an unblocked task, continue immediately. A final status response is allowed only when every candidate is blocked, the user asks to pause, or the execution environment forces a turn boundary.
 
 ## Current Gaps
 

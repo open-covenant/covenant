@@ -78,5 +78,14 @@
   "defaultValidation": [
     "bash agent-os/scripts/validate.sh --quick",
     "bash agent-os/scripts/validate.sh"
-  ]
+  ],
+  "continuation": {
+    "afterSuccessfulPush": [
+      "Run node agent-os/scripts/autonomy-continue.mjs.",
+      "If it names an unblocked task, continue into that task immediately instead of ending with a status report.",
+      "If the named task is blocked by unrelated dirty files, record that blocker in the task and select the next unblocked task.",
+      "Stop only when every candidate is blocked, the user explicitly asks to pause, or an external turn boundary prevents further work."
+    ],
+    "backstopCommand": "node agent-os/scripts/autonomy-continue.mjs"
+  }
 }

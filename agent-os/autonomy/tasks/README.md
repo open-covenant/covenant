@@ -17,6 +17,14 @@ node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-next.mjs --json
 ```
 
+Continuation check after a commit or push:
+
+```bash
+node agent-os/scripts/autonomy-continue.mjs
+```
+
+If this command names a task, keep working on that task instead of ending the session with a status report. Stop only when every candidate is blocked, the user explicitly asks to pause, or the execution environment forces a turn boundary.
+
 Move a task through an allowed transition:
 
 ```bash

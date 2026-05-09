@@ -25,9 +25,10 @@ export default function CliPage() {
   ping                               Check the daemon is responsive.
   version                            Print daemon protocol metadata as JSON.
 
-  memory recent [--tier T] [-n N]    List recent memory records.
+  memory recent [--tier T] [-n N]
+        [--json]                     List recent memory records.
   memory search <query>
-        [--tier T] [-n N]            Cosine-similarity search via embeddings.
+        [--tier T] [-n N] [--json]   Cosine-similarity search via embeddings.
   memory purge [--tier T]
         (--before-ms M
          | --older-than-ms D) [--json]
@@ -176,11 +177,19 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
 [1714938018993] working: echo (no agent matched): index the...
 [1714937883112] working: echo (no agent matched): list any open...`}</code>
       </pre>
+      <pre>
+        <code>{`$ covenant memory recent -n 3 --json
+{"kind":"memory_read","mode":"recent","tier":null,"limit":3,"query":null,"records":[...]}`}</code>
+      </pre>
 
       <h3>Semantic search across all tiers</h3>
       <pre>
         <code>{`$ covenant memory search "agent memory" -n 5
 # (records ordered by cosine similarity, descending)`}</code>
+      </pre>
+      <pre>
+        <code>{`$ covenant memory search "agent memory" -n 5 --json
+{"kind":"memory_read","mode":"search","tier":null,"limit":5,"query":"agent memory","records":[...]}`}</code>
       </pre>
 
       <h3>Purge old memory records</h3>

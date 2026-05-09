@@ -130,6 +130,7 @@ model    = "nomic-embed-text"`}</code>
         <code>{`covenant memory recent
 covenant memory recent --tier longterm
 covenant memory recent --tier episodic --limit 50
+covenant memory recent --tier working --limit 10 --json
 
 # Or via HTTP:
 curl -s '127.0.0.1:8421/memory/recent?tier=longterm&limit=50'`}</code>
@@ -145,6 +146,7 @@ curl -s '127.0.0.1:8421/memory/recent?tier=longterm&limit=50'`}</code>
       <pre>
         <code>{`covenant memory search "agent memory"
 covenant memory search "agent memory" --tier longterm --limit 5
+covenant memory search "agent memory" --tier working --limit 5 --json
 
 # Or via HTTP:
 curl -s '127.0.0.1:8421/memory/search?q=agent+memory&tier=longterm&limit=5'`}</code>

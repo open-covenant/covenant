@@ -36,6 +36,7 @@
         "agent-os/crates/covenant/src/main.rs"
       ],
       "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_memory_read_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_memory_purge_json.rs"
       ],
       "status": "covered",

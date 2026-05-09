@@ -3,8 +3,8 @@
 //! ```text
 //!   covenant ping
 //!   covenant intent <text>
-//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
-//!   covenant memory search <query>
+//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
+//!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
@@ -52,8 +52,8 @@ use covenant_mcp::ToolSpec;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{
-    MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
-    MemoryRepairRequest, MemoryTier, ResourceKind, SettlementReceipt,
+    MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRecord, MemoryRepairCommand,
+    MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind, SettlementReceipt,
 };
 use std::path::PathBuf;
 use tokio::net::UnixStream;
@@ -92,10 +92,10 @@ fn print_usage() {
     eprintln!("  covenant intent <text>                  submit an intent and print the result");
     eprintln!("  covenant ping                           check the daemon is responsive");
     eprintln!(
-        "  covenant memory recent [--tier T] [-n N]               list recent memory records"
+        "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
     );
     eprintln!(
-        "  covenant memory search <query> [--tier T] [-n N]       semantic search via embeddings"
+        "  covenant memory search <query> [--tier T] [-n N] [--json]  semantic search via embeddings"
     );
     eprintln!(
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D) [--json]  delete records older than ms epoch / D ms ago"
@@ -167,9 +167,32 @@ fn print_usage() {
     );
 }
 
-async fn print_memory_response(stream: &mut UnixStream) -> Result<()> {
+struct MemoryReadJsonArgs {
+    mode: &'static str,
+    tier: Option<MemoryTier>,
+    limit: usize,
+    query: Option<String>,
+}
+
+async fn print_memory_response(
+    stream: &mut UnixStream,
+    json: Option<MemoryReadJsonArgs>,
+) -> Result<()> {
     match read_frame::<_, Response>(stream).await? {
         Response::Memories { records } => {
+            if let Some(args) = json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&memory_read_json(
+                        args.mode,
+                        args.tier,
+                        args.limit,
+                        args.query.as_deref(),
+                        &records
+                    ))?
+                );
+                return Ok(());
+            }
             if records.is_empty() {
                 println!("(no records)");
             }
@@ -304,6 +327,7 @@ async fn main() -> Result<()> {
                 "recent" => {
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -317,12 +341,22 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
                     }
                     write_frame(&mut stream, &Request::RecentMemory { tier, limit }).await?;
-                    print_memory_response(&mut stream).await?;
+                    print_memory_response(
+                        &mut stream,
+                        as_json.then_some(MemoryReadJsonArgs {
+                            mode: "recent",
+                            tier,
+                            limit,
+                            query: None,
+                        }),
+                    )
+                    .await?;
                 }
                 "purge" => {
                     let mut tier: Option<MemoryTier> = None;
@@ -560,6 +594,7 @@ async fn main() -> Result<()> {
                     }
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
+                    let mut as_json = false;
                     let mut query_parts: Vec<String> = Vec::new();
                     let mut i = 2;
                     while i < args.len() {
@@ -574,6 +609,7 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--json" => as_json = true,
                             other => query_parts.push(other.to_string()),
                         }
                         i += 1;
@@ -582,8 +618,25 @@ async fn main() -> Result<()> {
                     if query.is_empty() {
                         bail!("query text is required");
                     }
-                    write_frame(&mut stream, &Request::SearchMemory { query, tier, limit }).await?;
-                    print_memory_response(&mut stream).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SearchMemory {
+                            query: query.clone(),
+                            tier,
+                            limit,
+                        },
+                    )
+                    .await?;
+                    print_memory_response(
+                        &mut stream,
+                        as_json.then_some(MemoryReadJsonArgs {
+                            mode: "search",
+                            tier,
+                            limit,
+                            query: Some(query),
+                        }),
+                    )
+                    .await?;
                 }
                 other => {
                     eprintln!("covenant memory: unknown subcommand '{other}'");
@@ -2061,6 +2114,23 @@ fn memory_purge_json(tier: Option<MemoryTier>, before_ms: u64, purged: u64) -> s
     })
 }
 
+fn memory_read_json(
+    mode: &str,
+    tier: Option<MemoryTier>,
+    limit: usize,
+    query: Option<&str>,
+    records: &[MemoryRecord],
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "memory_read",
+        "mode": mode,
+        "tier": tier.map(memory_tier_slug),
+        "limit": limit,
+        "query": query,
+        "records": records,
+    })
+}
+
 fn ignore_report_json(
     ignored: bool,
     matched_pattern: Option<&str>,
@@ -2624,6 +2694,43 @@ mod tests {
 
         let all_tiers = memory_purge_json(None, 1_700_000_000_000, 0);
         assert!(all_tiers["tier"].is_null());
+    }
+
+    #[test]
+    fn memory_read_json_renders_stable_shape() {
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let record = MemoryRecord {
+            id: uuid::Uuid::nil(),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "memory read fixture".into(),
+            embedding: vec![0.1, 0.2],
+            metadata: serde_json::json!({"source": "test"}),
+            created_at: 1_700_000_000_000,
+            parent: None,
+        };
+
+        let value = memory_read_json(
+            "search",
+            Some(MemoryTier::Working),
+            5,
+            Some("memory read"),
+            &[record],
+        );
+
+        assert_eq!(value["kind"], "memory_read");
+        assert_eq!(value["mode"], "search");
+        assert_eq!(value["tier"], "working");
+        assert_eq!(value["limit"], 5);
+        assert_eq!(value["query"], "memory read");
+        assert_eq!(value["records"][0]["text"], "memory read fixture");
+        assert_eq!(value["records"][0]["tier"], "working");
+        assert_eq!(value["records"][0]["owner"]["display"], owner.display);
+
+        let recent = memory_read_json("recent", None, 3, None, &[]);
+        assert!(recent["tier"].is_null());
+        assert!(recent["query"].is_null());
+        assert_eq!(recent["records"].as_array().unwrap().len(), 0);
     }
 
     #[test]

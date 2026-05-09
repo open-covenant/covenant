@@ -1,7 +1,7 @@
 {
   "id": "a2a-task-idempotency-metadata",
   "title": "Add A2A idempotency metadata to tasks",
-  "state": "ready",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
@@ -27,6 +27,6 @@
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Integrate on main, then continue with the next autonomous backlog item.",
+  "nextAction": "Continue with the next autonomous backlog item.",
   "updated": "2026-05-09"
 }

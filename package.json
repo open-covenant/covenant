@@ -3,15 +3,15 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Base-native infrastructure for agent task markets, x402 payments, proof verification, and EVM settlement.",
+  "description": "Open, agent-native operating layer for autonomous software systems.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/covenant-base/covenant"
+    "url": "https://github.com/open-covenant/covenant.git"
   },
-  "homepage": "https://covenantbase.com",
+  "homepage": "https://opencovenant.org",
   "bugs": {
-    "url": "https://github.com/covenant-base/covenant/issues"
+    "url": "https://github.com/open-covenant/covenant/issues"
   },
   "packageManager": "pnpm@10.31.0",
   "engines": {
@@ -20,6 +20,8 @@
   },
   "scripts": {
     "artifacts:export": "node scripts/export-base-artifacts.mjs",
+    "agent-os:validate": "bash agent-os/scripts/validate.sh",
+    "agent-os:validate-autonomy": "node agent-os/scripts/validate-autonomy.mjs",
     "build": "pnpm contracts:build && turbo run build --filter=!./contracts",
     "contracts:build": "pnpm --filter ./contracts build",
     "contracts:deploy:guardian:base": "pnpm --filter ./contracts deploy:guardian:base",

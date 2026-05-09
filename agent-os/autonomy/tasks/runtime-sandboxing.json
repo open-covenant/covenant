@@ -1,0 +1,26 @@
+{
+  "id": "runtime-sandboxing",
+  "title": "Introduce a real runtime sandbox boundary",
+  "state": "proposed",
+  "priority": "critical",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/crates/covenant-runtime",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant-manifest",
+    "docs/security"
+  ],
+  "summary": "Design and implement the first production-grade isolation backend for untrusted local agents, starting with Linux gVisor and preserving macOS subprocess mode as explicitly trusted-local only.",
+  "expectedFailureModes": [],
+  "gates": ["plan", "security", "test_expansion", "docs", "escalation"],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-runtime"
+  ],
+  "humanEscalation": [
+    "Hardware and OS target selection for sandbox validation",
+    "Approval before claiming sandbox-grade isolation publicly"
+  ],
+  "nextAction": "Write an architecture decision comparing gVisor, bubblewrap, and Firecracker for the first supported sandbox backend.",
+  "updated": "2026-05-09"
+}

@@ -1,0 +1,15 @@
+[advisories]
+ignore = [
+  # Transitive through anchor-lang/solana-program in the experimental
+  # settlement program. Revisit when the Solana/Anchor stack moves off
+  # bincode 1.x.
+  "RUSTSEC-2025-0141",
+
+  # Transitive through solana-secp256k1-recover in solana-program.
+  # The settlement program is scaffolded and not production-deployed.
+  "RUSTSEC-2025-0161",
+
+  # Transitive through libsecp256k1 0.6.0 -> rand 0.7.3 in the same
+  # Solana dependency chain.
+  "RUSTSEC-2026-0097",
+]

@@ -1,31 +1,29 @@
 #!/usr/bin/env bash
-# scripts/handover.sh — spawn a fresh Claude Code session in a new Terminal
-# window, pointed at HANDOVER.md.
+# Spawn a fresh agent session in a new terminal window, pointed at
+# HANDOVER.md.
 #
 # Used when the current autonomous run has accumulated enough state that a
 # clean context will produce better-quality work on the next sprint chunk
 # (e.g., MCP spec interpretation, Solana SPL programming, Tailwind migration).
 #
-# Trust state for the project folder is assumed cached (Claude Code remembers
-# per-folder after the first "yes I trust this folder" acceptance). If the
-# script is ever run for a brand-new folder, the operator accepts the prompt
-# manually that first time.
+# Trust state for the project folder is assumed cached by the configured
+# agent client. If the script is run for a brand-new folder, the operator may
+# need to accept the prompt manually the first time.
 #
 # Usage:
 #   scripts/handover.sh                                 # current dir
 #   scripts/handover.sh path/to/dir                     # specific project dir
-#   CLAUDE_CMD='claude --dangerously-skip-permissions' scripts/handover.sh
+#   AGENT_CMD='claude --dangerously-skip-permissions' scripts/handover.sh
 #
-# CLAUDE_CMD is invoked as a literal command in a non-interactive subshell, so
-# zsh aliases like `cc` don't resolve here — we call the `claude` binary
-# directly with the same flags the operator's alias carries.
+# AGENT_CMD is invoked as a literal command in a non-interactive subshell, so
+# zsh aliases do not resolve here.
 
 set -euo pipefail
 
 DIR="${1:-$(pwd)}"
 DIR_ABS="$(cd "$DIR" && pwd)"
 HANDOVER_PATH="$DIR_ABS/HANDOVER.md"
-CLAUDE_CMD="${CLAUDE_CMD:-claude --model claude-opus-4-7 --effort max --dangerously-skip-permissions}"
+AGENT_CMD="${AGENT_CMD:-${CLAUDE_CMD:-claude --model claude-opus-4-7 --effort max --dangerously-skip-permissions}}"
 
 if [ ! -f "$HANDOVER_PATH" ]; then
   echo "handover.sh: no HANDOVER.md at $HANDOVER_PATH" >&2
@@ -33,20 +31,20 @@ if [ ! -f "$HANDOVER_PATH" ]; then
   exit 1
 fi
 
-CLAUDE_BIN="${CLAUDE_CMD%% *}"
-if ! command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
-  echo "handover.sh: '$CLAUDE_BIN' not found on PATH." >&2
-  echo "  Set CLAUDE_CMD to the Claude Code binary + flags, e.g.:" >&2
-  echo "  CLAUDE_CMD='claude --dangerously-skip-permissions' scripts/handover.sh" >&2
+AGENT_BIN="${AGENT_CMD%% *}"
+if ! command -v "$AGENT_BIN" >/dev/null 2>&1; then
+  echo "handover.sh: '$AGENT_BIN' not found on PATH." >&2
+  echo "  Set AGENT_CMD to the agent client binary + flags, e.g.:" >&2
+  echo "  AGENT_CMD='claude --dangerously-skip-permissions' scripts/handover.sh" >&2
   exit 1
 fi
 
 # --- Session lock bootstrap ---
 #
 # Generate a fresh session-id, write it to <repo-root>/.covenant-session-id,
-# and pass it to the spawned Claude via $COVENANT_SESSION_ID. The repo's
+# and pass it to the spawned agent via $COVENANT_SESSION_ID. The repo's
 # pre-commit hook (hooks/pre-commit) reads both the env var and the file
-# and refuses commits when they don't match — so an older session that
+# and refuses commits when they do not match, so an older session that
 # stays alive (operator forgot to close the previous Terminal window)
 # cannot land work after this one starts.
 #
@@ -83,20 +81,20 @@ LAUNCH=$(mktemp -t covenant-handover-XXXXXX)
 chmod 0700 "$LAUNCH"
 cat >"$LAUNCH" <<EOF
 #!/bin/zsh -i
-# Auto-removed after launch; the new Claude session captures the handover
+# Auto-removed after launch; the new agent session captures the handover
 # from HANDOVER.md, not this file.
 cd $(printf '%q' "$DIR_ABS")
 export COVENANT_SESSION_ID=$(printf '%q' "$SESSION_ID")
-exec ${CLAUDE_CMD} $(printf '%q' "$PROMPT")
+exec ${AGENT_CMD} $(printf '%q' "$PROMPT")
 EOF
 
 case "$(uname -s)" in
   Darwin)
     # `do script` is a fire-and-forget command (returns the new tab id).
-    # The trust-folder prompt may render before Claude reads the prompt
+    # The trust-folder prompt may render before the agent client reads the prompt
     # argument, so we send a `return` keystroke after a short delay. If the
-    # folder was already trusted, the Enter is harmless — it lands in
-    # Claude's input box as an empty submission, which is a no-op.
+    # folder was already trusted, the Enter is harmless: it lands as an empty
+    # submission, which is a no-op.
     TRUST_DELAY="${COVENANT_HANDOVER_TRUST_DELAY:-3}"
     /usr/bin/osascript <<APPLE
 tell application "Terminal"
@@ -132,7 +130,7 @@ APPLE
     ;;
 esac
 
-echo "handover.sh: launched ${CLAUDE_CMD} in a new terminal at $DIR_ABS"
-echo "  → next session will read HANDOVER.md and resume from SPRINT_LOG.md's tail"
-echo "  → session-id: $SESSION_ID (written to $LOCK_PATH)"
-echo "  → any older session attempting a commit will be refused by hooks/pre-commit"
+echo "handover.sh: launched ${AGENT_CMD} in a new terminal at $DIR_ABS"
+echo "  next session will read HANDOVER.md and resume from SPRINT_LOG.md's tail"
+echo "  session-id: $SESSION_ID (written to $LOCK_PATH)"
+echo "  any older session attempting a commit will be refused by hooks/pre-commit"

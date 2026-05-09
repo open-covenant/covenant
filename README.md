@@ -3,52 +3,143 @@
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> Open source, agent-native operating layer.
+> Open, agent-native operating layer for long-running autonomous software systems.
 
-Covenant is the coordination layer for agentic software. It runs on your own machine, speaks to local and remote AI agents, and provides the OS-level primitives — intent, runtime, memory, identity, permissions, comms, compositor, settlement — that humans and agents need to safely share a computer, delegate work, and pay for usage.
+Covenant is a local-first control plane for software agents. It sits above macOS or Linux and gives autonomous systems structured access to codebases, tools, execution environments, project memory, capability-scoped permissions, audit trails, and review loops.
 
-- **Web** — [opencovenant.org](https://opencovenant.org)
-- **Docs** — [docs.opencovenant.org](https://docs.opencovenant.org)
-- **X** — [@OpenCovenant](https://x.com/OpenCovenant)
+The project is intentionally recursive: Covenant is being developed through the same operating model it exposes. Agents plan work, implement changes, review diffs, run verification, repair failures, update memory, and escalate only when human judgment, credentials, or external deployment authority are required.
 
-## Why
+- **Web:** [opencovenant.org](https://opencovenant.org)
+- **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
+- **Repository:** [open-covenant/covenant](https://github.com/open-covenant/covenant)
 
-Agentic systems are spreading faster than the OS-level primitives they need. Today every agent stack reinvents permissions, memory, identity, billing, and audit on top of plain processes and cloud APIs — badly, and incompatibly with the one next to it. Covenant is the missing coordination layer, designed for the desktop first.
+## Thesis
 
-## What's inside
+Modern computers are still human-operated environments. Filesystems, terminals, process managers, permission prompts, package managers, and issue trackers assume a person is present to decide what matters, what may run, what state should persist, and when work is complete.
 
-- Local-first daemon, Unix socket and HTTP gateway
-- ed25519 identity and signed capability tokens
-- Three-tier memory with semantic search
-- MCP and A2A protocol adapters
-- Pluggable LLM providers
-- Settlement on Solana
+Frontier agents need a different layer: one that can decompose work, delegate execution, preserve context, enforce policy, manage tools, record provenance, review outputs, repair failures, and continue across interruptions. Covenant explores that layer as open infrastructure for autonomous software maintenance.
 
-## Built by an autonomous engineering loop
+## System Overview
 
-Covenant is built and maintained by an autonomous multi-agent engineering loop running on a proto-version of the primitives this repo ships. The coordination substrate the codebase exposes — capability tokens, signed identity, audit ledger, peer auth, settlement — is the same substrate the build loop consumes. Three pseudonymous engineering personas (`aw`, `ir`, `nr`) sign commits with email-scoped ed25519 identity, routed by file domain. Architectural decisions pass a recorded plan-gate; security-sensitive diffs pass a recorded security-review subagent. The discipline is described in [`BUILT.md`](./BUILT.md).
+Covenant is not a chat wrapper or a single agent framework. The core is a Rust daemon, `covenantd`, with a CLI, local HTTP gateway, IPC protocol, agent manifests, and storage primitives. The daemon owns local state and mediates all privileged actions.
 
-The protocol surfaces and the daemon are under active development; the on-chain settlement layer is evolving in lock-step. Design feedback, sandbox experimentation, and contributions welcome.
+At a high level, Covenant provides:
 
-## Documentation
+- an **agent control plane** for dispatching intents, routing work, and coordinating peers;
+- an **execution substrate** for spawning agents and bounding their runtime behavior;
+- a **policy layer** based on signed capabilities, expiry, revocation, and peer authentication;
+- **persistent project memory** backed by tiered records, embeddings, ignore rules, and drift checks under development;
+- **audit and provenance** through append-only JSONL logs, signed actions, CI gates, and review artifacts;
+- **tool orchestration** through native tools, MCP integration, A2A messaging, and local gateway APIs;
+- a path toward **economic settlement** through local receipts today and a Solana program scaffold for future on-chain settlement.
 
-Concepts, architecture, reference, protocols, and operations docs are published at [opencovenant.org/docs](https://opencovenant.org/docs).
+## Architecture
 
-- [Getting started](https://opencovenant.org/docs/getting-started) — install, run the daemon, submit your first intent.
-- [Concepts](https://opencovenant.org/docs/concepts) — the eight-primitive vocabulary.
-- [System architecture](https://opencovenant.org/docs/architecture) — components, request lifecycle, on-disk state.
-- [HTTP API](https://opencovenant.org/docs/http-api) — every gateway route.
-- [Capability tokens](https://opencovenant.org/docs/capabilities) — the permission model.
-- [Security model](https://opencovenant.org/docs/security) — trust boundaries and threat model.
+The repository is organized around a small set of operating-layer primitives:
+
+| Primitive | Current implementation |
+|---|---|
+| Intent | CLI/IPC/HTTP request shapes, router, daemon dispatch path |
+| Runtime | Subprocess runner, timeout enforcement, agent manifest contract |
+| Memory | SQLite-backed tiered records, embedding hooks, ignore rules |
+| Identity | Local ed25519 identity, peer registry, token rotation |
+| Permissions | Signed capabilities, expiry, revocation tombstones, enforcement |
+| Comms | IPC socket, HTTP gateway, MCP adapter, A2A mailbox |
+| Audit | Append-only JSONL events for dispatch, auth, capabilities, peers |
+| Settlement | Local receipt ledger; Solana program scaffold is experimental |
+
+The architectural center is `agent-os/`: the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer auth, audit, MCP/A2A adapters, and settlement scaffold. The surrounding monorepo contains public docs, web surfaces, contracts, circuits, and services that support or experiment with adjacent protocol layers.
+
+See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), and [agent-os/README.md](./agent-os/README.md) for the build map and capability status.
+
+## Autonomous Development Loop
+
+Covenant's engineering loop is treated as part of the system design, not as repository trivia. The loop follows a task lifecycle:
+
+`intake -> plan -> implement -> self-review -> cross-review -> validate -> repair -> document -> integrate -> handoff`
+
+The loop uses explicit gates for architectural choices, security-sensitive diffs, broad cross-crate edits, insufficient tests, docs drift, and human-only blockers. The goal is not to pretend agents need no oversight. The goal is to make autonomous work inspectable, repeatable, resumable, and hard to overclaim.
+
+The tracked protocol is in [docs/autonomous-development.md](./docs/autonomous-development.md). The machine-readable lifecycle and autonomous backlog live under [agent-os/autonomy](./agent-os/autonomy). Durable context lives in [docs/project-memory.md](./docs/project-memory.md). The implementation history and current limits are summarized in [BUILT.md](./BUILT.md).
+
+## Current Capabilities
+
+Implemented and tested in the repository:
+
+- Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
+- Signed capability lifecycle: grant, verify, expire, revoke, list, and enforce.
+- Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
+- Append-only audit log with structured event types and bounded recent reads.
+- SQLite-backed memory records with working, episodic, and long-term tiers.
+- Local settlement receipts for resource accounting.
+- Live opt-in tests for real daemon/CLI boundaries and selected real backends.
+- CI for Rust, landing docs, workflow linting, dependency audits, and CodeQL.
+
+## Status
+
+| Area | Status | Notes |
+|---|---|---|
+| Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
+| Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation and audit rows. |
+| Memory | Implemented, still hardening | SQLite and embeddings are present; compaction and drift repair need more work. |
+| MCP and A2A | Experimental | Adapter crates and tests exist; multi-peer production operation is not claimed. |
+| Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
+| Runtime sandboxing | Planned | Subprocess timeouts exist; gVisor/Firecracker isolation is future work. |
+| On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
+| Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
+
+## Local Validation
+
+From the repository root:
+
+```bash
+bash agent-os/scripts/validate.sh --quick
+```
+
+For the full Rust gate used by CI:
+
+```bash
+bash agent-os/scripts/validate.sh
+```
+
+The landing docs build separately:
+
+```bash
+pnpm --dir landing install --frozen-lockfile --ignore-workspace
+pnpm --dir landing build
+```
+
+Live tests are opt-in because they may spawn real binaries or require local services:
+
+```bash
+cd agent-os
+cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
+```
+
+## Research Direction
+
+Covenant is exploring:
+
+- durable project memory for long-running autonomous maintenance;
+- verifiable agent actions and public provenance;
+- capability-scoped delegation across local and remote agents;
+- resumable task ownership after process, context, or machine interruption;
+- policy-aware tool use and sandboxed execution;
+- continuous repair and regression hardening;
+- human-directed autonomous engineering without hiding the human authority boundary.
+
+Claims that are not implemented are kept in the roadmap rather than marketed as shipped behavior.
 
 ## Contributing
 
-Pull requests are welcome. Before submitting, please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
+Covenant is early infrastructure. Serious contributions are welcome from systems engineers, AI researchers, security reviewers, protocol designers, and open-source maintainers.
+
+Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md](./docs/autonomous-development.md), and [ROADMAP.md](./ROADMAP.md). Pull requests should include a validation plan, tests for changed behavior, and a clear statement of any remaining production risks.
 
 ## Security
 
-Please follow [`SECURITY.md`](./SECURITY.md) for responsible disclosure. Do not open a public issue for vulnerability reports.
+Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. Do not open public issues for vulnerabilities.
 
 ## License
 
-Apache-2.0. See [`LICENSE`](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE).

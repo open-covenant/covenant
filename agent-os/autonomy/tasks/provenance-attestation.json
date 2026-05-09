@@ -1,0 +1,30 @@
+{
+  "id": "provenance-attestation",
+  "title": "Add public provenance attestation for agent-produced artifacts",
+  "state": "triaged",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/crates/covenant-identity",
+    "agent-os/crates/covenant-audit",
+    ".github/workflows",
+    "docs"
+  ],
+  "summary": "Define and implement a verifiable provenance path that connects local agent actions, signed commits or release artifacts, CI runs, and eventually a public transparency log.",
+  "expectedFailureModes": [
+    "Local signatures prove possession of a key but do not prove which automation or workflow produced the artifact.",
+    "Attestation metadata leaks machine-local paths, private usernames, or operational details.",
+    "A public verification story depends on a private key registry that outside contributors cannot audit."
+  ],
+  "gates": ["plan", "security", "docs", "test_expansion"],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "bash scripts/audit.sh"
+  ],
+  "humanEscalation": [
+    "Selection of public signing identity policy",
+    "Approval before publishing transparency-log or release-signing claims"
+  ],
+  "nextAction": "Draft an architecture decision for signed task records and release provenance before changing signing code.",
+  "updated": "2026-05-09"
+}

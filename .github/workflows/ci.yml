@@ -30,11 +30,7 @@ jobs:
         with:
           workspaces: agent-os
 
-      - run: cargo fmt --check
-      - run: ./scripts/check-no-display-form-a2a.sh
-      - run: cargo build  --workspace --exclude covenant-settlement-program --locked
-      - run: cargo clippy --workspace --all-targets --exclude covenant-settlement-program --locked -- -D warnings
-      - run: cargo test   --workspace --exclude covenant-settlement-program --locked
+      - run: ./scripts/validate.sh
 
   landing:
     runs-on: ubuntu-latest

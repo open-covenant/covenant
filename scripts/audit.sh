@@ -3,7 +3,7 @@
 # shared baseline in ./audit.toml. Exits non-zero on any advisory
 # not in the baseline ignore list.
 #
-# Usage: scripts/audit.sh          # scans root + services/indexer
+# Usage: scripts/audit.sh          # scans agent-os + services/indexer
 #        scripts/audit.sh <file>   # scans a single lockfile
 set -euo pipefail
 
@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 BASELINE="audit.toml"
 if [[ ! -f "$BASELINE" ]]; then
-  echo "audit.sh: $BASELINE missing — refusing to run with no policy" >&2
+  echo "audit.sh: $BASELINE missing; refusing to run with no policy" >&2
   exit 2
 fi
 
@@ -38,7 +38,11 @@ done < <(
 run_audit() {
   local lockfile="$1"
   echo ">> cargo audit --deny warnings --file $lockfile"
-  cargo audit --deny warnings --file "$lockfile" "${IGNORE_FLAGS[@]}"
+  if [[ "${#IGNORE_FLAGS[@]}" -eq 0 ]]; then
+    cargo audit --deny warnings --file "$lockfile"
+  else
+    cargo audit --deny warnings --file "$lockfile" "${IGNORE_FLAGS[@]}"
+  fi
 }
 
 if [[ $# -gt 0 ]]; then
@@ -47,7 +51,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 LOCKFILES=(
-  "Cargo.lock"
+  "agent-os/Cargo.lock"
   "services/indexer/Cargo.lock"
 )
 

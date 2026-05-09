@@ -94,14 +94,14 @@ export default function DocsIndexPage() {
         ))}
       </div>
 
-      <h2>Release</h2>
+      <h2>Status</h2>
       <p>
-        Covenant 0.1 (alpha) is released on 13 May 2026. Settlement runs on
-        Solana mainnet from the alpha release. The post-alpha milestone
-        schedule is published on the{" "}
-        <a href="https://opencovenant.org/roadmap">public roadmap</a>.
-        Protocol wire formats — IPC, capabilities, and agent manifest — are
-        subject to revision ahead of the 1.0 release.
+        Covenant is pre-1.0 infrastructure. The local daemon, CLI, identity,
+        permissions, memory, audit, peer auth, and local receipt ledger are
+        implemented in the repository. MCP, A2A, the local web console, and
+        the autonomous development loop are experimental. Runtime sandboxing,
+        on-chain settlement, installer, SDK ecosystem, and public
+        transparency-log attestation remain planned work.
       </p>
 
       <h2>Position in the stack</h2>

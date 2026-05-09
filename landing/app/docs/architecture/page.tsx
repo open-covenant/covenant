@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "System architecture",
   description:
-    "How the daemon, the runtime, the storage primitives, and the on-chain settlement program fit together.",
+    "How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.",
 };
 
 export default function ArchitecturePage() {
@@ -41,9 +41,9 @@ export default function ArchitecturePage() {
 └─────────┼────────┼────────┼────────┼────────┼────────────────┘
           │        │        │        │        │
           ▼        ▼        ▼        ▼        ▼
-       cards    spawned  SQLite  JSONL    JSONL  ←  on-chain
+       cards    spawned  SQLite  JSONL    JSONL     local
        on disk  processes  +    audit/   receipts  settlement
-                          embeds events           program`}</code>
+                          embeds events           scaffold`}</code>
       </pre>
 
       <h2>Process model</h2>
@@ -380,22 +380,19 @@ export default function ArchitecturePage() {
         </tbody>
       </table>
 
-      <h2>On-chain settlement</h2>
+      <h2>Settlement scaffold</h2>
       <p>
-        The on-chain side of Covenant is a single Anchor program for
-        Solana, deployed under the operator&apos;s authority. It implements
-        the credit-mint, consumption, and buyback shape described in{" "}
-        <Link href="/settlement">Settlement</Link>. The daemon
-        batches off-chain receipts and flushes them to the program; once
-        flushed, the receipt&apos;s <code>onchain_sig</code> is populated
-        and the receipt is reconcilable from chain state alone.
+        Covenant records local settlement receipts today. The repository
+        also contains an experimental Anchor program for the future Solana
+        settlement path described in <Link href="/settlement">Settlement</Link>.
+        Production credit minting, burn reconciliation, oracle integration,
+        and provider payout flows are not claimed as deployed behavior.
       </p>
 
       <p>
-        The on-chain program is deliberately minimal. Higher-level token
-        mechanics — oracle integration, DEX routing for buyback — are
-        implemented one layer up and may evolve without modification to
-        the on-chain authority surface.
+        The current boundary is deliberate: local receipts make resource
+        accounting inspectable while the on-chain authority surface remains a
+        hardening target.
       </p>
 
       <h2>Position in the stack</h2>

@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "Settlement",
   description:
-    "Credits, receipts, off-chain accounting, and the on-chain settlement program.",
+    "Local receipts, credit accounting, and the planned on-chain settlement path.",
 };
 
 export default function SettlementPage() {
@@ -12,10 +12,9 @@ export default function SettlementPage() {
       <h1>Settlement</h1>
       <p>
         Settlement is how Covenant accounts for resource consumption.
-        The model is intentionally split: every action that consumes
-        resources writes a local receipt; receipts are batched and
-        flushed to the on-chain settlement program; once flushed,
-        receipts are reconcilable from chain state alone.
+        Today the daemon writes local receipts. The future on-chain path
+        batches those receipts into the Solana settlement program once
+        the authority, mint, oracle, and reconciliation flows are ready.
       </p>
 
       <h2>Receipt</h2>
@@ -35,7 +34,7 @@ export default function SettlementPage() {
         <code>$COVENANT_HOME/receipts/working.jsonl</code>. The daemon
         writes one receipt per resource event — for example, every
         memory write produces a receipt with{" "}
-        <code>resource = "memory"</code> and{" "}
+        <code>{'resource = "memory"'}</code> and{" "}
         <code>credits_consumed</code> proportional to bytes written.
       </p>
 
@@ -54,10 +53,10 @@ export default function SettlementPage() {
         functions that compose the same way.
       </p>
 
-      <h2>Flushing on-chain</h2>
+      <h2>Future on-chain flush</h2>
       <p>
-        The on-chain side is a single Anchor program for Solana. It
-        exposes three instructions:
+        The planned on-chain side is an Anchor program for Solana. Its
+        scaffold exposes three instruction shapes:
       </p>
 
       <ul>
@@ -78,21 +77,21 @@ export default function SettlementPage() {
       </ul>
 
       <p>
-        The daemon batches off-chain receipts and submits them via{" "}
-        <code>consume_credits</code>. Once the on-chain transaction
-        confirms, the receipt&apos;s <code>onchain_sig</code> is
-        populated with the signature; from that point the receipt is
-        reconcilable from chain state alone.
+        The intended production flow is for the daemon to batch local
+        receipts and submit consumption to the program. Once an on-chain
+        transaction confirms, the receipt&apos;s <code>onchain_sig</code>{" "}
+        can be populated with the signature. This is a planned
+        reconciliation path, not deployed behavior.
       </p>
 
-      <h2>Buyback</h2>
+      <h2>Planned economic model</h2>
       <p>
-        Credits are minted in exchange for burned tokens; the mint side
-        burns, the consume side destroys. Net circulating supply
-        contracts as the system is used. The on-chain program
-        serializes mint and consume operations and binds credits to a
-        single authority per cluster, ensuring buyback semantics are not
-        subject to mint-versus-consume races.
+        The target model is credits minted against an external payment
+        input, credits consumed at resource-use time, and treasury policy
+        that can route a portion of inflows toward buyback or provider
+        payout. Those mechanics require oracle integration, mint
+        authority decisions, and deployment review before they should be
+        treated as operational.
       </p>
 
       <h2>Storage layout</h2>
@@ -111,9 +110,8 @@ export default function SettlementPage() {
             </td>
             <td>JSONL, append-only</td>
             <td>
-              Off-chain receipts awaiting flush, plus historical
-              flushed receipts (with <code>onchain_sig</code>{" "}
-              populated).
+              Local receipts. Future flushed receipts can populate{" "}
+              <code>onchain_sig</code>.
             </td>
           </tr>
         </tbody>
@@ -138,17 +136,16 @@ curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
 
       <h2>Release</h2>
       <p>
-        Off-chain receipts and the local credit accounting are stable.
-        The on-chain settlement program is deployed to Solana mainnet
-        from the alpha release. Refer to the public roadmap for the
-        post-alpha milestone schedule.
+        Local receipts and recent-receipt reads are implemented. On-chain
+        settlement is planned and scaffolded; it is not production and
+        should not be described as deployed.
       </p>
 
       <h2>Related</h2>
       <ul>
         <li>
           <Link href="/architecture">Architecture</Link> — the
-          on-chain program in the broader system map.
+          settlement scaffold in the broader system map.
         </li>
         <li>
           <Link href="/identity">Identity and keys</Link> — the

@@ -22,23 +22,23 @@ cd covenant
 ## Build the daemon and crates
 
 ```bash
+cd agent-os
 cargo build --workspace --exclude covenant-settlement-program
 ```
 
-The built binary lands at `agent-os/target/debug/covenantd`. Configuration lives under `$COVENANT_HOME` (default `~/.covenant`).
+The built binary lands at `target/debug/covenantd`. Configuration lives under `$COVENANT_HOME` (default `$HOME/.covenant`).
 
 ## Run the test suite
 
 ```bash
-cargo test  --workspace --exclude covenant-settlement-program
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
+bash scripts/validate.sh --quick
+bash scripts/validate.sh
 ```
 
-Tests prefixed `live_` exercise real backends (real network, real subprocesses, real model). They are `#[ignore]`'d to keep the default run fast — opt in with:
+Tests prefixed `live_` exercise real backends (real network, real subprocesses, real model). They are `#[ignore]`'d to keep the default run fast. Opt in with:
 
 ```bash
-cargo test -- --ignored live_
+cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
 ## Build the on-chain program (optional)
@@ -52,6 +52,7 @@ Anchor builds the Solana settlement program for the BPF target. This is a separa
 ## Run the landing site locally
 
 ```bash
+cd ..
 pnpm --dir landing install --frozen-lockfile --ignore-workspace
 pnpm --dir landing dev
 ```
@@ -60,7 +61,7 @@ Visit http://localhost:3001.
 
 ## Where to look next
 
-- [`README.md`](../README.md) — project overview
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution guide
-- [`SECURITY.md`](../SECURITY.md) — responsible disclosure
-- [`ROADMAP.md`](../ROADMAP.md) — what's in flight
+- [`README.md`](../README.md): project overview
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md): contribution guide
+- [`SECURITY.md`](../SECURITY.md): responsible disclosure
+- [`ROADMAP.md`](../ROADMAP.md): what's in flight

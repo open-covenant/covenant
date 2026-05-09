@@ -1,0 +1,84 @@
+# Covenant Agent OS
+
+`agent-os/` contains the local operating-layer runtime: the daemon, CLI, shared protocol crates, agent runtime, memory, identity, permissions, audit, peer auth, MCP/A2A adapters, local operator console, and settlement scaffold.
+
+## Build
+
+From this directory:
+
+```bash
+cargo build --workspace --exclude covenant-settlement-program
+```
+
+The two primary binaries are:
+
+- `target/debug/covenantd`: local daemon
+- `target/debug/covenant`: CLI client
+
+## Validate
+
+Fast local gate:
+
+```bash
+./scripts/validate.sh --quick
+```
+
+Full Rust gate:
+
+```bash
+./scripts/validate.sh
+```
+
+Live tests are opt-in:
+
+```bash
+cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
+```
+
+## Autonomy Artifacts
+
+The autonomous workflow has a machine-readable control surface:
+
+- `autonomy/workflow.json`: lifecycle states, roles, gates, transitions, and definition of done.
+- `autonomy/tasks/*.json`: task backlog records with scope, gates, expected failure modes, verification, next action, and human escalation needs.
+- `scripts/validate-autonomy.mjs`: dependency-free validator for the workflow and task records.
+
+The normal validation script runs the autonomy validator before the Rust gates.
+
+## Runtime State
+
+The daemon stores local state under `$COVENANT_HOME`. If unset, it uses `$HOME/.covenant`.
+
+Common paths:
+
+| Path | Purpose |
+|---|---|
+| `sock` | Unix socket for local clients. |
+| `identity/local.key` | Local ed25519 seed. |
+| `peers/operator.token` | Local operator token. |
+| `peers/registry.jsonl` | Peer registry and tombstones. |
+| `capabilities/granted.jsonl` | Signed capability grants. |
+| `capabilities/revoked.jsonl` | Capability revocation tombstones. |
+| `audit/events.jsonl` | Append-only audit log. |
+| `memory.db` | SQLite memory store. |
+| `receipts/working.jsonl` | Local settlement receipts. |
+
+## Crate Groups
+
+| Group | Crates |
+|---|---|
+| Core protocol | `covenant-types`, `covenant-ipc`, `covenant-manifest` |
+| Control plane | `covenantd`, `covenant`, `covenant-router`, `covenant-runtime` |
+| Trust and policy | `covenant-identity`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
+| State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a` |
+| Settlement | `covenant-settlement`, `programs/settlement` |
+
+## Operating Model
+
+The daemon is the enforcement boundary. Agents, web clients, and CLI calls should not bypass it for privileged state. New behavior should preserve these invariants:
+
+- authenticate before serving privileged requests;
+- check capabilities before dispatching or mutating protected state;
+- record audit rows for important state transitions and rejections;
+- keep token bytes, private keys, and secrets out of logs and responses;
+- add tests for both success and failure paths when changing protocol behavior.

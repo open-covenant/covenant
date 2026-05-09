@@ -11,9 +11,12 @@ Operational helpers:
 ```bash
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
+node agent-os/scripts/provenance.mjs verify-all
 ```
 
 `autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
+
+`provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
 
 ## Objectives
 
@@ -125,6 +128,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 |---|---|---|
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
+| Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
 | Landing docs | `pnpm --dir landing build` | Public docs and website changes. |
 | Contracts | `pnpm --filter ./contracts test` or `anchor build` where relevant | EVM and Solana surfaces. |
@@ -142,6 +146,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): machine-readable lifecycle, roles, gates, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): machine-readable autonomous maintenance backlog.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
+- [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.
 - [BUILT.md](../BUILT.md): recursive engineering model and honesty boundaries.
 

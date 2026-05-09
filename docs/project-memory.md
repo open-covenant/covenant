@@ -13,6 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
+- Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation is subprocess timeout enforcement, not sandbox-grade isolation.
 - Live tests exist but are opt-in and cover only selected real boundaries.
@@ -30,7 +31,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 
 - No production sandbox for untrusted agents.
 - No production on-chain settlement.
-- No public transparency-log attestation for agent-produced artifacts.
+- No public signing identity policy or transparency-log publication for agent-produced artifacts.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
 - Project memory has read-only drift reports; explicit repair commands, compaction, and long-horizon stale-context handling need more work.
@@ -54,6 +55,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
+- [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): validated autonomous maintenance backlog.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.

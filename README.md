@@ -28,7 +28,7 @@ At a high level, Covenant provides:
 - an **execution substrate** for spawning agents and bounding their runtime behavior;
 - a **policy layer** based on signed capabilities, expiry, revocation, and peer authentication;
 - **persistent project memory** backed by tiered records, embeddings, ignore rules, and read-only drift reports;
-- **audit and provenance** through append-only JSONL logs, signed actions, CI gates, and review artifacts;
+- **audit and provenance** through append-only JSONL logs, signed actions, CI gates, review artifacts, and verifiable commit provenance envelopes;
 - **tool orchestration** through native tools, MCP integration, A2A messaging, and local gateway APIs;
 - a path toward **economic settlement** through local receipts today and a Solana program scaffold for future on-chain settlement.
 
@@ -71,8 +71,9 @@ Implemented and tested in the repository:
 - Append-only audit log with structured event types and bounded recent reads.
 - SQLite-backed memory records with working, episodic, and long-term tiers.
 - Local settlement receipts for resource accounting.
+- Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
 - Live opt-in tests for real daemon/CLI boundaries and selected real backends.
-- CI for Rust, landing docs, workflow linting, dependency audits, and CodeQL.
+- CI for Rust, landing docs, workflow linting, provenance verification, dependency audits, and CodeQL.
 
 ## Status
 
@@ -83,6 +84,7 @@ Implemented and tested in the repository:
 | Memory | Implemented, still hardening | SQLite, embeddings, and read-only drift reports are present; explicit repair and compaction need more work. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery and queue-state inspection. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
+| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |
 | Runtime sandboxing | Planned | Subprocess timeouts exist; gVisor/Firecracker isolation is future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
@@ -99,6 +101,12 @@ For the full Rust gate used by CI:
 
 ```bash
 bash agent-os/scripts/validate.sh
+```
+
+To inspect public provenance envelopes directly:
+
+```bash
+node agent-os/scripts/provenance.mjs verify-all
 ```
 
 The landing docs build separately:

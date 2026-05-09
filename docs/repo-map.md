@@ -10,6 +10,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `landing/` | Public site and documentation app. |
 | `docs/` | Repository-level documentation that should remain readable without running the docs site. |
 | `docs/decisions/` | Architecture decision records. |
+| `docs/provenance/` | Alpha provenance contract and committed attestation envelopes. |
 | `apps/portal/` | Protocol portal and user-facing application experiments. |
 | `apps/docs/` | Secondary docs app retained for the broader workspace. |
 | `contracts/` | EVM contracts and scripts for protocol surfaces outside the local daemon. |
@@ -42,7 +43,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/programs/settlement` | Experimental Solana settlement program. |
 | `agent-os/covenant-web` | Local operator web console. |
 | `agent-os/autonomy` | Machine-readable autonomous workflow and task backlog. |
-| `agent-os/scripts` | Validation, test inventory, handoff, and regression guards. |
+| `agent-os/scripts` | Validation, provenance verification, test inventory, handoff, and regression guards. |
 
 ## Public vs Internal State
 

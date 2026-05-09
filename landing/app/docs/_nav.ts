@@ -42,6 +42,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/security", label: "Security model" },
       { href: "/identity", label: "Identity and keys" },
       { href: "/memory", label: "Memory tiers" },
+      { href: "/provenance", label: "Provenance" },
     ],
   },
 ];

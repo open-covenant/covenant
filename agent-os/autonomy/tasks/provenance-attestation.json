@@ -1,7 +1,7 @@
 {
   "id": "provenance-attestation",
   "title": "Add public provenance attestation for agent-produced artifacts",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "planner",
   "scope": [
@@ -16,15 +16,22 @@
     "Attestation metadata leaks machine-local paths, private usernames, or operational details.",
     "A public verification story depends on a private key registry that outside contributors cannot audit."
   ],
-  "gates": ["plan", "security", "docs", "test_expansion"],
+  "gates": [
+    "plan",
+    "security",
+    "docs",
+    "test_expansion"
+  ],
   "verification": [
     "bash agent-os/scripts/validate.sh --quick",
+    "node agent-os/scripts/provenance-self-test.mjs",
+    "pnpm --dir landing build",
     "bash scripts/audit.sh"
   ],
   "humanEscalation": [
     "Selection of public signing identity policy",
     "Approval before publishing transparency-log or release-signing claims"
   ],
-  "nextAction": "Draft an architecture decision for signed task records and release provenance before changing signing code.",
+  "nextAction": "Choose a public signing identity policy before adding detached signatures or transparency-log publication.",
   "updated": "2026-05-09"
 }

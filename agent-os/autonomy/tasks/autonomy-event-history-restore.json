@@ -1,0 +1,27 @@
+{
+  "id": "autonomy-event-history-restore",
+  "title": "Restore autonomy event history",
+  "state": "integrated",
+  "priority": "critical",
+  "ownerRole": "release_operator",
+  "scope": [
+    "agent-os/autonomy/events.jsonl"
+  ],
+  "summary": "Restore autonomy event entries that were accidentally dropped while integrating protocol info compatibility fixtures.",
+  "expectedFailureModes": [
+    "A corrective commit silently truncates prior task lifecycle events.",
+    "Future autonomous runs lose audit context for recently integrated tasks.",
+    "Identity or provenance checks pass while event history remains incomplete."
+  ],
+  "gates": [
+    "security"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-git-identity.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue autonomous work from the next validated backlog item.",
+  "updated": "2026-05-09"
+}

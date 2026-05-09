@@ -1697,6 +1697,37 @@
       ],
       "nextAction": "Implement an opt-in periodic scheduler that reuses the existing retry gate, enforces backoff and exhaustion limits, and records audit-visible retry decisions.",
       "updated": "2026-05-09"
+    },
+    {
+      "id": "alpha-release-bundle-scaffold",
+      "title": "Add alpha release bundle scaffold",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "The alpha release contract defines evidence bundles, but operators still have to create the directory and notes by hand. Add a small non-publishing scaffold command that creates a release evidence bundle with generated evidence, a validation notes template, and a dry-run path.",
+      "expectedFailureModes": [
+        "Operators generate evidence JSON but forget validation notes or release decisions.",
+        "Release bundle ids include unsafe path traversal or machine-local names.",
+        "The scaffold overwrites prior release evidence without an explicit operator decision."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.test --dry-run",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Create an alpha release bundle scaffold command, update release docs and landing docs to point at it, and verify the dry-run path.",
+      "updated": "2026-05-09"
     }
   ]
 }

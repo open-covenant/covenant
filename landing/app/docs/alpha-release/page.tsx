@@ -33,8 +33,7 @@ export default function AlphaReleasePage() {
         attestations when present, and the release decision.
       </p>
 
-      <code>{`mkdir -p docs/releases/<release-id>
-node agent-os/scripts/alpha-release-evidence.mjs --json > docs/releases/<release-id>/evidence.json
+      <code>{`node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
 bash agent-os/scripts/validate.sh --quick
 pnpm --dir landing build
 git diff --check`}</code>

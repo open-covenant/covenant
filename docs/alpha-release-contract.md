@@ -41,6 +41,14 @@ The bundle should contain:
 
 The evidence helper is read-only. It records the commit, branch, dirty-file count, recommended commands, and release notes. It does not execute the commands and does not create a tag or artifact.
 
+Create the bundle scaffold with:
+
+```bash
+node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
+```
+
+The scaffold writes `evidence.json` and `validation.md`. It refuses to overwrite an existing non-empty bundle unless `--force` is supplied.
+
 ## Minimum Local Gate
 
 Run from the repository root:

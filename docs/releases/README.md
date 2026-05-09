@@ -4,8 +4,8 @@ Release evidence bundles record the facts used to accept, reject, or supersede a
 
 Create one directory per release candidate:
 
-```text
-docs/releases/<release-id>/
+```bash
+node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
 ```
 
 Expected contents:

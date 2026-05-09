@@ -12,7 +12,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/decisions/` | Architecture decision records. |
 | `docs/alpha-release-contract.md` | Source alpha boundary, non-claims, evidence bundle expectations, and human-owned release decisions. |
 | `docs/release-validation.md` | Release evidence profile and validation requirements. |
-| `docs/releases/` | Release evidence bundle records for alpha candidates. |
+| `docs/releases/` | Release evidence bundle records for alpha candidates, scaffolded by `agent-os/scripts/alpha-release-bundle.mjs`. |
 | `docs/provenance/` | Provenance contract and committed attestation envelopes. |
 | `circuits/` | Circom proof circuits and catalog metadata. |
 | `packages/` | Shared TypeScript SDK, UI, and configuration packages. |

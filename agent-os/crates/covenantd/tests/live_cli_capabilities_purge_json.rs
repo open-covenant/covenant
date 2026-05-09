@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -53,8 +54,16 @@ async fn wait_for_operator_token(home: &std::path::Path) {
     panic!("operator token never appeared at {}", path.display());
 }
 
-async fn run_cli(cli_exe: &std::path::Path, home: &std::path::Path, args: &[&str]) -> String {
-    let output = Command::new(cli_exe)
+fn args(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| (*part).to_string()).collect()
+}
+
+async fn run_cli_output(
+    cli_exe: &std::path::Path,
+    home: &std::path::Path,
+    args: &[String],
+) -> std::process::Output {
+    Command::new(cli_exe)
         .args(args)
         .env("COVENANT_HOME", home)
         .env("HOME", home)
@@ -63,7 +72,11 @@ async fn run_cli(cli_exe: &std::path::Path, home: &std::path::Path, args: &[&str
         .stderr(Stdio::piped())
         .output()
         .await
-        .expect("spawn covenant CLI");
+        .expect("spawn covenant CLI")
+}
+
+async fn run_cli_ok(cli_exe: &std::path::Path, home: &std::path::Path, args: &[String]) -> String {
+    let output = run_cli_output(cli_exe, home, args).await;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -105,38 +118,52 @@ async fn live_cli_capabilities_purge_json_round_trip() {
     wait_for_operator_token(home.path()).await;
 
     let cli_exe = covenant_cli_bin();
-    run_cli(
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("unix time")
+        .as_millis() as u64;
+    let allowed_before_ms = now_ms + 30_000;
+    let denied_before_ms = allowed_before_ms + 30_000;
+
+    let scope = format!(r#"{{"version":1,"before_ms":{}}}"#, allowed_before_ms);
+    let mut grant_purge = args(&["capabilities", "grant", "capabilities.purge", "--scope"]);
+    grant_purge.push(scope);
+    run_cli_ok(&cli_exe, home.path(), &grant_purge).await;
+    let grant = run_cli_ok(
         &cli_exe,
         home.path(),
-        &["capabilities", "grant", "capabilities.purge"],
-    )
-    .await;
-    let grant = run_cli(
-        &cli_exe,
-        home.path(),
-        &["capabilities", "grant", "tool.call.echo"],
+        &args(&["capabilities", "grant", "tool.call.echo"]),
     )
     .await;
     let signature = signature_from_grant(&grant);
-    run_cli(
+    run_cli_ok(
         &cli_exe,
         home.path(),
-        &["capabilities", "revoke", signature],
+        &args(&["capabilities", "revoke", signature]),
     )
     .await;
 
-    let before_ms = "9999999999999";
-    let stdout = run_cli(
-        &cli_exe,
-        home.path(),
-        &["capabilities", "purge", "--before-ms", before_ms, "--json"],
-    )
-    .await;
+    let mut denied_cmd = args(&["capabilities", "purge", "--before-ms"]);
+    denied_cmd.push(denied_before_ms.to_string());
+    denied_cmd.push("--json".into());
+    let denied = run_cli_output(&cli_exe, home.path(), &denied_cmd).await;
+    let denied_stdout = String::from_utf8_lossy(&denied.stdout).to_string();
+    let denied_stderr = String::from_utf8_lossy(&denied.stderr).to_string();
+    assert!(
+        !denied.status.success(),
+        "capabilities purge should fail when before_ms exceeds granted scope: status={:?} stdout={denied_stdout:?} stderr={denied_stderr:?}",
+        denied.status
+    );
+
+    let mut allowed_cmd = args(&["capabilities", "purge", "--before-ms"]);
+    allowed_cmd.push(allowed_before_ms.to_string());
+    allowed_cmd.push("--json".into());
+    let stdout = run_cli_ok(&cli_exe, home.path(), &allowed_cmd).await;
 
     let value: Value =
         serde_json::from_str(stdout.trim()).expect("capabilities purge --json must be valid JSON");
     assert_eq!(value["kind"].as_str(), Some("capabilities_purged"));
-    assert_eq!(value["before_ms"].as_u64(), Some(9_999_999_999_999));
+    assert_eq!(value["before_ms"].as_u64(), Some(allowed_before_ms));
     assert_eq!(value["purged"].as_u64(), Some(1));
 
     let _ = child.kill().await;

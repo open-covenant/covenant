@@ -22,6 +22,7 @@ use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
     a2a_scope_allows as permission_a2a_scope_allows,
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
+    capabilities_purge_scope_allows as permission_capabilities_purge_scope_allows,
     chain_scope_allows as permission_chain_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
@@ -1812,6 +1813,39 @@ impl Server {
         Ok(false)
     }
 
+    async fn capabilities_purge_scope_allows(
+        &self,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == "capabilities.purge" && verify_with_clock(cap, now).is_ok()
+        }) {
+            match permission_capabilities_purge_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                before_ms,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
+    }
+
     async fn verify_audit_integrity(&self, peer: &AgentId) -> Response {
         if peer.pubkey != self.identity.agent_id().pubkey {
             return Response::Error {
@@ -1837,6 +1871,44 @@ impl Server {
                      Grant it with `covenant capabilities grant capabilities.purge`."
                     .into(),
             };
+        }
+        match self.capabilities_purge_scope_allows(before_ms, peer).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = format!("before_ms {before_ms} exceeds capability scope");
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "capabilities:purge".into(),
+                        action: "capabilities.purge".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("capabilities purge rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "capabilities:purge".into(),
+                        action: "capabilities.purge".into(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!(
+                        "capabilities purge rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
         }
         match self.capabilities.purge_revoked_older_than(before_ms).await {
             Ok(purged) => Response::CapabilitiesPurged { purged },

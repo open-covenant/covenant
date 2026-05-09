@@ -48,7 +48,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | Memory retention | Covered | CLI memory read JSON, purge JSON, and compaction dry-run/apply | Exact memory-record to settlement-receipt correlation once receipts carry memory ids. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
-| CLI audit feed | Covered | audit purge JSON, audit recent, audit recent JSON, audit verify | Scoped audit purge rejection coverage once retention policy defaults are stable. |
+| CLI audit feed | Covered | audit purge JSON including scoped rejection, audit recent, audit recent JSON, audit verify | Scoped audit query filter coverage once audit predicates become user-selectable. |
 | Ignore policy gate | Covered | CLI ignore check JSON, ignored-dispatch side-effect fixture | Scoped ignore override coverage once override policy semantics exist. |
 | Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |

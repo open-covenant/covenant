@@ -1,0 +1,31 @@
+{
+  "id": "autonomy-backlog-refill-2026-05-09b",
+  "title": "Refill autonomy backlog from durable gaps",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/autonomy/backlog.json",
+    "agent-os/autonomy/tasks",
+    "docs/status.md",
+    "docs/live-coverage.md",
+    "ROADMAP.md"
+  ],
+  "summary": "Add new autonomous task templates from the live coverage matrix, status matrix, roadmap, and alpha release boundary so backlog exhaustion does not stop the autonomous maintenance loop.",
+  "expectedFailureModes": [
+    "The seed queue is exhausted and the agent stops despite durable unblocked work.",
+    "New templates duplicate completed task ids and never seed.",
+    "Backlog items overclaim implementation readiness instead of separating current work from planned research."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-seed-next.mjs --dry-run",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Run the continuation command and immediately begin the next seeded backlog task.",
+  "updated": "2026-05-09"
+}

@@ -90,7 +90,7 @@
         "agent-os/crates/covenantd/tests/live_cli_audit_verify.rs"
       ],
       "status": "covered",
-      "nextGap": "Add scoped audit purge rejection coverage once retention policy defaults are stable."
+      "nextGap": "Add scoped audit query filter coverage once audit predicates become user-selectable."
     },
     {
       "id": "ignore-policy",

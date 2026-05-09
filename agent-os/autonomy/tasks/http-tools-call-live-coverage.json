@@ -1,0 +1,35 @@
+{
+  "id": "http-tools-call-live-coverage",
+  "title": "Add live HTTP tools-call coverage",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "verifier",
+  "scope": [
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs"
+  ],
+  "summary": "Cover `/tools/call` through a real daemon and HTTP gateway by authenticating with the minted operator token, proving the call is denied before `tool.call.echo` is granted, granting the capability over HTTP, and verifying the echo result.",
+  "expectedFailureModes": [
+    "The live HTTP gateway lists tools but cannot execute a real tool call through the daemon.",
+    "The HTTP tool-call route bypasses capability checks for the operator token.",
+    "The HTTP grant route signs a capability that the subsequent tool-call route cannot observe.",
+    "The live test becomes part of default CI or depends on non-local services."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenantd live_http_tools_call --locked",
+    "cd agent-os && cargo test -p covenantd --test live_http_tools_call --locked -- --ignored live_",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [
+    "Approval before making live tests part of default CI"
+  ],
+  "nextAction": "Integrated locally; next HTTP live slice should cover remaining mutation endpoints only after retention and recovery policies stabilize.",
+  "updated": "2026-05-09"
+}

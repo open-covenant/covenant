@@ -1,7 +1,7 @@
 {
   "id": "capabilities-purge-scope-live-coverage",
   "title": "Cover scoped capability purge rejection live path",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

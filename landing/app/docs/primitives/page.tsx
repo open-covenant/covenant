@@ -133,7 +133,7 @@ export default function PrimitivesPage() {
       <p>
         The evidence layer for privileged actions. Audit events are
         append-only JSONL rows with structured kinds, issuers, timestamps,
-        and local hash-chain integrity reports. The alpha surface supports
+        and local hash-chain integrity reports. The audit surface supports
         recent reads, bounded purges, integrity verification, and unsigned
         or locally signed audit-root attestations.
       </p>
@@ -147,8 +147,8 @@ export default function PrimitivesPage() {
         How resource consumption is accounted for. Today Covenant records
         local <code>SettlementReceipt</code> rows for resources such as
         memory writes. Chain fields remain empty unless a future settlement
-        integration records them. The Solana program is scaffolded and not
-        part of the alpha runtime claim.
+        integration records them. The Solana program provides the protocol
+        scaffold for networked settlement.
       </p>
       <p>
         See <Link href="/settlement">Settlement</Link>.

@@ -28,7 +28,7 @@ Each attestation should bind:
 - signing key id
 - validation command evidence
 
-Sign the canonical attestation payload with a project-controlled signing key. Store the signed attestation in the repository for alpha releases and publish the same payload to a transparency log when the release process matures.
+Sign the canonical attestation payload with a project-controlled signing key. Store the signed attestation in the repository for releases and publish the same payload to a transparency log when the release process matures.
 
 ## Signing Identity
 
@@ -52,7 +52,7 @@ Personal emails, local usernames, hostnames, private SSH key names, and absolute
 2. Add a generator that reads `covenant audit verify` output and emits an unsigned payload.
 3. Add signing through the selected project identity.
 4. Extend provenance verification to validate the payload, subject commit, task/release id, and signature.
-5. Publish signed root attestations for alpha release candidates.
+5. Publish signed root attestations for release candidates.
 6. Add transparency-log publication after signing is stable.
 
 Current implementation status:

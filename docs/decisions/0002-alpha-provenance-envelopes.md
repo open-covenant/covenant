@@ -1,4 +1,4 @@
-# 0002: Alpha provenance envelopes
+# 0002: Initial Provenance Envelopes
 
 ## Status
 
@@ -8,7 +8,7 @@ Accepted.
 
 Covenant's autonomous development loop needs public evidence that a committed change came from a tracked task, passed named verification gates, and modified the files claimed by the task record. Existing local signing primitives are not enough: a signature can prove key possession without proving task context, validation evidence, or whether metadata leaks private machine details.
 
-The project is not ready to claim release signing, a public key registry, or transparency-log publication. Those policies require human decisions about signing identity, key custody, and external infrastructure.
+Release signing, a public key registry, and transparency publication are governed by separate signing identity, key custody, and external infrastructure policies.
 
 ## Decision
 
@@ -27,17 +27,17 @@ The v1 envelope records:
 - autonomy task snapshot digest from the subject commit;
 - transition events for the task from the subject commit;
 - validation commands and recorded pass/fail/skipped status;
-- explicit limits stating that the envelope is not yet a signed release or transparency-log entry.
+- explicit release-evidence scope for the envelope.
 
 ## Consequences
 
 - Agent-produced commits can carry public, machine-checkable provenance without a database.
 - The verifier fails on local paths, personal identifiers, private key names, or other forbidden local identity patterns.
 - Historical attestations remain valid because verification reads the task record and event log from the subject commit, not from the current working tree.
-- The model is intentionally unsigned in alpha. Signing and transparency publication stay blocked until the project chooses a public signing identity policy.
+- The model starts unsigned. Signing and transparency publication are separate release-hardening tracks.
 
 ## Follow-up
 
 - Add optional detached signatures once signing identity and key custody are approved.
-- Add release artifact subjects after the alpha release layout is fixed.
+- Add release artifact subjects after the release layout is fixed.
 - Publish provenance entries to a public transparency log only after the signing policy is reviewed.

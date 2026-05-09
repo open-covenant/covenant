@@ -6,14 +6,14 @@ import { MobileMenu } from "../MobileMenu";
 export const metadata: Metadata = {
   title: "Roadmap — Covenant",
   description:
-    "Development milestones for Covenant around the alpha release target on 13.05.2026: hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
+    "Development milestones for Covenant: control-plane hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/roadmap",
     title: "Roadmap — Covenant",
     description:
-      "Development milestones for Covenant around the alpha release target on 13.05.2026.",
+      "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
   },
 };
 
@@ -67,16 +67,15 @@ type Milestone = {
 const MILESTONES: Milestone[] = [
   {
     code: "M0",
-    title: "Alpha",
-    status: "Target · 13.05.2026",
+    title: "Foundation",
+    status: "Available",
     intro:
-      "Source-built local control plane for engineers and researchers. The alpha boundary is explicit: local daemon, CLI, policy, memory, audit, A2A, MCP, local receipts, and provenance evidence.",
+      "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [
       "Daemon, CLI, IPC, local HTTP gateway, identity, permissions, memory, audit, A2A, MCP, budget, and local receipt ledger",
       "Trusted-local subprocess runtime plus fail-closed handling for sandbox-required manifests",
       "Opt-in Linux gVisor validation path where host prerequisites are met",
       "Autonomous workflow records, live coverage matrix, identity guards, and commit-scoped provenance envelopes",
-      "Explicit non-claims for production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, marketplace, and multi-host production",
       "Apache 2.0 core",
     ],
   },

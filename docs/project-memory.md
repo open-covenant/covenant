@@ -16,7 +16,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
-- Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, and human approval before any tag or artifact publication.
+- Release language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
@@ -66,7 +66,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [README.md](../README.md): public positioning and status.
 - [ROADMAP.md](../ROADMAP.md): capability roadmap.
 - [docs/status.md](./status.md): implemented, experimental, and planned capability matrix.
-- [docs/alpha-release-contract.md](./alpha-release-contract.md): source alpha boundary, blockers, non-claims, and post-alpha research split.
+- [docs/release-validation.md](./release-validation.md): release evidence profile and validation requirements.
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
@@ -75,7 +75,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
-- [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
+- [docs/provenance/README.md](./provenance/README.md): provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.

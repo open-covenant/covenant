@@ -2,7 +2,7 @@
 
 Covenant provenance envelopes connect an autonomy task, a Git commit, changed file evidence, transition history, and validation records. The same verifier also understands unsigned audit-root attestations that bind a local audit integrity report to a commit and task or release target.
 
-The alpha format is intentionally simple JSON. It is designed for public inspection and CI verification before the project introduces release signing or transparency-log publication.
+The envelope format is intentionally simple JSON. It is designed for public inspection and CI verification as release signing and transparency publication mature.
 
 ## Commands
 
@@ -53,7 +53,7 @@ node agent-os/scripts/provenance.mjs audit-root write \
   --commit HEAD \
   --out docs/provenance/audit-roots/<commit>-audit-root.json \
   --signing-key ./secure/project-audit-root-key.pem \
-  --key-id covenant-alpha-root \
+  --key-id covenant-root \
   --validation "covenant audit verify=passed"
 ```
 

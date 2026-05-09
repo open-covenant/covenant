@@ -61,7 +61,7 @@ The runtime contract should preserve the existing stdin/stdout JSON-line protoco
 - No secret environment inheritance except explicitly allowed variables.
 - Runtime logs must not include local absolute home paths or secret values.
 - A sandbox-required manifest must fail closed if the configured backend is unavailable.
-- Public docs must not claim sandbox-grade isolation until `linux-gvisor` exists and has live coverage.
+- Public docs should describe sandbox-grade isolation only when the corresponding backend exists and has live coverage.
 
 ## Consequences
 

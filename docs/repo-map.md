@@ -10,8 +10,8 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `landing/` | Public site and documentation app. |
 | `docs/` | Repository-level documentation that should remain readable without running the docs site. |
 | `docs/decisions/` | Architecture decision records. |
-| `docs/alpha-release-contract.md` | Source alpha boundary, blockers, non-claims, and release evidence contract. |
-| `docs/provenance/` | Alpha provenance contract and committed attestation envelopes. |
+| `docs/release-validation.md` | Release evidence profile and validation requirements. |
+| `docs/provenance/` | Provenance contract and committed attestation envelopes. |
 | `circuits/` | Circom proof circuits and catalog metadata. |
 | `packages/` | Shared TypeScript SDK, UI, and configuration packages. |
 | `services/` | Supporting services: MCP bridges, proof generation, indexer, compute broker, and bots. |

@@ -385,12 +385,12 @@ export default function ArchitecturePage() {
         Covenant records local settlement receipts today. The repository
         also contains an experimental Anchor program for the future Solana
         settlement path described in <Link href="/settlement">Settlement</Link>.
-        Production credit minting, burn reconciliation, oracle integration,
-        and provider payout flows are not claimed as deployed behavior.
+        Credit minting, burn reconciliation, oracle integration, and provider
+        payout flows are tracked as protocol hardening work.
       </p>
 
       <p>
-        The current boundary is deliberate: local receipts make resource
+        The design boundary is deliberate: local receipts make resource
         accounting inspectable while the on-chain authority surface remains a
         hardening target.
       </p>

@@ -23,9 +23,9 @@ const TILES = [
     body: "Task lifecycle, continuation, validation gates, and sprint summaries.",
   },
   {
-    href: "/alpha-release",
-    title: "Alpha release",
-    body: "Source-built alpha boundary, blockers, non-claims, and post-alpha research split.",
+    href: "/validation",
+    title: "Validation profile",
+    body: "Operating surfaces, evidence requirements, and live boundary checks.",
   },
   {
     href: "/architecture",
@@ -121,18 +121,17 @@ export default function DocsIndexPage() {
 
       <h2>Status</h2>
       <p>
-        Covenant is pre-1.0 infrastructure. The local daemon, CLI, identity,
-        permissions, memory, audit, peer auth, and local receipt ledger are
-        implemented in the repository. MCP, A2A, the local web console, the
-        autonomous development loop, live coverage matrix, and public
-        provenance envelopes are experimental. Runtime sandboxing currently
-        has manifest-level requirements, trusted-local fail-closed behavior,
-        daemon-selectable Linux gVisor configuration, an initial runtime-level
-        gVisor runner, opt-in live Linux sandbox coverage, and a documented
-        Linux runner setup. The alpha release contract is source-built local
-        infrastructure. On-chain settlement, installer, SDK ecosystem, signed
-        releases, production sandbox CI, and transparency-log publication
-        remain planned work.
+        Covenant is pre-1.0 systems infrastructure. The local daemon, CLI,
+        identity, permissions, memory, audit, peer auth, and local receipt
+        ledger are implemented in the repository. MCP, A2A, the local web
+        console, autonomous workflow records, live coverage matrix, and
+        provenance envelopes are actively hardening. Runtime isolation includes
+        manifest-level requirements, trusted-local fail-closed behavior,
+        daemon-selectable Linux gVisor configuration, runtime-level gVisor
+        runner work, live Linux sandbox coverage, and a documented Linux runner
+        setup. Distributed settlement, installers, SDK publication, signed
+        release artifacts, and transparency publication are tracked on the
+        roadmap.
       </p>
 
       <h2>Position in the stack</h2>

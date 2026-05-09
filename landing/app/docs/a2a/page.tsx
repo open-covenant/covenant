@@ -225,8 +225,8 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
           tracked separately.
         </li>
         <li>
-          <strong>Retry posture.</strong> Alpha does not auto-redeliver
-          leased tasks after restart. This avoids duplicate
+          <strong>Retry posture.</strong> A2A delivery avoids automatic
+          redelivery of leased tasks after restart. This prevents duplicate
           non-idempotent work; explicit repair commands carry the
           operator&apos;s duplicate-work posture.
         </li>

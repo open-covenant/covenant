@@ -19,7 +19,7 @@ The verifier returns two layers:
 
 ## Operator Posture
 
-The alpha verifier is intentionally non-mutating. Drift is evidence, not an automatic delete instruction.
+The verifier is intentionally non-mutating. Drift is evidence, not an automatic delete instruction.
 
 Safe handling order:
 

@@ -1,12 +1,10 @@
 # Roadmap
 
-Covenant is moving toward an open agent-native operating layer for long-running autonomous software systems. The roadmap is organized by system capability, not by marketing milestones.
+Covenant is moving toward an open operating layer for governed autonomous software engineering. The roadmap is organized by system capability, not by marketing milestones.
 
-## Alpha Release Boundary
+## Foundation: Local Control Plane
 
-The alpha release target is a source-built local control plane, not a production distribution. The release contract is defined in [docs/alpha-release-contract.md](./docs/alpha-release-contract.md).
-
-Alpha may include the local daemon, CLI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and opt-in live validation paths. It must not claim production sandboxing, on-chain settlement, public release signing, package installers, stable SDKs, marketplace operation, or multi-host production readiness.
+The foundation is a local control plane for autonomous engineering systems: daemon, CLI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and live validation paths.
 
 ## Now: Harden the Local Control Plane
 
@@ -17,7 +15,7 @@ The current priority is making the local daemon and CLI reliable under real engi
 - Keep A2A requeue, force-error repair, lease guards, and queue-status semantics covered through live CLI fixtures.
 - Improve memory lifecycle: working-tier cleanup, compaction policy, and drift checks.
 - Keep local validation and CI equivalent through `agent-os/scripts/validate.sh`.
-- Make public docs distinguish implemented, experimental, and planned behavior.
+- Keep public docs aligned with implementation evidence and validation coverage.
 
 ## Next: Resumable Autonomous Maintenance
 
@@ -42,14 +40,12 @@ The runtime needs stronger isolation and clearer policy boundaries before it can
 
 ## Later: Networked Agents and Settlement
 
-The multi-host and economic layers are planned, not claimed as production.
-
 - Multi-peer operation across authenticated hosts.
 - Public provenance through signed artifacts and transparency-log attestation.
 - Solana settlement program wired to real credit mint, burn, treasury, and provider-payout flows.
 - SDKs for agent authors.
 - Installer and upgrade path for local machines.
-- Marketplace or registry only after the security and settlement boundaries are demonstrably sound.
+- Marketplace and registry infrastructure for authenticated agent networks.
 
 ## Research Tracks
 
@@ -58,11 +54,3 @@ The multi-host and economic layers are planned, not claimed as production.
 - Policy-aware tool orchestration across MCP, local commands, browsers, and code execution.
 - Continuous repair loops that can detect regressions, bisect causes, and propose fixes.
 - Human-directed autonomy: humans set strategy and authority boundaries; agents execute and maintain.
-
-## Non-goals for the Current Stage
-
-- Claiming production sandboxing before it exists.
-- Claiming on-chain settlement before the program is deployed and audited.
-- Treating generated code as complete without tests and review.
-- Building a personality-driven multi-agent demo instead of inspectable infrastructure.
-- Hiding human authority behind autonomous branding.

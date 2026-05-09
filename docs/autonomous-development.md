@@ -168,7 +168,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 
 - [README.md](../README.md): public thesis and status.
 - [ROADMAP.md](../ROADMAP.md): capability roadmap.
-- [docs/alpha-release-contract.md](./alpha-release-contract.md): alpha release boundary, blockers, and non-claims.
+- [docs/release-validation.md](./release-validation.md): release evidence profile and validation requirements.
 - [docs/project-memory.md](./project-memory.md): durable project context and invariants.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/live-coverage.md](./live-coverage.md): live boundary coverage matrix.
@@ -177,7 +177,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
 - `node agent-os/scripts/autonomy-summary.mjs`: deterministic sprint and handoff summaries from the public task state.
-- [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
+- [docs/provenance/README.md](./provenance/README.md): provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.
 - [BUILT.md](../BUILT.md): recursive engineering model and honesty boundaries.
 

@@ -90,10 +90,11 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_a2a.rs",
+        "agent-os/crates/covenantd/tests/live_cli_a2a_repair.rs",
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live CLI repair coverage for stale in-flight inspection, requeue, and force-error flows."
+      "nextGap": "Add CLI stale-lease guard failure coverage and machine-readable status output once the operator format stabilizes."
     },
     {
       "id": "mcp-subprocess",

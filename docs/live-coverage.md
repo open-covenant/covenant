@@ -49,7 +49,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit purge JSON, audit recent, audit recent JSON, audit verify | Scoped audit purge rejection coverage once retention policy defaults are stable. |
-| Ignore policy gate | Covered | CLI ignore check JSON | Live dispatch fixture proving ignored intents never write memory or receipts. |
+| Ignore policy gate | Covered | CLI ignore check JSON, ignored-dispatch side-effect fixture | Scoped ignore override coverage once override policy semantics exist. |
 | Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI compact JSON, CLI repair, CLI status JSON, restart replay | Stale-lease guard failure coverage. |

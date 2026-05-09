@@ -100,10 +100,11 @@
         "agent-os/crates/covenant/src/main.rs"
       ],
       "liveTests": [
-        "agent-os/crates/covenantd/tests/live_cli_ignore_check_json.rs"
+        "agent-os/crates/covenantd/tests/live_cli_ignore_check_json.rs",
+        "agent-os/crates/covenantd/tests/live_cli_ignore_dispatch.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live dispatch fixture proving ignored intents never write memory or receipts."
+      "nextGap": "Add scoped ignore override coverage once override policy semantics exist."
     },
     {
       "id": "peer-auth",

@@ -13,7 +13,7 @@ const SURFACES = [
   ["HTTP gateway", "covered", "version, auth, and tools-call round trip"],
   ["CLI capability lifecycle", "covered", "capability purge after retention defaults"],
   ["CLI audit feed", "covered", "scoped audit purge rejection"],
-  ["Ignore policy gate", "covered", "ignored intent memory/receipt absence"],
+  ["Ignore policy gate", "covered", "scoped ignore override policy"],
   ["Peer authentication", "covered", "forced self-revoke recovery fixture"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
   ["A2A mailbox", "covered", "stale-lease guard failure"],

@@ -1,7 +1,7 @@
 {
   "id": "provenance-release-subjects",
   "title": "Define release artifact provenance subjects",
-  "state": "ready",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
@@ -30,6 +30,6 @@
   "humanEscalation": [
     "Human decision remains required for public signing keys and release publication."
   ],
-  "nextAction": "Integrate on main, then continue with the next autonomous backlog item.",
+  "nextAction": "Continue with the next autonomous backlog item.",
   "updated": "2026-05-09"
 }

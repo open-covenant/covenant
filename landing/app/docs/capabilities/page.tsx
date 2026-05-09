@@ -86,8 +86,8 @@ export default function CapabilitiesPage() {
         <code>memory.repair.*</code>, and <code>memory.compact.*</code>,
         plus stable A2A predicates for send, receive-admission, respond,
         and repair flows, plus peer predicates for delegated list/revoke
-        flows and purge retention. Settlement scope predicates remain
-        compatibility metadata until their dispatch semantics stabilize.
+        flows and purge retention, plus chain predicates for receipt
+        reads, receipt batch reads, and receipt flushing.
       </p>
 
       <p>
@@ -104,13 +104,13 @@ memory.*    { "version": 1, "tiers": ["working"], "record_id": null, "before_ms"
 a2a.*       { "version": 1, "peer_pubkey_b58": "...", "task_id": null, "lease_id": null, "duplicate_risk": "idempotent" }
 audit.*     { "version": 1, "window": 100, "before_ms": null, "include_integrity": true }
 peers.*     { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": null, "force": null, "before_ms": null }
-chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</code>
+chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null, "payer_pubkey_b58": null, "resource": null, "batch_id": null }`}</code>
       </pre>
 
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
-        the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for settlement predicates.
+        the detailed contract. Enforcement hardening should next broaden
+        live coverage for delegated scoped paths.
       </p>
 
       <h2>Canonical encoding</h2>

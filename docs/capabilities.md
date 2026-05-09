@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, and peer predicates for delegated list/revoke flows plus purge retention at dispatch. Settlement scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, and chain predicates for receipt reads, receipt batch reads, and receipt flushing at dispatch.
 
 ## Scope Envelope
 
@@ -142,14 +142,21 @@ Use for local settlement and receipt batching.
   "version": 1,
   "limit": 100,
   "mint": null,
-  "cluster": null
+  "cluster": null,
+  "payer_pubkey_b58": null,
+  "resource": null,
+  "batch_id": null
 }
 ```
 
 Rules:
 
-- `limit` bounds batch size.
-- `mint` and `cluster` must be explicit before any production settlement path is enabled.
+- `chain.receipts` gates local receipt reads; `chain.batches` gates local receipt batch summaries; `chain.flush` gates local receipt batching.
+- `limit` bounds read and batch sizes. A request above the scoped limit is rejected before receipts are read or batched.
+- `payer_pubkey_b58` narrows receipt rows to a 32-byte base58 payer key. The daemon still applies the authenticated-payer filter first.
+- `resource` narrows receipt rows to `compute`, `memory`, `tool`, `message`, or `registration`.
+- `cluster` and `batch_id` narrow already-batched receipt rows. Unbatched local receipts do not satisfy a concrete `cluster` or `batch_id` selector.
+- `mint` is checked against the configured settlement mint for `chain.flush`; a concrete mint selector does not match if the daemon has no configured mint.
 
 ## Enforcement Path
 

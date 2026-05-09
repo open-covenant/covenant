@@ -262,7 +262,7 @@ async fn intent_round_trip_after_grant() {
         .unwrap();
     assert_eq!(g["kind"], "capability_granted");
     let sig = g["signature_b58"].as_str().unwrap().to_string();
-    for action in ["memory.write", "memory.read"] {
+    for action in ["memory.write", "memory.read", "chain.receipts"] {
         let g: serde_json::Value = client
             .post(format!("{base}/capabilities/grant"))
             .json(&json!({ "action": action }))
@@ -310,7 +310,7 @@ async fn intent_round_trip_after_grant() {
         .unwrap();
     assert_eq!(recv["receipts"].as_array().unwrap().len(), 1);
 
-    // Capabilities recent should show the dispatch, write, and read grants.
+    // Capabilities recent should show the dispatch, write/read, and receipt-read grants.
     let caps: serde_json::Value = client
         .get(format!("{base}/capabilities/recent?limit=10"))
         .send()
@@ -319,7 +319,7 @@ async fn intent_round_trip_after_grant() {
         .json()
         .await
         .unwrap();
-    assert_eq!(caps["capabilities"].as_array().unwrap().len(), 3);
+    assert_eq!(caps["capabilities"].as_array().unwrap().len(), 4);
 
     // Semantic search: with the deterministic-but-pseudo-random `MockEmbedder`,
     // cosine between two arbitrary strings is ~0. Querying the exact stored

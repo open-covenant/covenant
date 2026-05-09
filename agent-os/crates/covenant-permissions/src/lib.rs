@@ -260,6 +260,40 @@ pub fn peer_scope_allows(
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChainScopeRequest<'a> {
+    pub limit: Option<usize>,
+    pub payer_pubkey_b58: Option<&'a str>,
+    pub resource: Option<&'a str>,
+    pub cluster: Option<&'a str>,
+    pub mint: Option<&'a str>,
+    pub batch_id: Option<&'a str>,
+}
+
+pub fn chain_scope_allows(
+    action: &str,
+    scope: &Value,
+    expected_action: &str,
+    request: ChainScopeRequest<'_>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(scope_allows_optional_limit(obj, request.limit)
+        && scope_allows_optional_string(obj, "payer_pubkey_b58", request.payer_pubkey_b58)
+        && scope_allows_optional_string(obj, "resource", request.resource)
+        && scope_allows_optional_string(obj, "cluster", request.cluster)
+        && scope_allows_optional_string(obj, "mint", request.mint)
+        && scope_allows_optional_string(obj, "batch_id", request.batch_id))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryCompactionScopeRequest {
     pub apply: bool,
@@ -541,6 +575,29 @@ fn scope_allows_optional_before_ms(obj: &Map<String, Value>, before_ms: Option<u
     }
 }
 
+fn scope_allows_optional_limit(obj: &Map<String, Value>, actual: Option<usize>) -> bool {
+    match obj.get("limit") {
+        Some(value) => actual
+            .map(|actual| (actual as u64) <= value.as_u64().unwrap_or(0))
+            .unwrap_or(true),
+        None => true,
+    }
+}
+
+fn scope_allows_optional_string(
+    obj: &Map<String, Value>,
+    field: &str,
+    actual: Option<&str>,
+) -> bool {
+    match obj.get(field) {
+        Some(value) if value.is_null() => true,
+        Some(value) => actual
+            .map(|actual| value.as_str() == Some(actual))
+            .unwrap_or(true),
+        None => true,
+    }
+}
+
 fn scope_allows_duplicate_risk(obj: &Map<String, Value>, actual: Option<&str>) -> bool {
     match obj.get("duplicate_risk") {
         Some(value) if value.is_null() => true,
@@ -634,8 +691,16 @@ fn validate_peer_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Per
 
 fn validate_chain_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_positive_integer(action, obj, "limit")?;
-    optional_string_or_null(action, obj, "mint")?;
-    optional_string_or_null(action, obj, "cluster")?;
+    optional_non_empty_string_or_null(action, obj, "mint")?;
+    optional_non_empty_string_or_null(action, obj, "cluster")?;
+    optional_pubkey_b58_or_null(action, obj, "payer_pubkey_b58")?;
+    optional_string_enum_or_null(
+        action,
+        obj,
+        "resource",
+        &["compute", "memory", "tool", "message", "registration"],
+    )?;
+    optional_non_empty_string_or_null(action, obj, "batch_id")?;
     Ok(())
 }
 
@@ -682,6 +747,32 @@ fn optional_pubkey_b58_or_null(
         return Err(invalid_scope(
             action,
             format!("{field} must decode to a 32-byte public key"),
+        ));
+    }
+    Ok(())
+}
+
+fn optional_non_empty_string_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(value) = value.as_str() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a non-empty string or null"),
+        ));
+    };
+    if value.is_empty() {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a non-empty string or null"),
         ));
     }
     Ok(())
@@ -817,6 +908,33 @@ fn optional_string_enum(
     };
     let Some(value) = value.as_str() else {
         return Err(invalid_scope(action, format!("{field} must be a string")));
+    };
+    if !allowed.contains(&value) {
+        return Err(invalid_scope(
+            action,
+            format!("{field} contains unsupported value {value:?}"),
+        ));
+    }
+    Ok(())
+}
+
+fn optional_string_enum_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+    allowed: &[&str],
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(value) = value.as_str() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be a string or null"),
+        ));
     };
     if !allowed.contains(&value) {
         return Err(invalid_scope(
@@ -1345,7 +1463,10 @@ mod tests {
                     "version": 1,
                     "limit": 10,
                     "mint": null,
-                    "cluster": "localnet"
+                    "cluster": "localnet",
+                    "payer_pubkey_b58": null,
+                    "resource": "memory",
+                    "batch_id": null
                 }),
             ),
         ];
@@ -1405,6 +1526,18 @@ mod tests {
         assert_invalid_scope(
             "chain.flush",
             serde_json::json!({ "version": 1, "limit": -1 }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "payer_pubkey_b58": "peer-1" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "resource": "unknown" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "batch_id": "" }),
         );
     }
 
@@ -1664,6 +1797,49 @@ mod tests {
             &serde_json::json!({}),
             "peers.revoke",
             request
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn chain_scope_allows_limit_environment_and_receipt_predicates() {
+        let payer = bs58::encode([9u8; 32]).into_string();
+        let scope = serde_json::json!({
+            "version": 1,
+            "limit": 10,
+            "payer_pubkey_b58": payer,
+            "resource": "memory",
+            "cluster": "devnet",
+            "mint": "So11111111111111111111111111111111111111112",
+            "batch_id": "batch-1"
+        });
+        let request = ChainScopeRequest {
+            limit: Some(5),
+            payer_pubkey_b58: Some(&payer),
+            resource: Some("memory"),
+            cluster: Some("devnet"),
+            mint: Some("So11111111111111111111111111111111111111112"),
+            batch_id: Some("batch-1"),
+        };
+        assert!(chain_scope_allows("chain.flush", &scope, "chain.flush", request).unwrap());
+        assert!(!chain_scope_allows(
+            "chain.flush",
+            &scope,
+            "chain.flush",
+            ChainScopeRequest {
+                limit: Some(11),
+                ..request
+            }
+        )
+        .unwrap());
+        assert!(!chain_scope_allows(
+            "chain.flush",
+            &scope,
+            "chain.flush",
+            ChainScopeRequest {
+                resource: Some("tool"),
+                ..request
+            }
         )
         .unwrap());
     }

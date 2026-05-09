@@ -108,7 +108,12 @@ async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
         Response::Pong
     );
 
-    for action in ["tool.web_search", "memory.write", "memory.read"] {
+    for action in [
+        "tool.web_search",
+        "memory.write",
+        "memory.read",
+        "chain.receipts",
+    ] {
         write_frame(
             &mut stream,
             &Request::GrantCapability {

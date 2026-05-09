@@ -41,7 +41,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
-- Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, and peer delegated list/revoke plus purge-retention paths; settlement predicates still need enforcement.
+- Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
 - Audit integrity is local tamper evidence only; immutable retention, public key custody, release publication, and transparency-log publication are not implemented.
 - A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until task classes can declare idempotency safely.

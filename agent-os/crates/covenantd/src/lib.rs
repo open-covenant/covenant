@@ -22,6 +22,7 @@ use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
     a2a_scope_allows as permission_a2a_scope_allows,
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
+    chain_scope_allows as permission_chain_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
     memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
@@ -30,7 +31,8 @@ use covenant_permissions::{
     memory_write_scope_allows as permission_memory_write_scope_allows,
     peer_scope_allows as permission_peer_scope_allows, sign as sign_capability,
     tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
-    A2aScopeRequest, CapabilityStore, MemoryCompactionScopeRequest, PeerScopeRequest,
+    A2aScopeRequest, CapabilityStore, ChainScopeRequest, MemoryCompactionScopeRequest,
+    PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -229,6 +231,41 @@ fn memory_read_record_allowed(
             &record_id,
             tier,
             record.created_at,
+        )
+        .unwrap_or(false)
+    })
+}
+
+fn settlement_resource_name(resource: ResourceKind) -> &'static str {
+    match resource {
+        ResourceKind::Compute => "compute",
+        ResourceKind::Memory => "memory",
+        ResourceKind::Tool => "tool",
+        ResourceKind::Message => "message",
+        ResourceKind::Registration => "registration",
+    }
+}
+
+fn chain_receipt_allowed(
+    scopes: &[(String, serde_json::Value)],
+    receipt: &SettlementReceipt,
+) -> bool {
+    let payer = receipt.payer.pubkey_base58();
+    let resource = settlement_resource_name(receipt.resource);
+    let cluster = receipt.cluster.as_deref().unwrap_or("");
+    let batch_id = receipt.batch_id.as_deref().unwrap_or("");
+    scopes.iter().any(|(action, scope)| {
+        permission_chain_scope_allows(
+            action,
+            scope,
+            action,
+            ChainScopeRequest {
+                payer_pubkey_b58: Some(&payer),
+                resource: Some(resource),
+                cluster: Some(cluster),
+                batch_id: Some(batch_id),
+                ..ChainScopeRequest::default()
+            },
         )
         .unwrap_or(false)
     })
@@ -2471,6 +2508,49 @@ impl Server {
         })
     }
 
+    async fn chain_scopes(
+        &self,
+        action: &str,
+        peer: &AgentId,
+        request: ChainScopeRequest<'_>,
+    ) -> Result<Vec<(String, serde_json::Value)>, String> {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut scopes = Vec::new();
+        let mut invalid_scope = None;
+
+        for cap in user_caps
+            .iter()
+            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
+        {
+            match permission_chain_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                action,
+                request,
+            ) {
+                Ok(true) => {
+                    scopes.push((cap.capability.action.clone(), cap.capability.scope.clone()))
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+
+        if scopes.is_empty() {
+            if let Some(reason) = invalid_scope {
+                return Err(reason);
+            }
+        }
+        Ok(scopes)
+    }
+
     async fn grant_capability(
         &self,
         action: String,
@@ -2612,11 +2692,62 @@ impl Server {
     /// `dispatch_intent`, so the filter keys directly off the dispatch
     /// attribution. Compared on the 32-byte pubkey.
     async fn recent_receipts(&self, limit: usize, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("chain:receipts".into(), vec!["chain.receipts".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "receipt reads require capability \"chain.receipts\". \
+                     Grant it with `covenant capabilities grant chain.receipts`."
+                    .into(),
+            };
+        }
+        let scopes = match self
+            .chain_scopes(
+                "chain.receipts",
+                peer,
+                ChainScopeRequest {
+                    limit: Some(limit),
+                    ..ChainScopeRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(scopes) if !scopes.is_empty() => scopes,
+            Ok(_) => {
+                let reason = format!("limit {limit} exceeds capability scope");
+                self.record_capability_scope_rejected(
+                    peer,
+                    "chain:receipts",
+                    "chain.receipts",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("receipt reads rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "chain:receipts",
+                    "chain.receipts",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "receipt reads rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        };
         match self.settlement.recent(limit).await {
             Ok(receipts) => {
                 let receipts = receipts
                     .into_iter()
                     .filter(|r| r.payer.pubkey == peer.pubkey)
+                    .filter(|r| chain_receipt_allowed(&scopes, r))
                     .collect();
                 Response::Receipts { receipts }
             }
@@ -2638,11 +2769,57 @@ impl Server {
                 message: "receipt flushing requires the operator identity".into(),
             };
         }
+        let check = self
+            .check_capabilities("chain:flush".into(), vec!["chain.flush".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "receipt flushing requires capability \"chain.flush\". \
+                     Grant it with `covenant capabilities grant chain.flush`."
+                    .into(),
+            };
+        }
+        let status = chain_status_from_env();
+        let mint = status.covnt_mint.as_deref().unwrap_or("");
+        let scopes = match self
+            .chain_scopes(
+                "chain.flush",
+                peer,
+                ChainScopeRequest {
+                    limit: Some(limit),
+                    cluster: Some(&status.cluster),
+                    mint: Some(mint),
+                    ..ChainScopeRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(scopes) if !scopes.is_empty() => scopes,
+            Ok(_) => {
+                let reason =
+                    format!("limit {limit}, cluster, or mint does not match capability scope");
+                self.record_capability_scope_rejected(peer, "chain:flush", "chain.flush", &reason)
+                    .await;
+                return Response::Error {
+                    message: format!("receipt flushing rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(peer, "chain:flush", "chain.flush", &reason)
+                    .await;
+                return Response::Error {
+                    message: format!(
+                        "receipt flushing rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        };
 
         let receipts = match self.settlement.recent(limit).await {
             Ok(receipts) => receipts
                 .into_iter()
                 .filter(|receipt| receipt.payer.pubkey == peer.pubkey)
+                .filter(|receipt| chain_receipt_allowed(&scopes, receipt))
                 .collect::<Vec<_>>(),
             Err(e) => {
                 return Response::Error {
@@ -2660,7 +2837,6 @@ impl Server {
             }
         };
 
-        let status = chain_status_from_env();
         let confirmation = ChainConfirmation {
             chain: "solana".to_string(),
             cluster: status.cluster,
@@ -2696,6 +2872,56 @@ impl Server {
     }
 
     async fn receipt_batches(&self, limit: usize, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("chain:batches".into(), vec!["chain.batches".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "receipt batch reads require capability \"chain.batches\". \
+                     Grant it with `covenant capabilities grant chain.batches`."
+                    .into(),
+            };
+        }
+        let scopes = match self
+            .chain_scopes(
+                "chain.batches",
+                peer,
+                ChainScopeRequest {
+                    limit: Some(limit),
+                    ..ChainScopeRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(scopes) if !scopes.is_empty() => scopes,
+            Ok(_) => {
+                let reason = format!("limit {limit} exceeds capability scope");
+                self.record_capability_scope_rejected(
+                    peer,
+                    "chain:batches",
+                    "chain.batches",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("receipt batch reads rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "chain:batches",
+                    "chain.batches",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "receipt batch reads rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        };
         let receipts = match self.settlement.recent(limit).await {
             Ok(receipts) => receipts,
             Err(e) => {
@@ -2709,6 +2935,7 @@ impl Server {
         for receipt in receipts
             .into_iter()
             .filter(|receipt| receipt.payer.pubkey == peer.pubkey)
+            .filter(|receipt| chain_receipt_allowed(&scopes, receipt))
         {
             let Some(batch_id) = receipt.batch_id.clone() else {
                 continue;
@@ -7396,6 +7623,7 @@ required = {caps:?}
             })
             .await
             .unwrap();
+        grant_action(&s, "chain.receipts").await;
         let resp = s.op_respond(Request::RecentReceipts { limit: 100 }).await;
         match resp {
             Response::Receipts { receipts } => {
@@ -7424,6 +7652,7 @@ required = {caps:?}
         );
         grant_action(&s, "tool.web_search").await;
         grant_action(&s, "memory.write").await;
+        grant_action(&s, "chain.receipts").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
         })
@@ -7440,6 +7669,91 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_rejects_without_chain_capability() {
+        let s = server_with(vec![], "");
+        let resp = s.op_respond(Request::RecentReceipts { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("chain.receipts")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_rejects_scope_limit_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.receipts",
+            serde_json::json!({
+                "version": 1,
+                "limit": 1
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::RecentReceipts { limit: 2 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.receipts"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn receipt_batches_rejects_scope_limit_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.batches",
+            serde_json::json!({
+                "version": 1,
+                "limit": 1
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::ReceiptBatches { limit: 2 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.batches"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn flush_receipts_rejects_scope_limit_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.flush",
+            serde_json::json!({
+                "version": 1,
+                "limit": 1
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::FlushReceipts { limit: 2 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.flush"
+            )
+        }));
     }
 
     #[tokio::test]

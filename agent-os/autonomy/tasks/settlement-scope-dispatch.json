@@ -1,0 +1,34 @@
+{
+  "id": "settlement-scope-dispatch",
+  "title": "Enforce settlement capability scope predicates",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "planner",
+  "scope": [
+    "agent-os/crates/covenant-permissions",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant-settlement",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Define and enforce stable settlement scope predicates so receipt reads and batch operations are constrained by signed scope metadata before expanding on-chain claims.",
+  "expectedFailureModes": [
+    "Settlement grants remain effectively unscoped and allow arbitrary receipt reads or batch creation.",
+    "Future enforcement rejects existing grants because no explicit schema or migration path exists.",
+    "Public docs overclaim settlement isolation before dispatch-time predicates exist."
+  ],
+  "gates": [
+    "plan",
+    "docs",
+    "security",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Write settlement scope schema, implement dispatch checks for receipt reads and batch operations, and add tests that assert scope mismatches are rejected.",
+  "updated": "2026-05-09"
+}

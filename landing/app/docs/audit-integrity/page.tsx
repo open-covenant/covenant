@@ -32,6 +32,7 @@ export default function AuditIntegrityPage() {
       <h2>Verify</h2>
       <pre>
         <code>{`covenant audit verify
+covenant audit verify --json
 
 GET /audit/verify
 Authorization: Bearer <operator-token>`}</code>

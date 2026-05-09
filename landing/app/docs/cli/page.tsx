@@ -219,6 +219,12 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
 {"kind":"memory_purged","tier":"working","before_ms":1714938191234,"purged":0}`}</code>
       </pre>
 
+      <h3>Compact memory</h3>
+      <pre>
+        <code>{`$ covenant memory compact --delete-working-before-ms 1714938191234 --reason "maintenance window" --json
+{"kind":"memory_compacted","outcome":{"mode":"dry_run","would_change":true,"changed":false,"deleted":[],"stale_marked":[],"parents_detached":[]}}`}</code>
+      </pre>
+
       <h3>Grant and revoke a capability</h3>
       <pre>
         <code>{`$ covenant capabilities grant tool.web_search
@@ -276,6 +282,11 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant audit verify
 {"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
+      </pre>
+
+      <pre>
+        <code>{`$ covenant audit verify --json
+{"kind":"audit_integrity","report":{"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}}`}</code>
       </pre>
 
       <h3>Read the audit feed</h3>

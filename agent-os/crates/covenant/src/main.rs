@@ -6,7 +6,7 @@
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>]
+//!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>] [--json]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -23,7 +23,7 @@
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
 //!   covenant audit recent [--limit N] [--json]
-//!   covenant audit verify
+//!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
@@ -43,7 +43,7 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{
     A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditKind};
+use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
     VerifyDrift,
@@ -52,8 +52,9 @@ use covenant_mcp::ToolSpec;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{
-    MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRecord, MemoryRepairCommand,
-    MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind, SettlementReceipt,
+    MemoryCompactionOutcome, MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRecord,
+    MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
+    SettlementReceipt,
 };
 use std::path::PathBuf;
 use tokio::net::UnixStream;
@@ -101,7 +102,7 @@ fn print_usage() {
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D) [--json]  delete records older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M] [--delete-episodic-before-ms M] [--mark-longterm-stale-before-ms M]"
+        "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M] [--delete-episodic-before-ms M] [--mark-longterm-stale-before-ms M] [--json]"
     );
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
@@ -123,7 +124,7 @@ fn print_usage() {
     eprintln!(
         "  covenant audit recent [-n N] [--json]   list recent audit events as JSONL or one JSON envelope"
     );
-    eprintln!("  covenant audit verify                  verify local audit hash-chain sidecar");
+    eprintln!("  covenant audit verify [--json]         verify local audit hash-chain sidecar");
     eprintln!(
         "  covenant audit purge (--before-ms M | --older-than-ms D) [--json]  drop audit events older than ms epoch / D ms ago"
     );
@@ -306,10 +307,17 @@ fn print_memory_repair_response(response: Response) -> Result<()> {
     }
 }
 
-fn print_memory_compaction_response(response: Response) -> Result<()> {
+fn print_memory_compaction_response(response: Response, as_json: bool) -> Result<()> {
     match response {
         Response::MemoryCompacted { outcome } => {
-            println!("{}", serde_json::to_string(&outcome)?);
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&memory_compaction_json(&outcome))?
+                );
+            } else {
+                println!("{}", serde_json::to_string(&outcome)?);
+            }
             Ok(())
         }
         Response::Error { message } => bail!("daemon error: {message}"),
@@ -501,10 +509,12 @@ async fn main() -> Result<()> {
                     let mut policy = MemoryCompactionPolicy::default();
                     let mut reason = None;
                     let mut apply = false;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
                             "--apply" => apply = true,
+                            "--json" => as_json = true,
                             "--reason" => {
                                 i += 1;
                                 reason =
@@ -594,7 +604,7 @@ async fn main() -> Result<()> {
                     };
                     write_frame(&mut stream, &Request::CompactMemory { request }).await?;
                     let response = read_frame::<_, Response>(&mut stream).await?;
-                    print_memory_compaction_response(response)?;
+                    print_memory_compaction_response(response, as_json)?;
                 }
                 "repair" => {
                     if args.len() < 4 {
@@ -1392,13 +1402,23 @@ async fn main() -> Result<()> {
                     }
                 }
                 "verify" => {
-                    if args.len() != 2 {
-                        bail!("covenant audit verify does not accept flags");
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
                     }
                     write_frame(&mut stream, &Request::VerifyAuditIntegrity).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditIntegrity { report } => {
-                            println!("{}", serde_json::to_string(&report)?);
+                            if as_json {
+                                println!("{}", serde_json::to_string(&audit_verify_json(&report))?);
+                            } else {
+                                println!("{}", serde_json::to_string(&report)?);
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2367,12 +2387,26 @@ fn audit_recent_json(limit: usize, events: &[AuditEvent]) -> serde_json::Value {
     })
 }
 
+fn audit_verify_json(report: &AuditIntegrityReport) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "audit_integrity",
+        "report": report,
+    })
+}
+
 fn memory_purge_json(tier: Option<MemoryTier>, before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "memory_purged",
         "tier": tier.map(memory_tier_slug),
         "before_ms": before_ms,
         "purged": purged,
+    })
+}
+
+fn memory_compaction_json(outcome: &MemoryCompactionOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "memory_compacted",
+        "outcome": outcome,
     })
 }
 
@@ -3145,6 +3179,34 @@ mod tests {
     }
 
     #[test]
+    fn audit_verify_json_renders_stable_shape() {
+        let report = AuditIntegrityReport {
+            events: 2,
+            anchors: 2,
+            valid: true,
+            root_hash_hex: "ab".repeat(32),
+            failures: vec![],
+        };
+
+        let value = audit_verify_json(&report);
+        assert_eq!(value["kind"], "audit_integrity");
+        assert_eq!(value["report"]["events"], 2);
+        assert_eq!(value["report"]["anchors"], 2);
+        assert_eq!(value["report"]["valid"], true);
+        assert_eq!(
+            value["report"]["root_hash_hex"]
+                .as_str()
+                .unwrap_or_default()
+                .len(),
+            64
+        );
+        assert_eq!(
+            value["report"]["failures"].as_array().map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn memory_purge_json_renders_stable_shape() {
         let value = memory_purge_json(Some(MemoryTier::Working), 1_700_000_000_000, 3);
         assert_eq!(value["kind"], "memory_purged");
@@ -3154,6 +3216,34 @@ mod tests {
 
         let all_tiers = memory_purge_json(None, 1_700_000_000_000, 0);
         assert!(all_tiers["tier"].is_null());
+    }
+
+    #[test]
+    fn memory_compaction_json_renders_stable_shape() {
+        let outcome = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::DryRun,
+            would_change: true,
+            changed: false,
+            deleted: vec![],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+
+        let value = memory_compaction_json(&outcome);
+        assert_eq!(value["kind"], "memory_compacted");
+        assert_eq!(value["outcome"]["mode"], "dry_run");
+        assert_eq!(value["outcome"]["would_change"], true);
+        assert_eq!(value["outcome"]["changed"], false);
+        assert_eq!(
+            value["outcome"]["deleted"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            value["outcome"]["parents_detached"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
     }
 
     #[test]

@@ -130,5 +130,36 @@ async fn live_cli_audit_verify_round_trip() {
         .join("events.chain.jsonl")
         .exists());
 
+    let verify_json = Command::new(&cli_exe)
+        .arg("audit")
+        .arg("verify")
+        .arg("--json")
+        .env("COVENANT_HOME", home.path())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("spawn covenant CLI (audit verify --json)");
+    let json_stdout = String::from_utf8_lossy(&verify_json.stdout);
+    let json_stderr = String::from_utf8_lossy(&verify_json.stderr);
+    assert!(
+        verify_json.status.success(),
+        "audit verify --json CLI failed: status={:?} stdout={json_stdout:?} stderr={json_stderr:?}",
+        verify_json.status
+    );
+
+    let envelope: Value = serde_json::from_slice(&verify_json.stdout)
+        .expect("audit verify --json stdout must be JSON");
+    assert_eq!(envelope["kind"], "audit_integrity", "envelope={envelope:?}");
+    let report = &envelope["report"];
+    assert_eq!(report["valid"], true, "envelope={envelope:?}");
+    assert!(
+        report["events"].as_u64().unwrap_or(0) > 0,
+        "envelope={envelope:?}"
+    );
+    assert_eq!(report["events"], report["anchors"], "envelope={envelope:?}");
+
     let _ = child.kill().await;
 }

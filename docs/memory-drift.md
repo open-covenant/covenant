@@ -93,6 +93,16 @@ covenant memory compact \
   --apply
 ```
 
+The CLI prints a bare `MemoryCompactionOutcome` JSON object by default. Use `--json` for a stable envelope:
+
+```bash
+covenant memory compact --reason "monthly memory hygiene" --json ...
+```
+
+```json
+{ "kind": "memory_compacted", "outcome": { "mode": "dry_run", "changed": false } }
+```
+
 Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.compact.apply`. Successful dry-runs and mutations record `memory_compaction_applied` audit rows containing the mode, changed flag, operator reason, deleted ids, stale-marked ids, and detached-parent ids. Long-term memory is not deleted by compaction; it is marked stale so future retrieval policy can decide how to treat it.
 
 ## Current Limits

@@ -7827,10 +7827,15 @@ required = {caps:?}
         grant_action(&s, "tool.web_search").await;
         grant_action(&s, "memory.write").await;
         grant_action(&s, "chain.receipts").await;
-        s.op_respond(Request::SubmitIntent {
-            text: "find recent papers on agent memory".into(),
-        })
-        .await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+            })
+            .await;
+        let intent_id = match resp {
+            Response::IntentResult { intent_id, .. } => intent_id,
+            other => panic!("unexpected: {other:?}"),
+        };
         let me = s.identity.agent_id();
         let resp = s.op_respond(Request::RecentReceipts { limit: 10 }).await;
         match resp {
@@ -7839,6 +7844,13 @@ required = {caps:?}
                 assert!(
                     receipts.iter().all(|r| r.payer.pubkey == me.pubkey),
                     "filter must keep operator's receipts"
+                );
+                assert!(
+                    receipts
+                        .iter()
+                        .filter(|r| r.resource == ResourceKind::Memory)
+                        .all(|r| r.memory_record_id == Some(intent_id)),
+                    "memory receipts must carry the originating memory record id"
                 );
             }
             other => panic!("unexpected: {other:?}"),

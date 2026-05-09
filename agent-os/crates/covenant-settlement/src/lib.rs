@@ -108,6 +108,7 @@ fn receipt_hash(receipt: &SettlementReceipt) -> [u8; 32] {
     if let Some(id) = receipt.memory_record_id {
         payload["memory_record_id"] = serde_json::json!(id);
     }
+
     Sha256::digest(serde_json::to_vec(&payload).expect("receipt hash payload serializes")).into()
 }
 

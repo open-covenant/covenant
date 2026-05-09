@@ -15,7 +15,7 @@ The verifier returns two layers:
 | `audit_without_memory` | An `IntentDispatched` audit row has no matching memory record in the sampled window. |
 | `memory_stale_parent` | A memory record points at a parent memory id that no longer exists. |
 | `capability_without_audit` | A capability grant exists without a matching `CapabilityGranted` audit row. |
-| `memory_receipt_mismatch` | Memory records and memory settlement receipts differ for an owner in the sampled window. |
+| `memory_receipt_mismatch` | Memory records and memory settlement receipts fail to reconcile for an owner in the sampled window. When receipts carry `memory_record_id`, the verifier checks exact pairing; older receipts without correlation fall back to count-based drift. |
 
 ## Operator Posture
 
@@ -107,4 +107,5 @@ Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.comp
 
 ## Current Limits
 
-The receipt check still reports drift at an owner+window granularity, but it now prefers exact pairing when receipts carry `memory_record_id`. Older receipts (or non-memory resources) may omit the field, in which case the verifier falls back to count-based evidence.
+Memory settlement receipts now carry an optional `memory_record_id` field that points at the originating `MemoryRecord.id`. The verifier uses this correlation id when present to do exact pairing. Any legacy receipts that lack the field (or any settlement write path that forgets to set it) can still force the verifier into a count-based mismatch report because it cannot prove which receipt belongs to which memory record.
+

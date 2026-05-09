@@ -170,3 +170,17 @@ Rules:
 7. Keep action-only checks as the fallback only for unscoped operator grants.
 
 Until a namespace-specific predicate lands, public docs must describe that namespace's scope as validated signed metadata and compatibility preparation, not as enforced least-privilege behavior.
+
+## Machine-readable inspection
+
+`covenant capabilities recent --json` emits one stable object for supervisors:
+
+```json
+{
+  "kind": "capability_list",
+  "limit": 10,
+  "capabilities": []
+}
+```
+
+Each row is the wire `SignedCapability`, including `capability`, `scope`, optional `expires_at`, and the base58-encoded `signature`. Human output from `covenant capabilities recent` remains unchanged.

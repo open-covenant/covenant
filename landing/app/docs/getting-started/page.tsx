@@ -228,7 +228,7 @@ covenant chain status --json
 covenant receipts recent --limit 20 --json
 covenant chain flush-receipts --limit 20 --json
 covenant chain receipt-batches --limit 20 --json
-covenant capabilities recent
+covenant capabilities recent --limit 20 --json
 covenant verify --window 100 --json`}</code>
       </pre>
 

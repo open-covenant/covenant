@@ -652,6 +652,7 @@ dependencies = [
  "covenant-ipc",
  "covenant-mcp",
  "covenant-peer-auth",
+ "covenant-permissions",
  "covenant-types",
  "serde_json",
  "tokio",

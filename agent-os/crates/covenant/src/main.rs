@@ -10,7 +10,7 @@
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
-//!   covenant capabilities recent [--limit N]
+//!   covenant capabilities recent [--limit N] [--json]
 //!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>]
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>)
@@ -48,6 +48,7 @@ use covenant_ipc::{
     VerifyDrift,
 };
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
+use covenant_permissions::SignedCapability;
 use covenant_types::{
     MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairCommand, MemoryRepairMode,
     MemoryRepairRequest, MemoryTier, ResourceKind, SettlementReceipt,
@@ -124,6 +125,11 @@ fn print_usage() {
     eprintln!(
         "  covenant audit purge (--before-ms M | --older-than-ms D)  drop audit events older than ms epoch / D ms ago"
     );
+    eprintln!(
+        "  covenant capabilities recent [-n N] [--json]  list recent active capability tokens"
+    );
+    eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M]");
+    eprintln!("  covenant capabilities revoke <signature-b58>");
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D)  drop revoked caps older than ms epoch / D ms ago"
     );
@@ -577,6 +583,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "recent" => {
                     let mut limit: usize = 10;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -585,6 +592,7 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -592,21 +600,30 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::RecentCapabilities { limit }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::Capabilities { capabilities } => {
-                            if capabilities.is_empty() {
-                                println!("(no capabilities granted)");
-                            }
-                            for c in capabilities {
-                                let exp = match c.capability.expires_at {
-                                    Some(ms) => format!("expires {ms}"),
-                                    None => "perpetual".into(),
-                                };
+                            if as_json {
                                 println!(
-                                    "{} → {} ({}) [{}]",
-                                    c.capability.subject.display,
-                                    c.capability.action,
-                                    c.capability.granted_by.display,
-                                    exp
+                                    "{}",
+                                    serde_json::to_string(&capability_list_json(
+                                        limit,
+                                        &capabilities
+                                    ))?
                                 );
+                            } else if capabilities.is_empty() {
+                                println!("(no capabilities granted)");
+                            } else {
+                                for c in capabilities {
+                                    let exp = match c.capability.expires_at {
+                                        Some(ms) => format!("expires {ms}"),
+                                        None => "perpetual".into(),
+                                    };
+                                    println!(
+                                        "{} → {} ({}) [{}]",
+                                        c.capability.subject.display,
+                                        c.capability.action,
+                                        c.capability.granted_by.display,
+                                        exp
+                                    );
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1907,6 +1924,14 @@ fn receipt_list_json(limit: usize, receipts: &[SettlementReceipt]) -> serde_json
     })
 }
 
+fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "capability_list",
+        "limit": limit,
+        "capabilities": capabilities,
+    })
+}
+
 fn receipt_batch_list_json(limit: usize, batches: &[ReceiptBatchSummary]) -> serde_json::Value {
     serde_json::json!({
         "kind": "receipt_batch_list",
@@ -2023,7 +2048,7 @@ fn print_expand_error(err: &ExpandError) {
 mod tests {
     use super::*;
     use covenant_a2a::{A2ATask, A2ATaskQueueState};
-    use covenant_types::AgentId;
+    use covenant_types::{AgentId, Capability};
 
     fn make_peer(seed: u8, display: &str, revoked: bool) -> PeerSummary {
         let mut pk = [0u8; 32];
@@ -2367,6 +2392,46 @@ mod tests {
         assert_eq!(value["receipts"][0]["resource"], "memory");
         assert_eq!(value["receipts"][0]["credits_consumed"], 42);
         assert!(value["receipts"][0]["tx_sig"].is_null());
+    }
+
+    #[test]
+    fn capability_list_json_renders_stable_shape() {
+        let subject = AgentId::new("subject@local", [1u8; 32]);
+        let granted_by = AgentId::new("issuer@local", [2u8; 32]);
+        let signed = SignedCapability {
+            capability: Capability {
+                subject: subject.clone(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({"version": 1}),
+                granted_by: granted_by.clone(),
+                expires_at: None,
+            },
+            signature: [9u8; 64],
+        };
+
+        let value = capability_list_json(5, &[signed]);
+        assert_eq!(value["kind"], "capability_list");
+        assert_eq!(value["limit"], 5);
+        assert_eq!(
+            value["capabilities"][0]["capability"]["action"],
+            "tool.call.echo"
+        );
+        assert_eq!(
+            value["capabilities"][0]["capability"]["subject"]["pubkey"],
+            subject.pubkey_base58()
+        );
+        assert_eq!(
+            value["capabilities"][0]["capability"]["granted_by"]["display"],
+            granted_by.display
+        );
+        assert_eq!(
+            value["capabilities"][0]["capability"]["scope"]["version"],
+            1
+        );
+        assert!(value["capabilities"][0]["capability"]["expires_at"].is_null());
+        assert!(value["capabilities"][0]["signature"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
     }
 
     #[test]

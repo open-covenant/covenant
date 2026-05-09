@@ -32,7 +32,8 @@ export default function CliPage() {
         (--before-ms M
          | --older-than-ms D)        Delete records older than the threshold.
 
-  capabilities recent [-n N]         List recent capability tokens.
+  capabilities recent [-n N] [--json]
+                                     List recent capability tokens.
   capabilities grant <action>
         [--scope <json>]
         [--expires-at <ms>]          Sign and persist a new capability.
@@ -180,6 +181,12 @@ revoked 4qXP...8tF1 (removed=true)`}</code>
         <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":true}'
 granted: user@local → memory.write
 signature: 4qXP...8tF1`}</code>
+      </pre>
+
+      <h3>Inspect active capabilities as JSON</h3>
+      <pre>
+        <code>{`$ covenant capabilities recent --limit 5 --json
+{"kind":"capability_list","limit":5,"capabilities":[...]}`}</code>
       </pre>
 
       <h3>Verify state</h3>

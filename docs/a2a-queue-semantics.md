@@ -99,6 +99,28 @@ covenant a2a force-error <task-id> \
 
 HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC. Repair calls are rejected unless the authenticated peer can see the in-flight task and holds `a2a.repair.requeue` or `a2a.repair.force_error`, depending on the command. Non-empty A2A scopes are enforced at dispatch: `task_id`, `lease_id`, `peer_pubkey_b58`, and `duplicate_risk` must match the concrete repair request.
 
+## Idempotency and Retry Policy
+
+Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Automatic retry is a future feature gated on task-level idempotency metadata.
+
+Before any automatic retry loop is enabled, tasks must be able to declare:
+
+- **Duplicate safety**: whether re-running the same logical task can create harmful external side effects (network writes, payments, ticket creation, etc.). Default posture is **unsafe**.
+- **Idempotency key**: a stable, caller-chosen key that uniquely identifies the logical work unit across retries. This allows a receiver to dedupe duplicate deliveries and/or return a previously computed result.
+
+Operator policy until that metadata exists:
+
+- Treat every stale lease as potentially non-idempotent external work.
+- Use `a2a requeue` only when the operator can justify `--duplicate-risk idempotent` (or explicitly accepts the risk).
+- Prefer `a2a force-error` when the correct outcome is “stop waiting” rather than “try again”.
+
+When automatic retry is introduced, it must be:
+
+- opt-in (disabled by default);
+- limited to tasks marked safe to duplicate with an explicit idempotency key;
+- observable (audit rows and queue status must show retry events and attempt counts);
+- bounded (retry budgets, backoff, and “stop retrying” behavior must be operator-configurable).
+
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.

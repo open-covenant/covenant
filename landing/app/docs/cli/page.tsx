@@ -278,6 +278,11 @@ orphans total: 0`}</code>
 {"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
       </pre>
 
+      <pre>
+        <code>{`$ covenant audit verify --json
+{"kind":"audit_integrity","report":{"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}}`}</code>
+      </pre>
+
       <h3>Read the audit feed</h3>
       <pre>
         <code>{`$ covenant audit recent --limit 5 --json

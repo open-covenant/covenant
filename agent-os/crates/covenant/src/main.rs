@@ -23,7 +23,7 @@
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
 //!   covenant audit recent [--limit N] [--json]
-//!   covenant audit verify
+//!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
@@ -43,7 +43,7 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{
     A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditKind};
+use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
     VerifyDrift,
@@ -123,7 +123,7 @@ fn print_usage() {
     eprintln!(
         "  covenant audit recent [-n N] [--json]   list recent audit events as JSONL or one JSON envelope"
     );
-    eprintln!("  covenant audit verify                  verify local audit hash-chain sidecar");
+    eprintln!("  covenant audit verify [--json]         verify local audit hash-chain sidecar");
     eprintln!(
         "  covenant audit purge (--before-ms M | --older-than-ms D) [--json]  drop audit events older than ms epoch / D ms ago"
     );
@@ -1392,13 +1392,23 @@ async fn main() -> Result<()> {
                     }
                 }
                 "verify" => {
-                    if args.len() != 2 {
-                        bail!("covenant audit verify does not accept flags");
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
                     }
                     write_frame(&mut stream, &Request::VerifyAuditIntegrity).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditIntegrity { report } => {
-                            println!("{}", serde_json::to_string(&report)?);
+                            if as_json {
+                                println!("{}", serde_json::to_string(&audit_verify_json(&report))?);
+                            } else {
+                                println!("{}", serde_json::to_string(&report)?);
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2367,6 +2377,13 @@ fn audit_recent_json(limit: usize, events: &[AuditEvent]) -> serde_json::Value {
     })
 }
 
+fn audit_verify_json(report: &AuditIntegrityReport) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "audit_integrity",
+        "report": report,
+    })
+}
+
 fn memory_purge_json(tier: Option<MemoryTier>, before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "memory_purged",
@@ -3142,6 +3159,34 @@ mod tests {
 
         let empty = audit_recent_json(5, &[]);
         assert_eq!(empty["events"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn audit_verify_json_renders_stable_shape() {
+        let report = AuditIntegrityReport {
+            events: 2,
+            anchors: 2,
+            valid: true,
+            root_hash_hex: "ab".repeat(32),
+            failures: vec![],
+        };
+
+        let value = audit_verify_json(&report);
+        assert_eq!(value["kind"], "audit_integrity");
+        assert_eq!(value["report"]["events"], 2);
+        assert_eq!(value["report"]["anchors"], 2);
+        assert_eq!(value["report"]["valid"], true);
+        assert_eq!(
+            value["report"]["root_hash_hex"]
+                .as_str()
+                .unwrap_or_default()
+                .len(),
+            64
+        );
+        assert_eq!(
+            value["report"]["failures"].as_array().map(Vec::len),
+            Some(0)
+        );
     }
 
     #[test]

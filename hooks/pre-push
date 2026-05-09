@@ -7,6 +7,7 @@ cd "$REPO_ROOT"
 
 node agent-os/scripts/validate-current-git-identity.mjs </dev/null
 node agent-os/scripts/validate-github-cli-account.mjs </dev/null
+node agent-os/scripts/validate-github-push-identity.mjs "${1:-origin}" "${2:-}" </dev/null
 
 refs=()
 while read -r local_ref local_sha remote_ref remote_sha || [ -n "${local_ref:-}" ]; do

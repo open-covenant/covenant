@@ -56,7 +56,7 @@
         "agent-os/crates/covenantd/tests/live_http_tools_call.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live coverage for high-risk HTTP mutation endpoints as retention and recovery policies stabilize."
+      "nextGap": "Broaden protected HTTP mutation coverage across memory repair, peer lifecycle, and A2A recovery endpoints."
     },
     {
       "id": "cli-capabilities",

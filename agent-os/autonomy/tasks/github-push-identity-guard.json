@@ -1,0 +1,36 @@
+{
+  "id": "github-push-identity-guard",
+  "title": "Guard GitHub push actor attribution",
+  "state": "integrated",
+  "priority": "critical",
+  "ownerRole": "security_reviewer",
+  "scope": [
+    "agent-os/scripts",
+    "hooks",
+    "docs/project-memory.md",
+    "agent-os/BLOCKERS.md"
+  ],
+  "summary": "Add a pre-push guard that probes the actual GitHub transport credential before a branch ref update can create remote attribution under an unapproved account.",
+  "expectedFailureModes": [
+    "Git author and committer metadata are neutral while the SSH key used for push resolves to an individual account.",
+    "A HTTPS push uses an approved local account that lacks write permission and would fail after validation.",
+    "A remote write bypasses GitHub CLI account validation because it uses SSH instead of HTTPS."
+  ],
+  "gates": [
+    "security",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-github-push-identity.mjs",
+    "node agent-os/scripts/validate-github-cli-account.mjs",
+    "node agent-os/scripts/validate-current-git-identity.mjs",
+    "node agent-os/scripts/validate-git-identity.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Provision a repository-owned deploy key, GitHub App, or approved bot write credential before remote pushes resume."
+  ],
+  "nextAction": "Keep remote writes blocked until the configured push credential resolves to an approved neutral account.",
+  "updated": "2026-05-09"
+}

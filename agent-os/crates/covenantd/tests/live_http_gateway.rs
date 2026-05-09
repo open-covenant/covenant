@@ -5,9 +5,9 @@
 //! Hermetic: tempdir-isolated home, ephemeral TCP port. `#[ignore]`'d.
 //! Run with `cargo test -p covenantd --test live_http_gateway -- --ignored live_`.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -128,6 +128,134 @@ async fn live_http_gateway_health_version_and_bearer_auth() {
         names.contains(&"clock"),
         "expected clock in tool list, got {names:?}"
     );
+
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd and exercises protected HTTP mutation semantics"]
+async fn live_http_gateway_capabilities_purge_scope_round_trip() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let port = pick_free_port();
+    let base = format!("http://127.0.0.1:{port}");
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+
+    let mut child = Command::new(exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+
+    wait_for_http(&base).await;
+
+    let token = read_operator_token(home.path()).await;
+    let client = reqwest::Client::new();
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("unix time")
+        .as_millis() as u64;
+    let allowed_before_ms = now_ms + 30_000;
+    let denied_before_ms = allowed_before_ms + 30_000;
+
+    let missing_capability: Value = client
+        .post(format!("{base}/capabilities/purge"))
+        .bearer_auth(&token)
+        .json(&json!({ "before_ms": allowed_before_ms }))
+        .send()
+        .await
+        .expect("missing-capability purge request")
+        .json()
+        .await
+        .expect("missing-capability purge json");
+    assert_eq!(missing_capability["kind"], "error");
+    assert!(missing_capability["message"]
+        .as_str()
+        .expect("missing-capability message")
+        .contains("capabilities.purge"));
+
+    let grant_purge: Value = client
+        .post(format!("{base}/capabilities/grant"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "action": "capabilities.purge",
+            "scope": { "version": 1, "before_ms": allowed_before_ms }
+        }))
+        .send()
+        .await
+        .expect("grant purge request")
+        .json()
+        .await
+        .expect("grant purge json");
+    assert_eq!(grant_purge["kind"], "capability_granted");
+
+    let grant_echo: Value = client
+        .post(format!("{base}/capabilities/grant"))
+        .bearer_auth(&token)
+        .json(&json!({ "action": "tool.call.echo" }))
+        .send()
+        .await
+        .expect("grant echo request")
+        .json()
+        .await
+        .expect("grant echo json");
+    assert_eq!(grant_echo["kind"], "capability_granted");
+    let signature = grant_echo["signature_b58"]
+        .as_str()
+        .expect("grant signature");
+
+    let revoke: Value = client
+        .post(format!("{base}/capabilities/revoke"))
+        .bearer_auth(&token)
+        .json(&json!({ "signature_b58": signature }))
+        .send()
+        .await
+        .expect("revoke request")
+        .json()
+        .await
+        .expect("revoke json");
+    assert_eq!(revoke["kind"], "capability_revoked");
+    assert_eq!(revoke["removed"], true);
+
+    let scoped_rejection: Value = client
+        .post(format!("{base}/capabilities/purge"))
+        .bearer_auth(&token)
+        .json(&json!({ "before_ms": denied_before_ms }))
+        .send()
+        .await
+        .expect("scoped purge request")
+        .json()
+        .await
+        .expect("scoped purge json");
+    assert_eq!(scoped_rejection["kind"], "error");
+    let rejection_message = scoped_rejection["message"]
+        .as_str()
+        .expect("scope rejection message");
+    assert!(rejection_message.contains("capability scope"));
+    assert!(rejection_message.contains(&format!("before_ms {denied_before_ms}")));
+
+    let allowed: Value = client
+        .post(format!("{base}/capabilities/purge"))
+        .bearer_auth(&token)
+        .json(&json!({ "before_ms": allowed_before_ms }))
+        .send()
+        .await
+        .expect("allowed purge request")
+        .json()
+        .await
+        .expect("allowed purge json");
+    assert_eq!(allowed["kind"], "capabilities_purged");
+    assert_eq!(allowed["purged"].as_u64(), Some(1));
 
     let _ = child.kill().await;
 }

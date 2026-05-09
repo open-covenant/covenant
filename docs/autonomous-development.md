@@ -149,6 +149,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
 | Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers by default; pre-push passes the exact pushed ref ranges. |
 | Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes unless the active local Git author and committer resolve to the neutral automation identity. |
+| GitHub push actor guard | `node agent-os/scripts/validate-github-push-identity.mjs` | Refuses GitHub pushes when the transport credential would attribute the ref update to an unapproved account. |
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |

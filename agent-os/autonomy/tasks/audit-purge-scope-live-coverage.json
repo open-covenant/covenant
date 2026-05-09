@@ -1,7 +1,7 @@
 {
   "id": "audit-purge-scope-live-coverage",
   "title": "Cover scoped audit purge rejection live path",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

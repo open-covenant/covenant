@@ -9,7 +9,7 @@ node agent-os/scripts/validate-current-git-identity.mjs
 node agent-os/scripts/validate-github-cli-account.mjs
 
 refs=()
-while read -r local_ref local_sha remote_ref remote_sha; do
+while read -r local_ref local_sha remote_ref remote_sha || [ -n "${local_ref:-}" ]; do
   if [ -z "${local_ref:-}" ] || [ -z "${local_sha:-}" ]; then
     continue
   fi

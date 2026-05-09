@@ -1,0 +1,37 @@
+{
+  "id": "audit-verify-live-coverage",
+  "title": "Add live CLI coverage for audit integrity verification",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "verifier",
+  "scope": [
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs"
+  ],
+  "summary": "Cover the new `covenant audit verify` operator path through a real daemon and CLI subprocess, proving the IPC authentication, audit chain report, and JSON stdout shape survive the live process boundary.",
+  "expectedFailureModes": [
+    "The CLI `audit verify` arm compiles but fails against a live authenticated daemon socket.",
+    "The integrity report is valid in unit tests but renders malformed JSON at the CLI boundary.",
+    "The live coverage matrix claims audit verification coverage without an ignored opt-in live test.",
+    "The test depends on network services or becomes part of default CI."
+  ],
+  "gates": [
+    "plan",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo build -p covenant --locked",
+    "cd agent-os && cargo test -p covenantd live_cli_audit_verify --locked",
+    "cd agent-os && cargo test -p covenantd --test live_cli_audit_verify --locked -- --ignored live_",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [
+    "Approval before making live tests part of default CI or adding non-local services"
+  ],
+  "nextAction": "Integrated locally; next audit live-coverage slice should cover purge only after retention defaults are decided.",
+  "updated": "2026-05-09"
+}

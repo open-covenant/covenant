@@ -194,6 +194,166 @@ pub fn audit_purge_scope_allows(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryCompactionScopeRequest {
+    pub apply: bool,
+    pub delete_working_before_ms: Option<u64>,
+    pub delete_episodic_before_ms: Option<u64>,
+    pub mark_longterm_stale_before_ms: Option<u64>,
+    pub detach_stale_parents: bool,
+}
+
+pub fn memory_purge_scope_allows(
+    action: &str,
+    scope: &Value,
+    tier: Option<&str>,
+    before_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "memory.purge" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, true) || !scope_allows_before_ms(obj, before_ms) {
+        return Ok(false);
+    }
+    match tier {
+        Some(tier) => Ok(scope_allows_tiers(obj, &[tier])),
+        None => Ok(scope_allows_tiers(
+            obj,
+            &["working", "episodic", "longterm"],
+        )),
+    }
+}
+
+pub fn memory_repair_scope_allows(
+    action: &str,
+    scope: &Value,
+    record_id: &str,
+    tier: &str,
+    created_at_ms: u64,
+    apply: bool,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    let expected_action = if apply {
+        "memory.repair.apply"
+    } else {
+        "memory.repair.dry_run"
+    };
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, apply)
+        || !scope_allows_record_id(obj, record_id)
+        || !scope_allows_tiers(obj, &[tier])
+    {
+        return Ok(false);
+    }
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => Ok(true),
+        Some(value) => Ok(created_at_ms < value.as_u64().unwrap_or(0)),
+        None => Ok(true),
+    }
+}
+
+pub fn memory_compaction_scope_allows(
+    action: &str,
+    scope: &Value,
+    request: MemoryCompactionScopeRequest,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    let expected_action = if request.apply {
+        "memory.compact.apply"
+    } else {
+        "memory.compact.dry_run"
+    };
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if !scope_allows_apply(obj, request.apply) {
+        return Ok(false);
+    }
+    for before_ms in [
+        request.delete_working_before_ms,
+        request.delete_episodic_before_ms,
+        request.mark_longterm_stale_before_ms,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !scope_allows_before_ms(obj, before_ms) {
+            return Ok(false);
+        }
+    }
+    if request.delete_working_before_ms.is_some() && !scope_allows_tiers(obj, &["working"]) {
+        return Ok(false);
+    }
+    if request.delete_episodic_before_ms.is_some() && !scope_allows_tiers(obj, &["episodic"]) {
+        return Ok(false);
+    }
+    if request.mark_longterm_stale_before_ms.is_some() && !scope_allows_tiers(obj, &["longterm"]) {
+        return Ok(false);
+    }
+    if request.detach_stale_parents
+        && obj.contains_key("tiers")
+        && !scope_allows_tiers(obj, &["working", "episodic", "longterm"])
+    {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn scope_allows_apply(obj: &Map<String, Value>, apply: bool) -> bool {
+    obj.get("apply")
+        .and_then(Value::as_bool)
+        .map(|allowed| allowed == apply)
+        .unwrap_or(true)
+}
+
+fn scope_allows_record_id(obj: &Map<String, Value>, record_id: &str) -> bool {
+    obj.get("record_id")
+        .and_then(Value::as_str)
+        .map(|allowed| allowed == record_id)
+        .unwrap_or(true)
+}
+
+fn scope_allows_before_ms(obj: &Map<String, Value>, before_ms: u64) -> bool {
+    match obj.get("before_ms") {
+        Some(value) if value.is_null() => true,
+        Some(value) => before_ms <= value.as_u64().unwrap_or(0),
+        None => true,
+    }
+}
+
+fn scope_allows_tiers(obj: &Map<String, Value>, requested: &[&str]) -> bool {
+    let Some(tiers) = obj.get("tiers").and_then(Value::as_array) else {
+        return true;
+    };
+    requested.iter().all(|requested| {
+        tiers
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|allowed| allowed == *requested)
+    })
+}
+
 fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_string_or_null(action, obj, "tool")?;
     if let (Some(expected), Some(tool)) = (
@@ -1042,6 +1202,127 @@ mod tests {
         });
         assert!(!audit_purge_scope_allows("audit.purge", &scope, 1_001).unwrap());
         assert!(!audit_purge_scope_allows("audit.verify", &serde_json::json!({}), 1_000).unwrap());
+    }
+
+    #[test]
+    fn memory_purge_scope_allows_tier_and_cutoff() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(memory_purge_scope_allows("memory.purge", &scope, Some("working"), 999).unwrap());
+        assert!(!memory_purge_scope_allows("memory.purge", &scope, Some("episodic"), 999).unwrap());
+        assert!(
+            !memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_001).unwrap()
+        );
+        assert!(!memory_purge_scope_allows("memory.purge", &scope, None, 999).unwrap());
+    }
+
+    #[test]
+    fn memory_repair_scope_allows_record_tier_and_mode() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "record_id": "record-1",
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(memory_repair_scope_allows(
+            "memory.repair.apply",
+            &scope,
+            "record-1",
+            "working",
+            999,
+            true
+        )
+        .unwrap());
+        assert!(!memory_repair_scope_allows(
+            "memory.repair.apply",
+            &scope,
+            "record-2",
+            "working",
+            999,
+            true
+        )
+        .unwrap());
+        assert!(!memory_repair_scope_allows(
+            "memory.repair.dry_run",
+            &scope,
+            "record-1",
+            "working",
+            999,
+            false
+        )
+        .unwrap());
+        assert!(!memory_repair_scope_allows(
+            "memory.repair.apply",
+            &scope,
+            "record-1",
+            "working",
+            1_000,
+            true
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn memory_compaction_scope_allows_tiers_and_cutoffs() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working", "episodic"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: Some(999),
+                delete_episodic_before_ms: Some(1_000),
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: Some(999),
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: Some(1_001),
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: true,
+            }
+        )
+        .unwrap());
     }
 
     #[test]

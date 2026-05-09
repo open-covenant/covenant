@@ -79,9 +79,11 @@ export default function CapabilitiesPage() {
         signature validity, expiry, subject, action presence,
         revocation, the <code>tool.call.*</code>{" "}
         <code>arguments.allow</code> predicate, and the{" "}
-        <code>audit.purge</code> <code>before_ms</code> cutoff. Other
-        scope predicates remain compatibility metadata until their
-        dispatch semantics stabilize.
+        <code>audit.purge</code> <code>before_ms</code> cutoff. It
+        also enforces stable memory mutation predicates for{" "}
+        <code>memory.purge</code>, <code>memory.repair.*</code>, and{" "}
+        <code>memory.compact.*</code>. Other scope predicates remain
+        compatibility metadata until their dispatch semantics stabilize.
       </p>
 
       <p>
@@ -104,7 +106,8 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null }`}</cod
       <p>
         The repository document <code>docs/capabilities.md</code> tracks
         the detailed contract. Enforcement hardening should next add
-        dispatch-time checks for memory mutation predicates.
+        dispatch-time checks for peer, A2A, settlement, and memory
+        read/write predicates.
       </p>
 
       <h2>Canonical encoding</h2>

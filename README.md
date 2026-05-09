@@ -66,13 +66,13 @@ The tracked protocol is in [docs/autonomous-development.md](./docs/autonomous-de
 Implemented and tested in the repository:
 
 - Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
-- Signed capability lifecycle: grant, validate known scopes, enforce tool-call argument scopes, enforce audit purge cutoffs, verify, expire, revoke, and list.
+- Signed capability lifecycle: grant, validate known scopes, enforce tool-call argument scopes, enforce audit purge cutoffs, enforce memory mutation scopes, verify, expire, revoke, and list.
 - Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
 - Append-only audit log with structured event types, bounded recent reads, retention purge, and local hash-chain verification.
 - SQLite-backed memory records with working, episodic, and long-term tiers.
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
-- Unsigned audit-root attestations that bind local audit integrity reports to commits and tasks before project signing lands.
+- Unsigned or locally signed audit-root attestations that bind local audit integrity reports to commits and tasks before public key custody and transparency publication land.
 - Live opt-in tests for real daemon/CLI boundaries and selected real backends.
 - Machine-readable live coverage matrix for protocol, CLI, runtime, and model boundaries.
 - CI for Rust, landing docs, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
@@ -82,11 +82,11 @@ Implemented and tested in the repository:
 | Area | Status | Notes |
 |---|---|---|
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
-| Identity, permissions, audit | Implemented | Signed ed25519 capability model with grant-time scope validation, tool-call argument scope enforcement, scoped audit purge cutoffs, revocation, audit rows, and local audit hash-chain verification. |
+| Identity, permissions, audit | Implemented | Signed ed25519 capability model with grant-time scope validation, tool-call argument scope enforcement, scoped audit purge cutoffs, scoped memory mutation enforcement, revocation, audit rows, and local audit hash-chain verification. |
 | Memory | Implemented, hardening | SQLite, embeddings, read-only drift reports, explicit repair commands, and bounded compaction dry-run/apply policy are present; automatic schedules and exact receipt correlation are not claimed. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, review gates, continuation, and deterministic sprint summaries exist; full benchmarked self-improvement is not claimed. |
-| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data, and unsigned audit-root attestations bind local integrity reports to commits and tasks; public signing and transparency-log publication are not claimed. |
+| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data, and unsigned or locally signed audit-root attestations bind local integrity reports to commits and tasks; public key custody and transparency-log publication are not claimed. |
 | Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage and a repeatable runner guide exist. CI-host automation and Firecracker isolation are future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |

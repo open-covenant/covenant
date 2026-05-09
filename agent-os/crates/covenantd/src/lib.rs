@@ -20,9 +20,12 @@ use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::{
-    audit_purge_scope_allows as permission_audit_purge_scope_allows, sign as sign_capability,
+    audit_purge_scope_allows as permission_audit_purge_scope_allows,
+    memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
+    memory_purge_scope_allows as permission_memory_purge_scope_allows,
+    memory_repair_scope_allows as permission_memory_repair_scope_allows, sign as sign_capability,
     tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
-    CapabilityStore,
+    CapabilityStore, MemoryCompactionScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
@@ -182,6 +185,14 @@ fn memory_repair_mode(mode: MemoryRepairMode) -> &'static str {
     match mode {
         MemoryRepairMode::DryRun => "dry_run",
         MemoryRepairMode::Apply => "apply",
+    }
+}
+
+fn memory_tier_name(tier: MemoryTier) -> &'static str {
+    match tier {
+        MemoryTier::Working => "working",
+        MemoryTier::Episodic => "episodic",
+        MemoryTier::LongTerm => "longterm",
     }
 }
 
@@ -503,7 +514,9 @@ impl Server {
             Request::SearchMemory { query, tier, limit } => {
                 self.search_memory(query, tier, limit).await
             }
-            Request::PurgeMemory { tier, before_ms } => self.purge_memory(tier, before_ms).await,
+            Request::PurgeMemory { tier, before_ms } => {
+                self.purge_memory(tier, before_ms, peer).await
+            }
             Request::RepairMemory { request } => self.repair_memory(request, peer).await,
             Request::CompactMemory { request } => self.compact_memory(request, peer).await,
             Request::Verify { window } => self.verify_recent(window).await,
@@ -2418,13 +2431,112 @@ impl Server {
         }
     }
 
-    async fn purge_memory(&self, tier: Option<MemoryTier>, before_ms: u64) -> Response {
+    async fn purge_memory(
+        &self,
+        tier: Option<MemoryTier>,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Response {
+        let required = "memory.purge".to_string();
+        let check = self
+            .check_capabilities("memory:purge".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "memory purge requires capability \"memory.purge\". \
+                     Grant it with `covenant capabilities grant memory.purge`."
+                    .into(),
+            };
+        }
+        match self.memory_purge_scope_allows(tier, before_ms, peer).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "tier or before_ms does not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:purge".into(),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory purge rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory:purge".into(),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory purge rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
         match self.memory.purge_older_than(tier, before_ms).await {
             Ok(purged) => Response::MemoryPurged { purged },
             Err(e) => Response::Error {
                 message: format!("memory: {e}"),
             },
         }
+    }
+
+    async fn memory_scope_allows<F>(
+        &self,
+        action: &str,
+        peer: &AgentId,
+        mut allows: F,
+    ) -> Result<bool, String>
+    where
+        F: FnMut(&serde_json::Value) -> Result<bool, covenant_permissions::PermissionError>,
+    {
+        let now = epoch_ms();
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps
+            .iter()
+            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
+        {
+            match allows(&cap.capability.scope) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
+    }
+
+    async fn memory_purge_scope_allows(
+        &self,
+        tier: Option<MemoryTier>,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let tier_name = tier.map(memory_tier_name);
+        self.memory_scope_allows("memory.purge", peer, |scope| {
+            permission_memory_purge_scope_allows("memory.purge", scope, tier_name, before_ms)
+        })
+        .await
     }
 
     async fn repair_memory(
@@ -2454,8 +2566,8 @@ impl Server {
         }
 
         let id = memory_repair_id(&request.command);
-        match self.memory.get(id).await {
-            Ok(Some(record)) if record.owner.pubkey == peer.pubkey => {}
+        let record = match self.memory.get(id).await {
+            Ok(Some(record)) if record.owner.pubkey == peer.pubkey => record,
             Ok(Some(_)) => {
                 return Response::Error {
                     message: format!("memory repair rejected: record {id} is not visible to the authenticated peer"),
@@ -2469,6 +2581,56 @@ impl Server {
             Err(e) => {
                 return Response::Error {
                     message: format!("memory: {e}"),
+                };
+            }
+        };
+
+        match self
+            .memory_repair_scope_allows(
+                &required,
+                &id.to_string(),
+                record.tier,
+                record.created_at,
+                request.mode == MemoryRepairMode::Apply,
+                peer,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason =
+                    "record, tier, mode, or age does not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("memory-repair:{action}:{}", id),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory repair rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("memory-repair:{action}:{}", id),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!(
+                        "memory repair rejected by invalid capability scope: {reason}"
+                    ),
                 };
             }
         }
@@ -2524,6 +2686,59 @@ impl Server {
             };
         }
 
+        match self
+            .memory_compaction_scope_allows(
+                &required,
+                MemoryCompactionScopeRequest {
+                    apply: request.mode == MemoryRepairMode::Apply,
+                    delete_working_before_ms: request.policy.delete_working_before_ms,
+                    delete_episodic_before_ms: request.policy.delete_episodic_before_ms,
+                    mark_longterm_stale_before_ms: request.policy.mark_longterm_stale_before_ms,
+                    detach_stale_parents: request.policy.detach_stale_parents,
+                },
+                peer,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason =
+                    "policy tiers, mode, or cutoffs do not match capability scope".to_string();
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory-compact".into(),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("memory compaction rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: "memory-compact".into(),
+                        action: required,
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!(
+                        "memory compaction rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
         if request.policy.mark_longterm_stale_before_ms.is_some()
             && request.policy.marked_at_ms.is_none()
         {
@@ -2556,6 +2771,40 @@ impl Server {
                 message: format!("memory: {e}"),
             },
         }
+    }
+
+    async fn memory_repair_scope_allows(
+        &self,
+        action: &str,
+        record_id: &str,
+        tier: MemoryTier,
+        created_at_ms: u64,
+        apply: bool,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_memory_repair_scope_allows(
+                action,
+                scope,
+                record_id,
+                memory_tier_name(tier),
+                created_at_ms,
+                apply,
+            )
+        })
+        .await
+    }
+
+    async fn memory_compaction_scope_allows(
+        &self,
+        action: &str,
+        request: MemoryCompactionScopeRequest,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_memory_compaction_scope_allows(action, scope, request)
+        })
+        .await
     }
 
     /// Returns capabilities where `peer` is either the subject (caps held
@@ -3087,6 +3336,137 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn memory_purge_accepts_matching_scope() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "expired working memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.purge".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "before_ms": 100
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 99,
+            })
+            .await;
+        match resp {
+            Response::MemoryPurged { purged } => assert_eq!(purged, 1),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(s.memory.get(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn memory_purge_rejects_scope_cutoff_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "memory.purge".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "before_ms": 100
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 101,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::CapabilityScopeRejected { action, .. } if action == "memory.purge"
+        )));
+    }
+
+    #[tokio::test]
+    async fn memory_repair_rejects_scope_record_mismatch_and_audits() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "stale parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.repair.dry_run".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "record_id": Uuid::new_v4().to_string(),
+                "tiers": ["working"],
+                "apply": false
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            s.memory.get(id).await.unwrap().unwrap().parent,
+            Some(parent)
+        );
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::CapabilityScopeRejected { action, .. } if action == "memory.repair.dry_run"
+        )));
+    }
+
+    #[tokio::test]
     async fn memory_repair_dry_run_returns_before_after_without_mutating_and_audits() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();
@@ -3333,6 +3713,46 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_rejects_scope_cutoff_exceeded_and_audits() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "memory.compact.apply".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "before_ms": 20,
+                "apply": true
+            })),
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::Apply,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        delete_working_before_ms: Some(21),
+                        ..covenant_types::MemoryCompactionPolicy::default()
+                    },
+                    reason: "age-based compaction".into(),
+                },
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::CapabilityScopeRejected { action, .. } if action == "memory.compact.apply"
+        )));
     }
 
     #[tokio::test]

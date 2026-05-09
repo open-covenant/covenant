@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, and the `audit.purge` `before_ms` cutoff at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, and stable memory mutation predicates for `memory.purge`, `memory.repair.*`, and `memory.compact.*` at dispatch. Other scope predicates remain compatibility metadata until their dispatch semantics stabilize.
 
 ## Scope Envelope
 
@@ -61,9 +61,11 @@ Use for memory reads, writes, repair, compaction, and purge.
 Rules:
 
 - `tiers` is optional; absent means every tier allowed by the action.
-- `record_id` narrows repair or delete operations to one record.
-- `before_ms` narrows retention operations.
-- `apply` distinguishes dry-run grants from mutation grants.
+- `record_id` narrows repair operations to one record.
+- `before_ms` narrows purge and compaction cutoffs. On repair scopes it means the target record must be older than the cutoff.
+- `apply` distinguishes dry-run grants from mutation grants. `memory.purge` is always a mutation and requires `apply: true` when the field is present.
+- A tier-scoped `memory.purge` grant only permits purging that tier. An un-tiered purge request requires the scope to include all tiers.
+- A tier-scoped `memory.compact.*` grant only permits policies that touch the listed tiers. `detach_stale_parents` with an explicit tier scope requires all tiers because parent detaches are not tier-isolated.
 
 ### `a2a.*`
 
@@ -148,7 +150,7 @@ Rules:
 2. Validate non-empty scopes at grant time for known action namespaces.
 3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
-5. Add dispatch-time checks for the next stable action families.
+5. Interpret stable `memory.purge`, `memory.repair.*`, and `memory.compact.*` scope predicates at dispatch.
 6. Fail closed for malformed versioned scopes after a migration window.
 7. Keep action-only checks as the fallback only for unscoped operator grants.
 

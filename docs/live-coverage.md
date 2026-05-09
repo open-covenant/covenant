@@ -45,7 +45,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | --- | --- | --- | --- |
 | Daemon IPC core | Covered | daemon ping/intent, CLI ping JSON, CLI intent, CLI intent JSON, CLI resume JSON, CLI version | Resume-success fixture once budget refill semantics can be exercised without long sleeps. |
 | State verifier | Covered | CLI `verify --json` healthy, drift, and targeted repair paths on a real daemon | Typed repair command hints once verifier repair action schemas stabilize. |
-| Memory retention | Covered | CLI memory read JSON, CLI memory purge JSON | Live repair and compaction fixtures that assert memory/audit/receipt consistency. |
+| Memory retention | Covered | CLI memory read JSON, purge JSON, and compaction dry-run/apply | Exact memory-record to settlement-receipt correlation once receipts carry memory ids. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit purge JSON, audit recent, audit recent JSON, audit verify | Scoped audit purge rejection coverage once retention policy defaults are stable. |

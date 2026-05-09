@@ -39,10 +39,11 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_cli_memory_read_json.rs",
-        "agent-os/crates/covenantd/tests/live_cli_memory_purge_json.rs"
+        "agent-os/crates/covenantd/tests/live_cli_memory_purge_json.rs",
+        "agent-os/crates/covenantd/tests/live_cli_memory_compaction.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live repair and compaction fixtures that assert memory/audit/receipt consistency."
+      "nextGap": "Add exact memory-record to settlement-receipt correlation once receipts carry memory ids."
     },
     {
       "id": "http-gateway",

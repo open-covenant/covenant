@@ -108,6 +108,13 @@ A2ATaskResult {
         exposure are the next hardening step; automatic retry remains
         disabled.
       </p>
+      <p>
+        Automatic retry stays disabled until tasks can declare duplicate
+        safety and carry a stable idempotency key. Without that metadata,
+        retry can double-spend external side effects; the operator must
+        choose <code>idempotent</code> vs <code>operator_accepted</code>{" "}
+        explicitly when requeueing.
+      </p>
 
       <h2>Daemon-mediated flow</h2>
       <pre>

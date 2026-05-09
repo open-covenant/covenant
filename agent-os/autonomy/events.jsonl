@@ -731,3 +731,10 @@
 {"timestamp":"2026-05-09T21:25:05.413Z","taskId":"alpha-release-evidence-script","from":"self_review","to":"validation","actorRole":"verifier","note":"Validation: validate.sh --quick, pnpm landing build, validate-autonomy, git diff --check."}
 {"timestamp":"2026-05-09T21:25:09.386Z","taskId":"alpha-release-evidence-script","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate: read-only alpha evidence helper added; no tagging/publishing behavior."}
 {"timestamp":"2026-05-09T21:25:38.193Z","taskId":"alpha-release-evidence-script","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated on main (commit 8db821a)."}
+{"timestamp":"2026-05-09T21:29:13.215Z","taskId":"a2a-idempotency-policy","from":null,"to":"proposed","actorRole":"planner","note":"Seeded from backlog template."}
+{"timestamp":"2026-05-09T21:29:51.663Z","taskId":"a2a-idempotency-policy","from":"proposed","to":"triaged","actorRole":"planner","note":"Idempotency scope and metadata defined"}
+{"timestamp":"2026-05-09T21:29:51.719Z","taskId":"a2a-idempotency-policy","from":"triaged","to":"planned","actorRole":"planner","note":"Write policy doc + seed follow-up tasks"}
+{"timestamp":"2026-05-09T21:29:51.775Z","taskId":"a2a-idempotency-policy","from":"planned","to":"in_progress","actorRole":"implementer","note":"Draft policy and backlog entries"}
+{"timestamp":"2026-05-09T21:31:55.462Z","taskId":"a2a-idempotency-policy","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Policy doc drafted; backlog tasks seeded"}
+{"timestamp":"2026-05-09T21:31:55.520Z","taskId":"a2a-idempotency-policy","from":"self_review","to":"validation","actorRole":"verifier","note":"validate-autonomy + landing build"}
+{"timestamp":"2026-05-09T21:31:55.575Z","taskId":"a2a-idempotency-policy","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate"}

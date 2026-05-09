@@ -72,23 +72,29 @@ async fn live_covenantd_rejects_when_budget_exhausted() {
 
     let agents_dir = home.path().join("agents").join("research");
     std::fs::create_dir_all(&agents_dir).expect("agents dir");
-    let manifest = format!(
-        r#"
+    let staged = agents_dir.join("research");
+    std::fs::copy(&bin, &staged).expect("stage research binary");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&staged).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&staged, perms).unwrap();
+    }
+    let manifest = r#"
 [agent]
 id = "research"
 name = "Research Agent"
 version = "0.0.1"
 runtime = "rust-bin"
-entry = "{}"
+entry = "research"
 
 [capabilities]
 required = ["tool.web_search"]
 
 [settlement]
 budget_credits_per_hour = 1
-"#,
-        bin.display()
-    );
+"#;
     std::fs::write(agents_dir.join("agent.toml"), manifest).expect("write manifest");
 
     let exe = env!("CARGO_BIN_EXE_covenantd");

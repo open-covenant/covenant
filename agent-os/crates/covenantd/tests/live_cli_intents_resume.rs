@@ -1,12 +1,17 @@
 //! Live integration test: spawns covenantd against a tempdir HOME with a
-//! research-agent manifest registered, grants the cap, dispatches a
-//! matching intent, and asserts the response came from the agent's canned
-//! fallback (not the echo path).
+//! research-agent manifest pinned to `budget_credits_per_hour = 1`,
+//! exhausts the budget to mint a `BudgetExhausted` audit row, then runs
+//! `covenant intents resume latest` as a subprocess and asserts the CLI
+//! locates the row (instead of failing with "no BudgetExhausted audit row").
 //!
-//! Hermetic — no Ollama / Brave / SerpAPI required; the research agent
-//! detects mock providers and returns `"research stub processed: <text>"`.
-//! `#[ignore]`'d. Run with
-//! `cargo test -p covenantd --test live_agent_dispatch -- --ignored live_`.
+//! Closes the gap between the IPC-level resume plumbing in
+//! `live_budget_enforcement.rs` and the CLI's `intents resume` verb.
+//! Hermetic — the research agent falls back to canned text when no
+//! providers are configured. `#[ignore]`'d. Build prereqs:
+//! `cargo build -p covenant -p research-agent`.
+//!
+//! Run with:
+//! `cargo test -p covenantd --test live_cli_intents_resume -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use std::path::PathBuf;
@@ -16,16 +21,14 @@ use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-fn pick_free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
-    l.local_addr().unwrap().port()
+fn covenant_cli_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/covenant")
+        .canonicalize()
+        .expect("covenant CLI binary not built; run `cargo build -p covenant` first")
 }
 
 fn research_agent_bin() -> PathBuf {
-    // CARGO_MANIFEST_DIR for this crate is `crates/covenantd`. The research
-    // binary is at `target/<profile>/research`. `cargo test` builds debug by
-    // default; if a future invocation uses `--release`, this path won't
-    // exist and the test will fail loudly — preferable to a silent skip.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug/research")
         .canonicalize()
@@ -68,18 +71,15 @@ async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd + dispatches to a real research-agent subprocess"]
-async fn live_covenantd_dispatches_to_research_agent() {
+#[ignore = "live: spawns covenantd + runs `covenant intents resume latest` subprocess"]
+async fn live_cli_intents_resume_latest_round_trip() {
     let home = tempfile::tempdir().expect("tempdir");
-    let port = pick_free_port();
-    let bin = research_agent_bin();
+    let research_bin = research_agent_bin();
 
-    // Register a research agent in the tempdir HOME. The router reads
-    // each subdirectory under `agents/` for an `agent.toml`.
     let agents_dir = home.path().join("agents").join("research");
     std::fs::create_dir_all(&agents_dir).expect("agents dir");
     let staged = agents_dir.join("research");
-    std::fs::copy(&bin, &staged).expect("stage research binary");
+    std::fs::copy(&research_bin, &staged).expect("stage research binary");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -97,13 +97,16 @@ entry = "research"
 
 [capabilities]
 required = ["tool.web_search"]
+
+[settlement]
+budget_credits_per_hour = 1
 "#;
     std::fs::write(agents_dir.join("agent.toml"), manifest).expect("write manifest");
 
-    let exe = env!("CARGO_BIN_EXE_covenantd");
-    let mut child = Command::new(exe)
+    let daemon_exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(daemon_exe)
         .env("COVENANT_HOME", home.path())
-        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("COVENANT_HTTP_PORT", "0")
         .env("HOME", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -121,7 +124,6 @@ required = ["tool.web_search"]
     let mut stream = UnixStream::connect(&sock).await.expect("connect");
     authenticate(&mut stream, home.path()).await;
 
-    // Grant the research agent's required capability.
     write_frame(
         &mut stream,
         &Request::GrantCapability {
@@ -135,8 +137,6 @@ required = ["tool.web_search"]
     let g: Response = read_frame(&mut stream).await.unwrap();
     assert!(matches!(g, Response::CapabilityGranted { .. }), "{g:?}");
 
-    // Submit an intent that matches the agent's keywords ("papers" maps
-    // to tool.web_search → research agent).
     write_frame(
         &mut stream,
         &Request::SubmitIntent {
@@ -145,53 +145,61 @@ required = ["tool.web_search"]
     )
     .await
     .unwrap();
-    let r: Response = read_frame(&mut stream).await.unwrap();
-    match r {
-        Response::IntentResult { text, status, .. } => {
-            assert_eq!(status, "ok");
-            // The agent's output varies by what's reachable in the
-            // operator's env: pure-mock returns "research stub processed",
-            // a reachable Ollama with a missing model returns "research
-            // agent fell back to canned response (...)". The contract this
-            // test is verifying is "the daemon dispatched to the agent, not
-            // the echo fallback" — both forms of agent output start with or
-            // contain "research".
-            assert!(
-                text.to_lowercase().contains("research"),
-                "expected research-agent output, got {text:?}"
-            );
-            assert!(
-                !text.contains("no agent matched"),
-                "echo fallback fired; agent dispatch did not happen: {text:?}"
-            );
-        }
-        other => panic!("unexpected response: {other:?}"),
-    }
+    let r1: Response = read_frame(&mut stream).await.unwrap();
+    assert!(
+        matches!(r1, Response::IntentResult { ref status, .. } if status == "ok"),
+        "first dispatch must pass, got {r1:?}"
+    );
 
-    // Memory + receipt should each have one entry now.
     write_frame(
         &mut stream,
-        &Request::RecentMemory {
-            tier: None,
-            limit: 10,
+        &Request::SubmitIntent {
+            text: "find another batch of papers on agent memory".into(),
         },
     )
     .await
     .unwrap();
-    let mem: Response = read_frame(&mut stream).await.unwrap();
-    match mem {
-        Response::Memories { records } => assert_eq!(records.len(), 1),
-        other => panic!("unexpected: {other:?}"),
-    }
-    write_frame(&mut stream, &Request::RecentReceipts { limit: 10 })
-        .await
-        .unwrap();
-    let rec: Response = read_frame(&mut stream).await.unwrap();
-    match rec {
-        Response::Receipts { receipts } => assert_eq!(receipts.len(), 1),
-        other => panic!("unexpected: {other:?}"),
-    }
+    let r2: Response = read_frame(&mut stream).await.unwrap();
+    let rejected_msg = match r2 {
+        Response::Error { message } => message,
+        other => panic!("expected Error from exhausted dispatch, got {other:?}"),
+    };
+    assert!(
+        rejected_msg.contains("budget exhausted"),
+        "expected budget-exhaustion message, got {rejected_msg:?}"
+    );
 
     drop(stream);
+
+    let cli_exe = covenant_cli_bin();
+    let cli_out = Command::new(&cli_exe)
+        .arg("intents")
+        .arg("resume")
+        .arg("latest")
+        .env("COVENANT_HOME", home.path())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("spawn covenant CLI (intents resume latest)");
+    let stdout = String::from_utf8_lossy(&cli_out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&cli_out.stderr).to_string();
+
+    assert!(
+        !cli_out.status.success(),
+        "resume latest should exit non-zero while bucket remains empty; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    assert!(
+        stderr.contains("budget exhausted"),
+        "stderr missing budget exhaustion error; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        !stderr.contains("no BudgetExhausted audit row"),
+        "stderr suggests resume did not locate the audit row; stdout={stdout:?} stderr={stderr:?}"
+    );
+
     let _ = child.kill().await;
 }

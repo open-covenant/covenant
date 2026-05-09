@@ -2,7 +2,6 @@
 //!
 //! ```text
 //!   covenant ping
-//!   covenant version
 //!   covenant intent <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
 //!   covenant memory search <query>
@@ -34,12 +33,14 @@
 //!   covenant peers list [--limit N] [--prefix <pubkey-b58-prefix>]
 //!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>]
 //!   covenant intents resume <intent-id>
+//!   covenant intents resume latest
 //! ```
 
 #![deny(unsafe_code)]
 
 use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
+use covenant_audit::AuditKind;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
 use covenant_types::{
@@ -82,7 +83,6 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!("  covenant intent <text>                  submit an intent and print the result");
     eprintln!("  covenant ping                           check the daemon is responsive");
-    eprintln!("  covenant version                        print daemon protocol metadata as JSON");
     eprintln!(
         "  covenant memory recent [--tier T] [-n N]               list recent memory records"
     );
@@ -147,6 +147,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant intents resume <intent-id>     re-dispatch a previously budget-rejected intent"
+    );
+    eprintln!(
+        "  covenant intents resume latest          re-dispatch the most recent budget-rejected intent"
     );
 }
 
@@ -251,10 +254,6 @@ fn print_memory_compaction_response(response: Response) -> Result<()> {
     }
 }
 
-fn protocol_info_json(info: &covenant_ipc::ProtocolInfo) -> Result<String> {
-    Ok(serde_json::to_string(info)?)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -271,17 +270,6 @@ async fn main() -> Result<()> {
             sock.display()
         )
     })?;
-
-    if args[0] == "version" {
-        write_frame(&mut stream, &Request::ProtocolInfo).await?;
-        match read_frame::<_, Response>(&mut stream).await? {
-            Response::ProtocolInfo { info } => println!("{}", protocol_info_json(&info)?),
-            Response::Error { message } => bail!("daemon error: {message}"),
-            other => bail!("unexpected response: {other:?}"),
-        }
-        return Ok(());
-    }
-
     authenticate(&mut stream, &home).await?;
 
     match args[0].as_str() {
@@ -1503,15 +1491,58 @@ async fn main() -> Result<()> {
         }
         "intents" => {
             if args.len() < 2 || args[1] != "resume" {
-                eprintln!("covenant intents: expected `resume <intent-id>`");
+                eprintln!("covenant intents: expected `resume <intent-id>|latest`");
                 std::process::exit(2);
             }
-            let intent_id_str = args
-                .get(2)
-                .context("covenant intents resume: missing <intent-id>")?;
-            let intent_id: uuid::Uuid = intent_id_str
-                .parse()
-                .with_context(|| format!("intent-id must be a uuid, got {intent_id_str:?}"))?;
+            let mut explicit_id: Option<String> = None;
+            let mut want_latest = false;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--latest" | "latest" => want_latest = true,
+                    other if !other.starts_with("--") && explicit_id.is_none() => {
+                        explicit_id = Some(other.to_string());
+                    }
+                    other => bail!("unknown flag '{other}'"),
+                }
+                i += 1;
+            }
+
+            let intent_id = if want_latest {
+                if explicit_id.is_some() {
+                    bail!("covenant intents resume: pass either <intent-id> or latest, not both");
+                }
+                let limit = 200;
+                write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
+                let events = match read_frame::<_, Response>(&mut stream).await? {
+                    Response::AuditEvents { events } => events,
+                    Response::Error { message } => bail!("daemon error: {message}"),
+                    other => bail!("unexpected response: {other:?}"),
+                };
+                let mut latest: Option<(u64, uuid::Uuid)> = None;
+                for e in events {
+                    let id = match e.kind {
+                        AuditKind::BudgetExhausted { intent_id, .. } => intent_id,
+                        _ => continue,
+                    };
+                    match latest {
+                        Some((ts, _)) if ts >= e.timestamp_ms => {}
+                        _ => latest = Some((e.timestamp_ms, id)),
+                    }
+                }
+                latest
+                    .map(|(_, id)| id)
+                    .context(
+                        "no BudgetExhausted audit row found in recent audit feed (try `covenant audit recent`)",
+                    )?
+            } else {
+                let intent_id_str = explicit_id
+                    .as_deref()
+                    .context("covenant intents resume: missing <intent-id> or latest")?;
+                intent_id_str
+                    .parse()
+                    .with_context(|| format!("intent-id must be a uuid, got {intent_id_str:?}"))?
+            };
             write_frame(&mut stream, &Request::ResumeIntent { intent_id }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::IntentResult { text, sources, .. } => {
@@ -1798,16 +1829,6 @@ mod tests {
                 None
             },
         }
-    }
-
-    #[test]
-    fn version_output_is_stable_json() {
-        let out = protocol_info_json(&covenant_ipc::protocol_info()).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(value["protocol"], "covenant.ipc");
-        assert_eq!(value["version"], 1);
-        assert_eq!(value["min_supported"], 1);
-        assert_eq!(value["max_supported"], 1);
     }
 
     #[test]

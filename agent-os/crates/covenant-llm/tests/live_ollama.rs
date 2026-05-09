@@ -5,6 +5,36 @@
 //! `cargo test -p covenant-llm -- --ignored live_`.
 
 use covenant_llm::{ChatMessage, Embedder, OllamaEmbedder, OllamaProvider, Provider};
+use serde_json::Value;
+
+async fn assert_model_available(model: &str) {
+    let tags: Value = reqwest::get("http://localhost:11434/api/tags")
+        .await
+        .unwrap_or_else(|e| panic!("ollama unreachable at http://localhost:11434: {e}"))
+        .json()
+        .await
+        .unwrap_or_else(|e| panic!("ollama tags returned invalid json: {e}"));
+    let models = tags["models"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ollama tags response missing models array: {tags:?}"));
+    let want = if model.contains(':') {
+        model.to_string()
+    } else {
+        format!("{model}:latest")
+    };
+    let found = models.iter().any(|m| {
+        m.get("name")
+            .and_then(|v| v.as_str())
+            .is_some_and(|name| name == want || name == model)
+            || m.get("model")
+                .and_then(|v| v.as_str())
+                .is_some_and(|name| name == want || name == model)
+    });
+    assert!(
+        found,
+        "ollama model {want:?} is not available; run `ollama pull {want}` first"
+    );
+}
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -20,6 +50,7 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 #[tokio::test]
 #[ignore = "live: needs Ollama running with nomic-embed-text"]
 async fn live_ollama_embeds_real_text() {
+    assert_model_available("nomic-embed-text").await;
     let e = OllamaEmbedder::local("nomic-embed-text");
     let v = e
         .embed("agent memory and retrieval")
@@ -36,6 +67,7 @@ async fn live_ollama_embeds_real_text() {
 #[tokio::test]
 #[ignore = "live: needs Ollama running with nomic-embed-text"]
 async fn live_ollama_semantic_similarity_holds() {
+    assert_model_available("nomic-embed-text").await;
     let e = OllamaEmbedder::local("nomic-embed-text");
     let q1 = e.embed("agent memory retrieval").await.unwrap();
     let q2 = e.embed("how do agents recall information").await.unwrap();
@@ -59,6 +91,7 @@ async fn live_ollama_semantic_similarity_holds() {
 #[tokio::test]
 #[ignore = "live: needs Ollama running with qwen2.5:7b"]
 async fn live_ollama_chat_completes() {
+    assert_model_available("qwen2.5:7b").await;
     let p = OllamaProvider::local("qwen2.5:7b");
     let r = p
         .complete(&[

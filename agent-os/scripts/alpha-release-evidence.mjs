@@ -67,7 +67,7 @@ function main() {
   const commands = [
     "bash agent-os/scripts/validate.sh --quick",
     "pnpm --dir landing build",
-    "node agent-os/scripts/probe-ollama.mjs",
+    "node agent-os/scripts/model-availability.mjs",
     "cd agent-os && cargo test --workspace --exclude covenant-settlement-program -- --ignored live_",
   ];
 

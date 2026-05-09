@@ -10,7 +10,7 @@
     "docs",
     "landing/app/docs"
   ],
-  "summary": "Add explicit local model availability probes so opt-in Ollama live tests report missing models clearly before expanding model coverage.",
+  "summary": "Add explicit local model availability probes so opt-in Ollama live tests and release evidence report missing models clearly before expanding model coverage.",
   "expectedFailureModes": [
     "Live Ollama tests fail with generic connection or model errors that look like code regressions.",
     "Contributors cannot preflight required local models before running live coverage.",

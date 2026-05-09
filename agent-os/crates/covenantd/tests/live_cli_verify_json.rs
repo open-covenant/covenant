@@ -243,6 +243,129 @@ async fn live_cli_verify_json_reports_drift_after_audit_loss() {
     let _ = restarted.kill().await;
 }
 
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, purges memory, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_drift_after_memory_purge() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    for action in ["memory.write", "memory.purge"] {
+        let output = run_cli_raw(
+            &cli_exe,
+            home.path(),
+            &["capabilities", "grant", action, "--json"],
+        )
+        .await;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        assert!(
+            output.status.success(),
+            "capabilities grant failed: action={action} status={:?} stdout={stdout:?} stderr={stderr:?}",
+            output.status
+        );
+        assert!(
+            stderr.trim().is_empty(),
+            "capabilities grant must not emit stderr on success: {stderr:?}"
+        );
+        let value: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+            panic!("capabilities grant --json must be valid JSON: {e}: {stdout:?}")
+        });
+        assert_eq!(value["kind"].as_str(), Some("capability_granted"));
+        assert_eq!(value["action"].as_str(), Some(action));
+    }
+
+    let intent_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "drift fixture: baseline"],
+    )
+    .await;
+    let intent_stdout = String::from_utf8_lossy(&intent_output.stdout).to_string();
+    let intent_stderr = String::from_utf8_lossy(&intent_output.stderr).to_string();
+    assert!(
+        intent_output.status.success(),
+        "intent failed: status={:?} stdout={intent_stdout:?} stderr={intent_stderr:?}",
+        intent_output.status
+    );
+    assert!(
+        intent_stderr.trim().is_empty(),
+        "intent --json must not emit stderr on success: {intent_stderr:?}"
+    );
+    let intent_json: Value = serde_json::from_str(intent_stdout.trim())
+        .expect("intent --json must be valid JSON");
+    assert_eq!(intent_json["kind"].as_str(), Some("intent_result"));
+    let intent_id = intent_json["intent_id"]
+        .as_str()
+        .expect("intent_result.intent_id must be a string");
+
+    let purge_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["memory", "purge", "--before-ms", "9999999999999", "--json"],
+    )
+    .await;
+    let purge_stdout = String::from_utf8_lossy(&purge_output.stdout).to_string();
+    let purge_stderr = String::from_utf8_lossy(&purge_output.stderr).to_string();
+    assert!(
+        purge_output.status.success(),
+        "memory purge failed: status={:?} stdout={purge_stdout:?} stderr={purge_stderr:?}",
+        purge_output.status
+    );
+    assert!(
+        purge_stderr.trim().is_empty(),
+        "memory purge --json must not emit stderr on success: {purge_stderr:?}"
+    );
+    let purge_json: Value = serde_json::from_str(purge_stdout.trim())
+        .expect("memory purge --json must be valid JSON");
+    assert_eq!(purge_json["kind"].as_str(), Some("memory_purged"));
+
+    let output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "100"],
+    )
+    .await;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        !output.status.success(),
+        "verify --json should exit non-zero when drift exists: status={:?} stdout={stdout:?} stderr={stderr:?}",
+        output.status
+    );
+    assert!(
+        stderr.trim().is_empty(),
+        "verify --json should report drift on stdout without stderr noise: {stderr:?}"
+    );
+
+    let value: Value = serde_json::from_str(stdout.trim())
+        .expect("verify --json drift stdout must be JSON");
+    assert_eq!(value["kind"].as_str(), Some("verify_report"));
+    assert_eq!(value["window"].as_u64(), Some(100));
+    assert!(
+        value["orphans_total"].as_u64().unwrap_or(0) > 0,
+        "memory purge drift should report orphans_total > 0: {value:?}"
+    );
+
+    let drift = value["drift"].as_array().expect("drift array");
+    assert!(
+        drift.iter().any(|item| {
+            item["kind"].as_str() == Some("audit_without_memory")
+                && item["id"].as_str() == Some(intent_id)
+                && item["repair"]
+                    .as_str()
+                    .is_some_and(|repair| !repair.trim().is_empty())
+        }),
+        "expected audit_without_memory drift for {intent_id}: {value:?}"
+    );
+
+    let _ = child.kill().await;
+}
+
 #[tokio::test]
 #[ignore = "live: spawns covenantd, injects stale memory, repairs it through CLI, and verifies again"]
 async fn live_cli_verify_json_repair_clears_stale_parent_drift() {

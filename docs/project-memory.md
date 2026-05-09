@@ -64,6 +64,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
+- [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.

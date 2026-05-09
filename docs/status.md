@@ -8,7 +8,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | IPC and HTTP gateway | Implemented | `covenant-ipc`, unauthenticated `protocol_info`, HTTP `/version`, daemon and gateway tests | Compatibility fixtures for stale clients and schema defaults. |
 | Identity and peer auth | Implemented | `covenant-identity`, `covenant-peer-auth`, token rotation tests | Public attestation and key provenance. |
 | Signed capabilities | Implemented, hardening | `covenant-permissions`, capability enforcement tests, `docs/capabilities.md` scope contract | Validate versioned scopes at grant time, then enforce stable predicates at dispatch. |
-| Audit log | Implemented, hardening | `covenant-audit`, daemon audit event tests, local hash-chain sidecar, CLI/HTTP/IPC integrity report | Public root signing, transparency-log publication, and immutable retention policy. |
+| Audit log | Implemented, hardening | `covenant-audit`, daemon audit event tests, local hash-chain sidecar, CLI/HTTP/IPC integrity report, ADR 0004 signing policy | Implement `audit-root-attestation.v1`, project signing, verifier support, and later transparency-log publication. |
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports, daemon/HTTP/CLI repair commands, bounded daemon/HTTP/CLI compaction commands, repair and compaction audit rows | Automatic compaction schedules and exact record-to-receipt correlation. |
 | Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout and malformed-stdout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
@@ -18,7 +18,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
 | Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, git identity validator, local pre-push guard | Signed review artifacts and stronger sprint summaries. |
 | Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, external-service gVisor coverage entry | Document a repeatable Linux runner for gVisor validation and keep adding mutation-edge live tests where policies are stable. |
-| Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations` | Signing identity policy, release artifact subjects, transparency-log publication. |
+| Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations`, ADR 0004 audit-root signing policy | Implement signed audit-root attestations and release artifact subjects. |
 | Installer and SDK ecosystem | Planned | No stable release path | Define alpha release contract after sandbox and settlement boundaries harden. |
 
 ## Validation Signals

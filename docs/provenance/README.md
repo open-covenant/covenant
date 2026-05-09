@@ -47,3 +47,5 @@ node agent-os/scripts/provenance.mjs verify-all
 - Envelopes are not transparency-log entries.
 - Validation entries record evidence from the producing operator or automation; the verifier checks envelope consistency, not whether every command was re-run.
 - Release artifact subjects are not included yet.
+
+Audit root signing is planned separately in [ADR 0004](../decisions/0004-audit-root-signing-policy.md). The intended first format is a detached release-scoped root attestation signed by a project identity, then published to a transparency log after local signing and verification are stable.

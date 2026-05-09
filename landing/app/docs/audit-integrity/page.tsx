@@ -53,6 +53,16 @@ Authorization: Bearer <operator-token>`}</code>
         transparency log.
       </p>
 
+      <h2>Root signing direction</h2>
+      <p>
+        The planned public path is detached audit-root attestations:
+        a release-scoped JSON payload that binds the retained event count,
+        anchor count, root hash, subject commit, task or release id,
+        timestamp, and signing key id. Those payloads are not implemented
+        yet. Until the generator, project signing identity, and verifier
+        land, audit roots remain local integrity evidence only.
+      </p>
+
       <h2>Related</h2>
       <ul>
         <li>

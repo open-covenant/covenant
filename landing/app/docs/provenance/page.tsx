@@ -45,6 +45,13 @@ node agent-os/scripts/provenance.mjs verify --file docs/provenance/attestations/
         publication remain future work.
       </p>
 
+      <p>
+        Audit root signing is planned as a separate release hardening path:
+        detached root attestations signed by a project identity, followed by
+        transparency-log publication once local signing and verification are
+        stable.
+      </p>
+
       <h2>Related</h2>
       <ul>
         <li>

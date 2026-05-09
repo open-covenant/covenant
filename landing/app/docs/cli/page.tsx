@@ -38,7 +38,7 @@ export default function CliPage() {
                                      List recent capability tokens.
   capabilities grant <action>
         [--scope <json>]
-        [--expires-at <ms>]          Sign and persist a new capability.
+        [--expires-at <ms>] [--json] Sign and persist a new capability.
   capabilities revoke <signature-b58>
                                      Tombstone a previously granted token.
   capabilities purge
@@ -223,6 +223,10 @@ revoked 4qXP...8tF1 (removed=true)`}</code>
         <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":true}'
 granted: user@local → memory.write
 signature: 4qXP...8tF1`}</code>
+      </pre>
+      <pre>
+        <code>{`$ covenant capabilities grant memory.write --scope '{"version":1,"tiers":["working"],"apply":true}' --json
+{"kind":"capability_granted","subject_display":"user@local","action":"memory.write","signature_b58":"...","scope":{"version":1,"tiers":["working"],"apply":true},"expires_at":null}`}</code>
       </pre>
 
       <h3>Inspect active capabilities as JSON</h3>

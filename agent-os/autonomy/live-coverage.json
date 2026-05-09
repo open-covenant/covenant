@@ -64,6 +64,7 @@
         "agent-os/crates/covenant/src/main.rs"
       ],
       "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_capabilities_grant_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_capabilities_grant_with_expiry.rs",
         "agent-os/crates/covenantd/tests/live_cli_capabilities_purge_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_capabilities_recent.rs",

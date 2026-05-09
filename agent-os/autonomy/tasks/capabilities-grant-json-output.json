@@ -1,0 +1,37 @@
+{
+  "id": "capabilities-grant-json-output",
+  "title": "Add JSON output for capability grants",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd/tests",
+    "agent-os/autonomy/live-coverage.json",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add stable machine-readable output for `covenant capabilities grant --json` so delegation setup can capture the granted action and signature without parsing human lines.",
+  "expectedFailureModes": [
+    "Automation scrapes `signature: ...` from human stdout and breaks when wording changes.",
+    "`--json` drops the effective action after A2A peer-prefix expansion.",
+    "Grant JSON omits scope or expiry values, making delegated permission evidence harder to replay."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "cd agent-os && cargo test -p covenant --locked capability_grant_json",
+    "cd agent-os && cargo build -p covenant --locked",
+    "cd agent-os && cargo test -p covenantd --test live_cli_capabilities_grant_json --locked -- --ignored live_",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-live-coverage.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "bash agent-os/scripts/validate.sh --quick",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue with the next autonomous backlog item.",
+  "updated": "2026-05-09"
+}

@@ -11,7 +11,7 @@
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
 //!   covenant capabilities recent [--limit N] [--json]
-//!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>]
+//!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] [--json]
 //!   covenant capabilities revoke <signature-b58>
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant receipts recent [--limit N] [--json]
@@ -130,7 +130,7 @@ fn print_usage() {
     eprintln!(
         "  covenant capabilities recent [-n N] [--json]  list recent active capability tokens"
     );
-    eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M]");
+    eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M] [--json]");
     eprintln!("  covenant capabilities revoke <signature-b58>");
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
@@ -757,6 +757,7 @@ async fn main() -> Result<()> {
                     let action = args[2].clone();
                     let mut scope: Option<serde_json::Value> = None;
                     let mut expires_at: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -774,6 +775,7 @@ async fn main() -> Result<()> {
                                         .context("--expires-at must be an integer (epoch ms)")?,
                                 );
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -815,8 +817,8 @@ async fn main() -> Result<()> {
                     write_frame(
                         &mut stream,
                         &Request::GrantCapability {
-                            action,
-                            scope,
+                            action: action.clone(),
+                            scope: scope.clone(),
                             expires_at,
                         },
                     )
@@ -827,8 +829,21 @@ async fn main() -> Result<()> {
                             subject_display,
                             action,
                         } => {
-                            println!("granted: {subject_display} → {action}");
-                            println!("signature: {signature_b58}");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&capability_grant_json(
+                                        &subject_display,
+                                        &action,
+                                        &signature_b58,
+                                        scope.as_ref(),
+                                        expires_at,
+                                    ))?
+                                );
+                            } else {
+                                println!("granted: {subject_display} → {action}");
+                                println!("signature: {signature_b58}");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -2165,6 +2180,23 @@ fn capability_list_json(limit: usize, capabilities: &[SignedCapability]) -> serd
     })
 }
 
+fn capability_grant_json(
+    subject_display: &str,
+    action: &str,
+    signature_b58: &str,
+    scope: Option<&serde_json::Value>,
+    expires_at: Option<u64>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "capability_granted",
+        "subject_display": subject_display,
+        "action": action,
+        "signature_b58": signature_b58,
+        "scope": scope,
+        "expires_at": expires_at,
+    })
+}
+
 fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "capabilities_purged",
@@ -2774,6 +2806,29 @@ mod tests {
         assert!(value["capabilities"][0]["signature"]
             .as_str()
             .is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn capability_grant_json_renders_stable_shape() {
+        let scope = serde_json::json!({"version": 1, "tools": ["echo"]});
+        let value = capability_grant_json(
+            "operator@local",
+            "tool.call.echo",
+            "sigb58",
+            Some(&scope),
+            Some(1_700_000_000_000),
+        );
+
+        assert_eq!(value["kind"], "capability_granted");
+        assert_eq!(value["subject_display"], "operator@local");
+        assert_eq!(value["action"], "tool.call.echo");
+        assert_eq!(value["signature_b58"], "sigb58");
+        assert_eq!(value["scope"]["version"], 1);
+        assert_eq!(value["expires_at"], 1_700_000_000_000u64);
+
+        let unscoped = capability_grant_json("operator@local", "memory.read", "sigb58", None, None);
+        assert!(unscoped["scope"].is_null());
+        assert!(unscoped["expires_at"].is_null());
     }
 
     #[test]

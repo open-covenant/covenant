@@ -1,7 +1,7 @@
 {
   "id": "memory-receipt-correlation",
   "title": "Correlate memory records with local receipts",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

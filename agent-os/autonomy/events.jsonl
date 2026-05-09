@@ -714,3 +714,4 @@
 {"timestamp":"2026-05-09T21:11:59.939Z","taskId":"memory-receipt-correlation","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed: SettlementReceipt gains optional memory_record_id; daemon populates it on memory writes; verifier uses correlated ids when present; docs updated."}
 {"timestamp":"2026-05-09T21:12:03.121Z","taskId":"memory-receipt-correlation","from":"self_review","to":"validation","actorRole":"verifier","note":"Validation: validate.sh --quick, pnpm landing build, cargo fmt, git diff --check."}
 {"timestamp":"2026-05-09T21:12:06.558Z","taskId":"memory-receipt-correlation","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate: receipts carry memory_record_id and verifier can join memory writes to receipts."}
+{"timestamp":"2026-05-09T21:12:40.368Z","taskId":"memory-receipt-correlation","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated on main (commit d515174)."}

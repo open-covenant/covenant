@@ -69,7 +69,8 @@ export default function CliPage() {
 
   verify [--window N] [--json]       Cross-check audit log vs other state.
 
-  audit recent [-n N]                List recent audit events as JSONL.
+  audit recent [-n N] [--json]       List recent audit events as JSONL
+                                     or one JSON envelope.
   audit verify                       Verify the local audit hash-chain.
   audit purge
         (--before-ms M
@@ -267,6 +268,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant audit verify
 {"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
+      </pre>
+
+      <h3>Read the audit feed</h3>
+      <pre>
+        <code>{`$ covenant audit recent --limit 5 --json
+{"kind":"audit_recent","limit":5,"events":[...]}`}</code>
       </pre>
 
       <h3>Purge old audit events</h3>

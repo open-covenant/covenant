@@ -85,6 +85,7 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_cli_audit_purge_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_audit_recent.rs",
+        "agent-os/crates/covenantd/tests/live_cli_audit_recent_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_audit_verify.rs"
       ],
       "status": "covered",

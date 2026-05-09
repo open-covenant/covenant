@@ -22,7 +22,7 @@
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
-//!   covenant audit recent [--limit N]
+//!   covenant audit recent [--limit N] [--json]
 //!   covenant audit verify
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
@@ -43,7 +43,7 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{
     A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest, A2ATaskQueueEntry, A2ATaskResult,
 };
-use covenant_audit::AuditKind;
+use covenant_audit::{AuditEvent, AuditKind};
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
     VerifyDrift,
@@ -121,7 +121,7 @@ fn print_usage() {
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
     eprintln!(
-        "  covenant audit recent [-n N]            list recent audit events as JSON lines (one per row, jq-friendly)"
+        "  covenant audit recent [-n N] [--json]   list recent audit events as JSONL or one JSON envelope"
     );
     eprintln!("  covenant audit verify                  verify local audit hash-chain sidecar");
     eprintln!(
@@ -1315,6 +1315,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "recent" => {
                     let mut limit: usize = 50;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1323,6 +1324,7 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1330,17 +1332,20 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditEvents { events } => {
-                            // One JSON line per event. The on-disk
-                            // `audit/events.jsonl` uses the same shape, so
-                            // a row read off the wire here matches what
-                            // grep/jq would surface against the file.
-                            // Universal renderer — every current and
-                            // future `AuditKind` variant ships unchanged.
-                            if events.is_empty() {
-                                println!("(no audit events)");
-                            }
-                            for e in events {
-                                println!("{}", serde_json::to_string(&e)?);
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&audit_recent_json(limit, &events))?
+                                );
+                            } else {
+                                // Default JSONL mirrors `audit/events.jsonl`, so tail/grep/jq
+                                // users see the same row shape as the durable log.
+                                if events.is_empty() {
+                                    println!("(no audit events)");
+                                }
+                                for e in events {
+                                    println!("{}", serde_json::to_string(&e)?);
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -2274,6 +2279,14 @@ fn audit_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     })
 }
 
+fn audit_recent_json(limit: usize, events: &[AuditEvent]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "audit_recent",
+        "limit": limit,
+        "events": events,
+    })
+}
+
 fn memory_purge_json(tier: Option<MemoryTier>, before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "memory_purged",
@@ -2932,6 +2945,31 @@ mod tests {
         assert_eq!(value["kind"], "audit_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn audit_recent_json_renders_stable_shape() {
+        let event = AuditEvent {
+            id: uuid::Uuid::nil(),
+            timestamp_ms: 1_700_000_000_000,
+            issuer: covenant_types::AgentId::new("operator@covenant", [7; 32]),
+            kind: AuditKind::CapabilityGranted {
+                subject_display: "operator@covenant".into(),
+                action: "tool.call.echo".into(),
+                granted_by_display: "operator@covenant".into(),
+                signature_b58: "sigb58".into(),
+            },
+        };
+
+        let value = audit_recent_json(5, &[event]);
+        assert_eq!(value["kind"], "audit_recent");
+        assert_eq!(value["limit"], 5);
+        assert_eq!(value["events"][0]["timestamp_ms"], 1_700_000_000_000u64);
+        assert_eq!(value["events"][0]["kind"]["type"], "capability_granted");
+        assert_eq!(value["events"][0]["kind"]["action"], "tool.call.echo");
+
+        let empty = audit_recent_json(5, &[]);
+        assert_eq!(empty["events"].as_array().unwrap().len(), 0);
     }
 
     #[test]

@@ -137,7 +137,7 @@ export default function AuditPage() {
 
       <h3>Last few events</h3>
       <pre>
-        <code>{`covenant tools call audit_recent --args '{"limit":5}'
+        <code>{`covenant audit recent --limit 5 --json
 # Or via HTTP:
 curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
       </pre>

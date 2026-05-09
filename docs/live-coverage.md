@@ -27,7 +27,7 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 | Surface | Status | Live coverage | Next gap |
 | --- | --- | --- | --- |
 | Daemon IPC core | Covered | `live_daemon.rs`, `live_cli_intent_dispatch.rs` | Resume-intent coverage after repair semantics settle. |
-| HTTP gateway | Covered | `live_http_gateway.rs`, `live_http_tools_call.rs` | High-risk mutation endpoints as retention and recovery policies stabilize. |
+| HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
 | CLI capability lifecycle | Covered | grant, grant with expiry, recent, revoke | Capability purge after retention defaults are decided. |
 | CLI audit feed | Covered | audit recent, audit verify | Audit purge after retention policy defaults are decided. |
 | Peer authentication and token lifecycle | Covered | auth rejection, revoke, CLI self-revoke rejection, restart revoke, token rotation | Forced self-revoke recovery only with isolated temp-home fixtures. |

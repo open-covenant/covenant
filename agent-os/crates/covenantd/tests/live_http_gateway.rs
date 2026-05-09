@@ -56,7 +56,7 @@ async fn wait_for_http(base: &str) {
 
 #[tokio::test]
 #[ignore = "live: spawns covenantd as a real subprocess"]
-async fn live_http_gateway_health_and_bearer_auth() {
+async fn live_http_gateway_health_version_and_bearer_auth() {
     let home = tempfile::tempdir().expect("tempdir");
     let port = pick_free_port();
     let base = format!("http://127.0.0.1:{port}");
@@ -88,6 +88,18 @@ async fn live_http_gateway_health_and_bearer_auth() {
         .await
         .expect("health json");
     assert_eq!(health["status"], "ok");
+
+    let version: Value = reqwest::get(format!("{base}/version"))
+        .await
+        .expect("version request")
+        .json()
+        .await
+        .expect("version json");
+    assert_eq!(version["kind"], "protocol_info");
+    assert_eq!(version["info"]["protocol"], "covenant.ipc");
+    assert_eq!(version["info"]["version"], 1);
+    assert_eq!(version["info"]["min_supported"], 1);
+    assert_eq!(version["info"]["max_supported"], 1);
 
     let denied = reqwest::get(format!("{base}/tools"))
         .await

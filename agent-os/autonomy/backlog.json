@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "live-cli-build-prereq-docs",
+      "title": "Document live CLI build prerequisites",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Make the live-test documentation explicit that cross-crate CLI live tests execute target/debug/covenant and therefore require cargo build -p covenant before targeted live runs.",
+      "expectedFailureModes": [
+        "A targeted live CLI test uses a stale target/debug/covenant binary.",
+        "Operators run the documented command and get a misleading unknown-command failure.",
+        "The full quick gate passes while an isolated live CLI command fails because the binary prerequisite is implicit."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Document the cargo build -p covenant prerequisite for targeted live CLI tests and update public live coverage docs.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "capability-scope-schema",
+      "title": "Define capability scope schemas",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "planner",
+      "scope": [
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Specify stable scope payload shapes for each capability action namespace before enforcing more granular signed permissions in code.",
+      "expectedFailureModes": [
+        "Capability scopes remain arbitrary JSON with no compatibility contract.",
+        "Future code enforcement rejects existing grants because no schema migration path exists.",
+        "Public docs imply scoped permissions are stronger than the current implementation can prove."
+      ],
+      "gates": [
+        "plan",
+        "docs",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Write the capability scope schema contract and mark any enforcement gaps explicitly.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "audit-root-signing-decision",
+      "title": "Define audit root signing policy",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "planner",
+      "scope": [
+        "docs/decisions",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Record the first public policy for signing audit roots and publishing verifiable provenance without overclaiming immutable transparency.",
+      "expectedFailureModes": [
+        "Audit integrity remains local-only while docs imply public verifiability.",
+        "Signing identity, key rotation, and root subject formats are left ambiguous.",
+        "Release artifacts cannot tie audit roots to task and commit provenance."
+      ],
+      "gates": [
+        "plan",
+        "docs",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an architecture decision record for audit root signing and update status/docs to match.",
+      "updated": "2026-05-09"
+    },
+    {
+      "id": "gvisor-linux-runner-docs",
+      "title": "Document repeatable Linux gVisor runner setup",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Document the repeatable Linux host prerequisites for the opt-in runsc/rootfs live sandbox test before making stronger sandbox claims.",
+      "expectedFailureModes": [
+        "The gVisor live test exists but cannot be reproduced by contributors.",
+        "Sandbox status claims outpace the tested Linux environment.",
+        "Rootfs, runsc, and environment variable prerequisites are scattered across test code."
+      ],
+      "gates": [
+        "docs",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Write the repeatable Linux gVisor live-test runner guide and link it from runtime sandbox docs.",
+      "updated": "2026-05-09"
+    }
+  ]
+}

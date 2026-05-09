@@ -35,23 +35,37 @@ const stateRank = new Map([
   ["proposed", 30]
 ]);
 
-const tasks = readdirSync(tasksDir)
-  .filter((file) => file.endsWith(".json"))
-  .map((file) => JSON.parse(readFileSync(join(tasksDir, file), "utf8")))
-  .filter((task) => !["integrated", "blocked"].includes(task.state))
-  .sort((a, b) => {
-    const byState = (stateRank.get(b.state) ?? 0) - (stateRank.get(a.state) ?? 0);
-    if (byState !== 0) return byState;
-    const byPriority = (priorityRank.get(b.priority) ?? 0) - (priorityRank.get(a.priority) ?? 0);
-    if (byPriority !== 0) return byPriority;
-    return a.id.localeCompare(b.id);
-  });
+const loadTasks = () =>
+  readdirSync(tasksDir)
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => JSON.parse(readFileSync(join(tasksDir, file), "utf8")))
+    .filter((task) => !["integrated", "blocked"].includes(task.state))
+    .sort((a, b) => {
+      const byState = (stateRank.get(b.state) ?? 0) - (stateRank.get(a.state) ?? 0);
+      if (byState !== 0) return byState;
+      const byPriority = (priorityRank.get(b.priority) ?? 0) - (priorityRank.get(a.priority) ?? 0);
+      if (byPriority !== 0) return byPriority;
+      return a.id.localeCompare(b.id);
+    });
 
-const next = tasks[0] ?? null;
+let next = loadTasks()[0] ?? null;
 
 if (!next) {
-  console.log("continuation: no unblocked autonomous task is ready");
-  process.exit(2);
+  const seeded = spawnSync(process.execPath, [join(root, "scripts", "autonomy-seed-next.mjs")], {
+    cwd: resolve(root, ".."),
+    encoding: "utf8"
+  });
+  process.stdout.write(seeded.stdout || "");
+  if (seeded.status !== 0) {
+    process.stderr.write(seeded.stderr || "");
+    console.log("continuation: no unblocked autonomous task is ready");
+    process.exit(seeded.status ?? 2);
+  }
+  next = loadTasks()[0] ?? null;
+  if (!next) {
+    console.log("continuation: seeded backlog task, but no unblocked autonomous task is ready");
+    process.exit(2);
+  }
 }
 
 console.log(`continuation: continue with ${next.id}`);

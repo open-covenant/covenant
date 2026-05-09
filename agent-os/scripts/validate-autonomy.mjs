@@ -7,6 +7,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const workflowPath = join(root, "autonomy", "workflow.json");
 const eventsPath = join(root, "autonomy", "events.jsonl");
+const backlogPath = join(root, "autonomy", "backlog.json");
 const tasksDir = join(root, "autonomy", "tasks");
 
 const forbiddenPatterns = [
@@ -187,6 +188,70 @@ for (const file of taskFiles) {
 
   if (!Array.isArray(task.humanEscalation)) {
     fail(path, "humanEscalation must be an array");
+  }
+}
+
+if (existsSync(backlogPath)) {
+  let backlog;
+  try {
+    backlog = readJson(backlogPath);
+  } catch (error) {
+    fail(backlogPath, `cannot parse backlog JSON: ${error.message}`);
+    backlog = {};
+  }
+
+  scanForbidden(backlogPath, backlog);
+
+  const backlogIds = new Set();
+  for (const [index, task] of assertArray(backlogPath, backlog.tasks, "tasks").entries()) {
+    const pointer = `tasks[${index}]`;
+    const id = assertString(backlogPath, task?.id, `${pointer}.id`);
+    if (id) {
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+        fail(backlogPath, `${pointer}.id must be lowercase kebab-case`);
+      }
+      if (backlogIds.has(id)) {
+        fail(backlogPath, `${pointer}.id duplicates another backlog template`);
+      }
+      backlogIds.add(id);
+    }
+
+    assertString(backlogPath, task?.title, `${pointer}.title`);
+    assertString(backlogPath, task?.summary, `${pointer}.summary`);
+    assertString(backlogPath, task?.nextAction, `${pointer}.nextAction`);
+
+    if (task?.state !== "proposed") {
+      fail(backlogPath, `${pointer}.state must be proposed`);
+    }
+
+    if (!priorities.has(task?.priority)) {
+      fail(backlogPath, `${pointer}.priority must be one of: ${[...priorities].join(", ")}`);
+    }
+
+    if (!roles.has(task?.ownerRole)) {
+      fail(backlogPath, `${pointer}.ownerRole must be one of: ${[...roles].join(", ")}`);
+    }
+
+    const scope = assertArray(backlogPath, task?.scope, `${pointer}.scope`);
+    for (const entry of scope) {
+      if (typeof entry !== "string" || entry.startsWith("/") || entry.includes("..")) {
+        fail(backlogPath, `${pointer}.scope entries must be relative repository paths: ${entry}`);
+      }
+    }
+
+    const gates = assertArray(backlogPath, task?.gates, `${pointer}.gates`);
+    for (const gate of gates) {
+      if (!gateNames.has(gate)) {
+        fail(backlogPath, `${pointer}.gates contains unknown gate: ${gate}`);
+      }
+    }
+
+    assertArray(backlogPath, task?.verification, `${pointer}.verification`);
+    assertArray(backlogPath, task?.expectedFailureModes, `${pointer}.expectedFailureModes`, 3);
+
+    if (!Array.isArray(task?.humanEscalation)) {
+      fail(backlogPath, `${pointer}.humanEscalation must be an array`);
+    }
   }
 }
 

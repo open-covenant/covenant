@@ -67,7 +67,8 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
-- [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): validated autonomous maintenance backlog.
+- [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
+- [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
 

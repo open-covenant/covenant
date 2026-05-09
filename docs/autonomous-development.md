@@ -4,12 +4,14 @@ Covenant treats autonomous software maintenance as an operating-layer problem. A
 
 This protocol is the public, tool-neutral version of the engineering loop. Local deployments may implement it with different agent clients, shells, signing policies, and review tools.
 
-The machine-readable workflow lives at [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json). The active autonomous backlog lives in [agent-os/autonomy/tasks](../agent-os/autonomy/tasks) and is validated by `node agent-os/scripts/validate-autonomy.mjs`.
+The machine-readable workflow lives at [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json). Active autonomous work lives in [agent-os/autonomy/tasks](../agent-os/autonomy/tasks). Durable seed templates live in [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json). Both are validated by `node agent-os/scripts/validate-autonomy.mjs`.
 
 Operational helpers:
 
 ```bash
 node agent-os/scripts/autonomy-next.mjs
+node agent-os/scripts/autonomy-continue.mjs
+node agent-os/scripts/autonomy-seed-next.mjs --dry-run
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/install-git-hooks.mjs --dry-run
@@ -18,6 +20,8 @@ node agent-os/scripts/provenance.mjs verify-all
 ```
 
 `autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
+
+`autonomy-continue.mjs` selects the highest-priority unblocked task. If every task is already integrated or blocked, it seeds the next template from `autonomy/backlog.json` through `autonomy-seed-next.mjs` and then returns that new proposed task. This keeps the loop moving without depending on chat history for the next work item.
 
 `provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
 
@@ -152,7 +156,8 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/live-coverage.md](./live-coverage.md): live boundary coverage matrix.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): machine-readable lifecycle, roles, gates, and definition of done.
-- [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): machine-readable autonomous maintenance backlog.
+- [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue for future autonomous tasks.
+- [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.

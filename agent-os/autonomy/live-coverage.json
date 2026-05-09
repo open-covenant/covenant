@@ -53,7 +53,8 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_http_gateway.rs",
-        "agent-os/crates/covenantd/tests/live_http_tools_call.rs"
+        "agent-os/crates/covenantd/tests/live_http_tools_call.rs",
+        "agent-os/crates/covenantd/tests/live_http_audit_purge.rs"
       ],
       "status": "covered",
       "nextGap": "Broaden protected HTTP mutation coverage across memory repair, peer lifecycle, and A2A recovery endpoints."

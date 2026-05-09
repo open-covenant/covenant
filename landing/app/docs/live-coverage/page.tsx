@@ -10,7 +10,7 @@ const SURFACES = [
   ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/resume/version"],
   ["State verifier", "covered", "typed repair hints"],
   ["Memory retention", "covered", "record-to-receipt correlation"],
-  ["HTTP gateway", "covered", "protected mutation endpoints"],
+  ["HTTP gateway", "covered", "audit and capabilities purge mutations"],
   ["CLI capability lifecycle", "covered", "capability purge after retention defaults"],
   ["CLI audit feed", "covered", "audit query filters after predicate support"],
   ["Ignore policy gate", "covered", "scoped ignore override policy"],

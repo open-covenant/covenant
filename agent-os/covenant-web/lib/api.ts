@@ -350,9 +350,18 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
-  listPeers: (limit = 20, prefix?: string) => {
+  // `status` narrows to live or tombstoned rows respectively; daemon
+  // treats unknown / absent values as "no filter" (HTTP `parse_status`
+  // is permissive — typos degrade rather than 400). Optional in the
+  // signature so existing callers compose without churn.
+  listPeers: (
+    limit = 20,
+    prefix?: string,
+    status?: "live" | "revoked",
+  ) => {
     const q = new URLSearchParams({ limit: String(limit) });
     if (prefix) q.set("prefix", prefix);
+    if (status) q.set("status", status);
     return call<{
       kind: "peer_list";
       peers: PeerSummary[];

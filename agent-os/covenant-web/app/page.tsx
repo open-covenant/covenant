@@ -22,6 +22,21 @@ import {
   peerPrefixToLookup,
 } from "@/lib/expand";
 
+// Live/revoked labels mirror the CLI verb names so a user who's seen
+// `peers list --live-only` finds the same vocabulary here. Six-cell
+// matrix (prefix × status) collapses to one switch instead of nested
+// ternaries inside the JSX.
+function emptyPeersMessage(
+  prefix: string,
+  status: "" | "live" | "revoked",
+): string {
+  const half =
+    status === "live" ? "live peers" : status === "revoked" ? "revoked peers" : "peers";
+  if (prefix) return `(no ${half} match prefix)`;
+  if (status) return `(no ${half})`;
+  return "(no peers registered)";
+}
+
 export default function Home() {
   const [intent, setIntent] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -53,6 +68,13 @@ export default function Home() {
   const [peersTruncated, setPeersTruncated] = useState(false);
   const [operatorPubkey, setOperatorPubkey] = useState<string>("");
   const [peerPrefix, setPeerPrefix] = useState("");
+  // "" = both halves (operator + revoked tombstones surface together,
+  // matching CLI `peers list` default). "live" / "revoked" mirror the
+  // CLI's `--live-only` / `--revoked-only`. Single-choice `<select>`
+  // makes the mutual exclusion structural — the two-checkbox shape
+  // would re-import the foot-gun the CLI's parse-time rejection
+  // already closed.
+  const [peerStatus, setPeerStatus] = useState<"" | "live" | "revoked">("");
   const [revoking, setRevoking] = useState<string | null>(null);
 
   const [tools, setTools] = useState<ToolSpec[]>([]);
@@ -73,7 +95,7 @@ export default function Home() {
         api.recentA2ATasks(20),
         api.recentA2AResults(20),
         api.recentDebits(20),
-        api.listPeers(20, peerPrefix || undefined),
+        api.listPeers(20, peerPrefix || undefined, peerStatus || undefined),
       ]);
       setMemories(m.records);
       setCapabilities(c.capabilities);
@@ -91,7 +113,7 @@ export default function Home() {
     } catch (e) {
       setLastError(String(e));
     }
-  }, [toolName, memoryTier, peerPrefix]);
+  }, [toolName, memoryTier, peerPrefix, peerStatus]);
 
   useEffect(() => {
     // Initial fetch + 3s polling. The lint rule against calling
@@ -383,19 +405,33 @@ export default function Home() {
           newest-first; revoked entries kept so a post-incident pubkey from
           the audit feed resolves to a live or tombstoned row in one read.
           paste a pubkey b58 prefix below to filter — same encoding as the
-          audit row&apos;s peer_pubkey_b58.
+          audit row&apos;s peer_pubkey_b58. the status dropdown narrows to
+          one half (mirrors `peers list --live-only` / `--revoked-only`).
         </p>
-        <form onSubmit={(e) => e.preventDefault()}>
+        <form
+          onSubmit={(e) => e.preventDefault()}
+          style={{ display: "flex", gap: "8px" }}
+        >
           <input
             value={peerPrefix}
             onChange={(e) => setPeerPrefix(e.target.value)}
             placeholder="pubkey b58 prefix (paste from audit row)"
           />
+          <select
+            value={peerStatus}
+            onChange={(e) =>
+              setPeerStatus(e.target.value as "" | "live" | "revoked")
+            }
+            aria-label="peer status filter"
+            style={{ flex: "0 0 auto" }}
+          >
+            <option value="">all</option>
+            <option value="live">live only</option>
+            <option value="revoked">revoked only</option>
+          </select>
         </form>
         {peers.length === 0 ? (
-          <p className="dim">
-            {peerPrefix ? "(no peers match prefix)" : "(no peers registered)"}
-          </p>
+          <p className="dim">{emptyPeersMessage(peerPrefix, peerStatus)}</p>
         ) : (
           <>
             <ul>

@@ -3,8 +3,7 @@
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -18,6 +17,10 @@ fn covenant_cli_bin() -> PathBuf {
         .join("../../target/debug/covenant")
         .canonicalize()
         .expect("covenant CLI binary not built; run `cargo build -p covenant` first")
+}
+
+fn args(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| (*part).to_string()).collect()
 }
 
 async fn wait_for_sock(path: &std::path::Path) -> bool {
@@ -41,10 +44,6 @@ async fn wait_for_operator_token(home: &std::path::Path) {
         sleep(Duration::from_millis(50)).await;
     }
     panic!("operator token never appeared at {}", path.display());
-}
-
-fn args(parts: &[&str]) -> Vec<String> {
-    parts.iter().map(|part| (*part).to_string()).collect()
 }
 
 async fn run_cli_output(
@@ -81,6 +80,36 @@ async fn run_cli_ok(cli_exe: &std::path::Path, home: &std::path::Path, args: &[S
     stdout
 }
 
+fn audit_events(value: &Value) -> &[Value] {
+    value["events"]
+        .as_array()
+        .expect("audit recent events must be an array")
+}
+
+fn audit_event_ids(value: &Value) -> Vec<String> {
+    audit_events(value)
+        .iter()
+        .map(|event| {
+            event["id"]
+                .as_str()
+                .expect("audit event id must be a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn capability_event_id(value: &Value, action: &str) -> String {
+    audit_events(value)
+        .iter()
+        .find(|event| {
+            event["kind"]["type"].as_str() == Some("capability_granted")
+                && event["kind"]["action"].as_str() == Some(action)
+        })
+        .and_then(|event| event["id"].as_str())
+        .unwrap_or_else(|| panic!("missing capability_granted row for {action}: {value:?}"))
+        .to_owned()
+}
+
 #[tokio::test]
 #[ignore = "live: spawns covenantd + runs `covenant audit purge --json` subprocess"]
 async fn live_cli_audit_purge_json_round_trip() {
@@ -107,42 +136,48 @@ async fn live_cli_audit_purge_json_round_trip() {
     wait_for_operator_token(home.path()).await;
 
     let cli_exe = covenant_cli_bin();
-
-    let marker = format!("audit-purge-scope-marker-{}", std::process::id());
     run_cli_ok(
         &cli_exe,
         home.path(),
         &args(&["capabilities", "grant", "tool.call.echo"]),
     )
     .await;
-    let echo_args = serde_json::json!({ "text": marker }).to_string();
-    let mut echo_cmd = args(&["tools", "call", "echo", "--args"]);
-    echo_cmd.push(echo_args);
-    echo_cmd.push("--json".into());
-    let echo_stdout = run_cli_ok(&cli_exe, home.path(), &echo_cmd).await;
-    let echo_value: Value =
-        serde_json::from_str(echo_stdout.trim()).expect("echo --json must be valid JSON");
-    assert_eq!(echo_value["kind"].as_str(), Some("tool_result"));
-
-    let audit_file = home.path().join("audit").join("events.jsonl");
-    let before_contents = std::fs::read_to_string(&audit_file).expect("read audit events");
-    assert!(
-        before_contents.contains(&marker),
-        "expected audit log to contain echo marker before purge attempts"
-    );
+    let seed_recent_stdout = run_cli_ok(
+        &cli_exe,
+        home.path(),
+        &args(&["audit", "recent", "--limit", "20", "--json"]),
+    )
+    .await;
+    let seed_recent: Value =
+        serde_json::from_str(seed_recent_stdout.trim()).expect("audit recent JSON after seed");
+    let seed_id = capability_event_id(&seed_recent, "tool.call.echo");
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("unix time")
         .as_millis() as u64;
-    let allowed_before_ms = now_ms;
+    let allowed_before_ms = now_ms + 1_000;
     let denied_before_ms = now_ms + 30_000;
 
-    let scope = format!(r#"{{"version":1,"before_ms":{}}}"#, allowed_before_ms);
+    let scope = format!(r#"{{"version":1,"before_ms":{allowed_before_ms}}}"#);
     let mut grant_purge = args(&["capabilities", "grant", "audit.purge", "--scope"]);
     grant_purge.push(scope);
     grant_purge.push("--json".into());
     run_cli_ok(&cli_exe, home.path(), &grant_purge).await;
+
+    let before_recent_stdout = run_cli_ok(
+        &cli_exe,
+        home.path(),
+        &args(&["audit", "recent", "--limit", "20", "--json"]),
+    )
+    .await;
+    let before_recent: Value =
+        serde_json::from_str(before_recent_stdout.trim()).expect("audit recent JSON before purge");
+    let before_ids = audit_event_ids(&before_recent);
+    assert!(
+        !before_ids.is_empty(),
+        "test must seed audit rows before rejected purge: {before_recent:?}"
+    );
 
     let mut denied_cmd = args(&["audit", "purge", "--before-ms"]);
     denied_cmd.push(denied_before_ms.to_string());
@@ -156,12 +191,43 @@ async fn live_cli_audit_purge_json_round_trip() {
         "audit purge should fail when before_ms exceeds granted scope: status={:?} stdout={denied_stdout:?} stderr={denied_stderr:?}",
         denied_output.status
     );
-
-    let after_denied_contents =
-        std::fs::read_to_string(&audit_file).expect("read audit events after denied purge");
     assert!(
-        after_denied_contents.contains(&marker),
-        "denied audit purge must not delete existing audit rows"
+        denied_stdout.trim().is_empty(),
+        "failed purge must not emit success JSON: {denied_stdout:?}"
+    );
+    assert!(
+        denied_stderr.contains("daemon error")
+            && denied_stderr.contains("capability scope")
+            && denied_stderr.contains(&format!("before_ms {denied_before_ms}")),
+        "failed purge should classify the scope rejection: {denied_stderr:?}"
+    );
+
+    let after_recent_stdout = run_cli_ok(
+        &cli_exe,
+        home.path(),
+        &args(&["audit", "recent", "--limit", "20", "--json"]),
+    )
+    .await;
+    let after_recent: Value =
+        serde_json::from_str(after_recent_stdout.trim()).expect("audit recent JSON after reject");
+    let after_events = audit_events(&after_recent);
+    for id in &before_ids {
+        assert!(
+            after_events
+                .iter()
+                .any(|event| event["id"].as_str() == Some(id.as_str())),
+            "rejected purge must preserve pre-existing audit row {id}: {after_recent:?}"
+        );
+    }
+    assert!(
+        after_events.iter().any(|event| {
+            event["kind"]["type"].as_str() == Some("capability_scope_rejected")
+                && event["kind"]["action"].as_str() == Some("audit.purge")
+                && event["kind"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains(&format!("before_ms {denied_before_ms}")))
+        }),
+        "rejected purge should record an audit scope rejection: {after_recent:?}"
     );
 
     let mut allowed_cmd = args(&["audit", "purge", "--before-ms"]);
@@ -173,12 +239,22 @@ async fn live_cli_audit_purge_json_round_trip() {
         serde_json::from_str(stdout.trim()).expect("audit purge --json must be valid JSON");
     assert_eq!(value["kind"].as_str(), Some("audit_purged"));
     assert_eq!(value["before_ms"].as_u64(), Some(allowed_before_ms));
-
-    let after_contents =
-        std::fs::read_to_string(&audit_file).expect("read audit events after purge");
     assert!(
-        !after_contents.contains(&marker),
-        "allowed audit purge should remove the marker row"
+        value["purged"].as_u64().is_some_and(|purged| purged > 0),
+        "allowed audit purge should remove at least one seeded row: {value:?}"
+    );
+
+    let after_allowed_stdout = run_cli_ok(
+        &cli_exe,
+        home.path(),
+        &args(&["audit", "recent", "--limit", "20", "--json"]),
+    )
+    .await;
+    let after_allowed: Value = serde_json::from_str(after_allowed_stdout.trim())
+        .expect("audit recent JSON after allowed purge");
+    assert!(
+        !audit_event_ids(&after_allowed).contains(&seed_id),
+        "allowed purge should remove seeded audit row {seed_id}: {after_allowed:?}"
     );
 
     let _ = child.kill().await;

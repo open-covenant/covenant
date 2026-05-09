@@ -31,6 +31,6 @@
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Extend the live audit purge JSON fixture with scoped rejection and state-preservation assertions.",
+  "nextAction": "Continue with the next autonomous backlog item.",
   "updated": "2026-05-09"
 }

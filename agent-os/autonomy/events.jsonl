@@ -722,3 +722,4 @@
 {"timestamp":"2026-05-09T21:15:27.669Z","taskId":"model-availability-probes","from":"in_progress","to":"self_review","actorRole":"reviewer","note":"Reviewed: probe-ollama.mjs preflights Ollama + required models and emits actionable pull commands; live coverage docs updated."}
 {"timestamp":"2026-05-09T21:15:33.023Z","taskId":"model-availability-probes","from":"self_review","to":"validation","actorRole":"verifier","note":"Validation: validate.sh --quick, landing build, validate-autonomy/live-coverage, git diff --check."}
 {"timestamp":"2026-05-09T21:15:36.388Z","taskId":"model-availability-probes","from":"validation","to":"ready","actorRole":"verifier","note":"Ready to integrate: contributors can preflight Ollama models before running live tests."}
+{"timestamp":"2026-05-09T21:16:00.667Z","taskId":"model-availability-probes","from":"ready","to":"integrated","actorRole":"release_operator","note":"Integrated on main (commit 1bb83e8)."}

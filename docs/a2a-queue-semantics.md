@@ -50,6 +50,19 @@ Compaction may drop events for a task only when all of the following are true:
 
 Queued tasks, leased tasks without results, and pending results are never compacted. This keeps recovery state available across daemon restarts.
 
+Queue maintenance automation should use the machine-readable compaction form:
+
+```bash
+covenant a2a compact --json
+```
+
+```json
+{
+  "kind": "a2a_compacted",
+  "dropped": 0
+}
+```
+
 ## Repair Contract
 
 The mailbox crate defines explicit repair primitives for in-flight leases. The daemon exposes them through IPC, HTTP, and CLI surfaces with capability checks, peer-visible task guards, and success audit rows. These are operator-controlled mutation paths; they are not automatic retry policy.

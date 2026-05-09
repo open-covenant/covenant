@@ -63,6 +63,7 @@ export default function CliPage() {
         --reason <text>
         --message <text>
         [--lease-id <uuid>]          Resolve an in-flight task as failed.
+  a2a compact [--json]              Drop fully resolved A2A event rows.
 
   verify [--window N] [--json]       Cross-check audit log vs other state.
 
@@ -261,6 +262,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant a2a status --min-lease-age-ms 300000 --json
 {"kind":"a2a_status","limit":10,"min_lease_age_ms":300000,"tasks":[],"results":[]}`}</code>
+      </pre>
+
+      <h3>Compact resolved A2A events</h3>
+      <pre>
+        <code>{`$ covenant a2a compact --json
+{"kind":"a2a_compacted","dropped":0}`}</code>
       </pre>
 
       <h3>Invoke a tool</h3>

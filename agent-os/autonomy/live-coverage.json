@@ -140,6 +140,7 @@
       ],
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_a2a.rs",
+        "agent-os/crates/covenantd/tests/live_cli_a2a_compact_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_a2a_repair.rs",
         "agent-os/crates/covenantd/tests/live_cli_a2a_status_json.rs",
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"

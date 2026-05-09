@@ -52,7 +52,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | Ignore policy gate | Covered | CLI ignore check JSON | Live dispatch fixture proving ignored intents never write memory or receipts. |
 | Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation | Forced self-revoke recovery only with isolated temp-home fixtures. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |
-| A2A mailbox and restart durability | Covered | duplex, admission gate, CLI repair, CLI status JSON, restart replay | Stale-lease guard failure coverage. |
+| A2A mailbox and restart durability | Covered | duplex, admission gate, CLI compact JSON, CLI repair, CLI status JSON, restart replay | Stale-lease guard failure coverage. |
 | MCP subprocess transport | Covered | CLI tools list JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
 | Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Automate the documented Linux `runsc` runner on a pinned rootfs. |

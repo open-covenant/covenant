@@ -75,6 +75,19 @@ export default function A2AIdempotencyPolicyPage() {
         consistently.
       </p>
 
+      <h2>Receiver-side result cache</h2>
+      <p>
+        When an idempotent task posts a result, the mailbox stores a cached
+        payload keyed by sender, recipient, current task kind, and idempotency
+        key. A later task with the same cache key receives a replayed result
+        immediately instead of being leased again.
+      </p>
+      <p>
+        JSONL-backed mailboxes persist cache entries in the event log. Task
+        compaction removes resolved task history but keeps cache entries, so
+        future duplicates can still short-circuit after restart.
+      </p>
+
       <h2>Explicit retry gate</h2>
       <p>
         <code>covenant a2a retry-stale</code> is disabled by default and reports
@@ -128,10 +141,9 @@ export default function A2AIdempotencyPolicyPage() {
 
       <h2>Follow-up work</h2>
       <ul>
-        <li>Persist receiver-side idempotency results keyed by work unit.</li>
+        <li>Add an explicit typed task-kind field for cache scoping.</li>
         <li>
-          Add periodic retry scheduling only after receiver-side deduplication
-          exists.
+          Add periodic retry scheduling that reuses the existing retry gate.
         </li>
       </ul>
 

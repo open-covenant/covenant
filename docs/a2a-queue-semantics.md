@@ -117,7 +117,7 @@ The optional task metadata is:
 - **Duplicate safety** declares whether re-running the same logical task can create harmful external side effects (network writes, payments, ticket creation, etc.). Missing metadata is treated as **unsafe**.
 - **Idempotency key** is a stable, caller-chosen key that uniquely identifies the logical work unit across retries. The daemon validates that a present key is non-empty and persists it through queue/status surfaces and restart replay.
 
-This metadata is evidence, not receiver-side deduplication. Receivers and future retry policy can use it to return a previously computed result, but the current daemon does not persist `idempotency_key → result`.
+For idempotent tasks, the mailbox persists receiver-side result cache entries keyed by sender, recipient, current task kind, and idempotency key. A later task with the same cache key receives a replayed result immediately instead of being leased to the recipient again. Cached entries survive JSONL replay and are not removed by task-history compaction.
 
 Operator policy:
 
@@ -140,7 +140,7 @@ covenant a2a retry-stale \
 
 Without `--enable`, the CLI returns a report and performs no mutation. With `--enable`, the daemon only requeues entries that are in flight, old enough, below the attempt bound, and marked `duplicate_safety = "idempotent"` with a non-empty key. Each requeue records an `auto_requeue` A2A repair audit row. Entries that are unsafe, too young, exhausted, missing metadata, or outside capability scope remain untouched and appear in the report's `skipped` list.
 
-Future autonomous retry also requires receiver-side de-duplication that persists `idempotency_key → result`, so redelivery can short-circuit without repeating side effects.
+The cache is intentionally conservative: tasks without metadata, tasks marked `unsafe`, and tasks whose sender, recipient, task kind, or idempotency key differ are delivered normally.
 
 Any background retry scheduler must remain:
 
@@ -152,4 +152,4 @@ Any background retry scheduler must remain:
 ## Remaining Work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
-- Add receiver-side idempotency result caching before enabling periodic retry loops (see `docs/a2a-idempotency-policy.md`).
+- Add an opt-in periodic retry scheduler that reuses the explicit retry gate (see `docs/a2a-idempotency-policy.md`).

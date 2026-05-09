@@ -1,0 +1,38 @@
+{
+  "id": "a2a-receiver-idempotency-cache",
+  "title": "Add receiver-side A2A idempotency result cache",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Persist receiver-side idempotency results so duplicate deliveries with the same key can return the original result without repeating external side effects.",
+  "expectedFailureModes": [
+    "A redelivered idempotent task executes side effects again instead of replaying the original result.",
+    "Result cache keys are scoped too broadly and collide across senders, recipients, or task types.",
+    "Operators enable periodic retry before receivers can prove duplicate deliveries are deduplicated."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-a2a --locked",
+    "cd agent-os && cargo test -p covenantd a2a --locked",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Approval before enabling any periodic background retry scheduler by default."
+  ],
+  "nextAction": "Design and implement durable receiver-side idempotency result caching scoped by sender, recipient, task kind, and idempotency key.",
+  "updated": "2026-05-09"
+}

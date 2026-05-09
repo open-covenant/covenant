@@ -55,6 +55,44 @@ impl A2AIdempotency {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2AIdempotencyCacheKey {
+    pub sender_pubkey_b58: String,
+    pub recipient_pubkey_b58: String,
+    pub task_kind: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct A2AIdempotencyCachedResult {
+    pub source_task_id: Uuid,
+    pub status: A2ATaskStatus,
+    #[serde(default)]
+    pub content: Vec<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+impl A2AIdempotencyCachedResult {
+    fn from_result(result: &A2ATaskResult) -> Self {
+        Self {
+            source_task_id: result.task_id,
+            status: result.status.clone(),
+            content: result.content.clone(),
+            error_message: result.error_message.clone(),
+        }
+    }
+
+    fn to_result(&self, task_id: Uuid) -> A2ATaskResult {
+        A2ATaskResult {
+            task_id,
+            status: self.status.clone(),
+            content: self.content.clone(),
+            error_message: self.error_message.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct A2ATask {
     pub id: Uuid,
@@ -399,6 +437,23 @@ fn validate_task(task: &A2ATask) -> Result<(), A2AError> {
     Ok(())
 }
 
+fn idempotency_cache_key(task: &A2ATask) -> Option<A2AIdempotencyCacheKey> {
+    let idempotency = task.idempotency.as_ref()?;
+    if idempotency.duplicate_safety != A2ADuplicateSafety::Idempotent {
+        return None;
+    }
+    let key = idempotency.key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some(A2AIdempotencyCacheKey {
+        sender_pubkey_b58: task.sender.pubkey_base58(),
+        recipient_pubkey_b58: task.recipient.pubkey_base58(),
+        task_kind: task.intent_text.clone(),
+        key: key.to_owned(),
+    })
+}
+
 fn assert_lease_match(
     task_id: Uuid,
     expected: Option<Uuid>,
@@ -520,6 +575,7 @@ pub struct InMemoryMailbox {
     /// to attribute `PostA2AResult` calls back to the original sender so
     /// the capability check can use the sender-scoped action.
     senders: Mutex<HashMap<Uuid, AgentId>>,
+    result_cache: Mutex<HashMap<A2AIdempotencyCacheKey, A2AIdempotencyCachedResult>>,
     task_notify: Notify,
     result_notify: Notify,
 }
@@ -538,6 +594,7 @@ impl InMemoryMailbox {
             in_flight: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::new()),
             senders: Mutex::new(HashMap::new()),
+            result_cache: Mutex::new(HashMap::new()),
             task_notify: Notify::new(),
             result_notify: Notify::new(),
         }
@@ -584,6 +641,19 @@ impl InMemoryMailbox {
 impl Mailbox for InMemoryMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
         validate_task(&task)?;
+        if let Some(cached) = idempotency_cache_key(&task)
+            .and_then(|key| self.result_cache.lock().unwrap().get(&key).cloned())
+        {
+            let result = cached.to_result(task.id);
+            self.senders
+                .lock()
+                .unwrap()
+                .insert(task.id, task.sender.clone());
+            self.attempts.lock().unwrap().entry(task.id).or_insert(0);
+            self.results.lock().unwrap().push_back(result);
+            self.result_notify.notify_one();
+            return Ok(());
+        }
         self.senders
             .lock()
             .unwrap()
@@ -614,7 +684,15 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
-        self.in_flight.lock().unwrap().remove(&result.task_id);
+        let completed = self.in_flight.lock().unwrap().remove(&result.task_id);
+        if let Some(lease) = completed {
+            if let Some(key) = idempotency_cache_key(&lease.task) {
+                self.result_cache
+                    .lock()
+                    .unwrap()
+                    .insert(key, A2AIdempotencyCachedResult::from_result(&result));
+            }
+        }
         self.results.lock().unwrap().push_back(result);
         self.result_notify.notify_one();
         Ok(())
@@ -787,6 +865,14 @@ enum MailboxEvent {
         forced_at_ms: u64,
         attempt: u32,
     },
+    IdempotencyResultCached {
+        cache_key: A2AIdempotencyCacheKey,
+        result: A2AIdempotencyCachedResult,
+    },
+    IdempotencyResultReplayed {
+        task: A2ATask,
+        result: A2ATaskResult,
+    },
     ResultPosted {
         result: A2ATaskResult,
     },
@@ -801,6 +887,7 @@ struct MailboxState {
     in_flight: HashMap<Uuid, TaskLease>,
     senders: HashMap<Uuid, AgentId>,
     attempts: HashMap<Uuid, u32>,
+    result_cache: HashMap<A2AIdempotencyCacheKey, A2AIdempotencyCachedResult>,
 }
 
 impl MailboxState {
@@ -811,6 +898,7 @@ impl MailboxState {
             in_flight: HashMap::new(),
             senders: HashMap::new(),
             attempts: HashMap::new(),
+            result_cache: HashMap::new(),
         }
     }
 
@@ -846,6 +934,14 @@ impl MailboxState {
             } => {
                 self.in_flight.remove(&task_id);
                 self.attempts.insert(task_id, attempt);
+                self.results.push_back(result);
+            }
+            MailboxEvent::IdempotencyResultCached { cache_key, result } => {
+                self.result_cache.insert(cache_key, result);
+            }
+            MailboxEvent::IdempotencyResultReplayed { task, result } => {
+                self.senders.insert(task.id, task.sender.clone());
+                self.attempts.entry(task.id).or_insert(0);
                 self.results.push_back(result);
             }
             MailboxEvent::ResultPosted { result } => {
@@ -998,6 +1094,22 @@ impl Mailbox for JsonlMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
         validate_task(&task)?;
         let _g = self.file_lock.lock().await;
+        let replay = {
+            let s = self.state.lock().unwrap();
+            idempotency_cache_key(&task)
+                .and_then(|key| s.result_cache.get(&key).cloned())
+                .map(|cached| cached.to_result(task.id))
+        };
+        if let Some(result) = replay {
+            let event = MailboxEvent::IdempotencyResultReplayed {
+                task: task.clone(),
+                result,
+            };
+            self.append(&event).await?;
+            self.state.lock().unwrap().apply(event);
+            self.result_notify.notify_one();
+            return Ok(());
+        }
         self.append(&MailboxEvent::TaskSent { task: task.clone() })
             .await?;
         {
@@ -1075,13 +1187,28 @@ impl Mailbox for JsonlMailbox {
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
         let _g = self.file_lock.lock().await;
+        let cache_event = {
+            let s = self.state.lock().unwrap();
+            s.in_flight
+                .get(&result.task_id)
+                .and_then(|lease| idempotency_cache_key(&lease.task))
+                .map(|cache_key| MailboxEvent::IdempotencyResultCached {
+                    cache_key,
+                    result: A2AIdempotencyCachedResult::from_result(&result),
+                })
+        };
         self.append(&MailboxEvent::ResultPosted {
             result: result.clone(),
         })
         .await?;
+        if let Some(event) = &cache_event {
+            self.append(event).await?;
+        }
         let mut s = self.state.lock().unwrap();
-        s.in_flight.remove(&result.task_id);
-        s.results.push_back(result);
+        s.apply(MailboxEvent::ResultPosted { result });
+        if let Some(event) = cache_event {
+            s.apply(event);
+        }
         self.result_notify.notify_one();
         Ok(())
     }
@@ -1310,6 +1437,12 @@ fn compute_droppable_task_ids(events: &[MailboxEvent]) -> HashSet<Uuid> {
             MailboxEvent::TaskForceErrored { result, .. } => {
                 *posted.entry(result.task_id).or_insert(0) += 1;
             }
+            MailboxEvent::IdempotencyResultCached { .. } => {}
+            MailboxEvent::IdempotencyResultReplayed { task, result } => {
+                seen.insert(task.id);
+                delivered.insert(task.id);
+                *posted.entry(result.task_id).or_insert(0) += 1;
+            }
             MailboxEvent::ResultPosted { result } => {
                 *posted.entry(result.task_id).or_insert(0) += 1;
             }
@@ -1335,6 +1468,8 @@ fn event_belongs_to_droppable(ev: &MailboxEvent, droppable: &HashSet<Uuid>) -> b
         MailboxEvent::TaskLeased { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::TaskRequeued { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::TaskForceErrored { task_id, .. } => droppable.contains(task_id),
+        MailboxEvent::IdempotencyResultCached { .. } => false,
+        MailboxEvent::IdempotencyResultReplayed { task, .. } => droppable.contains(&task.id),
         MailboxEvent::ResultPosted { result } => droppable.contains(&result.task_id),
         MailboxEvent::ResultRecv { task_id } => droppable.contains(task_id),
     }
@@ -1532,6 +1667,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_replays_cached_idempotent_result_without_delivery() {
+        let m = InMemoryMailbox::new();
+        let mut first = dummy_task();
+        first.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory",
+        ));
+        m.send_task(first.clone()).await.unwrap();
+        let leased = m
+            .try_recv_task_for(&first.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leased.id, first.id);
+        m.send_result(A2ATaskResult::ok(
+            first.id,
+            vec![Content::text("cached answer")],
+        ))
+        .await
+        .unwrap();
+
+        let mut duplicate = first.clone();
+        duplicate.id = Uuid::new_v4();
+        m.send_task(duplicate.clone()).await.unwrap();
+
+        assert!(m
+            .try_recv_task_for(&duplicate.recipient)
+            .await
+            .unwrap()
+            .is_none());
+        let original = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
+        assert_eq!(original.task_id, first.id);
+        let replayed = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
+        assert_eq!(replayed.task_id, duplicate.id);
+        assert_eq!(replayed.status, A2ATaskStatus::Ok);
+        assert_eq!(replayed.content, vec![Content::text("cached answer")]);
+    }
+
+    #[tokio::test]
+    async fn unsafe_tasks_do_not_populate_idempotency_cache() {
+        let m = InMemoryMailbox::new();
+        let mut first = dummy_task();
+        first.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Unsafe,
+            "research:agent-memory",
+        ));
+        m.send_task(first.clone()).await.unwrap();
+        let _ = m
+            .try_recv_task_for(&first.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        m.send_result(A2ATaskResult::ok(first.id, vec![]))
+            .await
+            .unwrap();
+
+        let mut duplicate = first.clone();
+        duplicate.id = Uuid::new_v4();
+        m.send_task(duplicate.clone()).await.unwrap();
+
+        let delivered = m
+            .try_recv_task_for(&duplicate.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(delivered.id, duplicate.id);
+    }
+
+    #[tokio::test]
     async fn in_memory_mailbox_recv_blocks_until_send() {
         let m = std::sync::Arc::new(InMemoryMailbox::new());
         let m_recv = m.clone();
@@ -1668,6 +1872,52 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(got.idempotency, t.idempotency);
+    }
+
+    #[tokio::test]
+    async fn jsonl_replays_cached_idempotent_result_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut first = dummy_task();
+        first.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory",
+        ));
+        {
+            let m = JsonlMailbox::open(path.clone()).await.unwrap();
+            m.send_task(first.clone()).await.unwrap();
+            let _ = m
+                .try_recv_task_for(&first.recipient)
+                .await
+                .unwrap()
+                .unwrap();
+            m.send_result(A2ATaskResult::ok(
+                first.id,
+                vec![Content::text("cached answer")],
+            ))
+            .await
+            .unwrap();
+            let _ = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
+            assert_eq!(m.compact().await.unwrap(), 4);
+        }
+
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        let mut duplicate = first.clone();
+        duplicate.id = Uuid::new_v4();
+        reopened.send_task(duplicate.clone()).await.unwrap();
+
+        assert!(reopened
+            .try_recv_task_for(&duplicate.recipient)
+            .await
+            .unwrap()
+            .is_none());
+        let replayed = reopened
+            .try_recv_result_for(&duplicate.sender)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replayed.task_id, duplicate.id);
+        assert_eq!(replayed.content, vec![Content::text("cached answer")]);
     }
 
     #[tokio::test]

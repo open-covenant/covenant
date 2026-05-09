@@ -44,6 +44,19 @@ Manual repair still uses an operator posture (`idempotent` or `operator_accepted
 
 The idempotency key is a stable, caller-chosen key that identifies the logical work unit across retries. If a task performs external work that supports an explicit idempotency key, the sender should provide the same key so the receiver can forward it without inventing a new scheme.
 
+## Receiver-side result cache
+
+When an idempotent task posts a result, the mailbox stores a cached result payload keyed by:
+
+- sender public key;
+- recipient public key;
+- current task kind;
+- idempotency key.
+
+A later task with the same cache key is not leased to the recipient. The mailbox immediately queues a replayed result for the new task id, preserving the original status, content, and error message. JSONL-backed mailboxes persist cache entries in the event log; task compaction removes resolved task history but keeps cache entries so future duplicates can still short-circuit after restart.
+
+The current task kind is derived from the task intent text. That is deliberately conservative until A2A has an explicit typed task-kind field.
+
 ## Explicit retry gate
 
 The daemon exposes an operator-triggered retry scan through CLI and IPC. It is disabled by default and reports what it would do unless the operator passes `--enable`.
@@ -82,5 +95,5 @@ Manual lease repair already requires an explicit duplicate-risk posture (`idempo
 
 ## Follow-up work
 
-- Add receiver-side idempotency result caching that persists `idempotency_key -> result`.
-- Add an opt-in periodic retry scheduler only after receiver-side deduplication exists.
+- Add an explicit A2A task-kind field so cache keys no longer depend on intent text.
+- Add an opt-in periodic retry scheduler that reuses the existing retry gate.

@@ -73,6 +73,19 @@
       "nextGap": "Add scoped audit purge rejection coverage once retention policy defaults are stable."
     },
     {
+      "id": "ignore-policy",
+      "name": "Ignore policy gate",
+      "mockTests": [
+        "agent-os/crates/covenant-memory/src/ignore.rs",
+        "agent-os/crates/covenant/src/main.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_ignore_check_json.rs"
+      ],
+      "status": "covered",
+      "nextGap": "Add live dispatch fixture proving ignored intents never write memory or receipts."
+    },
+    {
       "id": "peer-auth",
       "name": "Peer authentication and token lifecycle",
       "mockTests": [

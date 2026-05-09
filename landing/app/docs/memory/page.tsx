@@ -272,10 +272,8 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))`}</code>
 
       <h2>Test the ignore set</h2>
       <pre>
-        <code>{`covenant ignore check "summarise ~/.ssh/id_rsa"
-# → ignored: true
-# → matched_pattern: "id_rsa"
-# → rules_loaded: 5`}</code>
+        <code>{`covenant ignore check --json "summarise ~/.ssh/id_rsa"
+{"kind":"ignore_report","ignored":true,"matched_pattern":"id_rsa","rules_loaded":5}`}</code>
       </pre>
 
       <h2>Related</h2>

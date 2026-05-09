@@ -19,7 +19,7 @@
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant verify [--window N] [--json]
-//!   covenant ignore check <text>
+//!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
@@ -117,7 +117,7 @@ fn print_usage() {
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
     eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
-    eprintln!("  covenant ignore check <text>            test text against .covenantignore rules");
+    eprintln!("  covenant ignore check [--json] <text>   test text against .covenantignore rules");
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>]   invoke a registered tool");
     eprintln!(
@@ -1731,11 +1731,20 @@ async fn main() -> Result<()> {
                 eprintln!("covenant ignore: expected `check <text>`");
                 std::process::exit(2);
             }
-            if args.len() < 3 {
+            let mut as_json = false;
+            let mut text_parts = Vec::new();
+            for arg in args.iter().skip(2) {
+                if arg == "--json" {
+                    as_json = true;
+                } else {
+                    text_parts.push(arg.as_str());
+                }
+            }
+            if text_parts.is_empty() {
                 eprintln!("covenant ignore check: missing <text>");
                 std::process::exit(2);
             }
-            let text = args[2..].join(" ");
+            let text = text_parts.join(" ");
             write_frame(&mut stream, &Request::IgnoreCheck { text }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::IgnoreReport {
@@ -1743,7 +1752,16 @@ async fn main() -> Result<()> {
                     matched_pattern,
                     rules_loaded,
                 } => {
-                    if ignored {
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&ignore_report_json(
+                                ignored,
+                                matched_pattern.as_deref(),
+                                rules_loaded
+                            ))?
+                        );
+                    } else if ignored {
                         let pat = matched_pattern.as_deref().unwrap_or("(none)");
                         println!("ignored — matched rule: {pat}");
                     } else {
@@ -1979,6 +1997,19 @@ fn audit_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
         "kind": "audit_purged",
         "before_ms": before_ms,
         "purged": purged,
+    })
+}
+
+fn ignore_report_json(
+    ignored: bool,
+    matched_pattern: Option<&str>,
+    rules_loaded: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "ignore_report",
+        "ignored": ignored,
+        "matched_pattern": matched_pattern,
+        "rules_loaded": rules_loaded,
     })
 }
 
@@ -2505,6 +2536,18 @@ mod tests {
         assert_eq!(value["kind"], "audit_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn ignore_report_json_renders_stable_shape() {
+        let value = ignore_report_json(true, Some("*.pem"), 2);
+        assert_eq!(value["kind"], "ignore_report");
+        assert_eq!(value["ignored"], true);
+        assert_eq!(value["matched_pattern"], "*.pem");
+        assert_eq!(value["rules_loaded"], 2);
+
+        let clear = ignore_report_json(false, None, 2);
+        assert!(clear["matched_pattern"].is_null());
     }
 
     #[test]

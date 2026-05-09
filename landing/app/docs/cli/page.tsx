@@ -72,7 +72,7 @@ export default function CliPage() {
          | --older-than-ms D) [--json]
                                      Delete audit events older than the threshold.
 
-  ignore check <text>                Report whether text matches the
+  ignore check [--json] <text>       Report whether text matches the
                                      .covenantignore rules.
 
   tools list [--json]                List registered tools.
@@ -226,6 +226,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant audit purge --before-ms 1714938191234 --json
 {"kind":"audit_purged","before_ms":1714938191234,"purged":0}`}</code>
+      </pre>
+
+      <h3>Check ignore rules</h3>
+      <pre>
+        <code>{`$ covenant ignore check --json "summarise ~/.ssh/id_rsa"
+{"kind":"ignore_report","ignored":true,"matched_pattern":"id_rsa","rules_loaded":5}`}</code>
       </pre>
 
       <h3>Inspect the A2A queue</h3>

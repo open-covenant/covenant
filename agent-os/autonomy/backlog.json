@@ -582,6 +582,8 @@
       "ownerRole": "implementer",
       "scope": [
         "agent-os/crates/covenant",
+        "agent-os/crates/covenantd/tests",
+        "agent-os/autonomy/live-coverage.json",
         "docs",
         "landing/app/docs"
       ],
@@ -598,7 +600,9 @@
       "verification": [
         "cd agent-os && cargo test -p covenant --locked ignore_report_json",
         "cd agent-os && cargo build -p covenant --locked",
+        "cd agent-os && cargo test -p covenantd --test live_cli_ignore_check_json --locked -- --ignored live_",
         "pnpm --dir landing build",
+        "node agent-os/scripts/validate-live-coverage.mjs",
         "node agent-os/scripts/validate-autonomy.mjs",
         "bash agent-os/scripts/validate.sh --quick",
         "git diff --check"

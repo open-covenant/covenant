@@ -89,10 +89,18 @@ pub async fn bootstrap_remote_tools_with_options(
 
 impl RemoteToolOptions {
     fn allows(&self, name: &str) -> bool {
-        if !self.include.is_empty() && !self.include.iter().any(|pattern| matches_filter(pattern, name)) {
+        if !self.include.is_empty()
+            && !self
+                .include
+                .iter()
+                .any(|pattern| matches_filter(pattern, name))
+        {
             return false;
         }
-        !self.exclude.iter().any(|pattern| matches_filter(pattern, name))
+        !self
+            .exclude
+            .iter()
+            .any(|pattern| matches_filter(pattern, name))
     }
 
     fn advertised_name(&self, upstream_name: &str) -> String {
@@ -282,7 +290,10 @@ mod tests {
             ]
         );
 
-        let r = tools[0].call(serde_json::json!({ "path": "/tmp" })).await.unwrap();
+        let r = tools[0]
+            .call(serde_json::json!({ "path": "/tmp" }))
+            .await
+            .unwrap();
         match &r.content[0] {
             Content::Text { text } => assert_eq!(text, "called fs.read"),
             other => panic!("unexpected: {other:?}"),

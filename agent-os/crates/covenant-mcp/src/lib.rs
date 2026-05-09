@@ -157,8 +157,8 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::native::EchoTool;
+    use async_trait::async_trait;
 
     struct StaticTool {
         name: &'static str,

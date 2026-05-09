@@ -65,6 +65,7 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_peer_auth.rs",
         "agent-os/crates/covenantd/tests/live_peers_revoke.rs",
+        "agent-os/crates/covenantd/tests/live_cli_peers_revoke_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_peers_self_revoke.rs",
         "agent-os/crates/covenantd/tests/live_restart_peers_revoke.rs",
         "agent-os/crates/covenantd/tests/live_rotate_token.rs"

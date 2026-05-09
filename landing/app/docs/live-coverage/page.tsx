@@ -11,7 +11,7 @@ const SURFACES = [
   ["State verifier", "covered", "live drift fixture"],
   ["HTTP gateway", "covered", "version, auth, and tools-call round trip"],
   ["CLI capability lifecycle", "covered", "capability purge after retention defaults"],
-  ["CLI audit feed", "covered", "audit purge after retention policy defaults"],
+  ["CLI audit feed", "covered", "scoped audit purge rejection"],
   ["Peer authentication", "covered", "forced self-revoke recovery fixture"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
   ["A2A mailbox", "covered", "stale-lease guard failure"],

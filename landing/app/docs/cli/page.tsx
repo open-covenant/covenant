@@ -69,7 +69,8 @@ export default function CliPage() {
   audit verify                       Verify the local audit hash-chain.
   audit purge
         (--before-ms M
-         | --older-than-ms D)        Delete audit events older than the threshold.
+         | --older-than-ms D) [--json]
+                                     Delete audit events older than the threshold.
 
   ignore check <text>                Report whether text matches the
                                      .covenantignore rules.
@@ -219,6 +220,12 @@ orphans total: 0`}</code>
       <pre>
         <code>{`$ covenant audit verify
 {"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
+      </pre>
+
+      <h3>Purge old audit events</h3>
+      <pre>
+        <code>{`$ covenant audit purge --before-ms 1714938191234 --json
+{"kind":"audit_purged","before_ms":1714938191234,"purged":0}`}</code>
       </pre>
 
       <h3>Inspect the A2A queue</h3>

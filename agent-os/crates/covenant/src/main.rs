@@ -24,6 +24,7 @@
 //!   covenant tools call <name> [--args <json>]
 //!   covenant audit recent [--limit N]
 //!   covenant audit verify
+//!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
@@ -124,7 +125,7 @@ fn print_usage() {
     );
     eprintln!("  covenant audit verify                  verify local audit hash-chain sidecar");
     eprintln!(
-        "  covenant audit purge (--before-ms M | --older-than-ms D)  drop audit events older than ms epoch / D ms ago"
+        "  covenant audit purge (--before-ms M | --older-than-ms D) [--json]  drop audit events older than ms epoch / D ms ago"
     );
     eprintln!(
         "  covenant capabilities recent [-n N] [--json]  list recent active capability tokens"
@@ -1198,6 +1199,7 @@ async fn main() -> Result<()> {
                 }
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
+                    let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1216,6 +1218,7 @@ async fn main() -> Result<()> {
                                     v.parse().context("--older-than-ms must be an integer")?;
                                 before_ms = Some(epoch_ms().saturating_sub(dur));
                             }
+                            "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1224,7 +1227,14 @@ async fn main() -> Result<()> {
                     write_frame(&mut stream, &Request::PurgeAudit { before_ms }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditPurged { purged } => {
-                            println!("purged {purged} event(s)");
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&audit_purge_json(before_ms, purged))?
+                                );
+                            } else {
+                                println!("purged {purged} event(s)");
+                            }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
@@ -1964,6 +1974,14 @@ fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     })
 }
 
+fn audit_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "audit_purged",
+        "before_ms": before_ms,
+        "purged": purged,
+    })
+}
+
 fn tool_list_json(tools: &[ToolSpec]) -> serde_json::Value {
     serde_json::json!({
         "kind": "tool_list",
@@ -2477,6 +2495,14 @@ mod tests {
     fn capabilities_purge_json_renders_stable_shape() {
         let value = capabilities_purge_json(1_700_000_000_000, 3);
         assert_eq!(value["kind"], "capabilities_purged");
+        assert_eq!(value["before_ms"], 1_700_000_000_000u64);
+        assert_eq!(value["purged"], 3);
+    }
+
+    #[test]
+    fn audit_purge_json_renders_stable_shape() {
+        let value = audit_purge_json(1_700_000_000_000, 3);
+        assert_eq!(value["kind"], "audit_purged");
         assert_eq!(value["before_ms"], 1_700_000_000_000u64);
         assert_eq!(value["purged"], 3);
     }

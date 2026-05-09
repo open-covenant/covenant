@@ -19,6 +19,20 @@ Each sidecar row is an `AuditChainEntry`:
 
 The sidecar is append-only during normal writes. If the sidecar is missing or has a different length from the event log when a new event is recorded, Covenant rebuilds it over the retained events before appending the new anchor. Retention purge rewrites both the retained audit file and its sidecar, so a valid retained log remains valid after old rows are intentionally removed.
 
+Retention automation should use the machine-readable purge form:
+
+```bash
+covenant audit purge --before-ms 1700000000000 --json
+```
+
+```json
+{
+  "kind": "audit_purged",
+  "before_ms": 1700000000000,
+  "purged": 0
+}
+```
+
 ## Verification
 
 Operators can verify the local chain through all daemon surfaces:

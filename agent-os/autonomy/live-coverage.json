@@ -65,11 +65,12 @@
         "agent-os/crates/covenant/src/main.rs"
       ],
       "liveTests": [
+        "agent-os/crates/covenantd/tests/live_cli_audit_purge_json.rs",
         "agent-os/crates/covenantd/tests/live_cli_audit_recent.rs",
         "agent-os/crates/covenantd/tests/live_cli_audit_verify.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live audit purge coverage once retention policy defaults are decided."
+      "nextGap": "Add scoped audit purge rejection coverage once retention policy defaults are stable."
     },
     {
       "id": "peer-auth",

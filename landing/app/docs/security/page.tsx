@@ -14,9 +14,11 @@ export default function SecurityPage() {
         Covenant is a local-first daemon. The model assumes the operator
         owns the host and trusts their own user account; it does not defend
         against an adversary that has already obtained shell access as the
-        operator. Within that boundary, Covenant provides strong guarantees
-        over agent and tool behavior: ed25519-signed capability tokens, an
-        append-only audit log, and hard enforcement at dispatch.
+        operator. Within that boundary, Covenant provides hard guarantees
+        over Covenant-mediated actions: ed25519-signed capability tokens,
+        an append-only audit log, and enforcement at dispatch. Trusted-local
+        subprocess execution is not process isolation; sandbox-grade local
+        execution starts with the planned Linux gVisor backend.
       </p>
 
       <h2>Trust boundaries</h2>
@@ -41,12 +43,12 @@ export default function SecurityPage() {
             </td>
           </tr>
           <tr>
-            <td>Daemon → agent</td>
-            <td>Yes</td>
+            <td>Daemon → trusted-local agent</td>
+            <td>Partial</td>
             <td>
               Capability checks at dispatch, wall-clock budget,
-              JSON-line stdin/stdout protocol with no out-of-band
-              channel.
+              JSON-line stdin/stdout protocol, and daemon-owned
+              attribution. This is not a sandbox against hostile code.
             </td>
           </tr>
           <tr>
@@ -75,6 +77,15 @@ export default function SecurityPage() {
               The HTTP gateway binds <code>127.0.0.1</code> only.
               Anything beyond that requires explicit operator
               configuration.
+            </td>
+          </tr>
+          <tr>
+            <td>Sandbox-required agent → host</td>
+            <td>Planned</td>
+            <td>
+              Manifests can require <code>linux-gvisor</code>, and the
+              trusted-local runner fails closed instead of downgrading.
+              gVisor execution is planned, not implemented.
             </td>
           </tr>
         </tbody>
@@ -129,6 +140,11 @@ export default function SecurityPage() {
           enforces them.
         </li>
         <li>
+          Host filesystem, environment, or network access by a malicious
+          trusted-local subprocess. The current subprocess runner is for
+          first-party or otherwise trusted local automation only.
+        </li>
+        <li>
           Network-level mitm to the on-chain RPC. Use a trusted RPC
           provider and verify TLS; the daemon does not pin
           certificates.
@@ -152,6 +168,11 @@ export default function SecurityPage() {
           <code>outbound-https-only</code>;{" "}
           <code>full</code> network access requires explicit opt-in per
           agent.
+        </li>
+        <li>
+          Agents declaring <code>sandbox.required</code> fail closed on the
+          trusted-local runner. Covenant must not silently downgrade a
+          sandbox-required agent to subprocess execution.
         </li>
         <li>
           The default <code>.covenantignore</code> seeds rules for

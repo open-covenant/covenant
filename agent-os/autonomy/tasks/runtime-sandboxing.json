@@ -8,7 +8,7 @@
     "agent-os/crates/covenant-runtime",
     "agent-os/crates/covenantd",
     "agent-os/crates/covenant-manifest",
-    "docs/security",
+    "docs/runtime-sandbox-security.md",
     "docs/decisions"
   ],
   "summary": "Design and implement the first production-grade isolation backend for untrusted local agents, starting with Linux gVisor and preserving macOS subprocess mode as explicitly trusted-local only.",

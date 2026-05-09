@@ -110,9 +110,10 @@ export default function DocsIndexPage() {
         permissions, memory, audit, peer auth, and local receipt ledger are
         implemented in the repository. MCP, A2A, the local web console, the
         autonomous development loop, live coverage matrix, and public
-        provenance envelopes are experimental. Runtime sandboxing, on-chain
-        settlement, installer, SDK ecosystem, signed releases, and
-        transparency-log publication remain planned work.
+        provenance envelopes are experimental. Runtime sandboxing currently
+        has manifest-level requirements and trusted-local fail-closed behavior;
+        gVisor execution, on-chain settlement, installer, SDK ecosystem,
+        signed releases, and transparency-log publication remain planned work.
       </p>
 
       <h2>Position in the stack</h2>

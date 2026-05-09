@@ -58,6 +58,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
+- [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): validated autonomous maintenance backlog.

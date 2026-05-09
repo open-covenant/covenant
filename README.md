@@ -86,7 +86,7 @@ Implemented and tested in the repository:
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery and queue-state inspection. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |
-| Runtime sandboxing | Planned | Subprocess timeouts exist; gVisor/Firecracker isolation is future work. |
+| Runtime sandboxing | Partially implemented, trusted-local | Manifest sandbox requirements are parsed and trusted-local subprocess execution fails closed for sandbox-required agents; gVisor/Firecracker isolation is future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
 
@@ -152,7 +152,7 @@ Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md
 
 ## Security
 
-Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. Do not open public issues for vulnerabilities.
+Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation contract is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md). Do not open public issues for vulnerabilities.
 
 ## License
 

@@ -15,17 +15,22 @@
 # attack where a peer authenticating with the same `<local>@<host>` but
 # a different pubkey wins a grant intended for the legitimate holder.
 #
-# Production code in `crates/covenantd/src/lib.rs` MUST go through
+# Production code anywhere under `crates/covenantd/src/` MUST go through
 # `scoped_action_alternatives` + `check_capabilities_any_of`. Test code
 # is exempt because tests intentionally synthesise display-form action
 # strings to exercise the matched-form branches.
 #
-# Scope: only the daemon's library entry point, where the capability
-# check actually runs. The CLI (`crates/covenant/src/main.rs`) and the
-# types crate (`crates/covenant-types/src/lib.rs`) construct action
-# strings as inputs (operator-typed grant strings, helper output) but
-# never call `check_capabilities`, so a hand-rolled string there is not
-# a regression of the same shape.
+# Scope: every `*.rs` file under `crates/covenantd/src/`. The CLI
+# (`crates/covenant/src/main.rs`) and the types crate
+# (`crates/covenant-types/src/lib.rs`) construct action strings as
+# inputs (operator-typed grant strings, helper output) but never call
+# `check_capabilities`, so a hand-rolled string there is not a regression
+# of the same shape and is out of scope. The widening from `lib.rs` to
+# the whole daemon source tree closes the gap a future commit could
+# exploit by landing a `format!` in `http.rs` or `main.rs` (or any new
+# module that joins the daemon crate later) — anything that ends up
+# linked into the daemon binary risks running through a capability check
+# the same way `lib.rs` does.
 #
 # Run from the workspace root (the directory containing `crates/`):
 #
@@ -36,38 +41,48 @@
 
 set -euo pipefail
 
-target="crates/covenantd/src/lib.rs"
+target_dir="crates/covenantd/src"
 
-if [ ! -f "$target" ]; then
-    echo "check-no-display-form-a2a: target file not found: $target" >&2
+if [ ! -d "$target_dir" ]; then
+    echo "check-no-display-form-a2a: target dir not found: $target_dir" >&2
     echo "  Run this script from the cargo workspace root." >&2
     exit 2
 fi
 
-# Production region = lines before the first `#[cfg(test)]` marker.
-# `awk` exits at that line; if the file has no such marker we walk the
-# whole file. A regression that lands a hand-rolled action string in a
-# new file (other than `lib.rs`) is out of scope for this guard — the
-# scope is the file where `check_capabilities` actually runs.
-test_marker_line=$(grep -n '^#\[cfg(test)\]' "$target" | head -1 | cut -d: -f1 || true)
-if [ -z "$test_marker_line" ]; then
-    test_marker_line=$(($(wc -l < "$target") + 1))
-fi
-
 pattern='format!\("a2a\.(send|recv|respond)\.'
 
-matches=$(awk -v end="$test_marker_line" 'NR < end' "$target" \
-    | grep -nE "$pattern" || true)
+# Collect violations across every `.rs` file under the daemon crate's
+# `src/` tree. `find` walks any future submodules without a script
+# update; `sort` makes the output deterministic across filesystems.
+# Each file is scanned only up to its first `#[cfg(test)]` marker so
+# tests stay exempt without lying about coverage.
+violations=""
+while IFS= read -r file; do
+    test_marker_line=$(grep -n '^#\[cfg(test)\]' "$file" | head -1 | cut -d: -f1 || true)
+    if [ -z "$test_marker_line" ]; then
+        test_marker_line=$(($(wc -l < "$file") + 1))
+    fi
 
-if [ -n "$matches" ]; then
+    matches=$(awk -v end="$test_marker_line" 'NR < end' "$file" \
+        | grep -nE "$pattern" || true)
+
+    if [ -n "$matches" ]; then
+        # Prefix each match line with the file path so a single-pass
+        # CI log read points the operator at the offending file
+        # without a separate header line.
+        violations+=$(printf '%s\n' "$matches" | sed -E "s#^#${file}:#")
+        violations+=$'\n'
+    fi
+done < <(find "$target_dir" -name '*.rs' | sort)
+
+if [ -n "$violations" ]; then
     cat >&2 <<EOF
 check-no-display-form-a2a: hand-rolled a2a action string in production code.
 
-Offending lines in $target (line numbers are within the production
-region, before line $test_marker_line):
+Offending lines (line numbers are within each file's production region,
+before its first \`#[cfg(test)]\` marker):
 
-$matches
-
+$violations
 Peer-scoped a2a capability checks must compose both display-form and
 pubkey-b58 alternatives via:
 
@@ -85,4 +100,4 @@ EOF
     exit 1
 fi
 
-echo "check-no-display-form-a2a: ok ($target production region clean)"
+echo "check-no-display-form-a2a: ok ($target_dir production region clean across all .rs files)"

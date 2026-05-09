@@ -35,10 +35,11 @@
       "liveTests": [
         "agent-os/crates/covenantd/tests/live_cli_capabilities_grant_with_expiry.rs",
         "agent-os/crates/covenantd/tests/live_cli_capabilities_recent.rs",
+        "agent-os/crates/covenantd/tests/live_cli_capabilities_revoke.rs",
         "agent-os/crates/covenantd/tests/live_cli_grant_expand.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live capability revoke coverage through the CLI."
+      "nextGap": "Add live capability purge coverage after retention defaults are decided."
     },
     {
       "id": "cli-audit",

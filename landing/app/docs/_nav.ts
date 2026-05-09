@@ -33,6 +33,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/mcp", label: "MCP integration" },
       { href: "/a2a", label: "Agent-to-agent" },
       { href: "/audit", label: "Audit log" },
+      { href: "/audit-integrity", label: "Audit integrity" },
       { href: "/settlement", label: "Settlement" },
     ],
   },

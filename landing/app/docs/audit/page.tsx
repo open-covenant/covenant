@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "Audit log",
   description:
-    "Append-only JSONL audit log: event variants, schema, and how to read it.",
+    "JSONL audit log: event variants, integrity sidecar, schema, and how to read it.",
 };
 
 export default function AuditPage() {
@@ -16,8 +16,9 @@ export default function AuditPage() {
         <code>$COVENANT_HOME/audit/events.jsonl</code>. The log is the
         ground truth — operators read it directly,{" "}
         <code>covenant verify</code> cross-checks it against the other
-        state files, and the <code>covenant audit/recent</code> route
-        reads from the same file.
+        state files, <code>covenant audit verify</code> checks the local
+        hash-chain sidecar, and the <code>covenant audit/recent</code>{" "}
+        route reads from the same file.
       </p>
 
       <h2>Event envelope</h2>
@@ -87,10 +88,14 @@ export default function AuditPage() {
       <h2>Properties</h2>
       <ul>
         <li>
-          <strong>Append-only on disk.</strong> The file is opened for
-          append; the daemon never rewrites prior lines. Backups via{" "}
-          <code>cp</code> or <code>tar</code>; log rotation is the
-          operator&apos;s responsibility.
+          <strong>Append-only during normal writes.</strong> The file is
+          opened for append on event record. Operator-driven retention
+          purge rewrites the retained rows and the sidecar together.
+        </li>
+        <li>
+          <strong>Locally chained.</strong> The daemon writes{" "}
+          <code>$COVENANT_HOME/audit/events.chain.jsonl</code> with a
+          SHA-256 hash chain over retained event rows.
         </li>
         <li>
           <strong>One event per line.</strong> Compatible with{" "}
@@ -137,6 +142,13 @@ export default function AuditPage() {
 curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
       </pre>
 
+      <h3>Verify local chain</h3>
+      <pre>
+        <code>{`covenant audit verify
+curl -s 127.0.0.1:8421/audit/verify \\
+  -H "Authorization: Bearer $COVENANT_OPERATOR_TOKEN" | jq`}</code>
+      </pre>
+
       <h3>Filter for capability checks that failed</h3>
       <pre>
         <code>{`tail -F ~/.covenant/audit/events.jsonl \\
@@ -153,11 +165,11 @@ curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
       <h2>Trust model</h2>
       <p>
         The audit log is local. A user with write access to{" "}
-        <code>$COVENANT_HOME</code> can rewrite history. The daemon does
-        not sign individual events at this layer; protection derives from
-        the operating system&apos;s file permissions and the{" "}
-        <code>covenant verify</code> drift check, which surfaces
-        out-of-band edits that break the cross-references.
+        <code>$COVENANT_HOME</code> can rewrite history. The local
+        hash-chain detects retained-row edits and sidecar mismatch after
+        anchoring, and <code>covenant verify</code> surfaces
+        cross-reference drift. This is not public signing or immutable
+        storage.
       </p>
       <p>
         Deployments where the operator is not the sole writer to the host
@@ -169,6 +181,10 @@ curl -s 127.0.0.1:8421/audit/recent?limit=5 | jq`}</code>
 
       <h2>Related</h2>
       <ul>
+        <li>
+          <Link href="/audit-integrity">Audit integrity</Link> — local
+          hash-chain verification and its limits.
+        </li>
         <li>
           <Link href="/capabilities">Capability tokens</Link> —
           where grants and checks originate.

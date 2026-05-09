@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
@@ -33,6 +34,25 @@ pub struct AuditEvent {
     pub timestamp_ms: u64,
     pub issuer: AgentId,
     pub kind: AuditKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditChainEntry {
+    pub index: u64,
+    pub event_id: Uuid,
+    pub timestamp_ms: u64,
+    pub event_hash_hex: String,
+    pub previous_hash_hex: String,
+    pub chain_hash_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditIntegrityReport {
+    pub events: u64,
+    pub anchors: u64,
+    pub valid: bool,
+    pub root_hash_hex: String,
+    pub failures: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -288,11 +308,116 @@ pub trait AuditLog: Send + Sync {
     /// log grows unbounded for the lifetime of the daemon. Mirrors the
     /// `MemoryStore::purge_older_than` shape.
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError>;
+    /// Verify the audit log's local tamper-evidence chain.
+    async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError>;
 }
 
 pub struct JsonlAuditLog {
     path: PathBuf,
     lock: Arc<Mutex<()>>,
+}
+
+const ZERO_CHAIN_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut out, "{byte:02x}").expect("write to string");
+    }
+    out
+}
+
+fn chain_hash(previous_hash_hex: &str, event_hash_hex: &str) -> String {
+    let material = format!("{previous_hash_hex}\n{event_hash_hex}");
+    sha256_hex(material.as_bytes())
+}
+
+fn chain_entry_for_line(
+    index: usize,
+    event: &AuditEvent,
+    line: &str,
+    previous_hash_hex: &str,
+) -> AuditChainEntry {
+    let event_hash_hex = sha256_hex(line.as_bytes());
+    AuditChainEntry {
+        index: index as u64,
+        event_id: event.id,
+        timestamp_ms: event.timestamp_ms,
+        previous_hash_hex: previous_hash_hex.into(),
+        chain_hash_hex: chain_hash(previous_hash_hex, &event_hash_hex),
+        event_hash_hex,
+    }
+}
+
+fn build_chain_entries(events: &[AuditEvent]) -> Result<Vec<AuditChainEntry>, AuditError> {
+    let mut previous = ZERO_CHAIN_HASH.to_string();
+    let mut entries = Vec::with_capacity(events.len());
+    for (index, event) in events.iter().enumerate() {
+        let line = serde_json::to_string(event)?;
+        let entry = chain_entry_for_line(index, event, &line, &previous);
+        previous = entry.chain_hash_hex.clone();
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+async fn read_events(path: &PathBuf) -> Result<Vec<AuditEvent>, AuditError> {
+    match fs::read_to_string(path).await {
+        Ok(s) => s
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn read_event_lines(path: &PathBuf) -> Result<Vec<String>, AuditError> {
+    match fs::read_to_string(path).await {
+        Ok(s) => Ok(s
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn read_chain_entries(path: &PathBuf) -> Result<Vec<AuditChainEntry>, AuditError> {
+    match fs::read_to_string(path).await {
+        Ok(s) => s
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn write_chain_entries(
+    path: &PathBuf,
+    entries: &[AuditChainEntry],
+) -> Result<(), AuditError> {
+    let mut f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .await?;
+    for entry in entries {
+        let line = serde_json::to_string(entry)?;
+        f.write_all(line.as_bytes()).await?;
+        f.write_all(b"\n").await?;
+    }
+    f.flush().await?;
+    Ok(())
 }
 
 impl JsonlAuditLog {
@@ -310,12 +435,20 @@ impl JsonlAuditLog {
             lock: Arc::new(Mutex::new(())),
         })
     }
+
+    fn chain_path(&self) -> PathBuf {
+        self.path.with_extension("chain.jsonl")
+    }
 }
 
 #[async_trait]
 impl AuditLog for JsonlAuditLog {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
         let _g = self.lock.lock().await;
+        let existing_events = read_events(&self.path).await?;
+        let chain_path = self.chain_path();
+        let existing_chain = read_chain_entries(&chain_path).await?;
+        let rebuild_chain = existing_chain.len() != existing_events.len();
         let line = serde_json::to_string(&event)?;
         let mut f = OpenOptions::new()
             .create(true)
@@ -325,6 +458,29 @@ impl AuditLog for JsonlAuditLog {
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
         f.flush().await?;
+        drop(f);
+
+        if rebuild_chain {
+            let mut events = existing_events;
+            events.push(event);
+            let entries = build_chain_entries(&events)?;
+            write_chain_entries(&chain_path, &entries).await?;
+        } else {
+            let previous_hash = existing_chain
+                .last()
+                .map(|entry| entry.chain_hash_hex.as_str())
+                .unwrap_or(ZERO_CHAIN_HASH);
+            let entry = chain_entry_for_line(existing_chain.len(), &event, &line, previous_hash);
+            let mut chain_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&chain_path)
+                .await?;
+            let chain_line = serde_json::to_string(&entry)?;
+            chain_file.write_all(chain_line.as_bytes()).await?;
+            chain_file.write_all(b"\n").await?;
+            chain_file.flush().await?;
+        }
         Ok(())
     }
 
@@ -360,18 +516,14 @@ impl AuditLog for JsonlAuditLog {
         // the rewrite comes from `tempfile + rename` — readers see either
         // the old log or the new one, never a partial rewrite.
         let _g = self.lock.lock().await;
-        let existing: Vec<AuditEvent> = match fs::read_to_string(&self.path).await {
-            Ok(s) => s
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(serde_json::from_str)
-                .collect::<Result<Vec<_>, _>>()?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(e.into()),
-        };
-        let kept: Vec<&AuditEvent> = existing
+        let existing = read_events(&self.path).await?;
+        if existing.is_empty() {
+            return Ok(0);
+        }
+        let kept: Vec<AuditEvent> = existing
             .iter()
             .filter(|e| e.timestamp_ms >= before_ms)
+            .cloned()
             .collect();
         let purged = (existing.len() - kept.len()) as u64;
         if purged == 0 {
@@ -392,7 +544,71 @@ impl AuditLog for JsonlAuditLog {
         f.flush().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
+        let chain_entries = build_chain_entries(&kept)?;
+        write_chain_entries(&self.chain_path(), &chain_entries).await?;
         Ok(purged)
+    }
+
+    async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError> {
+        let _g = self.lock.lock().await;
+        let event_lines = read_event_lines(&self.path).await?;
+        let anchors = read_chain_entries(&self.chain_path()).await?;
+        let mut failures = Vec::new();
+        if anchors.len() != event_lines.len() {
+            failures.push(format!(
+                "chain length mismatch: {} event(s), {} anchor(s)",
+                event_lines.len(),
+                anchors.len()
+            ));
+        }
+        let mut previous_hash_hex = ZERO_CHAIN_HASH.to_string();
+        for (index, line) in event_lines.iter().enumerate() {
+            let event_hash_hex = sha256_hex(line.as_bytes());
+            let chain_hash_hex = chain_hash(&previous_hash_hex, &event_hash_hex);
+            match serde_json::from_str::<AuditEvent>(line) {
+                Ok(event) => {
+                    let expected = AuditChainEntry {
+                        index: index as u64,
+                        event_id: event.id,
+                        timestamp_ms: event.timestamp_ms,
+                        event_hash_hex,
+                        previous_hash_hex: previous_hash_hex.clone(),
+                        chain_hash_hex: chain_hash_hex.clone(),
+                    };
+                    match anchors.get(index) {
+                        Some(actual) if actual == &expected => {}
+                        Some(_) => failures.push(format!("chain entry {index} mismatch")),
+                        None => failures.push(format!("chain entry {index} missing")),
+                    }
+                }
+                Err(e) => {
+                    failures.push(format!("event line {index} parse error: {e}"));
+                    match anchors.get(index) {
+                        Some(actual)
+                            if actual.index == index as u64
+                                && actual.event_hash_hex == event_hash_hex
+                                && actual.previous_hash_hex == previous_hash_hex
+                                && actual.chain_hash_hex == chain_hash_hex => {}
+                        Some(_) => failures.push(format!("chain entry {index} mismatch")),
+                        None => failures.push(format!("chain entry {index} missing")),
+                    }
+                }
+            }
+            previous_hash_hex = chain_hash_hex;
+        }
+        if anchors.len() > event_lines.len() {
+            failures.push(format!(
+                "{} dangling chain anchor(s)",
+                anchors.len() - event_lines.len()
+            ));
+        }
+        Ok(AuditIntegrityReport {
+            events: event_lines.len() as u64,
+            anchors: anchors.len() as u64,
+            valid: failures.is_empty(),
+            root_hash_hex: previous_hash_hex,
+            failures,
+        })
     }
 }
 
@@ -425,6 +641,21 @@ impl AuditLog for InMemoryAuditLog {
         let len_before = g.len();
         g.retain(|e| e.timestamp_ms >= before_ms);
         Ok((len_before - g.len()) as u64)
+    }
+
+    async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError> {
+        let g = self.events.lock().await;
+        let entries = build_chain_entries(&g)?;
+        Ok(AuditIntegrityReport {
+            events: g.len() as u64,
+            anchors: g.len() as u64,
+            valid: true,
+            root_hash_hex: entries
+                .last()
+                .map(|entry| entry.chain_hash_hex.clone())
+                .unwrap_or_else(|| ZERO_CHAIN_HASH.into()),
+            failures: Vec::new(),
+        })
     }
 }
 
@@ -490,6 +721,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_integrity_report_accepts_untampered_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("error"))).await.unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(report.valid, "{report:?}");
+        assert_eq!(report.events, 2);
+        assert_eq!(report.anchors, 2);
+        assert_eq!(report.root_hash_hex.len(), 64);
+        let chain_raw = std::fs::read_to_string(path.with_extension("chain.jsonl")).unwrap();
+        assert_eq!(chain_raw.lines().filter(|l| !l.is_empty()).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_detects_tampered_event_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, raw.replace("find x", "find y")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(!report.valid);
+        assert!(report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("mismatch")));
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_surfaces_malformed_event_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        std::fs::write(&path, "{bad json}\n").unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(!report.valid);
+        assert!(report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("parse error")));
+    }
+
+    #[tokio::test]
     async fn jsonl_recent_on_missing_file_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
@@ -551,6 +833,10 @@ mod tests {
         let kept = log2.recent(10).await.unwrap();
         assert_eq!(kept.len(), 2);
         assert!(kept.iter().all(|e| e.timestamp_ms >= 150));
+        let report = log2.verify_integrity().await.unwrap();
+        assert!(report.valid, "{report:?}");
+        assert_eq!(report.events, 2);
+        assert_eq!(report.anchors, 2);
     }
 
     #[tokio::test]

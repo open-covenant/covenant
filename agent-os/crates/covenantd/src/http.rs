@@ -130,6 +130,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/tools", get(list_tools))
         .route("/tools/call", post(call_tool))
         .route("/audit/recent", get(audit_recent))
+        .route("/audit/verify", get(audit_verify))
         .route("/audit/purge", post(audit_purge))
         .route("/capabilities/purge", post(capabilities_purge))
         .route("/a2a/tasks", post(send_a2a_task))
@@ -457,6 +458,15 @@ async fn audit_recent(
                 &peer,
             )
             .await,
+    ))
+}
+
+async fn audit_verify(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server.respond(Request::VerifyAuditIntegrity, &peer).await,
     ))
 }
 

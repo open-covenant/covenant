@@ -50,6 +50,9 @@ export default function IpcPage() {
       <pre>
         <code>{`{ "kind": "ping" }
 
+{ "kind": "authenticate",
+  "token_b58": "…" }
+
 { "kind": "submit_intent",
   "text": "…" }
 
@@ -95,6 +98,8 @@ export default function IpcPage() {
 { "kind": "recent_audit",
   "limit": 20 }
 
+{ "kind": "verify_audit_integrity" }
+
 { "kind": "send_a2a_task",      "task":   { ... } }
 { "kind": "try_recv_a2a_task" }
 { "kind": "a2a_queue",          "limit":  20 }
@@ -112,6 +117,12 @@ export default function IpcPage() {
 
       <pre>
         <code>{`{ "kind": "pong" }
+
+{ "kind": "authenticated",
+  "display": "operator@local" }
+
+{ "kind": "authentication_failed",
+  "reason": "…" }
 
 { "kind": "intent_result",
   "intent_id": "uuid",
@@ -143,6 +154,13 @@ export default function IpcPage() {
 { "kind": "tool_list",       "tools":    [ ... ] }
 { "kind": "tool_result",     "content":  [ ... ], "is_error": false }
 { "kind": "audit_events",    "events":   [ ... ] }
+{ "kind": "audit_integrity", "report": {
+    "events": 42,
+    "anchors": 42,
+    "valid": true,
+    "root_hash_hex": "…",
+    "failures": []
+  } }
 { "kind": "a2a_task_queued",   "task_id": "uuid" }
 { "kind": "a2a_task_opt",      "task":    null | { ... } }
 { "kind": "a2a_result_posted", "task_id": "uuid" }
@@ -173,9 +191,10 @@ export default function IpcPage() {
           timeouts.
         </li>
         <li>
-          <strong>Authentication.</strong> Connection to the Unix socket
-          is the sole credential. Any process with read access to{" "}
-          <code>$COVENANT_HOME/sock</code> can submit intents.
+          <strong>Authentication.</strong> The first frame must be{" "}
+          <code>authenticate</code>. The daemon resolves the token through
+          the peer registry and binds the resulting identity to the
+          connection.
         </li>
       </ul>
 

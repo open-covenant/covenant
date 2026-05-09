@@ -40,6 +40,12 @@ export default function CliPage() {
 
   verify [--window N]                Cross-check audit log vs other state.
 
+  audit recent [-n N]                List recent audit events as JSONL.
+  audit verify                       Verify the local audit hash-chain.
+  audit purge
+        (--before-ms M
+         | --older-than-ms D)        Delete audit events older than the threshold.
+
   ignore check <text>                Report whether text matches the
                                      .covenantignore rules.
 
@@ -154,6 +160,12 @@ verify (last 100 records):
 orphans total: 0`}</code>
       </pre>
 
+      <h3>Verify the audit chain</h3>
+      <pre>
+        <code>{`$ covenant audit verify
+{"events":42,"anchors":42,"valid":true,"root_hash_hex":"...","failures":[]}`}</code>
+      </pre>
+
       <h3>Invoke a tool</h3>
       <pre>
         <code>{`$ covenant capabilities grant tool.call.echo
@@ -207,6 +219,10 @@ hello`}</code>
         <li>
           <Link href="/ipc">Local IPC</Link> — the wire protocol
           underneath the CLI.
+        </li>
+        <li>
+          <Link href="/audit-integrity">Audit integrity</Link> — what{" "}
+          <code>audit verify</code> checks.
         </li>
         <li>
           <Link href="/capabilities">Capability tokens</Link> —

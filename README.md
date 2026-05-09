@@ -28,7 +28,7 @@ At a high level, Covenant provides:
 - an **execution substrate** for spawning agents and bounding their runtime behavior;
 - a **policy layer** based on signed capabilities, expiry, revocation, and peer authentication;
 - **persistent project memory** backed by tiered records, embeddings, ignore rules, and read-only drift reports;
-- **audit and provenance** through append-only JSONL logs, signed actions, CI gates, review artifacts, and verifiable commit provenance envelopes;
+- **audit and provenance** through append-only JSONL logs, local hash-chain integrity reports, signed actions, CI gates, review artifacts, and verifiable commit provenance envelopes;
 - **tool orchestration** through native tools, MCP integration, A2A messaging, and local gateway APIs;
 - a path toward **economic settlement** through local receipts today and a Solana program scaffold for future on-chain settlement.
 
@@ -44,12 +44,12 @@ The repository is organized around a small set of operating-layer primitives:
 | Identity | Local ed25519 identity, peer registry, token rotation |
 | Permissions | Signed capabilities, expiry, revocation tombstones, enforcement |
 | Comms | IPC socket, HTTP gateway, MCP adapter, A2A mailbox |
-| Audit | Append-only JSONL events for dispatch, auth, capabilities, peers |
+| Audit | Append-only JSONL events, local hash-chain sidecar, deterministic integrity report |
 | Settlement | Local receipt ledger; Solana program scaffold is experimental |
 
 The architectural center is `agent-os/`: the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer auth, audit, MCP/A2A adapters, and settlement scaffold. The surrounding monorepo contains public docs, web surfaces, contracts, circuits, and services that support or experiment with adjacent protocol layers.
 
-See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), and [agent-os/README.md](./agent-os/README.md) for the build map and capability status.
+See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), and [agent-os/README.md](./agent-os/README.md) for the build map and capability status.
 
 ## Autonomous Development Loop
 
@@ -68,7 +68,7 @@ Implemented and tested in the repository:
 - Rust workspace with `covenantd`, `covenant` CLI, IPC, HTTP, router, runtime, memory, identity, permissions, audit, MCP, A2A, peer-auth, budget, and settlement crates.
 - Signed capability lifecycle: grant, verify, expire, revoke, list, and enforce.
 - Peer authentication, operator token rotation, peer revocation, and peer-scoped A2A capability checks.
-- Append-only audit log with structured event types and bounded recent reads.
+- Append-only audit log with structured event types, bounded recent reads, retention purge, and local hash-chain verification.
 - SQLite-backed memory records with working, episodic, and long-term tiers.
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
@@ -81,7 +81,7 @@ Implemented and tested in the repository:
 | Area | Status | Notes |
 |---|---|---|
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
-| Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation and audit rows. |
+| Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation, audit rows, and local audit hash-chain verification. |
 | Memory | Implemented, hardening | SQLite, embeddings, read-only drift reports, explicit repair commands, and bounded compaction dry-run/apply policy are present; automatic schedules and exact receipt correlation are not claimed. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |

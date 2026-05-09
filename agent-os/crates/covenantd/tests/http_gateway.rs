@@ -163,6 +163,43 @@ async fn auth_failure_lands_in_audit_log() {
 }
 
 #[tokio::test]
+async fn audit_verify_round_trip_after_authenticated_event() {
+    let TestServer { base, token, .. } = spawn_test_server().await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
+
+    let grant: serde_json::Value = client
+        .post(format!("{base}/capabilities/grant"))
+        .json(&json!({ "action": "tool.call.echo" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(grant["kind"], "capability_granted");
+
+    let report: serde_json::Value = client
+        .get(format!("{base}/audit/verify"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(report["kind"], "audit_integrity");
+    assert_eq!(report["report"]["valid"], true);
+    assert_eq!(report["report"]["events"], report["report"]["anchors"]);
+}
+
+#[tokio::test]
 async fn intent_rejects_when_capabilities_missing() {
     let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();

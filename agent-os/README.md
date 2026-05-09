@@ -63,6 +63,7 @@ Common paths:
 | `capabilities/granted.jsonl` | Signed capability grants. |
 | `capabilities/revoked.jsonl` | Capability revocation tombstones. |
 | `audit/events.jsonl` | Append-only audit log. |
+| `audit/events.chain.jsonl` | Local hash-chain sidecar for audit integrity verification. |
 | `memory.db` | SQLite memory store. |
 | `receipts/working.jsonl` | Local settlement receipts. |
 | `runtime/gvisor` | Default scratch root when `COVENANT_RUNTIME_BACKEND=linux-gvisor`. |
@@ -115,5 +116,6 @@ The daemon is the enforcement boundary. Agents, web clients, and CLI calls shoul
 - authenticate before serving privileged requests;
 - check capabilities before dispatching or mutating protected state;
 - record audit rows for important state transitions and rejections;
+- keep the audit hash-chain sidecar consistent when audit retention rewrites retained rows;
 - keep token bytes, private keys, and secrets out of logs and responses;
 - add tests for both success and failure paths when changing protocol behavior.

@@ -10,7 +10,7 @@ const SURFACES = [
   ["Daemon IPC core", "covered", "daemon and CLI intent dispatch"],
   ["HTTP gateway", "mock only", "real daemon gateway smoke test"],
   ["CLI capability lifecycle", "covered", "capability revoke"],
-  ["CLI audit feed", "covered", "audit purge after retention policy"],
+  ["CLI audit feed", "covered", "audit integrity live CLI smoke"],
   ["Peer authentication", "covered", "operator self-revoke rejection"],
   ["Peer listing", "covered", "ambiguous-prefix listing"],
   ["A2A mailbox", "covered", "explicit requeue repair"],

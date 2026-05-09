@@ -6,7 +6,7 @@
 #![deny(unsafe_code)]
 
 use covenant_a2a::{A2ARepairOutcome, A2ARepairRequest, A2ATask, A2ATaskQueueEntry, A2ATaskResult};
-use covenant_audit::AuditEvent;
+use covenant_audit::{AuditEvent, AuditIntegrityReport};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -150,6 +150,7 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    VerifyAuditIntegrity,
     /// Drop audit events strictly older than `before_ms`. Operator-driven
     /// retention; no scheduled compaction in v0.
     PurgeAudit {
@@ -378,6 +379,9 @@ pub enum Response {
     },
     AuditEvents {
         events: Vec<AuditEvent>,
+    },
+    AuditIntegrity {
+        report: AuditIntegrityReport,
     },
     AuditPurged {
         purged: u64,

@@ -38,8 +38,9 @@ export default function HttpApiPage() {
           <code>{"{ \"error\": \"…\" }"}</code>.
         </li>
         <li>
-          CORS is permissive. The gateway is intended for local use only
-          and must not be exposed beyond loopback.
+          CORS uses an explicit origin allow-list. Default is{" "}
+          <code>http://localhost:3000</code>; override with{" "}
+          <code>COVENANT_HTTP_ORIGINS</code>.
         </li>
       </ul>
 
@@ -142,7 +143,19 @@ POST /tools/call
       <h3>Audit</h3>
       <pre>
         <code>{`GET /audit/recent?limit=20
-→ 200 { "kind": "audit_events", "events": [ ... ] }`}</code>
+→ 200 { "kind": "audit_events", "events": [ ... ] }
+
+GET /audit/verify
+→ 200 {
+    "kind": "audit_integrity",
+    "report": {
+      "events": 42,
+      "anchors": 42,
+      "valid": true,
+      "root_hash_hex": "…",
+      "failures": []
+    }
+  }`}</code>
       </pre>
 
       <h3>Agent-to-agent</h3>
@@ -164,12 +177,12 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
 
       <h2>Authentication</h2>
       <p>
-        The HTTP gateway provides no token authentication; access to the
-        loopback interface is the sole credential. Any process that can
-        connect to <code>127.0.0.1:8421</code> can submit intents and
-        grant capabilities. A subsequent milestone introduces capability
-        gating on the HTTP surface; until then the gateway must not be
-        exposed beyond loopback.
+        Every route except <code>/health</code> requires{" "}
+        <code>Authorization: Bearer &lt;token&gt;</code>. The token must
+        resolve to a live peer in the daemon registry, matching the
+        Unix-socket authentication model. The gateway still binds to
+        loopback by default and should not be exposed directly to an
+        untrusted network.
       </p>
 
       <h2>Related</h2>

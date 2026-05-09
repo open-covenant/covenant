@@ -1,0 +1,40 @@
+{
+  "id": "audit-tamper-evidence",
+  "title": "Add audit tamper-evidence reports",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-audit",
+    "agent-os/crates/covenant-ipc",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant",
+    "docs"
+  ],
+  "summary": "Add a lightweight tamper-evidence layer for the audit log: hash-chain sidecar entries for JSONL audit events, deterministic verification reports, operator-facing CLI/HTTP/IPC surfaces, and retention documentation.",
+  "expectedFailureModes": [
+    "Existing audit readers break when a chain sidecar is present.",
+    "Purging old audit events leaves stale hash-chain anchors that make a valid retained log look corrupt.",
+    "The integrity report claims cryptographic publication or non-repudiation before public signing and transparency-log policy exist.",
+    "A non-operator peer can inspect global audit integrity metadata across peers."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-audit --locked",
+    "cd agent-os && cargo test -p covenantd audit_integrity --locked",
+    "cd agent-os && cargo test -p covenantd audit_verify_round_trip_after_authenticated_event --locked",
+    "cd agent-os && cargo test -p covenant audit --locked",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [
+    "Approval before public signing keys, transparency-log publication, or changing audit retention defaults"
+  ],
+  "nextAction": "Integrated locally; next audit hardening slice should define public root signing, transparency publication, and immutable retention policy before release claims.",
+  "updated": "2026-05-09"
+}

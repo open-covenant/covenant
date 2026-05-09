@@ -493,6 +493,7 @@ impl Server {
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
             Request::RecentAudit { limit } => self.recent_audit(limit, peer).await,
+            Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
                 self.purge_capabilities(before_ms, peer).await
@@ -1341,6 +1342,20 @@ impl Server {
         }
         match self.audit.purge_older_than(before_ms).await {
             Ok(purged) => Response::AuditPurged { purged },
+            Err(e) => Response::Error {
+                message: format!("audit: {e}"),
+            },
+        }
+    }
+
+    async fn verify_audit_integrity(&self, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "audit integrity verification requires the operator identity".into(),
+            };
+        }
+        match self.audit.verify_integrity().await {
+            Ok(report) => Response::AuditIntegrity { report },
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },
@@ -5324,6 +5339,42 @@ required = {caps:?}
                     events.iter().all(|e| e.issuer.pubkey == me.pubkey),
                     "filter must keep operator's rows"
                 );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_integrity_returns_report_for_operator() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s.op_respond(Request::VerifyAuditIntegrity).await;
+        match resp {
+            Response::AuditIntegrity { report } => {
+                assert!(report.valid, "{report:?}");
+                assert!(report.events > 0);
+                assert_eq!(report.events, report.anchors);
+                assert_eq!(report.root_hash_hex.len(), 64);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_integrity_rejects_non_operator() {
+        let s = server_with(vec![], "");
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+
+        let resp = s.respond(Request::VerifyAuditIntegrity, &foreign).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
             }
             other => panic!("unexpected: {other:?}"),
         }

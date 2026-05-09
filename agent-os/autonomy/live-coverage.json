@@ -50,7 +50,7 @@
         "agent-os/crates/covenantd/tests/live_cli_audit_recent.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live audit purge coverage only after retention policy is documented."
+      "nextGap": "Add a live CLI smoke test for audit integrity verification."
     },
     {
       "id": "peer-auth",

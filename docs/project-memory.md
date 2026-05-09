@@ -13,6 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
+- Audit logs have local SHA-256 hash-chain sidecars and operator-only integrity reports.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, and opt-in live Linux gVisor coverage.
@@ -34,10 +35,11 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 
 - No production sandbox for untrusted agents.
 - No production on-chain settlement.
-- No public signing identity policy or transparency-log publication for agent-produced artifacts.
+- No public signing identity policy or transparency-log publication for agent-produced artifacts or audit roots.
 - No installer or stable SDK ecosystem.
 - Multi-peer operation is experimental.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
+- Audit integrity is local tamper evidence only; immutable retention, public root signing, and transparency-log publication are not implemented.
 - A2A has lease-age status filters plus manual requeue and force-error repair through IPC, HTTP, and CLI; automatic retry remains disabled until task classes can declare idempotency safely.
 
 ## Human Authority Boundary
@@ -59,6 +61,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
+- [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.

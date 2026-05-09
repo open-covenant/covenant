@@ -8,7 +8,7 @@ This status matrix separates what exists from what is experimental or planned. U
 | IPC and HTTP gateway | Implemented | `covenant-ipc`, `covenantd/src/http.rs`, `http_gateway.rs` tests | Add version negotiation and compatibility tests. |
 | Identity and peer auth | Implemented | `covenant-identity`, `covenant-peer-auth`, token rotation tests | Public attestation and key provenance. |
 | Signed capabilities | Implemented | `covenant-permissions`, capability enforcement tests | Formalize scope schemas per action namespace. |
-| Audit log | Implemented | `covenant-audit`, daemon audit event tests | Add retention policy docs and tamper-evidence design. |
+| Audit log | Implemented, hardening | `covenant-audit`, daemon audit event tests, local hash-chain sidecar, CLI/HTTP/IPC integrity report | Public root signing, transparency-log publication, and immutable retention policy. |
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports, daemon/HTTP/CLI repair commands, bounded daemon/HTTP/CLI compaction commands, repair and compaction audit rows | Automatic compaction schedules and exact record-to-receipt correlation. |
 | Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |

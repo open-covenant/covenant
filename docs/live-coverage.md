@@ -29,7 +29,7 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 | Daemon IPC core | Covered | `live_daemon.rs`, `live_cli_intent_dispatch.rs` | Resume-intent coverage after repair semantics settle. |
 | HTTP gateway | Covered | `live_http_gateway.rs` | `/tools/call` round trip through the daemon. |
 | CLI capability lifecycle | Covered | grant, grant with expiry, recent | Capability revoke through the CLI. |
-| CLI audit feed | Covered | audit recent | Audit purge after retention policy is documented. |
+| CLI audit feed | Covered | audit recent | Audit integrity live CLI smoke. |
 | Peer authentication and token lifecycle | Covered | auth rejection, revoke, restart revoke, token rotation | Operator self-revoke rejection through the CLI. |
 | Peer listing and status filters | Covered | list, live-only, revoked-only | Ambiguous-prefix coverage after machine-readable output exists. |
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI repair, restart replay | Stale-lease guard failure coverage after machine-readable status output stabilizes. |

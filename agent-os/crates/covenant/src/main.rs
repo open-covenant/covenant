@@ -160,10 +160,10 @@ fn print_usage() {
         "  covenant peers revoke <TOKEN-PREFIX> [--force] [--limit-matches N] [--json]  revoke a single peer by its token prefix (operator-only); --json emits one stable machine-readable outcome"
     );
     eprintln!(
-        "  covenant intents resume <intent-id> [--json]  re-dispatch a previously budget-rejected intent"
+        "  covenant intents resume <intent-id> [--json]     re-dispatch a previously budget-rejected intent"
     );
     eprintln!(
-        "  covenant intents resume latest [--json]       re-dispatch the most recent budget-rejected intent"
+        "  covenant intents resume latest [--json]          re-dispatch the most recent budget-rejected intent"
     );
 }
 
@@ -172,6 +172,45 @@ struct MemoryReadJsonArgs {
     tier: Option<MemoryTier>,
     limit: usize,
     query: Option<String>,
+}
+
+async fn resolve_intents_resume_intent_id(
+    stream: &mut UnixStream,
+    want_latest: bool,
+    explicit_id: Option<&str>,
+) -> Result<uuid::Uuid> {
+    if want_latest {
+        if explicit_id.is_some() {
+            bail!("covenant intents resume: pass either <intent-id> or latest, not both");
+        }
+        let limit = 200;
+        write_frame(stream, &Request::RecentAudit { limit }).await?;
+        let events = match read_frame::<_, Response>(stream).await? {
+            Response::AuditEvents { events } => events,
+            Response::Error { message } => bail!("daemon error: {message}"),
+            other => bail!("unexpected response: {other:?}"),
+        };
+        let mut latest: Option<(u64, uuid::Uuid)> = None;
+        for e in events {
+            let id = match e.kind {
+                AuditKind::BudgetExhausted { intent_id, .. } => intent_id,
+                _ => continue,
+            };
+            match latest {
+                Some((ts, _)) if ts >= e.timestamp_ms => {}
+                _ => latest = Some((e.timestamp_ms, id)),
+            }
+        }
+        return latest.map(|(_, id)| id).context(
+            "no BudgetExhausted audit row found in recent audit feed (try `covenant audit recent`)",
+        );
+    }
+
+    let intent_id_str =
+        explicit_id.context("covenant intents resume: missing <intent-id> or latest")?;
+    intent_id_str
+        .parse()
+        .with_context(|| format!("intent-id must be a uuid, got {intent_id_str:?}"))
 }
 
 async fn print_memory_response(
@@ -1866,7 +1905,7 @@ async fn main() -> Result<()> {
         }
         "intents" => {
             if args.len() < 2 || args[1] != "resume" {
-                eprintln!("covenant intents: expected `resume <intent-id>|latest`");
+                eprintln!("covenant intents: expected `resume [--json] <intent-id>|latest`");
                 std::process::exit(2);
             }
             let mut explicit_id: Option<String> = None;
@@ -1885,75 +1924,61 @@ async fn main() -> Result<()> {
                 i += 1;
             }
 
-            let intent_id = if want_latest {
-                if explicit_id.is_some() {
-                    bail!("covenant intents resume: pass either <intent-id> or latest, not both");
-                }
-                let limit = 200;
-                write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
-                let events = match read_frame::<_, Response>(&mut stream).await? {
-                    Response::AuditEvents { events } => events,
-                    Response::Error { message } => bail!("daemon error: {message}"),
-                    other => bail!("unexpected response: {other:?}"),
-                };
-                let mut latest: Option<(u64, uuid::Uuid)> = None;
-                for e in events {
-                    let id = match e.kind {
-                        AuditKind::BudgetExhausted { intent_id, .. } => intent_id,
-                        _ => continue,
-                    };
-                    match latest {
-                        Some((ts, _)) if ts >= e.timestamp_ms => {}
-                        _ => latest = Some((e.timestamp_ms, id)),
+            let mode = if want_latest { "latest" } else { "explicit" };
+
+            let intent_id = match resolve_intents_resume_intent_id(
+                &mut stream,
+                want_latest,
+                explicit_id.as_deref(),
+            )
+            .await
+            {
+                Ok(intent_id) => intent_id,
+                Err(err) => {
+                    if as_json {
+                        let message = err.to_string();
+                        let code = intents_resume_error_code(&message);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&intents_resume_error_json(
+                                mode, None, code, &message
+                            ))?
+                        );
+                        std::process::exit(1);
                     }
+                    return Err(err);
                 }
-                latest
-                    .map(|(_, id)| id)
-                    .context(
-                        "no BudgetExhausted audit row found in recent audit feed (try `covenant audit recent`)",
-                    )?
-            } else {
-                let intent_id_str = explicit_id
-                    .as_deref()
-                    .context("covenant intents resume: missing <intent-id> or latest")?;
-                intent_id_str
-                    .parse()
-                    .with_context(|| format!("intent-id must be a uuid, got {intent_id_str:?}"))?
             };
+
             write_frame(&mut stream, &Request::ResumeIntent { intent_id }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::IntentResult {
-                    intent_id: result_intent_id,
+                    intent_id,
                     status,
                     text,
                     sources,
                     settlement,
                 } => {
                     if as_json {
-                        let result = intent_result_json(
-                            result_intent_id,
-                            &status,
-                            &text,
-                            &sources,
-                            settlement.as_ref(),
-                        );
                         println!(
                             "{}",
-                            serde_json::to_string(&intent_resume_json(
+                            serde_json::to_string(&intents_resume_ok_json(
+                                mode,
                                 intent_id,
-                                "ok",
-                                Some(result),
-                                None,
+                                &status,
+                                &text,
+                                &sources,
+                                &settlement
                             ))?
                         );
-                    } else {
-                        println!("{text}");
-                        if !sources.is_empty() {
-                            println!();
-                            println!("sources:");
-                            for s in sources {
-                                println!("  - {s}");
-                            }
+                        return Ok(());
+                    }
+                    println!("{text}");
+                    if !sources.is_empty() {
+                        println!();
+                        println!("sources:");
+                        for s in sources {
+                            println!("  - {s}");
                         }
                     }
                 }
@@ -1961,19 +1986,32 @@ async fn main() -> Result<()> {
                     if as_json {
                         println!(
                             "{}",
-                            serde_json::to_string(&intent_resume_json(
-                                intent_id,
-                                "error",
-                                None,
-                                Some(&message),
+                            serde_json::to_string(&intents_resume_error_json(
+                                mode,
+                                Some(intent_id),
+                                "daemon_error",
+                                &message
                             ))?
                         );
                         std::process::exit(1);
-                    } else {
-                        bail!("daemon error: {message}");
                     }
+                    bail!("daemon error: {message}")
                 }
-                other => bail!("unexpected response: {other:?}"),
+                other => {
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&intents_resume_error_json(
+                                mode,
+                                Some(intent_id),
+                                "unexpected_response",
+                                &format!("{other:?}")
+                            ))?
+                        );
+                        std::process::exit(1);
+                    }
+                    bail!("unexpected response: {other:?}")
+                }
             }
         }
         "ignore" => {
@@ -2243,21 +2281,6 @@ fn intent_result_json(
     })
 }
 
-fn intent_resume_json(
-    resumed_intent_id: uuid::Uuid,
-    status: &str,
-    result: Option<serde_json::Value>,
-    message: Option<&str>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "kind": "intent_resume",
-        "resumed_intent_id": resumed_intent_id,
-        "status": status,
-        "result": result,
-        "message": message,
-    })
-}
-
 fn ping_json() -> serde_json::Value {
     serde_json::json!({
         "kind": "daemon_ping",
@@ -2465,6 +2488,61 @@ fn peer_revoke_json(outcome: &RevokeOutcome) -> serde_json::Value {
     serde_json::json!({
         "kind": "peer_revoke",
         "outcome": outcome,
+    })
+}
+
+fn intents_resume_error_code(message: &str) -> &'static str {
+    if message.contains("no BudgetExhausted audit row found") {
+        return "no_budget_exhausted_row";
+    }
+    if message.contains("missing <intent-id>") {
+        return "missing_intent_id";
+    }
+    if message.contains("intent-id must be a uuid") || message.contains("intent-id must be a UUID")
+    {
+        return "invalid_intent_id";
+    }
+    if message.contains("pass either <intent-id> or latest") {
+        return "conflicting_flags";
+    }
+    "error"
+}
+
+fn intents_resume_ok_json(
+    mode: &str,
+    intent_id: uuid::Uuid,
+    status: &str,
+    text: &str,
+    sources: &[String],
+    settlement: &Option<SettlementReceipt>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "intents_resume",
+        "ok": true,
+        "mode": mode,
+        "intent_id": intent_id,
+        "status": status,
+        "text": text,
+        "sources": sources,
+        "settlement": settlement,
+    })
+}
+
+fn intents_resume_error_json(
+    mode: &str,
+    intent_id: Option<uuid::Uuid>,
+    code: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "intents_resume",
+        "ok": false,
+        "mode": mode,
+        "intent_id": intent_id,
+        "error": {
+            "code": code,
+            "message": message,
+        }
     })
 }
 
@@ -2835,6 +2913,43 @@ mod tests {
     }
 
     #[test]
+    fn intents_resume_json_renders_stable_error_shape() {
+        let intent_id = uuid::Uuid::nil();
+        let value = intents_resume_error_json(
+            "latest",
+            Some(intent_id),
+            "daemon_error",
+            "budget exhausted; try again later",
+        );
+        assert_eq!(value["kind"], "intents_resume");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["mode"], "latest");
+        assert_eq!(value["intent_id"], intent_id.to_string());
+        assert_eq!(value["error"]["code"], "daemon_error");
+        assert!(value["error"]["message"].as_str().is_some());
+    }
+
+    #[test]
+    fn intents_resume_json_renders_stable_ok_shape() {
+        let intent_id = uuid::Uuid::nil();
+        let value = intents_resume_ok_json(
+            "explicit",
+            intent_id,
+            "ok",
+            "resumed intent text",
+            &["a".into(), "b".into()],
+            &None,
+        );
+        assert_eq!(value["kind"], "intents_resume");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["mode"], "explicit");
+        assert_eq!(value["intent_id"], intent_id.to_string());
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["sources"][0], "a");
+        assert!(value["settlement"].is_null());
+    }
+
+    #[test]
     fn receipt_list_json_renders_stable_shape() {
         let payer = AgentId::new("payer@local", [3u8; 32]);
         let receipt = SettlementReceipt {
@@ -2881,32 +2996,6 @@ mod tests {
         assert_eq!(value["text"], "phase 0 echo");
         assert_eq!(value["sources"][0], "research");
         assert!(value["settlement"].is_null());
-    }
-
-    #[test]
-    fn intent_resume_json_renders_success_and_error_shapes() {
-        let result = intent_result_json(
-            uuid::Uuid::nil(),
-            "ok",
-            "resumed",
-            &["research".into()],
-            None,
-        );
-        let resumed = intent_resume_json(uuid::Uuid::nil(), "ok", Some(result), None);
-
-        assert_eq!(resumed["kind"], "intent_resume");
-        assert_eq!(resumed["resumed_intent_id"], uuid::Uuid::nil().to_string());
-        assert_eq!(resumed["status"], "ok");
-        assert_eq!(resumed["result"]["kind"], "intent_result");
-        assert_eq!(resumed["result"]["text"], "resumed");
-        assert!(resumed["message"].is_null());
-
-        let errored =
-            intent_resume_json(uuid::Uuid::nil(), "error", None, Some("budget exhausted"));
-        assert_eq!(errored["kind"], "intent_resume");
-        assert_eq!(errored["status"], "error");
-        assert!(errored["result"].is_null());
-        assert_eq!(errored["message"], "budget exhausted");
     }
 
     #[test]

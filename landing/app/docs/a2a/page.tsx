@@ -118,7 +118,8 @@ A2ATaskResult {
         daemon persists and validates the metadata. An explicit{" "}
         <code>retry-stale</code> scan can requeue only stale idempotent
         tasks when the operator passes <code>--enable</code>; skipped
-        tasks stay visible in the report.
+        tasks stay visible in the report. See{" "}
+        <Link href="/a2a-idempotency">A2A idempotency policy</Link>.
       </p>
 
       <h2>Daemon-mediated flow</h2>

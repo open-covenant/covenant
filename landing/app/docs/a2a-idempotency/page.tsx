@@ -1,0 +1,151 @@
+import Link from "next/link";
+
+export const metadata = {
+  title: "A2A idempotency policy",
+  description:
+    "The idempotency metadata, retry gate, and receiver obligations for A2A task redelivery.",
+};
+
+export default function A2AIdempotencyPolicyPage() {
+  return (
+    <>
+      <h1>A2A idempotency policy</h1>
+      <p>
+        Covenant A2A is a durable, explicitly leased queue. It does not
+        automatically redeliver leased work after restart. Operators can repair
+        stale leases explicitly, and a disabled-by-default retry scan can
+        requeue only stale tasks that declare idempotent duplicate safety and
+        carry a non-empty key.
+      </p>
+
+      <h2>Terms</h2>
+      <ul>
+        <li>
+          <strong>Attempt.</strong> One lease and execution of a task.
+        </li>
+        <li>
+          <strong>Duplicate execution.</strong> A task is executed more than
+          once (for example, the receiver crashes after performing work but
+          before posting a result).
+        </li>
+        <li>
+          <strong>Retry.</strong> Requeueing a task for another attempt without
+          changing the task id.
+        </li>
+      </ul>
+
+      <h2>Policy goals</h2>
+      <ol>
+        <li>Make duplicate-work risk explicit and machine-checkable.</li>
+        <li>Prevent silent duplicate side effects when automation requeues.</li>
+        <li>Keep retries visible via attempt counters and audit rows.</li>
+      </ol>
+
+      <h2>Task metadata</h2>
+      <p>
+        Tasks may carry explicit idempotency metadata in the{" "}
+        <code>A2ATask</code> envelope. The daemon validates that a present key
+        is non-empty, persists the metadata, and returns it through
+        queue/status surfaces.
+      </p>
+
+      <h3>Idempotency class</h3>
+      <ul>
+        <li>
+          <code>idempotent</code>: executing the task multiple times with the
+          same task id is safe. Any side effects must be keyed or conditional
+          such that duplicates do not create new external effects.
+        </li>
+        <li>
+          <code>unsafe</code>: duplicate execution may cause external effects.
+          The system must not automatically requeue these tasks.
+        </li>
+      </ul>
+      <p>
+        Manual repair still uses <code>operator_accepted</code> as an explicit
+        human posture. The automated retry gate only accepts task metadata
+        marked <code>idempotent</code>.
+      </p>
+
+      <h3>Idempotency key</h3>
+      <p>
+        The idempotency key is a stable, caller-chosen key for the logical work
+        unit. For tasks that call external systems that support explicit keys,
+        senders should provide the same key so receivers can forward it
+        consistently.
+      </p>
+
+      <h2>Explicit retry gate</h2>
+      <p>
+        <code>covenant a2a retry-stale</code> is disabled by default and reports
+        what it would do unless the operator passes <code>--enable</code>.
+      </p>
+      <ol>
+        <li>
+          Never synthesize a new task id. Retries requeue the same task id and
+          increment the attempt counter on the next lease.
+        </li>
+        <li>Retry only tasks marked <code>idempotent</code>.</li>
+        <li>Skip tasks without a non-empty idempotency key.</li>
+        <li>
+          Make retry decisions observable via <code>auto_requeue</code> audit
+          rows and skipped-task report entries.
+        </li>
+        <li>
+          Bound retry behavior with explicit maximum attempts, maximum requeues,
+          minimum lease age, and scan limits.
+        </li>
+      </ol>
+
+      <h2>Receiver obligations</h2>
+      <p>Receivers may claim <code>idempotent</code> only when:</p>
+      <ul>
+        <li>
+          persistent writes are conditional on the task id (or explicit
+          idempotency key) so replays do not create new records;
+        </li>
+        <li>
+          external calls that support idempotency keys receive the key
+          consistently across retries;
+        </li>
+        <li>
+          results are safe to post multiple times (posting the same result twice
+          must not corrupt mailbox state).
+        </li>
+      </ul>
+      <p>
+        If any step cannot be made idempotent, classify the task as{" "}
+        <code>operator_accepted</code>.
+      </p>
+
+      <h2>Relationship to manual repair</h2>
+      <p>
+        Manual lease repair already requires an explicit duplicate-risk posture
+        (<code>idempotent</code> vs <code>operator_accepted</code>). The retry
+        gate is effectively a daemon-initiated requeue, so it must use task
+        metadata and must never bypass this classification.
+      </p>
+
+      <h2>Follow-up work</h2>
+      <ul>
+        <li>Persist receiver-side idempotency results keyed by work unit.</li>
+        <li>
+          Add periodic retry scheduling only after receiver-side deduplication
+          exists.
+        </li>
+      </ul>
+
+      <h2>Related</h2>
+      <ul>
+        <li>
+          <Link href="/a2a">Agent-to-agent</Link> — A2A envelopes and mailbox
+          surface.
+        </li>
+        <li>
+          <Link href="/live-coverage">Live coverage</Link> — boundary test
+          inventory.
+        </li>
+      </ul>
+    </>
+  );
+}

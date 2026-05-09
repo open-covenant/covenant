@@ -65,9 +65,7 @@ node agent-os/scripts/provenance.mjs audit-root verify \\
         Provenance envelopes are experimental. They are consistency evidence,
         not release signatures and not transparency-log entries. Audit-root
         attestations are generated and verified, but they remain unsigned until
-        a project signing identity is selected. Key custody, release artifact
-        subjects, and transparency-log publication are tracked as release
-        hardening work.
+        a project signing identity is selected. Key custody and transparency-log publication remain planned work. Release artifact subject schema is defined, but not implemented or published yet.
       </p>
 
       <p>

@@ -3,7 +3,7 @@
   "title": "Define A2A retry idempotency policy",
   "state": "integrated",
   "priority": "medium",
-  "ownerRole": "planner",
+  "ownerRole": "implementer",
   "scope": [
     "docs/a2a-queue-semantics.md",
     "docs",
@@ -26,6 +26,6 @@
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Write the A2A idempotency policy and convert automatic retry into concrete implementation tasks.",
+  "nextAction": "Continue with the next autonomous backlog item.",
   "updated": "2026-05-09"
 }

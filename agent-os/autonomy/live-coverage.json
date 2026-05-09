@@ -123,6 +123,19 @@
       "nextGap": "Add live failure-path coverage for malformed agent stdout."
     },
     {
+      "id": "runtime-linux-gvisor",
+      "name": "Linux gVisor runtime dispatch",
+      "mockTests": [
+        "agent-os/crates/covenant-runtime/src/lib.rs",
+        "agent-os/crates/covenantd/src/lib.rs"
+      ],
+      "liveTests": [
+        "agent-os/crates/covenant-runtime/tests/live_gvisor.rs"
+      ],
+      "status": "external_service",
+      "nextGap": "Run the opt-in live test on a Linux host with runsc and a minimal /bin/sh rootfs before claiming sandbox-grade execution."
+    },
+    {
       "id": "budget-enforcement",
       "name": "Budget enforcement",
       "mockTests": [

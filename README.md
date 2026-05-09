@@ -86,7 +86,7 @@ Implemented and tested in the repository:
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery and queue-state inspection. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |
-| Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup. Live Linux coverage and Firecracker isolation are future work. |
+| Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage exists. Repeatable CI coverage and Firecracker isolation are future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |
 

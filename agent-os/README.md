@@ -91,6 +91,13 @@ COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
 
 The daemon fails startup when `linux-gvisor` is selected without a rootfs. Trusted-local execution refuses manifests that declare `sandbox.required = true`; it does not silently downgrade sandbox-required agents.
 
+The real `runsc` dispatch path has ignored live coverage. It is skipped unless a Linux host rootfs is provided:
+
+```bash
+COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_
+```
+
 ## Crate Groups
 
 | Group | Crates |

@@ -10,14 +10,14 @@ This status matrix separates what exists from what is experimental or planned. U
 | Signed capabilities | Implemented | `covenant-permissions`, capability enforcement tests | Formalize scope schemas per action namespace. |
 | Audit log | Implemented | `covenant-audit`, daemon audit event tests | Add retention policy docs and tamper-evidence design. |
 | Memory store | Implemented, hardening | `covenant-memory`, SQLite, embedding tests, read-only drift reports, repair primitives | Daemon/CLI repair surface, audit rows, compaction, stale-context handling. |
-| Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests | Live Linux `runsc` coverage and documented host requirements. |
+| Runtime execution | Partially implemented | `covenant-runtime`, subprocess timeout tests, manifest sandbox requirement parsing, daemon backend selection, initial `runsc` OCI runner tests, opt-in live Linux gVisor dispatch test | Repeatable Linux CI host requirements and broader sandbox policy enforcement. |
 | MCP tools | Experimental | `covenant-mcp`, native/external transport tests | More live server compatibility tests. |
 | A2A messaging | Implemented, hardening | `covenant-a2a`, leased queue state, restart live tests, repair primitives | Daemon/CLI repair surface and audit rows. |
 | Budget ledger | Implemented | `covenant-budget`, daemon budget tests | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests | Stronger reconciliation and drift reports. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
 | Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log | Signed review artifacts and stronger sprint summaries. |
-| Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests | Add HTTP gateway and CLI revoke live coverage. |
+| Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, external-service gVisor coverage entry | Add CLI revoke live coverage and a documented Linux runner for gVisor validation. |
 | Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations` | Signing identity policy, release artifact subjects, transparency-log publication. |
 | Installer and SDK ecosystem | Planned | No stable release path | Define alpha release contract after sandbox and settlement boundaries harden. |
 

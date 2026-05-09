@@ -1,7 +1,7 @@
 {
   "id": "runtime-gvisor-live-coverage",
   "title": "Add live Linux gVisor runtime coverage",
-  "state": "triaged",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

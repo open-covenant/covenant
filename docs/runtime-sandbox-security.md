@@ -12,13 +12,14 @@ Implemented:
 - `GvisorRunner` prepares a restrictive OCI bundle and invokes `runsc`.
 - The initial `GvisorRunner` supports `filesystem = "read-only-package"` and `network = "off"` only.
 - `covenantd` can select `trusted-local` or `linux-gvisor` at startup through explicit runtime backend configuration.
+- The live coverage matrix includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
 - Sandbox stderr redacts configured host-local paths before surfacing failure text.
 
 Not implemented:
 
-- Live Linux `runsc` validation is not wired into the test matrix yet.
 - `outbound-https-only`, `full`, `ephemeral`, and `host` sandbox policies are not enforced by the initial runner; they fail closed instead.
 - macOS execution is trusted-local only.
+- Default CI does not provision the Linux host, `runsc`, or rootfs needed for live sandbox validation.
 
 ## Trust Boundary
 
@@ -76,9 +77,27 @@ COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
 
 `COVENANT_GVISOR_ROOTFS` is required for `linux-gvisor`. Missing or unknown backend configuration fails daemon startup. Runtime execution errors from `runsc` are surfaced as dispatch failures; Covenant must not fall back to trusted-local execution for sandbox-required agents.
 
+## Live gVisor Validation
+
+The runtime crate has an opt-in live test for the real `runsc` dispatch path. It is intentionally ignored by default because the host requirements are not portable:
+
+```bash
+cd agent-os
+COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
+  cargo test -p covenant-runtime --test live_gvisor -- --ignored live_
+```
+
+Optional:
+
+```bash
+COVENANT_LIVE_RUNSC=/path/to/runsc
+```
+
+The rootfs must contain `/bin/sh`. When the rootfs is not provided, the test takes a prerequisite-skip path and exits successfully. When the rootfs is provided, missing `runsc`, invalid rootfs layout, sandbox startup failure, or fallback behavior is a test failure.
+
 ## First Production Backend
 
-The accepted first production sandbox backend is Linux gVisor through `runsc`. The runtime crate contains the first runner boundary and the daemon can select it explicitly, but Covenant cannot claim production sandbox-grade local execution until live Linux coverage and host requirements are complete. The backend must meet this minimum contract:
+The accepted first production sandbox backend is Linux gVisor through `runsc`. The runtime crate contains the first runner boundary, the daemon can select it explicitly, and an opt-in live dispatch test exists. Covenant still cannot claim production sandbox-grade local execution until Linux host requirements and repeatable CI coverage are complete. The backend must meet this minimum contract:
 
 - prepare an OCI bundle from the agent package without mounting the host home directory;
 - mount the agent package read-only unless the manifest explicitly requests an ephemeral writable layer;

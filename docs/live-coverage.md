@@ -47,7 +47,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | State verifier | Covered | CLI `verify --json` on a real daemon | Live drift fixture that asserts non-zero exit with actionable repair hints. |
 | Memory retention | Covered | CLI memory read JSON, CLI memory purge JSON | Live repair and compaction fixtures that assert memory/audit/receipt consistency. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call | High-risk mutation endpoints as retention and recovery policies stabilize. |
-| CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
+| CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit purge JSON, audit recent, audit verify | Scoped audit purge rejection coverage once retention policy defaults are stable. |
 | Ignore policy gate | Covered | CLI ignore check JSON | Live dispatch fixture proving ignored intents never write memory or receipts. |
 | Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures. |

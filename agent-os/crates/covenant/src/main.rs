@@ -12,7 +12,7 @@
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
 //!   covenant capabilities recent [--limit N] [--json]
 //!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] [--json]
-//!   covenant capabilities revoke <signature-b58>
+//!   covenant capabilities revoke <signature-b58> [--json]
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant receipts recent [--limit N] [--json]
 //!   covenant chain status [--json]
@@ -131,7 +131,7 @@ fn print_usage() {
         "  covenant capabilities recent [-n N] [--json]  list recent active capability tokens"
     );
     eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M] [--json]");
-    eprintln!("  covenant capabilities revoke <signature-b58>");
+    eprintln!("  covenant capabilities revoke <signature-b58> [--json]");
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
     );
@@ -855,6 +855,15 @@ async fn main() -> Result<()> {
                         std::process::exit(2);
                     }
                     let signature_b58 = args[2].clone();
+                    let mut as_json = false;
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
                     write_frame(
                         &mut stream,
                         &Request::RevokeCapability {
@@ -863,8 +872,19 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::CapabilityRevoked { removed, .. } => {
-                            if removed {
+                        Response::CapabilityRevoked {
+                            signature_b58,
+                            removed,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&capability_revoke_json(
+                                        &signature_b58,
+                                        removed,
+                                    ))?
+                                );
+                            } else if removed {
                                 println!("revoked: {signature_b58}");
                             } else {
                                 println!("(no live capability with that signature)");
@@ -2197,6 +2217,14 @@ fn capability_grant_json(
     })
 }
 
+fn capability_revoke_json(signature_b58: &str, removed: bool) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "capability_revoked",
+        "signature_b58": signature_b58,
+        "removed": removed,
+    })
+}
+
 fn capabilities_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     serde_json::json!({
         "kind": "capabilities_purged",
@@ -2829,6 +2857,19 @@ mod tests {
         let unscoped = capability_grant_json("operator@local", "memory.read", "sigb58", None, None);
         assert!(unscoped["scope"].is_null());
         assert!(unscoped["expires_at"].is_null());
+    }
+
+    #[test]
+    fn capability_revoke_json_renders_stable_shape() {
+        let removed = capability_revoke_json("sigb58", true);
+        assert_eq!(removed["kind"], "capability_revoked");
+        assert_eq!(removed["signature_b58"], "sigb58");
+        assert_eq!(removed["removed"], true);
+
+        let absent = capability_revoke_json("sigb58", false);
+        assert_eq!(absent["kind"], "capability_revoked");
+        assert_eq!(absent["signature_b58"], "sigb58");
+        assert_eq!(absent["removed"], false);
     }
 
     #[test]

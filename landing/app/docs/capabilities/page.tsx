@@ -206,7 +206,10 @@ covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
 
       <pre>
         <code>{`covenant capabilities revoke 4qXP…8tF1
-# → revoked 4qXP…8tF1 (removed=true)`}</code>
+# → revoked: 4qXP…8tF1
+
+covenant capabilities revoke 4qXP…8tF1 --json
+# → {"kind":"capability_revoked","signature_b58":"4qXP…8tF1","removed":true}`}</code>
       </pre>
 
       <h2>Storage layout</h2>

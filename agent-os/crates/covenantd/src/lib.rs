@@ -3770,6 +3770,21 @@ impl Server {
             .await
             .unwrap_or_default();
         if !owned.iter().any(|c| c.signature == bytes) {
+            match self.capabilities.is_revoked(bytes).await {
+                Ok(true) => {
+                    return Response::CapabilityRevoked {
+                        signature_b58,
+                        removed: false,
+                    };
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("permissions: {e}"),
+                    };
+                }
+            }
+
             let event = AuditEvent {
                 id: Uuid::new_v4(),
                 timestamp_ms: epoch_ms(),
@@ -7096,6 +7111,42 @@ required = {caps:?}
         match owner {
             Response::CapabilityRevoked { removed, .. } => assert!(removed),
             other => panic!("expected CapabilityRevoked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_returns_false_for_already_revoked_signature() {
+        let s = server_with(vec![], "");
+        let granted = s
+            .op_respond(Request::GrantCapability {
+                action: "tool.web_search".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        let sig_b58 = match granted {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let first = s
+            .op_respond(Request::RevokeCapability {
+                signature_b58: sig_b58.clone(),
+            })
+            .await;
+        match first {
+            Response::CapabilityRevoked { removed, .. } => assert!(removed),
+            other => panic!("expected CapabilityRevoked, got {other:?}"),
+        }
+
+        let second = s
+            .op_respond(Request::RevokeCapability {
+                signature_b58: sig_b58,
+            })
+            .await;
+        match second {
+            Response::CapabilityRevoked { removed, .. } => assert!(!removed),
+            other => panic!("expected idempotent CapabilityRevoked, got {other:?}"),
         }
     }
 

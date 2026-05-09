@@ -40,6 +40,7 @@ export default function CliPage() {
         [--scope <json>]
         [--expires-at <ms>] [--json] Sign and persist a new capability.
   capabilities revoke <signature-b58>
+        [--json]
                                      Tombstone a previously granted token.
   capabilities purge
         (--before-ms M
@@ -215,7 +216,11 @@ granted: user@local → tool.web_search
 signature: 4qXP...8tF1
 
 $ covenant capabilities revoke 4qXP...8tF1
-revoked 4qXP...8tF1 (removed=true)`}</code>
+revoked: 4qXP...8tF1`}</code>
+      </pre>
+      <pre>
+        <code>{`$ covenant capabilities revoke 4qXP...8tF1 --json
+{"kind":"capability_revoked","signature_b58":"4qXP...8tF1","removed":true}`}</code>
       </pre>
 
       <h3>Grant a scoped capability</h3>

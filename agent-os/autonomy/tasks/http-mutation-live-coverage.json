@@ -1,7 +1,7 @@
 {
   "id": "http-mutation-live-coverage",
   "title": "Add live HTTP mutation coverage",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "verifier",
   "scope": [

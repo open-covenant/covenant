@@ -13,7 +13,10 @@ pub use ignore::{IgnorePattern, IgnoreSet, IgnoreVerdict};
 
 use async_trait::async_trait;
 use covenant_types::{MemoryRecord, MemoryTier};
-use serde::{Deserialize, Serialize};
+pub use covenant_types::{
+    MemoryRepairAction, MemoryRepairCommand, MemoryRepairMode, MemoryRepairOutcome,
+    MemoryRepairRequest,
+};
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::task;
@@ -39,58 +42,6 @@ pub enum MemoryError {
     },
     #[error("invalid memory repair request: {0}")]
     InvalidRepair(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryRepairMode {
-    DryRun,
-    Apply,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum MemoryRepairCommand {
-    DetachParent {
-        id: Uuid,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_parent: Option<Uuid>,
-    },
-    DeleteRecord {
-        id: Uuid,
-    },
-    BackfillProvenance {
-        id: Uuid,
-        provenance: serde_json::Value,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MemoryRepairRequest {
-    pub mode: MemoryRepairMode,
-    pub command: MemoryRepairCommand,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryRepairAction {
-    DetachParent,
-    DeleteRecord,
-    BackfillProvenance,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MemoryRepairOutcome {
-    pub id: Uuid,
-    pub action: MemoryRepairAction,
-    pub mode: MemoryRepairMode,
-    pub would_change: bool,
-    pub changed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before: Option<MemoryRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<MemoryRecord>,
 }
 
 #[async_trait]
@@ -155,24 +106,6 @@ pub trait MemoryStore: Send + Sync {
             before: Some(before),
             after,
         })
-    }
-}
-
-impl MemoryRepairCommand {
-    fn id(&self) -> Uuid {
-        match self {
-            Self::DetachParent { id, .. } => *id,
-            Self::DeleteRecord { id } => *id,
-            Self::BackfillProvenance { id, .. } => *id,
-        }
-    }
-
-    fn action(&self) -> MemoryRepairAction {
-        match self {
-            Self::DetachParent { .. } => MemoryRepairAction::DetachParent,
-            Self::DeleteRecord { .. } => MemoryRepairAction::DeleteRecord,
-            Self::BackfillProvenance { .. } => MemoryRepairAction::BackfillProvenance,
-        }
     }
 }
 

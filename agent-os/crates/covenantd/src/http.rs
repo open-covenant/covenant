@@ -120,6 +120,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/memory/recent", get(memory_recent))
         .route("/memory/search", get(memory_search))
         .route("/memory/purge", post(memory_purge))
+        .route("/memory/repair", post(memory_repair))
         .route("/verify", get(verify))
         .route("/receipts/recent", get(receipts_recent))
         .route("/capabilities/recent", get(capabilities_recent))
@@ -294,6 +295,18 @@ async fn memory_purge(
                 },
                 &peer,
             )
+            .await,
+    ))
+}
+
+async fn memory_repair(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(request): Json<covenant_types::MemoryRepairRequest>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::RepairMemory { request }, &peer)
             .await,
     ))
 }

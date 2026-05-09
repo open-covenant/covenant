@@ -27,8 +27,8 @@ use covenant_settlement::{
     Settlement,
 };
 use covenant_types::{
-    AgentId, Capability, Intent, MemoryRecord, MemoryTier, Priority, ResourceKind,
-    SettlementReceipt,
+    AgentId, Capability, Intent, MemoryRecord, MemoryRepairCommand, MemoryRepairMode, MemoryTier,
+    Priority, ResourceKind, SettlementReceipt,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -155,6 +155,29 @@ fn a2a_duplicate_risk(command: &covenant_a2a::A2ARepairCommand) -> Option<&'stat
             covenant_a2a::A2ADuplicateRisk::OperatorAccepted => Some("operator_accepted"),
         },
         covenant_a2a::A2ARepairCommand::ForceError { .. } => None,
+    }
+}
+
+fn memory_repair_id(command: &MemoryRepairCommand) -> Uuid {
+    match command {
+        MemoryRepairCommand::DetachParent { id, .. }
+        | MemoryRepairCommand::DeleteRecord { id }
+        | MemoryRepairCommand::BackfillProvenance { id, .. } => *id,
+    }
+}
+
+fn memory_repair_action(command: &MemoryRepairCommand) -> &'static str {
+    match command {
+        MemoryRepairCommand::DetachParent { .. } => "detach_parent",
+        MemoryRepairCommand::DeleteRecord { .. } => "delete_record",
+        MemoryRepairCommand::BackfillProvenance { .. } => "backfill_provenance",
+    }
+}
+
+fn memory_repair_mode(mode: MemoryRepairMode) -> &'static str {
+    match mode {
+        MemoryRepairMode::DryRun => "dry_run",
+        MemoryRepairMode::Apply => "apply",
     }
 }
 
@@ -463,6 +486,7 @@ impl Server {
                 self.search_memory(query, tier, limit).await
             }
             Request::PurgeMemory { tier, before_ms } => self.purge_memory(tier, before_ms).await,
+            Request::RepairMemory { request } => self.repair_memory(request, peer).await,
             Request::Verify { window } => self.verify_recent(window).await,
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
@@ -2205,6 +2229,79 @@ impl Server {
         }
     }
 
+    async fn repair_memory(
+        &self,
+        request: covenant_types::MemoryRepairRequest,
+        peer: &AgentId,
+    ) -> Response {
+        let mode = memory_repair_mode(request.mode);
+        let action = memory_repair_action(&request.command);
+        let required = format!("memory.repair.{mode}");
+        let check = self
+            .check_capabilities(
+                format!(
+                    "memory-repair:{action}:{}",
+                    memory_repair_id(&request.command)
+                ),
+                vec![required.clone()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "memory repair {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        let id = memory_repair_id(&request.command);
+        match self.memory.get(id).await {
+            Ok(Some(record)) if record.owner.pubkey == peer.pubkey => {}
+            Ok(Some(_)) => {
+                return Response::Error {
+                    message: format!("memory repair rejected: record {id} is not visible to the authenticated peer"),
+                };
+            }
+            Ok(None) => {
+                return Response::Error {
+                    message: format!("memory: memory record {id} not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    message: format!("memory: {e}"),
+                };
+            }
+        }
+
+        let reason = request.reason.clone();
+        match self.memory.repair(request).await {
+            Ok(outcome) => {
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::MemoryRepairApplied {
+                            memory_id: outcome.id,
+                            action: action.into(),
+                            mode: mode.into(),
+                            changed: outcome.changed,
+                            reason,
+                        },
+                    },
+                )
+                .await;
+                Response::MemoryRepaired { outcome }
+            }
+            Err(e) => Response::Error {
+                message: format!("memory: {e}"),
+            },
+        }
+    }
+
     /// Returns capabilities where `peer` is either the subject (caps held
     /// against them) or `granted_by` (caps they granted). Bidirectional
     /// because both ends of a delegation are natural privacy boundaries —
@@ -2691,6 +2788,232 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn memory_repair_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "orphaned memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory.repair.dry_run"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_repair_dry_run_returns_before_after_without_mutating_and_audits() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "stale parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.repair.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let reason = "verified stale parent";
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: reason.into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::MemoryRepaired { outcome } => {
+                assert_eq!(outcome.id, id);
+                assert_eq!(outcome.mode, MemoryRepairMode::DryRun);
+                assert!(outcome.would_change);
+                assert!(!outcome.changed);
+                assert_eq!(outcome.before.as_ref().and_then(|r| r.parent), Some(parent));
+                assert_eq!(outcome.after.as_ref().and_then(|r| r.parent), None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            s.memory.get(id).await.unwrap().unwrap().parent,
+            Some(parent)
+        );
+
+        let events = s.audit.recent(20).await.unwrap();
+        let repair = events
+            .iter()
+            .find(|event| matches!(event.kind, AuditKind::MemoryRepairApplied { .. }))
+            .expect("memory repair audit row");
+        match &repair.kind {
+            AuditKind::MemoryRepairApplied {
+                memory_id,
+                action,
+                mode,
+                changed,
+                reason: logged_reason,
+            } => {
+                assert_eq!(*memory_id, id);
+                assert_eq!(action, "detach_parent");
+                assert_eq!(mode, "dry_run");
+                assert!(!changed);
+                assert_eq!(logged_reason, reason);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_repair_apply_detaches_parent_with_guard_and_audits() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "stale parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.repair.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::Apply,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::MemoryRepaired { outcome } => {
+                assert_eq!(
+                    outcome.action,
+                    covenant_memory::MemoryRepairAction::DetachParent
+                );
+                assert!(outcome.changed);
+                assert_eq!(outcome.after.as_ref().and_then(|r| r.parent), None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(s.memory.get(id).await.unwrap().unwrap().parent, None);
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            AuditKind::MemoryRepairApplied {
+                memory_id,
+                mode,
+                changed: true,
+                ..
+            } if *memory_id == id && mode == "apply"
+        )));
+    }
+
+    #[tokio::test]
+    async fn memory_repair_apply_rejects_parent_mismatch() {
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "fresh parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "memory.repair.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::Apply,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(Uuid::new_v4()),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("parent mismatch")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            s.memory.get(id).await.unwrap().unwrap().parent,
+            Some(parent)
+        );
     }
 
     #[tokio::test]

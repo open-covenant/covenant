@@ -82,7 +82,7 @@ Implemented and tested in the repository:
 |---|---|---|
 | Local daemon and CLI | Implemented | Active Rust workspace under `agent-os/`. |
 | Identity, permissions, audit | Implemented | Signed ed25519 capability model with revocation and audit rows. |
-| Memory | Implemented, still hardening | SQLite, embeddings, and read-only drift reports are present; explicit repair and compaction need more work. |
+| Memory | Implemented, still hardening | SQLite, embeddings, read-only drift reports, and explicit repair dry-run/apply commands are present; compaction and stale-context policy need more work. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
 | Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |

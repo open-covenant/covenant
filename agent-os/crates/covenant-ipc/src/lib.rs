@@ -11,7 +11,9 @@ use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
-use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
+use covenant_types::{
+    MemoryRecord, MemoryRepairOutcome, MemoryRepairRequest, MemoryTier, SettlementReceipt,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifyCheck {
@@ -105,6 +107,12 @@ pub enum Request {
         #[serde(default)]
         tier: Option<MemoryTier>,
         before_ms: u64,
+    },
+    /// Operator-controlled repair for verifier memory drift findings.
+    /// Dry-run is the default CLI posture; apply requires an explicit
+    /// caller choice and daemon capability.
+    RepairMemory {
+        request: MemoryRepairRequest,
     },
     RecentCapabilities {
         #[serde(default = "default_recent_limit")]
@@ -312,6 +320,9 @@ pub enum Response {
     },
     MemoryPurged {
         purged: u64,
+    },
+    MemoryRepaired {
+        outcome: MemoryRepairOutcome,
     },
     Receipts {
         receipts: Vec<SettlementReceipt>,

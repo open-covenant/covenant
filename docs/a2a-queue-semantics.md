@@ -88,5 +88,5 @@ HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC.
 
 ## Remaining Work
 
-- Add live CLI coverage for repair commands and stale-work inspection.
+- Add stale lease-guard failure coverage once machine-readable CLI status output stabilizes.
 - Keep automatic retry disabled until task classes can declare idempotency safely.

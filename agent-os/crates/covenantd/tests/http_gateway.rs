@@ -7,7 +7,7 @@ use covenant_audit::{AuditLog, InMemoryAuditLog};
 use covenant_identity::LocalIdentity;
 use covenant_llm::MockEmbedder;
 use covenant_manifest::Manifest;
-use covenant_memory::InMemoryStore;
+use covenant_memory::{InMemoryStore, MemoryStore};
 use covenant_permissions::InMemoryCapabilityStore;
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::MockRunner;
@@ -38,7 +38,9 @@ required = ["tool.web_search"]
 struct TestServer {
     base: String,
     token: String,
+    agent_id: covenant_types::AgentId,
     audit: Arc<InMemoryAuditLog>,
+    memory: Arc<InMemoryStore>,
     _handle: tokio::task::JoinHandle<()>,
 }
 
@@ -56,11 +58,13 @@ async fn spawn_test_server() -> TestServer {
         })
         .await
         .unwrap();
+    let agent_id = covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes());
     let audit = Arc::new(InMemoryAuditLog::new());
+    let memory = Arc::new(InMemoryStore::new());
     let server = Server::new(
         Arc::new(Router::from_cards(vec![stub_card()])),
         Arc::new(MockRunner::new("mocked summary")),
-        Arc::new(InMemoryStore::new()),
+        memory.clone(),
         Arc::new(InMemorySettlement::new()),
         audit.clone(),
         Arc::new(InMemoryCapabilityStore::new()),
@@ -83,7 +87,9 @@ async fn spawn_test_server() -> TestServer {
     TestServer {
         base: format!("http://{addr}"),
         token: token_b58,
+        agent_id,
         audit,
+        memory,
         _handle,
     }
 }
@@ -295,6 +301,77 @@ async fn intent_round_trip_after_grant() {
 }
 
 #[tokio::test]
+async fn memory_repair_round_trip_after_grant() {
+    let TestServer {
+        base,
+        token,
+        agent_id,
+        memory,
+        ..
+    } = spawn_test_server().await;
+    let id = uuid::Uuid::new_v4();
+    let parent = uuid::Uuid::new_v4();
+    memory
+        .put(covenant_types::MemoryRecord {
+            id,
+            tier: covenant_types::MemoryTier::Working,
+            owner: agent_id,
+            text: "stale parent".into(),
+            embedding: vec![1.0],
+            metadata: json!({}),
+            created_at: 1,
+            parent: Some(parent),
+        })
+        .await
+        .unwrap();
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
+
+    let grant: serde_json::Value = client
+        .post(format!("{base}/capabilities/grant"))
+        .json(&json!({ "action": "memory.repair.dry_run" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(grant["kind"], "capability_granted");
+
+    let repaired: serde_json::Value = client
+        .post(format!("{base}/memory/repair"))
+        .json(&json!({
+            "mode": "dry_run",
+            "command": {
+                "action": "detach_parent",
+                "id": id,
+                "expected_parent": parent
+            },
+            "reason": "verified stale parent"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(repaired["kind"], "memory_repaired");
+    assert_eq!(repaired["outcome"]["id"], id.to_string());
+    assert_eq!(repaired["outcome"]["mode"], "dry_run");
+    assert_eq!(repaired["outcome"]["would_change"], true);
+    assert_eq!(repaired["outcome"]["changed"], false);
+    assert_eq!(memory.get(id).await.unwrap().unwrap().parent, Some(parent));
+}
+
+#[tokio::test]
 async fn tools_list_and_call_round_trip() {
     let TestServer { base, token, .. } = spawn_test_server().await;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -383,11 +460,13 @@ async fn spawn_test_server_with_origins(origins: Vec<&'static str>) -> TestServe
         })
         .await
         .unwrap();
+    let agent_id = covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes());
     let audit = Arc::new(InMemoryAuditLog::new());
+    let memory = Arc::new(InMemoryStore::new());
     let server = Server::new(
         Arc::new(Router::from_cards(vec![stub_card()])),
         Arc::new(MockRunner::new("mocked summary")),
-        Arc::new(InMemoryStore::new()),
+        memory.clone(),
         Arc::new(InMemorySettlement::new()),
         audit.clone(),
         Arc::new(InMemoryCapabilityStore::new()),
@@ -411,7 +490,9 @@ async fn spawn_test_server_with_origins(origins: Vec<&'static str>) -> TestServe
     TestServer {
         base: format!("http://{addr}"),
         token: token_b58,
+        agent_id,
         audit,
+        memory,
         _handle,
     }
 }

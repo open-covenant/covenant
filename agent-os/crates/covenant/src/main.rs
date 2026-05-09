@@ -6,6 +6,9 @@
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N]
 //!   covenant memory search <query>
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>)
+//!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
+//!   covenant memory repair delete <id> --reason <text> [--apply]
+//!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
 //!   covenant capabilities recent [--limit N]
 //!   covenant capabilities grant <action>          (auto-expands `a2a.{send,recv,respond}.<pubkey-prefix>` to full b58)
 //!   covenant capabilities revoke <signature-b58>
@@ -36,7 +39,7 @@ use anyhow::{bail, Context, Result};
 use covenant_a2a::{A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary};
-use covenant_types::MemoryTier;
+use covenant_types::{MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier};
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 
@@ -81,6 +84,13 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D)  delete records older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
+    );
+    eprintln!("  covenant memory repair delete <id> --reason TEXT [--apply]");
+    eprintln!(
+        "  covenant memory repair backfill-provenance <id> --reason TEXT --provenance JSON [--apply]"
     );
     eprintln!("  covenant receipts recent [-n N]         list recent settlement receipts");
     eprintln!("  covenant chain status                   show Solana protocol configuration");
@@ -201,6 +211,17 @@ fn print_a2a_repair_response(response: Response) -> Result<()> {
     }
 }
 
+fn print_memory_repair_response(response: Response) -> Result<()> {
+    match response {
+        Response::MemoryRepaired { outcome } => {
+            println!("{}", serde_json::to_string(&outcome)?);
+            Ok(())
+        }
+        Response::Error { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected response: {other:?}"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -313,6 +334,85 @@ async fn main() -> Result<()> {
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),
                     }
+                }
+                "repair" => {
+                    if args.len() < 4 {
+                        bail!(
+                            "covenant memory repair: expected detach-parent|delete|backfill-provenance <id>"
+                        );
+                    }
+                    let id = parse_uuid(&args[3], "memory-id")?;
+                    let mut reason = None;
+                    let mut apply = false;
+                    let mut expected_parent = None;
+                    let mut provenance = None;
+                    let mut i = 4;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--apply" => apply = true,
+                            "--reason" => {
+                                i += 1;
+                                reason =
+                                    Some(args.get(i).context("--reason needs a value")?.clone());
+                            }
+                            "--expected-parent" => {
+                                i += 1;
+                                let v = args.get(i).context("--expected-parent needs a value")?;
+                                expected_parent = Some(parse_uuid(v, "--expected-parent")?);
+                            }
+                            "--provenance" => {
+                                i += 1;
+                                let v = args.get(i).context("--provenance needs a value")?;
+                                provenance = Some(
+                                    serde_json::from_str(v)
+                                        .context("--provenance must be valid JSON")?,
+                                );
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let command = match args[2].as_str() {
+                        "detach-parent" => {
+                            if provenance.is_some() {
+                                bail!("detach-parent does not accept --provenance");
+                            }
+                            MemoryRepairCommand::DetachParent {
+                                id,
+                                expected_parent,
+                            }
+                        }
+                        "delete" => {
+                            if expected_parent.is_some() || provenance.is_some() {
+                                bail!("delete accepts only --reason and --apply");
+                            }
+                            MemoryRepairCommand::DeleteRecord { id }
+                        }
+                        "backfill-provenance" => {
+                            if expected_parent.is_some() {
+                                bail!("backfill-provenance does not accept --expected-parent");
+                            }
+                            MemoryRepairCommand::BackfillProvenance {
+                                id,
+                                provenance: provenance.context("missing --provenance JSON")?,
+                            }
+                        }
+                        other => bail!(
+                            "unknown memory repair action '{other}' (expected detach-parent|delete|backfill-provenance)"
+                        ),
+                    };
+                    let request = MemoryRepairRequest {
+                        mode: if apply {
+                            MemoryRepairMode::Apply
+                        } else {
+                            MemoryRepairMode::DryRun
+                        },
+                        command,
+                        reason: reason.context("missing --reason")?,
+                    };
+                    write_frame(&mut stream, &Request::RepairMemory { request }).await?;
+                    let response = read_frame::<_, Response>(&mut stream).await?;
+                    print_memory_repair_response(response)?;
                 }
                 "search" => {
                     if args.len() < 3 {

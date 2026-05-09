@@ -112,6 +112,17 @@ pub enum AuditKind {
         duplicate_risk: Option<String>,
         attempt: u32,
     },
+    /// Logged when an operator completes a memory repair request. The
+    /// full before/after record shape is returned to the caller through
+    /// the repair response; the audit row keeps the durable who/what/why
+    /// envelope without duplicating memory text into the audit log.
+    MemoryRepairApplied {
+        memory_id: Uuid,
+        action: String,
+        mode: String,
+        changed: bool,
+        reason: String,
+    },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
     /// asked to revoke. Enforces the subject-ownership invariant on

@@ -40,10 +40,25 @@ Every repair request requires a non-empty reason. Supported crate-level commands
 | Command | Use | Safety guard |
 | --- | --- | --- |
 | `detach_parent` | Clear a stale `parent` reference after inspection. | Optional `expected_parent` prevents detaching if the record changed since the drift report. |
-| `delete_record` | Remove a memory record confirmed to be unsafe, invalid, or unwanted. | Dry-run reports the deletion without mutating. |
+| `delete_record` | Remove a memory record confirmed to be unsafe, invalid, or unwanted. | Dry-run reports the deletion without mutating; apply requires an explicit reason and capability. |
 | `backfill_provenance` | Add provenance evidence under `metadata.provenance`. | Rejects null provenance payloads and preserves existing metadata. |
 
-Daemon, CLI, and audit-log exposure are still pending. Until those surfaces are wired, these repair primitives are available inside the memory crate only.
+The daemon exposes the same repair request shape over IPC and HTTP `POST /memory/repair`. The CLI defaults to dry-run and requires `--apply` before mutation:
+
+```bash
+covenant capabilities grant memory.repair.dry_run
+covenant memory repair detach-parent <memory-id> \
+  --expected-parent <parent-id> \
+  --reason "verified stale parent"
+
+covenant capabilities grant memory.repair.apply
+covenant memory repair backfill-provenance <memory-id> \
+  --provenance '{"source":"audit-reconciliation"}' \
+  --reason "verified missing provenance" \
+  --apply
+```
+
+Dry-run calls require `memory.repair.dry_run`; apply calls require `memory.repair.apply`. Successful dry-runs and mutations record `memory_repair_applied` audit rows containing the memory id, action, mode, changed flag, and operator reason. Full before/after records stay in the repair response rather than being duplicated into the audit log.
 
 ## Current Limits
 

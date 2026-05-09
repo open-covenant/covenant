@@ -48,20 +48,32 @@ Authorization: Bearer <operator-token>`}</code>
       <p>
         This is local tamper evidence. It detects retained-row edits,
         missing sidecar entries, and chain mismatches after local anchoring.
-        It does not prevent deletion or replacement of both files by a
-        host-level attacker, and it does not yet publish signed roots to a
-        transparency log.
+        Covenant can generate and verify unsigned audit-root attestations from
+        this report, but it does not prevent deletion or replacement of both
+        files by a host-level attacker and it does not yet publish signed roots
+        to a transparency log.
       </p>
 
       <h2>Root signing direction</h2>
       <p>
-        The planned public path is detached audit-root attestations:
-        a release-scoped JSON payload that binds the retained event count,
-        anchor count, root hash, subject commit, task or release id,
-        timestamp, and signing key id. Those payloads are not implemented
-        yet. Until the generator, project signing identity, and verifier
-        land, audit roots remain local integrity evidence only.
+        The implemented first step is an unsigned{" "}
+        <code>covenant.audit-root-attestation.v1</code> payload that binds the
+        retained event count, anchor count, root hash, subject commit, task or
+        release id, timestamp, and validation evidence. Project signing
+        identity and transparency-log publication remain planned.
       </p>
+
+      <pre>
+        <code>{`covenant audit verify > audit-report.json
+node agent-os/scripts/provenance.mjs audit-root write \\
+  --report audit-report.json \\
+  --task <task-id> \\
+  --commit <commit> \\
+  --out docs/provenance/audit-roots/<commit>-audit-root.json
+
+node agent-os/scripts/provenance.mjs audit-root verify \\
+  --file docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
+      </pre>
 
       <h2>Related</h2>
       <ul>
@@ -72,6 +84,10 @@ Authorization: Bearer <operator-token>`}</code>
         <li>
           <Link href="/security">Security model</Link> — the local trust
           boundary.
+        </li>
+        <li>
+          <Link href="/provenance">Provenance</Link> — verifier commands and
+          current attestation limits.
         </li>
       </ul>
     </>

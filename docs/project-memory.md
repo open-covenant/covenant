@@ -13,7 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
-- Audit logs have local SHA-256 hash-chain sidecars and operator-only integrity reports.
+- Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned `audit-root-attestation.v1` payload generation/verification.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.

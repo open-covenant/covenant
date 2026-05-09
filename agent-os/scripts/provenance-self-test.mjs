@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,6 +43,28 @@ function expectFail(args, expected) {
   }
 }
 
+function stableJson(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+    .join(",")}}`;
+}
+
+function sha256(input) {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function withPayloadDigest(value) {
+  const { payloadSha256, ...payload } = value;
+  return { ...payload, payloadSha256: sha256(stableJson(payload)) };
+}
+
 const tempDir = mkdtempSync(join(tmpdir(), "covenant-provenance-"));
 try {
   expectOk(["verify-all"]);
@@ -65,6 +88,96 @@ try {
     )}\n`,
   );
   expectFail(["verify", "--file", identityTamper], "forbidden local identity pattern");
+
+  const auditReport = join(tempDir, "audit-report.json");
+  writeFileSync(
+    auditReport,
+    `${JSON.stringify(
+      {
+        events: 2,
+        anchors: 2,
+        valid: true,
+        root_hash_hex: "a".repeat(64),
+        failures: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const auditRoot = join(tempDir, "audit-root.json");
+  expectOk([
+    "audit-root",
+    "write",
+    "--report",
+    auditReport,
+    "--task",
+    "memory-drift-repair",
+    "--commit",
+    "20ff55e",
+    "--out",
+    auditRoot,
+    "--validation",
+    "covenant audit verify=passed",
+  ]);
+  expectOk(["audit-root", "verify", "--file", auditRoot]);
+  expectOk(["verify", "--file", auditRoot]);
+
+  const auditRootOriginal = JSON.parse(readFileSync(auditRoot, "utf8"));
+  const auditRootTamper = join(tempDir, "audit-root-tamper.json");
+  writeFileSync(
+    auditRootTamper,
+    `${JSON.stringify({ ...auditRootOriginal, payloadSha256: "0".repeat(64) }, null, 2)}\n`,
+  );
+  expectFail(["audit-root", "verify", "--file", auditRootTamper], "payloadSha256 mismatch");
+
+  const auditRootMetadataTamper = join(tempDir, "audit-root-metadata-tamper.json");
+  const tamperedMetadata = {
+    ...auditRootOriginal,
+    target: {
+      ...auditRootOriginal.target,
+      title: "tampered",
+    },
+  };
+  writeFileSync(
+    auditRootMetadataTamper,
+    `${JSON.stringify(withPayloadDigest(tamperedMetadata), null, 2)}\n`,
+  );
+  expectFail(
+    ["audit-root", "verify", "--file", auditRootMetadataTamper],
+    "task target metadata mismatch",
+  );
+
+  const invalidAuditReport = join(tempDir, "invalid-audit-report.json");
+  writeFileSync(
+    invalidAuditReport,
+    `${JSON.stringify(
+      {
+        events: 2,
+        anchors: 1,
+        valid: false,
+        root_hash_hex: "b".repeat(64),
+        failures: ["chain length mismatch"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  expectFail(
+    [
+      "audit-root",
+      "write",
+      "--report",
+      invalidAuditReport,
+      "--task",
+      "memory-drift-repair",
+      "--commit",
+      "20ff55e",
+      "--out",
+      join(tempDir, "invalid-audit-root.json"),
+    ],
+    "audit integrity report must be valid",
+  );
 
   console.log("provenance-self-test: ok");
 } finally {

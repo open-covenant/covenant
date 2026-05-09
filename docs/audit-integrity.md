@@ -50,10 +50,24 @@ This is local tamper evidence, not public non-repudiation.
 
 The chain detects edits to retained audit rows, missing sidecar entries, and sidecar mismatch after events have been anchored locally. It does not stop a host-level attacker from deleting both the audit log and the sidecar, replacing both files together, or rolling the machine back to an older filesystem snapshot.
 
-The current implementation does not publish roots to a transparency log, sign roots with a release identity, anchor roots on-chain, or define immutable retention storage. Those are future hardening steps and should not be claimed as shipped behavior.
+The current implementation can generate and verify unsigned `audit-root-attestation.v1` payloads from `covenant audit verify` output. It does not publish roots to a transparency log, sign roots with a release identity, anchor roots on-chain, or define immutable retention storage. Those are future hardening steps and should not be claimed as shipped behavior.
 
 ## Public Root Signing Direction
 
 The accepted planning direction is [ADR 0004](./decisions/0004-audit-root-signing-policy.md): publish detached `audit-root-attestation.v1` payloads for release candidates, sign them with a project-controlled identity, and later submit the same payloads to a transparency log.
 
-Until that generator, signing path, and verifier exist, audit roots remain local integrity evidence only.
+The generator and verifier now exist in `agent-os/scripts/provenance.mjs`:
+
+```bash
+covenant audit verify > audit-report.json
+node agent-os/scripts/provenance.mjs audit-root write \
+  --report audit-report.json \
+  --task <task-id> \
+  --commit <commit> \
+  --out docs/provenance/audit-roots/<commit>-audit-root.json
+
+node agent-os/scripts/provenance.mjs audit-root verify \
+  --file docs/provenance/audit-roots/<commit>-audit-root.json
+```
+
+Until the project signing path lands, these payloads remain consistency evidence, not public non-repudiation.

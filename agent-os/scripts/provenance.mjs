@@ -15,8 +15,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const agentRoot = resolve(here, "..");
 const repoRoot = resolve(agentRoot, "..");
 const defaultAttestationDir = join(repoRoot, "docs", "provenance", "attestations");
-const schema = "covenant.provenance.v1";
+const defaultAuditRootDir = join(repoRoot, "docs", "provenance", "audit-roots");
+const provenanceSchema = "covenant.provenance.v1";
+const auditRootSchema = "covenant.audit-root-attestation.v1";
+const defaultRepository = "open-covenant/covenant";
 const privateEd25519KeyPattern = new RegExp(["id", "ed25519"].join("_"));
+const hex64Pattern = /^[0-9a-f]{64}$/;
+const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const releasePattern = /^[A-Za-z0-9_.:@/-]+$/;
 
 const forbiddenPatterns = [
   /\/Users\//,
@@ -29,6 +35,8 @@ const forbiddenPatterns = [
 function usage() {
   console.error(`usage:
   node agent-os/scripts/provenance.mjs write --task <id> --out <path> [--commit <sha>] [--validation "command=passed"]
+  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"]
+  node agent-os/scripts/provenance.mjs audit-root verify --file <path>
   node agent-os/scripts/provenance.mjs verify --file <path>
   node agent-os/scripts/provenance.mjs verify-all [--dir <path>]`);
 }
@@ -180,6 +188,30 @@ function parseValidation(value) {
   return { command, status };
 }
 
+function assertHex64(value, label) {
+  if (typeof value !== "string" || !hex64Pattern.test(value)) {
+    throw new Error(`${label} must be a lowercase 64-character hex string`);
+  }
+}
+
+function assertRepository(value) {
+  if (typeof value !== "string" || !repositoryPattern.test(value)) {
+    throw new Error(`repository must be owner/name: ${value}`);
+  }
+}
+
+function assertReleaseId(value) {
+  if (typeof value !== "string" || !releasePattern.test(value)) {
+    throw new Error(`release id contains unsupported characters: ${value}`);
+  }
+}
+
+function assertIsoTimestamp(value, label) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw new Error(`${label} must be an ISO timestamp`);
+  }
+}
+
 function assertNoPrivateStrings(value, label) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   for (const pattern of forbiddenPatterns) {
@@ -194,6 +226,45 @@ function stripDigest(attestation) {
   return payload;
 }
 
+function parseAuditReport(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label}: expected audit integrity report object`);
+  }
+
+  const events = value.events;
+  const anchors = value.anchors;
+  const rootHashHex = value.root_hash_hex ?? value.rootHashHex;
+  const failures = value.failures ?? [];
+
+  if (!Number.isSafeInteger(events) || events < 0) {
+    throw new Error(`${label}: events must be a non-negative integer`);
+  }
+  if (!Number.isSafeInteger(anchors) || anchors < 0) {
+    throw new Error(`${label}: anchors must be a non-negative integer`);
+  }
+  if (value.valid !== true) {
+    throw new Error(`${label}: audit integrity report must be valid`);
+  }
+  if (events !== anchors) {
+    throw new Error(`${label}: event and anchor counts must match`);
+  }
+  assertHex64(rootHashHex, `${label}: root_hash_hex`);
+  if (!Array.isArray(failures) || failures.some((item) => typeof item !== "string")) {
+    throw new Error(`${label}: failures must be an array of strings`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`${label}: valid audit report must not contain failures`);
+  }
+
+  return {
+    events,
+    anchors,
+    valid: true,
+    root_hash_hex: rootHashHex,
+    failures,
+  };
+}
+
 function attest(taskId, commit, validationValues) {
   const resolvedCommit = fullCommit(commit);
   const task = taskSnapshot(resolvedCommit, taskId);
@@ -201,7 +272,7 @@ function attest(taskId, commit, validationValues) {
   const files = changedFiles(resolvedCommit).map((path) => fileEvidence(resolvedCommit, path));
 
   const payload = {
-    schema,
+    schema: provenanceSchema,
     generatedAt: new Date().toISOString(),
     subject: {
       kind: "git_commit",
@@ -238,9 +309,96 @@ function attest(taskId, commit, validationValues) {
   return { ...payload, payloadSha256: sha256(stableJson(payload)) };
 }
 
-function verify(attestationPath) {
+function auditRootTarget(commit, taskId, releaseId) {
+  if ((taskId && releaseId) || (!taskId && !releaseId)) {
+    throw new Error("audit-root attestation requires exactly one of --task or --release");
+  }
+  if (taskId) {
+    const task = taskSnapshot(commit, taskId);
+    return {
+      kind: "task",
+      id: task.id,
+      title: task.title,
+      state: task.state,
+      priority: task.priority,
+      snapshotPath: taskPath(taskId),
+      snapshotSha256: sha256(stableJson(task)),
+    };
+  }
+  assertReleaseId(releaseId);
+  return {
+    kind: "release",
+    id: releaseId,
+  };
+}
+
+function auditReportFromPayload(auditRoot) {
+  return {
+    events: auditRoot.events,
+    anchors: auditRoot.anchors,
+    valid: auditRoot.valid,
+    root_hash_hex: auditRoot.rootHashHex,
+    failures: auditRoot.failures,
+  };
+}
+
+function auditRootAttest(options) {
+  const resolvedCommit = fullCommit(options.commit);
+  const reportPath = resolve(repoRoot, options.report);
+  const report = parseAuditReport(JSON.parse(readFileSync(reportPath, "utf8")), reportPath);
+  const repository = options.repository ?? defaultRepository;
+  assertRepository(repository);
+
+  const previousRootHashHex = options.previousRoot ?? null;
+  if (previousRootHashHex !== null) {
+    assertHex64(previousRootHashHex, "--previous-root");
+  }
+
+  const payload = {
+    schema: auditRootSchema,
+    generatedAt: new Date().toISOString(),
+    repository,
+    subject: {
+      kind: "git_commit",
+      commit: resolvedCommit,
+    },
+    target: auditRootTarget(resolvedCommit, options.taskId, options.releaseId),
+    auditRoot: {
+      events: report.events,
+      anchors: report.anchors,
+      valid: report.valid,
+      rootHashHex: report.root_hash_hex,
+      failures: report.failures,
+      reportSha256: sha256(stableJson(report)),
+    },
+    previous: {
+      rootHashHex: previousRootHashHex,
+    },
+    signing: {
+      status: "unsigned",
+      keyId: null,
+      algorithm: null,
+      signature: null,
+    },
+    verification: options.validationValues.map(parseValidation),
+    claims: [
+      "The audit root was produced from a valid covenant audit verify report.",
+      "The subject commit is resolved from the local Git object database.",
+      "Task targets are bound to the task snapshot stored in the subject commit.",
+    ],
+    limits: [
+      "This alpha audit-root attestation is not a signature.",
+      "This alpha audit-root attestation is not a transparency-log entry.",
+      "This alpha audit-root attestation does not claim immutable retention.",
+    ],
+  };
+  assertNoPrivateStrings(payload, "audit root attestation");
+  return { ...payload, payloadSha256: sha256(stableJson(payload)) };
+}
+
+function verifyProvenance(attestationPath) {
   const attestation = JSON.parse(readFileSync(attestationPath, "utf8"));
-  if (attestation.schema !== schema) {
+  if (attestation.schema !== provenanceSchema) {
     throw new Error(`${attestationPath}: unsupported schema ${attestation.schema}`);
   }
   assertNoPrivateStrings(attestation, attestationPath);
@@ -288,6 +446,89 @@ function verify(attestationPath) {
   }
 }
 
+function verifyAuditRoot(attestationPath) {
+  const attestation = JSON.parse(readFileSync(attestationPath, "utf8"));
+  if (attestation.schema !== auditRootSchema) {
+    throw new Error(`${attestationPath}: unsupported schema ${attestation.schema}`);
+  }
+  assertNoPrivateStrings(attestation, attestationPath);
+
+  const expectedDigest = sha256(stableJson(stripDigest(attestation)));
+  if (attestation.payloadSha256 !== expectedDigest) {
+    throw new Error(`${attestationPath}: payloadSha256 mismatch`);
+  }
+
+  assertIsoTimestamp(attestation.generatedAt, `${attestationPath}: generatedAt`);
+  assertRepository(attestation.repository);
+
+  const commit = fullCommit(attestation.subject.commit);
+  if (commit !== attestation.subject.commit || attestation.subject.kind !== "git_commit") {
+    throw new Error(`${attestationPath}: subject commit is not canonical`);
+  }
+
+  const rootReport = parseAuditReport(
+    auditReportFromPayload(attestation.auditRoot),
+    `${attestationPath}: auditRoot`,
+  );
+  if (attestation.auditRoot.reportSha256 !== sha256(stableJson(rootReport))) {
+    throw new Error(`${attestationPath}: audit report digest mismatch`);
+  }
+
+  if (attestation.previous?.rootHashHex !== null) {
+    assertHex64(attestation.previous?.rootHashHex, `${attestationPath}: previous.rootHashHex`);
+  }
+
+  if (attestation.target?.kind === "task") {
+    const task = taskSnapshot(commit, attestation.target.id);
+    if (
+      attestation.target.title !== task.title ||
+      attestation.target.state !== task.state ||
+      attestation.target.priority !== task.priority
+    ) {
+      throw new Error(`${attestationPath}: task target metadata mismatch`);
+    }
+    if (attestation.target.snapshotPath !== taskPath(attestation.target.id)) {
+      throw new Error(`${attestationPath}: task snapshot path mismatch`);
+    }
+    if (attestation.target.snapshotSha256 !== sha256(stableJson(task))) {
+      throw new Error(`${attestationPath}: task snapshot digest mismatch`);
+    }
+  } else if (attestation.target?.kind === "release") {
+    assertReleaseId(attestation.target.id);
+  } else {
+    throw new Error(`${attestationPath}: unsupported target kind`);
+  }
+
+  const signing = attestation.signing;
+  if (
+    signing?.status !== "unsigned" ||
+    signing.keyId !== null ||
+    signing.algorithm !== null ||
+    signing.signature !== null
+  ) {
+    throw new Error(`${attestationPath}: signed audit-root attestations are not supported yet`);
+  }
+
+  for (const item of attestation.verification) {
+    if (!item.command || !["passed", "failed", "skipped"].includes(item.status)) {
+      throw new Error(`${attestationPath}: invalid verification item`);
+    }
+  }
+}
+
+function verifyAny(attestationPath) {
+  const attestation = JSON.parse(readFileSync(attestationPath, "utf8"));
+  if (attestation.schema === provenanceSchema) {
+    verifyProvenance(attestationPath);
+    return;
+  }
+  if (attestation.schema === auditRootSchema) {
+    verifyAuditRoot(attestationPath);
+    return;
+  }
+  throw new Error(`${attestationPath}: unsupported schema ${attestation.schema}`);
+}
+
 function jsonFiles(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
@@ -307,8 +548,8 @@ function writeFile(path, data) {
 
 try {
   const [command, ...args] = process.argv.slice(2);
-  const flags = parseFlags(args);
   if (command === "write") {
+    const flags = parseFlags(args);
     const taskId = one(flags, "task");
     const out = one(flags, "out");
     const commit = one(flags, "commit", "HEAD");
@@ -319,18 +560,55 @@ try {
     const attestation = attest(taskId, commit, many(flags, "validation"));
     writeFile(resolve(repoRoot, out), attestation);
     console.log(`wrote ${relative(repoRoot, resolve(repoRoot, out))}`);
+  } else if (command === "audit-root") {
+    const [subcommand, ...subargs] = args;
+    const flags = parseFlags(subargs);
+    if (subcommand === "write") {
+      const out = one(flags, "out");
+      const report = one(flags, "report");
+      if (!out || !report) {
+        usage();
+        process.exit(2);
+      }
+      const attestation = auditRootAttest({
+        report,
+        commit: one(flags, "commit", "HEAD"),
+        taskId: one(flags, "task"),
+        releaseId: one(flags, "release"),
+        repository: one(flags, "repository", defaultRepository),
+        previousRoot: one(flags, "previous-root"),
+        validationValues: many(flags, "validation"),
+      });
+      writeFile(resolve(repoRoot, out), attestation);
+      console.log(`wrote ${relative(repoRoot, resolve(repoRoot, out))}`);
+    } else if (subcommand === "verify") {
+      const file = one(flags, "file");
+      if (!file) {
+        usage();
+        process.exit(2);
+      }
+      verifyAuditRoot(resolve(repoRoot, file));
+      console.log(`provenance: ok (${file})`);
+    } else {
+      usage();
+      process.exit(2);
+    }
   } else if (command === "verify") {
+    const flags = parseFlags(args);
     const file = one(flags, "file");
     if (!file) {
       usage();
       process.exit(2);
     }
-    verify(resolve(repoRoot, file));
+    verifyAny(resolve(repoRoot, file));
     console.log(`provenance: ok (${file})`);
   } else if (command === "verify-all") {
-    const dir = resolve(repoRoot, one(flags, "dir", defaultAttestationDir));
-    const files = jsonFiles(dir);
-    for (const file of files) verify(file);
+    const flags = parseFlags(args);
+    const explicitDir = one(flags, "dir");
+    const files = explicitDir
+      ? jsonFiles(resolve(repoRoot, explicitDir))
+      : [defaultAttestationDir, defaultAuditRootDir].flatMap(jsonFiles);
+    for (const file of files) verifyAny(file);
     console.log(`provenance: ok (${files.length} attestation${files.length === 1 ? "" : "s"})`);
   } else {
     usage();

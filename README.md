@@ -44,7 +44,7 @@ The repository is organized around a small set of operating-layer primitives:
 | Identity | Local ed25519 identity, peer registry, token rotation |
 | Permissions | Signed capabilities, expiry, revocation tombstones, enforcement |
 | Comms | IPC socket, HTTP gateway, MCP adapter, A2A mailbox |
-| Audit | Append-only JSONL events, local hash-chain sidecar, deterministic integrity report |
+| Audit | Append-only JSONL events, local hash-chain sidecar, deterministic integrity report, unsigned root attestations |
 | Settlement | Local receipt ledger; Solana program scaffold is experimental |
 
 The architectural center is `agent-os/`: the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer auth, audit, MCP/A2A adapters, and settlement scaffold. The surrounding monorepo contains public docs, web surfaces, contracts, circuits, and services that support or experiment with adjacent protocol layers.
@@ -72,6 +72,7 @@ Implemented and tested in the repository:
 - SQLite-backed memory records with working, episodic, and long-term tiers.
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind agent-produced changes to autonomy tasks, changed Git blobs, transition events, and recorded validation.
+- Unsigned audit-root attestations that bind local audit integrity reports to commits and tasks before project signing lands.
 - Live opt-in tests for real daemon/CLI boundaries and selected real backends.
 - Machine-readable live coverage matrix for protocol, CLI, runtime, and model boundaries.
 - CI for Rust, landing docs, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
@@ -85,7 +86,7 @@ Implemented and tested in the repository:
 | Memory | Implemented, hardening | SQLite, embeddings, read-only drift reports, explicit repair commands, and bounded compaction dry-run/apply policy are present; automatic schedules and exact receipt correlation are not claimed. |
 | MCP and A2A | Implemented, hardening | MCP adapter tests exist; A2A has durable leased delivery, queue-state inspection with stale-lease filters, manual repair commands, and repair audit rows. Multi-peer production operation is not claimed. |
 | Autonomous development loop | Experimental | Protocol, session locking, validation, and review gates exist; full benchmarked self-improvement is not claimed. |
-| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data; public signing and transparency-log publication are not claimed. |
+| Public provenance | Experimental | Alpha JSON envelopes verify committed task evidence from Git object data, and unsigned audit-root attestations bind local integrity reports to commits and tasks; public signing and transparency-log publication are not claimed. |
 | Runtime sandboxing | Partially implemented | Manifest sandbox requirements are parsed; trusted-local execution fails closed for sandbox-required agents; the runtime crate has an initial `runsc` runner; the daemon can select `trusted-local` or `linux-gvisor` at startup; opt-in live Linux gVisor coverage and a repeatable runner guide exist. CI-host automation and Firecracker isolation are future work. |
 | On-chain settlement | Planned / scaffolded | Local receipts exist; Solana program wiring is not production. |
 | Installer and SDK ecosystem | Planned | Not a release-ready developer platform yet. |

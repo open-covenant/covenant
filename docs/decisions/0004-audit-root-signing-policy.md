@@ -55,6 +55,12 @@ Personal emails, local usernames, hostnames, private SSH key names, and absolute
 5. Publish signed root attestations for alpha release candidates.
 6. Add transparency-log publication after signing is stable.
 
+Current implementation status:
+
+- Steps 1 and 2 are implemented in `agent-os/scripts/provenance.mjs`.
+- The verifier validates unsigned `covenant.audit-root-attestation.v1` payloads, canonical commits, valid audit reports, and task snapshot bindings.
+- Signature generation and signature verification remain blocked on the project signing identity decision.
+
 ## Consequences
 
 - Local audit integrity remains useful without network dependencies.

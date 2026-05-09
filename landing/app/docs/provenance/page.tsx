@@ -13,7 +13,9 @@ export default function ProvenancePage() {
       <p>
         Covenant provenance envelopes connect an autonomous task to the Git
         commit it produced. The alpha format is plain JSON and is verified from
-        Git object data, not from local working-tree state.
+        Git object data, not from local working-tree state. The same verifier
+        also validates unsigned audit-root attestations that bind a local audit
+        integrity report to a commit and task or release target.
       </p>
 
       <h2>Envelope contents</h2>
@@ -37,18 +39,40 @@ export default function ProvenancePage() {
       <code>{`node agent-os/scripts/provenance.mjs verify-all
 node agent-os/scripts/provenance.mjs verify --file docs/provenance/attestations/20ff55e-memory-drift-reports.json`}</code>
 
+      <h2>Audit-root attestations</h2>
+      <p>
+        <code>covenant.audit-root-attestation.v1</code> payloads are generated
+        from <code>covenant audit verify</code> output. The verifier checks
+        that the report is valid, event and anchor counts match, the root hash
+        is canonical hex, the subject commit is canonical, and task targets
+        match the task snapshot stored in the subject commit.
+      </p>
+
+      <code>{`covenant audit verify > audit-report.json
+
+node agent-os/scripts/provenance.mjs audit-root write \\
+  --report audit-report.json \\
+  --task audit-root-attestation-v1 \\
+  --commit HEAD \\
+  --out docs/provenance/audit-roots/<commit>-audit-root.json \\
+  --validation "covenant audit verify=passed"
+
+node agent-os/scripts/provenance.mjs audit-root verify \\
+  --file docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
+
       <h2>Status</h2>
       <p>
         Provenance envelopes are experimental. They are consistency evidence,
-        not release signatures and not transparency-log entries. Public signing
-        identity, key custody, release artifact subjects, and transparency-log
-        publication remain future work.
+        not release signatures and not transparency-log entries. Audit-root
+        attestations are generated and verified, but they remain unsigned until
+        a project signing identity is selected. Key custody, release artifact
+        subjects, and transparency-log publication remain future work.
       </p>
 
       <p>
-        Audit root signing is planned as a separate release hardening path:
-        detached root attestations signed by a project identity, followed by
-        transparency-log publication once local signing and verification are
+        Audit root signing remains a separate release hardening path: attach a
+        project-controlled signature to the existing detached root payload, then
+        publish it to a transparency log once local signing and verification are
         stable.
       </p>
 

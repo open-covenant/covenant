@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-settlement = "CovntSettLement1111111111111111111111111111"
+settlement = "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
 
 [programs.devnet]
-settlement = "CovntSettLement1111111111111111111111111111"
+settlement = "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [workspace]

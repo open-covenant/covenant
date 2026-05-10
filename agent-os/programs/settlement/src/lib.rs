@@ -10,7 +10,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("CovntSettLement1111111111111111111111111111");
+declare_id!("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2");
 
 #[program]
 pub mod settlement {

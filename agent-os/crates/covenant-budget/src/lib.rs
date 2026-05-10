@@ -5,8 +5,8 @@
 //! `budget_credits_per_hour`, the runtime pauses, persists partial state,
 //! settles consumed credits, and queues a resume*. This crate ships the
 //! types and storage backends; `dispatch_intent` calls
-//! [`BudgetLedger::try_debit`] before spawning, and the resume verb
-//! handles the mid-task pause/resume.
+//! [`BudgetLedger::try_debit`] before spawning, and the checkpoint store
+//! preserves pause state before full runtime suspension wiring lands.
 //!
 //! ## Token-bucket model
 //!
@@ -27,6 +27,9 @@
 //! (event-log replay on `open`, tempfile+rename for compaction).
 //! Both serialize concurrent mutations through a `Mutex` so two
 //! debits can't race past the same `tokens_remaining` snapshot.
+//! [`JsonlPauseCheckpointStore`] stores pause/resume handoff records
+//! separately from spend events so replay cannot charge the same work
+//! twice.
 //!
 //! ## Compaction
 //!
@@ -45,7 +48,7 @@
 #![deny(unsafe_code)]
 
 use async_trait::async_trait;
-use covenant_types::AgentId;
+use covenant_types::{AgentId, BudgetPauseCheckpoint};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -79,6 +82,22 @@ pub enum BudgetError {
         tokens_remaining: u64,
         refill_eta_ms: u64,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BudgetCheckpointError {
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("serde: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("invalid pause checkpoint: {0}")]
+    InvalidCheckpoint(String),
+    #[error("pause checkpoint already active for intent {0}")]
+    AlreadyPaused(Uuid),
+    #[error("pause checkpoint already resumed for intent {0}")]
+    AlreadyResumed(Uuid),
+    #[error("no pause checkpoint for intent {0}")]
+    NotFound(Uuid),
 }
 
 /// One debit event. Persisted to the JSONL log by [`JsonlLedger`] and
@@ -116,6 +135,25 @@ enum BudgetEvent {
         last_refill_ms: u64,
         at_ms: u64,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BudgetCheckpointEvent {
+    PauseSaved {
+        checkpoint: BudgetPauseCheckpoint,
+    },
+    ResumeClaimed {
+        intent_id: Uuid,
+        agent: AgentId,
+        resumed_at_ms: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CheckpointState {
+    checkpoint: BudgetPauseCheckpoint,
+    resumed_at_ms: Option<u64>,
 }
 
 #[async_trait]
@@ -350,6 +388,226 @@ pub struct JsonlLedger {
     buckets: Mutex<HashMap<[u8; 32], Bucket>>,
     debits: Mutex<Vec<BudgetDebit>>,
     file_lock: Arc<Mutex<()>>,
+}
+
+/// JSONL-backed checkpoint store for pausing in-flight work without
+/// charging the budget ledger twice on resume.
+pub struct JsonlPauseCheckpointStore {
+    path: PathBuf,
+    checkpoints: Mutex<HashMap<(Uuid, [u8; 32]), CheckpointState>>,
+    file_lock: Arc<Mutex<()>>,
+}
+
+impl JsonlPauseCheckpointStore {
+    /// `path` should typically be `$COVENANT_HOME/budget/checkpoints.jsonl`.
+    /// Creates the file and parent directories if missing.
+    pub async fn open(path: PathBuf) -> Result<Self, BudgetCheckpointError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+
+        let mut checkpoints: HashMap<(Uuid, [u8; 32]), CheckpointState> = HashMap::new();
+        let f = fs::File::open(&path).await?;
+        let mut reader = BufReader::new(f);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<BudgetCheckpointEvent>(trimmed)? {
+                BudgetCheckpointEvent::PauseSaved { checkpoint } => {
+                    validate_pause_checkpoint(&checkpoint)?;
+                    let key = checkpoint_key(checkpoint.intent_id, &checkpoint.agent);
+                    if matches!(
+                        checkpoints.get(&key),
+                        Some(state) if state.resumed_at_ms.is_none()
+                    ) {
+                        return Err(BudgetCheckpointError::AlreadyPaused(checkpoint.intent_id));
+                    }
+                    checkpoints.insert(
+                        key,
+                        CheckpointState {
+                            checkpoint,
+                            resumed_at_ms: None,
+                        },
+                    );
+                }
+                BudgetCheckpointEvent::ResumeClaimed {
+                    intent_id,
+                    agent,
+                    resumed_at_ms,
+                } => {
+                    let state = checkpoints
+                        .get_mut(&checkpoint_key(intent_id, &agent))
+                        .ok_or(BudgetCheckpointError::NotFound(intent_id))?;
+                    if state.resumed_at_ms.is_some() {
+                        return Err(BudgetCheckpointError::AlreadyResumed(intent_id));
+                    }
+                    state.resumed_at_ms = Some(resumed_at_ms);
+                }
+            }
+        }
+
+        Ok(Self {
+            path,
+            checkpoints: Mutex::new(checkpoints),
+            file_lock: Arc::new(Mutex::new(())),
+        })
+    }
+
+    pub async fn save_pause(
+        &self,
+        checkpoint: BudgetPauseCheckpoint,
+    ) -> Result<(), BudgetCheckpointError> {
+        validate_pause_checkpoint(&checkpoint)?;
+        let _g = self.file_lock.lock().await;
+        let key = checkpoint_key(checkpoint.intent_id, &checkpoint.agent);
+        {
+            let checkpoints = self.checkpoints.lock().await;
+            if let Some(existing) = checkpoints.get(&key) {
+                if existing.resumed_at_ms.is_none() {
+                    return Err(BudgetCheckpointError::AlreadyPaused(checkpoint.intent_id));
+                }
+            }
+        }
+        self.append(&BudgetCheckpointEvent::PauseSaved {
+            checkpoint: checkpoint.clone(),
+        })
+        .await?;
+        self.checkpoints.lock().await.insert(
+            key,
+            CheckpointState {
+                checkpoint,
+                resumed_at_ms: None,
+            },
+        );
+        Ok(())
+    }
+
+    pub async fn active_pause(
+        &self,
+        intent_id: Uuid,
+        agent: &AgentId,
+    ) -> Option<BudgetPauseCheckpoint> {
+        let checkpoints = self.checkpoints.lock().await;
+        checkpoints
+            .get(&checkpoint_key(intent_id, agent))
+            .filter(|state| state.resumed_at_ms.is_none())
+            .map(|state| state.checkpoint.clone())
+    }
+
+    pub async fn claim_resume(
+        &self,
+        intent_id: Uuid,
+        agent: &AgentId,
+        resumed_at_ms: u64,
+    ) -> Result<BudgetPauseCheckpoint, BudgetCheckpointError> {
+        let _g = self.file_lock.lock().await;
+        let key = checkpoint_key(intent_id, agent);
+        let checkpoint = {
+            let checkpoints = self.checkpoints.lock().await;
+            let state = checkpoints
+                .get(&key)
+                .ok_or(BudgetCheckpointError::NotFound(intent_id))?;
+            if state.resumed_at_ms.is_some() {
+                return Err(BudgetCheckpointError::AlreadyResumed(intent_id));
+            }
+            state.checkpoint.clone()
+        };
+        self.append(&BudgetCheckpointEvent::ResumeClaimed {
+            intent_id,
+            agent: agent.clone(),
+            resumed_at_ms,
+        })
+        .await?;
+        let mut checkpoints = self.checkpoints.lock().await;
+        if let Some(state) = checkpoints.get_mut(&key) {
+            state.resumed_at_ms = Some(resumed_at_ms);
+        }
+        Ok(checkpoint)
+    }
+
+    async fn append(&self, ev: &BudgetCheckpointEvent) -> Result<(), BudgetCheckpointError> {
+        let line = serde_json::to_string(ev)?;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .await?;
+        f.write_all(line.as_bytes()).await?;
+        f.write_all(b"\n").await?;
+        f.flush().await?;
+        Ok(())
+    }
+}
+
+fn checkpoint_key(intent_id: Uuid, agent: &AgentId) -> (Uuid, [u8; 32]) {
+    (intent_id, agent.pubkey)
+}
+
+fn validate_pause_checkpoint(
+    checkpoint: &BudgetPauseCheckpoint,
+) -> Result<(), BudgetCheckpointError> {
+    if checkpoint.version != BudgetPauseCheckpoint::VERSION {
+        return Err(BudgetCheckpointError::InvalidCheckpoint(
+            "unsupported checkpoint version".into(),
+        ));
+    }
+    if checkpoint.requested_credits == 0 {
+        return Err(BudgetCheckpointError::InvalidCheckpoint(
+            "requested_credits must be non-zero".into(),
+        ));
+    }
+    validate_resume_state_map(&checkpoint.resume_state)
+}
+
+fn validate_resume_state_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), BudgetCheckpointError> {
+    for value in map.values() {
+        validate_resume_state_value(value)?;
+    }
+    Ok(())
+}
+
+fn validate_resume_state_value(value: &serde_json::Value) -> Result<(), BudgetCheckpointError> {
+    match value {
+        serde_json::Value::String(s) if looks_machine_local_path(s) => {
+            Err(BudgetCheckpointError::InvalidCheckpoint(
+                "resume_state contains a machine-local path".into(),
+            ))
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_resume_state_value(value)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => validate_resume_state_map(map),
+        _ => Ok(()),
+    }
+}
+
+fn looks_machine_local_path(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    s.starts_with('/')
+        || s.starts_with("~/")
+        || s.starts_with("$HOME/")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
 }
 
 impl JsonlLedger {
@@ -730,6 +988,8 @@ fn epoch_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use covenant_types::BudgetPauseReason;
+    use serde_json::json;
 
     fn agent(name: &str) -> AgentId {
         let mut pk = [0u8; 32];
@@ -737,6 +997,22 @@ mod tests {
             pk[i] = b;
         }
         AgentId::new(name, pk)
+    }
+
+    fn checkpoint(agent: &AgentId, intent_id: Uuid) -> BudgetPauseCheckpoint {
+        let mut resume_state = serde_json::Map::new();
+        resume_state.insert("cursor".to_string(), json!({"step": 2, "unit": "compile"}));
+        BudgetPauseCheckpoint {
+            version: BudgetPauseCheckpoint::VERSION,
+            intent_id,
+            agent: agent.clone(),
+            reason: BudgetPauseReason::BudgetExhausted,
+            requested_credits: 4,
+            tokens_remaining: 1,
+            refill_eta_ms: 2_000,
+            saved_at_ms: 1_000,
+            resume_state,
+        }
     }
 
     #[test]
@@ -1185,6 +1461,145 @@ mod tests {
             l.tokens_remaining(&a).await.unwrap() + ok as u64,
             10,
             "tokens spent + tokens remaining must equal capacity"
+        );
+    }
+
+    #[test]
+    fn pause_checkpoint_event_round_trips_with_stable_fields() {
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(1);
+        let event = BudgetCheckpointEvent::PauseSaved {
+            checkpoint: checkpoint(&a, intent_id),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "pause_saved");
+        assert_eq!(
+            value["checkpoint"]["version"],
+            BudgetPauseCheckpoint::VERSION
+        );
+        assert_eq!(value["checkpoint"]["intent_id"], intent_id.to_string());
+        assert_eq!(value["checkpoint"]["agent"]["display"], "a@local");
+        assert_eq!(value["checkpoint"]["reason"], "budget_exhausted");
+        assert_eq!(value["checkpoint"]["requested_credits"], 4);
+        assert_eq!(value["checkpoint"]["tokens_remaining"], 1);
+        assert_eq!(value["checkpoint"]["resume_state"]["cursor"]["step"], 2);
+
+        let back: BudgetCheckpointEvent = serde_json::from_value(value).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_claim_is_single_use_and_preserves_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_path = dir.path().join("ledger.jsonl");
+        let checkpoint_path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(7);
+        let ledger = JsonlLedger::open(ledger_path).await.unwrap();
+        let store = JsonlPauseCheckpointStore::open(checkpoint_path)
+            .await
+            .unwrap();
+
+        ledger.set_capacity(&a, 10).await.unwrap();
+        ledger.try_debit(&a, 4, Uuid::from_u128(11)).await.unwrap();
+        let tokens_after_debit = ledger.tokens_remaining(&a).await.unwrap();
+
+        let mut saved = checkpoint(&a, intent_id);
+        saved.tokens_remaining = tokens_after_debit;
+        store.save_pause(saved.clone()).await.unwrap();
+        assert_eq!(
+            store
+                .active_pause(intent_id, &a)
+                .await
+                .expect("checkpoint should be active"),
+            saved
+        );
+
+        let claimed = store.claim_resume(intent_id, &a, 3_000).await.unwrap();
+        assert_eq!(claimed, saved);
+        let err = store.claim_resume(intent_id, &a, 4_000).await.unwrap_err();
+        assert!(matches!(err, BudgetCheckpointError::AlreadyResumed(_)));
+        assert!(store.active_pause(intent_id, &a).await.is_none());
+
+        let debits = ledger.recent_debits(&a, 10).await.unwrap();
+        assert_eq!(debits.len(), 1);
+        assert_eq!(debits[0].credits, 4);
+        assert!(ledger.tokens_remaining(&a).await.unwrap() >= tokens_after_debit);
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_replays_resume_state_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(8);
+        let saved = checkpoint(&a, intent_id);
+        {
+            let store = JsonlPauseCheckpointStore::open(path.clone()).await.unwrap();
+            store.save_pause(saved.clone()).await.unwrap();
+        }
+        {
+            let store = JsonlPauseCheckpointStore::open(path.clone()).await.unwrap();
+            assert_eq!(store.active_pause(intent_id, &a).await, Some(saved.clone()));
+            assert_eq!(
+                store.claim_resume(intent_id, &a, 5_000).await.unwrap(),
+                saved
+            );
+        }
+        let store = JsonlPauseCheckpointStore::open(path).await.unwrap();
+        assert!(store.active_pause(intent_id, &a).await.is_none());
+        let err = store.claim_resume(intent_id, &a, 6_000).await.unwrap_err();
+        assert!(matches!(err, BudgetCheckpointError::AlreadyResumed(_)));
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_replay_rejects_duplicate_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(9);
+        let saved = BudgetCheckpointEvent::PauseSaved {
+            checkpoint: checkpoint(&a, intent_id),
+        };
+        let claimed = BudgetCheckpointEvent::ResumeClaimed {
+            intent_id,
+            agent: a,
+            resumed_at_ms: 5_000,
+        };
+        let lines = [
+            serde_json::to_string(&saved).unwrap(),
+            serde_json::to_string(&claimed).unwrap(),
+            serde_json::to_string(&claimed).unwrap(),
+        ]
+        .join("\n");
+        tokio::fs::write(&path, format!("{lines}\n")).await.unwrap();
+
+        let result = JsonlPauseCheckpointStore::open(path).await;
+        assert!(matches!(
+            result,
+            Err(BudgetCheckpointError::AlreadyResumed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_rejects_machine_local_resume_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let store = JsonlPauseCheckpointStore::open(path).await.unwrap();
+        let a = agent("a@local");
+        let mut saved = checkpoint(&a, Uuid::from_u128(10));
+        saved.resume_state.insert(
+            "scratch".to_string(),
+            json!({"local": "/tmp/covenant-state"}),
+        );
+
+        let err = store.save_pause(saved).await.unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(err, BudgetCheckpointError::InvalidCheckpoint(_)));
+        assert!(message.contains("machine-local path"));
+        assert!(
+            !message.contains("/tmp"),
+            "error messages must not echo machine-local paths"
         );
     }
 }

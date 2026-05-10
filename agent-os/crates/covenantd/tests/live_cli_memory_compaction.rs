@@ -1,4 +1,4 @@
-//! Live CLI coverage for `covenant memory compact`.
+//! Live CLI coverage for `covenant memory compact` and `plan-compaction`.
 //!
 //! Seeds deterministic memory records, drives dry-run and apply through
 //! the public CLI, and verifies persisted memory state plus audit evidence.
@@ -220,6 +220,36 @@ async fn live_cli_memory_compaction_round_trip() {
     );
     assert_ids(&dry_run, "stale_marked", &[fixture.longterm]);
     assert_ids(&dry_run, "parents_detached", &[fixture.child]);
+
+    let plan_args = [
+        "memory",
+        "plan-compaction",
+        "--delete-working-before-ms",
+        "20",
+        "--delete-episodic-before-ms",
+        "20",
+        "--mark-longterm-stale-before-ms",
+        "20",
+        "--marked-at-ms",
+        "99",
+        "--detach-stale-parents",
+        "--reason",
+        "live compaction plan",
+    ];
+    let plan_stdout = run_cli(&cli_exe, home.path(), &plan_args).await;
+    let plan: Value = serde_json::from_str(plan_stdout.trim()).expect("plan stdout must be JSON");
+    assert_eq!(plan["kind"], "memory_compaction_plan");
+    assert_eq!(plan["outcome"]["mode"].as_str(), Some("dry_run"));
+    assert_eq!(plan["outcome"]["would_change"].as_bool(), Some(true));
+    assert_eq!(plan["outcome"]["changed"].as_bool(), Some(false));
+    assert_eq!(plan["expected_receipt_changes"]["mode"], "none");
+    assert_ids(
+        &plan["outcome"],
+        "deleted",
+        &[fixture.old_working, fixture.old_episodic],
+    );
+    assert_ids(&plan["outcome"], "stale_marked", &[fixture.longterm]);
+    assert_ids(&plan["outcome"], "parents_detached", &[fixture.child]);
 
     let mut apply_args = base_args.to_vec();
     apply_args.extend(["--reason", "live compaction apply", "--apply"]);

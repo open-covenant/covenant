@@ -214,7 +214,7 @@
         "agent-os/crates/covenantd/tests/live_budget_enforcement.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live budget resume coverage after pause/resume policy lands."
+      "nextGap": "Add live budget resume coverage after runtime checkpoint wiring lands."
     },
     {
       "id": "settlement-receipts",

@@ -75,6 +75,8 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Multi-peer operation is experimental.
 - Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
+- Memory maintenance has a read-only `covenant memory plan-compaction --json` planning surface for scheduled compaction evidence; receipt backfill for legacy uncorrelated rows remains future mutation work.
+- Budget pause checkpoints exist as a portable JSONL-backed primitive in `covenant-budget`; daemon runtime wiring for automatic save/claim on real mid-task suspension remains future hardening.
 - Audit integrity is local tamper evidence only; immutable retention, public key custody, release publication, and transparency-log publication are not implemented.
 - A2A has lease-age status filters, manual requeue and force-error repair through IPC/HTTP/CLI, explicit task-kind metadata with legacy `intent_text` fallback for idempotency cache keys, receiver-side idempotency result caching, an explicit disabled-by-default retry gate, and an opt-in daemon scheduler that reuses the same bounded idempotent retry policy with audit-visible scan summaries.
 
@@ -99,6 +101,8 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/protocol-versioning.md](./protocol-versioning.md): IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy.
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
+- [docs/budget-pause-checkpoints.md](./budget-pause-checkpoints.md): budget pause checkpoint format and daemon integration boundary.
+- [docs/memory-maintenance.md](./memory-maintenance.md): read-only compaction planning and receipt backfill boundary.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.

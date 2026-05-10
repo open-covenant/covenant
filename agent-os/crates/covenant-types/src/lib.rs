@@ -303,6 +303,33 @@ pub struct MemoryCompactionOutcome {
     pub parents_detached: Vec<Uuid>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetPauseReason {
+    BudgetExhausted,
+    OperatorRequested,
+    Shutdown,
+    Maintenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BudgetPauseCheckpoint {
+    pub version: u16,
+    pub intent_id: Uuid,
+    pub agent: AgentId,
+    pub reason: BudgetPauseReason,
+    pub requested_credits: u64,
+    pub tokens_remaining: u64,
+    pub refill_eta_ms: u64,
+    pub saved_at_ms: u64,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub resume_state: serde_json::Map<String, serde_json::Value>,
+}
+
+impl BudgetPauseCheckpoint {
+    pub const VERSION: u16 = 1;
+}
+
 /// One consumption event recorded by the settlement layer.
 ///
 /// Chain metadata is empty until the receipt is batched and confirmed on

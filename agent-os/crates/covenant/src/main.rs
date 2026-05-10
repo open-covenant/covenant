@@ -6,7 +6,8 @@
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>] [--delete-episodic-before-ms <M>] [--mark-longterm-stale-before-ms <M>] [--json]
+//!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
+//!   covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -104,7 +105,10 @@ fn print_usage() {
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D) [--json]  delete records older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M] [--delete-episodic-before-ms M] [--mark-longterm-stale-before-ms M] [--json]"
+        "  covenant memory compact --reason TEXT [--apply] [--detach-stale-parents] [--delete-working-before-ms M|--delete-working-older-than-ms D] [--delete-episodic-before-ms M|--delete-episodic-older-than-ms D] [--mark-longterm-stale-before-ms M|--mark-longterm-stale-older-than-ms D] [--json]"
+    );
+    eprintln!(
+        "  covenant memory plan-compaction --reason TEXT [--detach-stale-parents] [--delete-working-before-ms M|--delete-working-older-than-ms D] [--delete-episodic-before-ms M|--delete-episodic-older-than-ms D] [--mark-longterm-stale-before-ms M|--mark-longterm-stale-older-than-ms D] [--json]"
     );
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
@@ -330,6 +334,31 @@ fn print_memory_compaction_response(response: Response, as_json: bool) -> Result
     }
 }
 
+fn print_memory_compaction_plan_response(response: Response, as_json: bool) -> Result<()> {
+    match response {
+        Response::MemoryCompacted { outcome } => {
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&memory_compaction_plan_json(&outcome))?
+                );
+            } else {
+                println!(
+                    "would change: {} (delete {}, mark stale {}, detach parent {})",
+                    outcome.would_change,
+                    outcome.deleted.len(),
+                    outcome.stale_marked.len(),
+                    outcome.parents_detached.len()
+                );
+                println!("receipt backfill: none in dry-run plan");
+            }
+        }
+        Response::Error { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected response: {other:?}"),
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -510,14 +539,18 @@ async fn main() -> Result<()> {
                         other => bail!("unexpected response: {other:?}"),
                     }
                 }
-                "compact" => {
+                "compact" | "plan-compaction" => {
+                    let plan_only = args[1] == "plan-compaction";
                     let mut policy = MemoryCompactionPolicy::default();
                     let mut reason = None;
                     let mut apply = false;
-                    let mut as_json = false;
+                    let mut as_json = plan_only;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
+                            "--apply" if plan_only => {
+                                bail!("memory plan-compaction is read-only and does not accept --apply")
+                            }
                             "--apply" => apply = true,
                             "--json" => as_json = true,
                             "--reason" => {
@@ -609,7 +642,11 @@ async fn main() -> Result<()> {
                     };
                     write_frame(&mut stream, &Request::CompactMemory { request }).await?;
                     let response = read_frame::<_, Response>(&mut stream).await?;
-                    print_memory_compaction_response(response, as_json)?;
+                    if plan_only {
+                        print_memory_compaction_plan_response(response, as_json)?;
+                    } else {
+                        print_memory_compaction_response(response, as_json)?;
+                    }
                 }
                 "repair" => {
                     if args.len() < 4 {
@@ -2472,6 +2509,18 @@ fn memory_compaction_json(outcome: &MemoryCompactionOutcome) -> serde_json::Valu
     })
 }
 
+fn memory_compaction_plan_json(outcome: &MemoryCompactionOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "memory_compaction_plan",
+        "outcome": outcome,
+        "expected_receipt_changes": {
+            "mode": "none",
+            "records": [],
+            "reason": "dry-run compaction planning does not mutate memory or settlement receipts"
+        }
+    })
+}
+
 fn memory_read_json(
     mode: &str,
     tier: Option<MemoryTier>,
@@ -3351,6 +3400,30 @@ mod tests {
         );
         assert_eq!(
             value["outcome"]["parents_detached"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn memory_compaction_plan_json_renders_stable_shape() {
+        let outcome = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::DryRun,
+            would_change: true,
+            changed: false,
+            deleted: vec![uuid::Uuid::nil()],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+
+        let value = memory_compaction_plan_json(&outcome);
+        assert_eq!(value["kind"], "memory_compaction_plan");
+        assert_eq!(value["outcome"]["mode"], "dry_run");
+        assert_eq!(value["outcome"]["changed"], false);
+        assert_eq!(value["expected_receipt_changes"]["mode"], "none");
+        assert_eq!(
+            value["expected_receipt_changes"]["records"]
                 .as_array()
                 .map(Vec::len),
             Some(0)

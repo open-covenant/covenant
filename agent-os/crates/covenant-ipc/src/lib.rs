@@ -608,6 +608,40 @@ mod tests {
         assert_eq!(json, fixture);
     }
 
+    #[test]
+    fn v1_response_fixtures_replay_against_current_parser() {
+        let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        let mut fixture_count = 0;
+
+        for entry in std::fs::read_dir(&fixtures_dir).unwrap() {
+            let path = entry.unwrap().path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".v1.json") {
+                continue;
+            }
+
+            fixture_count += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            let response: Response = serde_json::from_str(&text)
+                .unwrap_or_else(|error| panic!("{} should parse: {error}", path.display()));
+
+            if name == "protocol-info.v1.json" {
+                assert_eq!(
+                    response,
+                    Response::ProtocolInfo {
+                        info: protocol_info()
+                    }
+                );
+            }
+        }
+
+        assert!(fixture_count > 0, "expected at least one v1 IPC fixture");
+    }
+
     #[tokio::test]
     async fn recent_memory_request_uses_default_limit() {
         let json = r#"{"kind":"recent_memory"}"#;

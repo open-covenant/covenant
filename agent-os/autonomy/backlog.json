@@ -642,7 +642,7 @@
       ],
       "summary": "Add stable machine-readable output for `covenant tools list --json` so agents can enumerate tool cards without parsing human text.",
       "expectedFailureModes": [
-        "Automation depends on human `name — description` rendering and breaks when punctuation changes.",
+        "Automation depends on human `name \u2014 description` rendering and breaks when punctuation changes.",
         "`--json` emits multiple objects or mixes human stdout with JSON output.",
         "The machine-readable tool list diverges from the daemon registry because the CLI applies extra filtering or formatting."
       ],
@@ -678,7 +678,7 @@
       ],
       "summary": "Add stable machine-readable output for `covenant ignore check --json` so automation can gate prompts on `.covenantignore` without parsing human text.",
       "expectedFailureModes": [
-        "Automation parses `ignored — matched rule:` and breaks when punctuation changes.",
+        "Automation parses `ignored \u2014 matched rule:` and breaks when punctuation changes.",
         "`--json` changes exit codes (ignored should remain non-zero) and breaks gating logic.",
         "The JSON output omits the matched pattern or rules_loaded fields required for debugging."
       ],
@@ -3598,6 +3598,35 @@
       ],
       "humanEscalation": [],
       "nextAction": "Extend the HTTP tools/call live test with a scoped tool.call.echo grant, a mismatched-argument rejection, an allowed exact-argument call, and docs/status evidence for the live boundary.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-next-help-and-empty-guidance",
+      "title": "Improve autonomy-next help and empty-queue guidance",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/autonomy-next.mjs",
+        "agent-os/autonomy/tasks/autonomy-next-help-and-empty-guidance.json"
+      ],
+      "summary": "autonomy-next currently treats --help as an unknown flag and prints an unhelpful empty-queue message. This stalls operators when the task queue is empty or when they forget to pass --seed. Add a real usage message, validate unknown flags, and when no task is available print the exact next command(s) to run.",
+      "expectedFailureModes": [
+        "Operators call autonomy-next --help and get no usage guidance.",
+        "Autonomy loops stall because the empty-queue message doesn't mention --seed.",
+        "Unknown flags silently change behavior, causing automation drift."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-next.mjs --help",
+        "node agent-os/scripts/autonomy-next.mjs --json",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add --help/--json/--seed parsing with unknown-flag rejection, plus a clearer empty-queue message that points to autonomy-next --seed and autonomy-seed-next; keep JSON output stable.",
       "updated": "2026-05-10"
     },
     {

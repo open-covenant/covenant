@@ -4093,6 +4093,186 @@
       "humanEscalation": [],
       "nextAction": "Add review-signing-readiness report/validator, document the custody gate, wire the validator into script validation, and keep signed review artifacts blocked without a project key.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-backlog-refill-2026-05-10-v3",
+      "title": "Refill autonomy backlog templates (2026-05-10 v3)",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/autonomy/backlog.json",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Autonomy sessions are stalled again because every previously-seeded backlog template already exists under agent-os/autonomy/tasks. Append a fresh batch of alpha-critical templates grounded in docs/status gaps so autonomy-next can keep seeding new work without chat context.",
+      "expectedFailureModes": [
+        "Autonomy sessions stall because backlog exhaustion prevents seeding new tasks.",
+        "New templates fail validate-autonomy due to missing fields, invalid enums, or duplicated ids.",
+        "Templates include machine-local paths or non-portable verification commands, making the record unverifiable."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Append a small set of new templates (>=5) derived from node agent-os/scripts/autonomy-status-gaps.mjs, with realistic scopes, gates, and deterministic verification commands.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-homebrew-manifest-section-contract",
+      "title": "Define homebrew manifest section contract",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/distribution-readiness.md",
+        "docs/status.md"
+      ],
+      "summary": "Extend the package-manager manifest contract (from status-distribution-and-sdk-ecosystem-add-package-manager-manifest-contract) with a homebrew-specific manifest section: schema, empty placeholders, and a validator hook so future homebrew formula evidence can be checked deterministically. Publication and signing remain human-owned.",
+      "expectedFailureModes": [
+        "Homebrew manifest section ships without a schema validator and drifts into machine-local paths.",
+        "docs/status.md overclaims homebrew formula availability before publication custody is decided.",
+        "Validator hook is added but not wired into validate.sh --scripts, so regressions slip past CI."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Homebrew tap publication, formula custody, and signing keys remain human-owned."
+      ],
+      "nextAction": "Add a homebrew section to the package-manager manifest schema with required fields, emit empty placeholders, register a validator hook, and document the contract in docs/distribution-readiness.md without claiming homebrew is shipping.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-mcp-tools-third-party-fixture-selection-policy",
+      "title": "Define third-party MCP server fixture selection policy",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "docs/status.md"
+      ],
+      "summary": "Before adding an opt-in third-party MCP server fixture, define the selection policy (provenance pinning, license check, opt-in default-off semantics, reproducible build evidence) as a docs+validator contract. Avoids landing a fixture that quietly imports an unvetted dependency surface.",
+      "expectedFailureModes": [
+        "A third-party MCP fixture lands without a documented selection policy and pulls in an unvetted dependency surface.",
+        "Selection policy exists in prose but has no validator hook, so a future deletion of required fields slips through review.",
+        "docs/status.md is updated to imply an opt-in fixture is available before the policy itself is reviewed."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Final fixture selection, vendor allowlist, and any external network access remain human-owned."
+      ],
+      "nextAction": "Document the third-party MCP fixture selection policy in docs/mcp-tools.md (or a sibling page), add a validator that scans the policy fields for completeness, and link from docs/status.md MCP tools row without claiming a fixture is shipping.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-runtime-gvisor-runner-promotion-readiness-report",
+      "title": "Add gvisor runner promotion readiness report",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/runtime-execution.md",
+        "docs/status.md"
+      ],
+      "summary": "After status-runtime-execution-pin-gvisor-runner-metadata-schema pinned the runner/rootfs metadata schema, the next layer is a promotion-readiness report that surfaces whether the pinned metadata satisfies the CI promotion preconditions (host provisioning state, image digest pin, rootfs digest pin) without performing the promotion itself. Production runner selection and CI access remain human-owned.",
+      "expectedFailureModes": [
+        "Promotion happens against a runner whose preconditions were never aggregated into a single readable signal.",
+        "Report exists but disagrees with the schema validator, so a future schema change silently invalidates the report shape.",
+        "docs/status.md overclaims promotion readiness before host provisioning is in place."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "CI host provisioning, runner credentials, and actual promotion of the gvisor runner into CI remain human-owned."
+      ],
+      "nextAction": "Implement agent-os/scripts/gvisor-runner-promotion-readiness.mjs that reads the pinned metadata, reports per-precondition pass/blocked, register the validator hook, and document the report in docs/runtime-execution.md while keeping promotion human-gated.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-signed-capabilities-scoped-delegated-live-coverage-matrix",
+      "title": "Add scoped-delegated live coverage matrix",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/signed-capabilities-live-coverage.md",
+        "docs/status.md"
+      ],
+      "summary": "Signed capabilities have broad scoped-delegated paths, but there is no single artifact tracking which paths have live test coverage versus only mock coverage. Add a coverage matrix (docs + validator) that enumerates the scoped-delegated action grammar and pairs each entry with its live test pointer (if any), so the autonomy loop can target the gaps deterministically.",
+      "expectedFailureModes": [
+        "The matrix exists but disagrees with the test tree on names, so it falsely reports coverage that was deleted.",
+        "Validator is added but skipped from validate.sh, so the matrix silently drifts.",
+        "docs/status.md cites the matrix before it is wired up, overclaiming live coverage."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add docs/signed-capabilities-live-coverage.md enumerating each scoped-delegated action with its live test pointer (or 'gap'), implement a validator that compares the matrix to existing live_ test files under crates/covenantd/tests, and link from docs/status.md.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-ipc-http-gateway-v2-fixture-contract",
+      "title": "Define v2 IPC/HTTP fixture contract",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/ipc-and-http-gateway.md",
+        "docs/status.md"
+      ],
+      "summary": "Adding concrete v2 fixtures requires an intentional protocol bump and is human-owned. Before that decision, define the *contract* a v2 fixture pair must satisfy (file layout, naming, schema-version field, migration-note format) as docs + a validator that runs only when v2 fixtures appear. Keeps the protocol-bump decision human-gated while making the eventual landing deterministic.",
+      "expectedFailureModes": [
+        "v2 fixtures land later with inconsistent file layouts because the contract was never written down.",
+        "The validator is over-eager and fires on legacy v1 fixtures, blocking unrelated work.",
+        "docs/status.md is updated to imply v2 fixtures exist before the protocol bump decision is made."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "The actual decision to bump the IPC/HTTP protocol to v2 and publish v2 fixtures remains human-owned."
+      ],
+      "nextAction": "Document the v2 IPC/HTTP fixture contract in docs/ipc-and-http-gateway.md (file layout, schema-version field, migration-note pairing rules), implement a validator that no-ops when no v2 fixture exists and fails with a clear remediation when the contract is violated, and link from docs/status.md without claiming v2 fixtures ship.",
+      "updated": "2026-05-10"
     }
   ]
 }

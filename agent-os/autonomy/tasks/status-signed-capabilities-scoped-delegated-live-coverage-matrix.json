@@ -1,0 +1,29 @@
+{
+  "id": "status-signed-capabilities-scoped-delegated-live-coverage-matrix",
+  "title": "Add scoped-delegated live coverage matrix",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/signed-capabilities-live-coverage.md",
+    "docs/status.md"
+  ],
+  "summary": "Signed capabilities have broad scoped-delegated paths, but there is no single artifact tracking which paths have live test coverage versus only mock coverage. Add a coverage matrix (docs + validator) that enumerates the scoped-delegated action grammar and pairs each entry with its live test pointer (if any), so the autonomy loop can target the gaps deterministically.",
+  "expectedFailureModes": [
+    "The matrix exists but disagrees with the test tree on names, so it falsely reports coverage that was deleted.",
+    "Validator is added but skipped from validate.sh, so the matrix silently drifts.",
+    "docs/status.md cites the matrix before it is wired up, overclaiming live coverage."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add docs/signed-capabilities-live-coverage.md enumerating each scoped-delegated action with its live test pointer (or 'gap'), implement a validator that compares the matrix to existing live_ test files under crates/covenantd/tests, and link from docs/status.md.",
+  "updated": "2026-05-10"
+}

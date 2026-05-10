@@ -111,6 +111,15 @@ COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
 
 ## CI Adoption Criteria
 
+Check host readiness before promoting the live test into CI:
+
+```bash
+node agent-os/scripts/gvisor-host-readiness.mjs --json
+node agent-os/scripts/validate-gvisor-host-readiness.mjs
+```
+
+The readiness report is non-mutating. It reports the current host prerequisites separately from the project decisions needed for required CI.
+
 Before this becomes a required CI job, the runner needs:
 
 - a dedicated Linux runner image or setup step with `runsc` preinstalled;

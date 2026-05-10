@@ -10,7 +10,9 @@ pub mod http;
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
 use covenant_audit::{hash_hex, AuditEvent, AuditKind, AuditLog};
-use covenant_budget::{BudgetError, BudgetLedger};
+use covenant_budget::{
+    BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
+};
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
@@ -42,14 +44,16 @@ use covenant_settlement::{
     Settlement,
 };
 use covenant_types::{
-    AgentId, Capability, Intent, MemoryCompactionRequest, MemoryRecord, MemoryRepairCommand,
-    MemoryRepairMode, MemoryTier, Priority, ResourceKind, SettlementReceipt,
+    AgentId, BudgetPauseCheckpoint, BudgetPauseReason, Capability, Intent, MemoryCompactionRequest,
+    MemoryRecord, MemoryRepairCommand, MemoryRepairMode, MemoryTier, Priority, ResourceKind,
+    SettlementReceipt,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -463,6 +467,8 @@ pub struct Server {
     mailbox: Arc<dyn Mailbox>,
     pub peers: Arc<dyn PeerRegistry>,
     budget: Arc<dyn BudgetLedger>,
+    budget_checkpoints: Option<Arc<JsonlPauseCheckpointStore>>,
+    active_budget_pauses: Arc<Mutex<BTreeMap<Uuid, BudgetPauseCheckpoint>>>,
     /// `$COVENANT_HOME` for this daemon — set via [`Server::with_home`]
     /// in the binary's `main`. Required by [`Server::rotate_operator_token`]
     /// (which needs to read the current operator token from
@@ -504,6 +510,8 @@ impl Server {
             mailbox,
             peers,
             budget,
+            budget_checkpoints: None,
+            active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
             home: None,
         }
     }
@@ -514,6 +522,11 @@ impl Server {
     /// `RotateOperatorToken` returns `Response::Error`.
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = Some(home);
+        self
+    }
+
+    pub fn with_budget_checkpoints(mut self, store: Arc<JsonlPauseCheckpointStore>) -> Self {
+        self.budget_checkpoints = Some(store);
         self
     }
 
@@ -695,6 +708,49 @@ impl Server {
         if let Err(e) = self.audit.record(event).await {
             warn!(error = %e, "audit record failed");
         }
+    }
+
+    async fn save_budget_pause_checkpoint(&self, checkpoint: BudgetPauseCheckpoint) {
+        let Some(store) = &self.budget_checkpoints else {
+            return;
+        };
+        if let Err(e) = store.save_pause(checkpoint).await {
+            warn!(error = %e, "budget pause checkpoint save failed");
+        }
+    }
+
+    async fn remember_active_budget_checkpoint(&self, checkpoint: BudgetPauseCheckpoint) {
+        self.active_budget_pauses
+            .lock()
+            .await
+            .insert(checkpoint.intent_id, checkpoint);
+    }
+
+    async fn clear_active_budget_checkpoint(&self, intent_id: Uuid) {
+        self.active_budget_pauses.lock().await.remove(&intent_id);
+    }
+
+    pub async fn save_shutdown_budget_checkpoints(&self) -> usize {
+        let Some(store) = &self.budget_checkpoints else {
+            return 0;
+        };
+        let checkpoints: Vec<BudgetPauseCheckpoint> = self
+            .active_budget_pauses
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
+
+        let mut saved = 0usize;
+        for checkpoint in checkpoints {
+            match store.save_pause(checkpoint).await {
+                Ok(()) => saved += 1,
+                Err(BudgetCheckpointError::AlreadyPaused(_)) => {}
+                Err(e) => warn!(error = %e, "shutdown budget checkpoint save failed"),
+            }
+        }
+        saved
     }
 
     pub async fn run_a2a_auto_retry_scheduler_once(
@@ -2523,7 +2579,24 @@ impl Server {
                 let agent = agent_id_for_card(card);
                 let requested = intent_dispatch_credits();
                 match self.budget.try_debit(&agent, requested, receipt_id).await {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        let tokens_remaining =
+                            self.budget.tokens_remaining(&agent).await.unwrap_or_else(|e| {
+                                warn!(agent = %card.id, error = %e, "budget token read failed after debit");
+                                0
+                            });
+                        let checkpoint = budget_pause_checkpoint(
+                            intent_id,
+                            agent.clone(),
+                            BudgetPauseReason::Shutdown,
+                            requested,
+                            tokens_remaining,
+                            issued_at,
+                            issued_at,
+                            budget_resume_state(&text, &card.id, "active_dispatch"),
+                        );
+                        self.remember_active_budget_checkpoint(checkpoint).await;
+                    }
                     Err(BudgetError::NoCapacity(_)) => {
                         // Manifest opts in to budget but the bucket was never
                         // seeded — operator forgot to call
@@ -2553,6 +2626,17 @@ impl Server {
                         tokens_remaining,
                         refill_eta_ms,
                     }) => {
+                        let checkpoint = budget_pause_checkpoint(
+                            intent_id,
+                            agent.clone(),
+                            BudgetPauseReason::BudgetExhausted,
+                            requested,
+                            tokens_remaining,
+                            refill_eta_ms,
+                            epoch_ms(),
+                            budget_resume_state(&text, &card.id, "budget_exhausted"),
+                        );
+                        self.save_budget_pause_checkpoint(checkpoint).await;
                         let event = AuditEvent {
                             id: Uuid::new_v4(),
                             timestamp_ms: epoch_ms(),
@@ -2596,7 +2680,9 @@ impl Server {
                 priority: Priority::Normal,
                 parent: None,
             };
-            match self.runner.run(card, &intent).await {
+            let run_result = self.runner.run(card, &intent).await;
+            self.clear_active_budget_checkpoint(intent_id).await;
+            match run_result {
                 Ok(result) => (result.text, result.sources),
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
@@ -2711,20 +2797,54 @@ impl Server {
         // Resuming someone else's `BudgetExhausted` would otherwise leak
         // their `intent_text` through `dispatch_intent`'s code path. Same
         // pubkey-equality predicate as `recent_audit`.
-        let text = events
+        let row = events
             .iter()
             .filter(|e| e.issuer.pubkey == peer.pubkey)
             .rev()
             .find_map(|e| match &e.kind {
                 AuditKind::BudgetExhausted {
                     intent_id: row_id,
+                    agent_display,
                     intent_text,
                     ..
-                } if *row_id == intent_id => Some(intent_text.clone()),
+                } if *row_id == intent_id => Some((agent_display.clone(), intent_text.clone())),
                 _ => None,
             });
-        match text {
-            Some(t) => self.dispatch_intent(t, peer).await,
+        match row {
+            Some((agent_display, t)) => {
+                if let Some(store) = &self.budget_checkpoints {
+                    let Some(agent) = self.budget_agent_by_display(&agent_display) else {
+                        return Response::Error {
+                            message: format!(
+                                "resume: no registered budget agent matches {agent_display:?}"
+                            ),
+                        };
+                    };
+                    match store.claim_resume(intent_id, &agent, epoch_ms()).await {
+                        Ok(_) => {}
+                        Err(BudgetCheckpointError::NotFound(_)) => {
+                            warn!(
+                                intent_id = %intent_id,
+                                agent = %agent_display,
+                                "resume checkpoint missing; falling back to legacy audit-row resume"
+                            );
+                        }
+                        Err(BudgetCheckpointError::AlreadyResumed(_)) => {
+                            return Response::Error {
+                                message: format!(
+                                    "resume: checkpoint for intent {intent_id} was already claimed"
+                                ),
+                            };
+                        }
+                        Err(e) => {
+                            return Response::Error {
+                                message: format!("resume: checkpoint claim failed: {e}"),
+                            };
+                        }
+                    }
+                }
+                self.dispatch_intent(t, peer).await
+            }
             None => Response::Error {
                 message: format!(
                     "resume: no BudgetExhausted audit row for intent {intent_id} \
@@ -2732,6 +2852,14 @@ impl Server {
                 ),
             },
         }
+    }
+
+    fn budget_agent_by_display(&self, display: &str) -> Option<AgentId> {
+        self.router
+            .agents()
+            .iter()
+            .map(agent_id_for_card)
+            .find(|agent| agent.display == display)
     }
 
     /// Capability check for plain (single-form) actions. Thin wrapper
@@ -4535,6 +4663,41 @@ fn round_tokens_remaining(n: u64) -> u64 {
         10_000_000_000,
     ];
     BUCKETS.iter().rev().copied().find(|&b| b <= n).unwrap_or(0)
+}
+
+fn budget_resume_state(
+    intent_text: &str,
+    matched_agent: &str,
+    source: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut state = serde_json::Map::new();
+    state.insert("intent_text".into(), intent_text.into());
+    state.insert("matched_agent".into(), matched_agent.into());
+    state.insert("source".into(), source.into());
+    state
+}
+
+fn budget_pause_checkpoint(
+    intent_id: Uuid,
+    agent: AgentId,
+    reason: BudgetPauseReason,
+    requested_credits: u64,
+    tokens_remaining: u64,
+    refill_eta_ms: u64,
+    saved_at_ms: u64,
+    resume_state: serde_json::Map<String, serde_json::Value>,
+) -> BudgetPauseCheckpoint {
+    BudgetPauseCheckpoint {
+        version: BudgetPauseCheckpoint::VERSION,
+        intent_id,
+        agent,
+        reason,
+        requested_credits,
+        tokens_remaining,
+        refill_eta_ms,
+        saved_at_ms,
+        resume_state,
+    }
 }
 
 /// Map an `AgentCard` to a stable `AgentId` for budget keying. v0 agents
@@ -9347,6 +9510,147 @@ budget_credits_per_hour = {credits}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_budget_exhaustion_saves_checkpoint_and_resume_claims_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 1);
+        let agent = agent_id_for_card(&card);
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+        s.register_agent_budgets().await.unwrap();
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+
+        assert!(matches!(
+            s.op_respond(Request::SubmitIntent {
+                text: "find recent papers".into()
+            })
+            .await,
+            Response::IntentResult { .. }
+        ));
+        let second_text = "find more recent papers";
+        assert!(matches!(
+            s.op_respond(Request::SubmitIntent {
+                text: second_text.into()
+            })
+            .await,
+            Response::Error { .. }
+        ));
+
+        let events = audit.recent(50).await.unwrap();
+        let exhausted_intent = events
+            .iter()
+            .find_map(|event| match &event.kind {
+                AuditKind::BudgetExhausted { intent_id, .. } => Some(*intent_id),
+                _ => None,
+            })
+            .expect("expected budget exhaustion row");
+        let saved = checkpoints
+            .active_pause(exhausted_intent, &agent)
+            .await
+            .expect("budget exhaustion should save a pause checkpoint");
+        assert_eq!(saved.reason, BudgetPauseReason::BudgetExhausted);
+        assert_eq!(saved.resume_state["intent_text"], second_text);
+
+        let first_resume = s
+            .op_respond(Request::ResumeIntent {
+                intent_id: exhausted_intent,
+            })
+            .await;
+        assert!(
+            matches!(first_resume, Response::Error { ref message } if message.contains("budget exhausted")),
+            "resume should redispatch and hit the still-empty bucket, got {first_resume:?}"
+        );
+        assert!(
+            checkpoints
+                .active_pause(exhausted_intent, &agent)
+                .await
+                .is_none(),
+            "resume claim should consume the original checkpoint"
+        );
+
+        let duplicate = s
+            .op_respond(Request::ResumeIntent {
+                intent_id: exhausted_intent,
+            })
+            .await;
+        assert!(
+            matches!(duplicate, Response::Error { ref message } if message.contains("already claimed")),
+            "duplicate resume must not redispatch a claimed checkpoint, got {duplicate:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_saves_active_budget_checkpoints_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 10);
+        let agent = agent_id_for_card(&card);
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+
+        let intent_id = Uuid::new_v4();
+        let checkpoint = budget_pause_checkpoint(
+            intent_id,
+            agent.clone(),
+            BudgetPauseReason::Shutdown,
+            1,
+            9,
+            epoch_ms(),
+            epoch_ms(),
+            budget_resume_state("find recent papers", "research", "active_dispatch"),
+        );
+        s.active_budget_pauses
+            .lock()
+            .await
+            .insert(intent_id, checkpoint.clone());
+
+        assert_eq!(s.save_shutdown_budget_checkpoints().await, 1);
+        assert_eq!(
+            checkpoints.active_pause(intent_id, &agent).await,
+            Some(checkpoint)
+        );
+        assert_eq!(s.save_shutdown_budget_checkpoints().await, 0);
     }
 
     /// Phase-0 manifests have `budget_credits_per_hour = 0`. The daemon

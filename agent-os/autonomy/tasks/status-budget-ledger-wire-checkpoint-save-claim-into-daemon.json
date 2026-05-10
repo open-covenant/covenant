@@ -1,0 +1,36 @@
+{
+  "id": "status-budget-ledger-wire-checkpoint-save-claim-into-daemon",
+  "title": "Wire budget checkpoints into daemon pauses",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant-budget",
+    "agent-os/crates/covenant",
+    "docs"
+  ],
+  "summary": "Budget checkpoint records exist, but daemon runtime pause and operator-requested shutdown paths need to save and claim checkpoints so resume semantics survive real daemon control flow.",
+  "expectedFailureModes": [
+    "Daemon pause writes budget events without creating a resumable checkpoint.",
+    "Resume can claim the same checkpoint more than once across daemon restarts.",
+    "Operator shutdown skips checkpoint persistence and loses pause state."
+  ],
+  "gates": [
+    "test_expansion"
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo test -p covenant-budget --locked",
+    "cargo test -p covenantd budget --locked",
+    "cargo test -p covenantd dispatch_budget_exhaustion_saves_checkpoint_and_resume_claims_once --locked",
+    "cargo test -p covenantd shutdown_saves_active_budget_checkpoints_once --locked",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check",
+    "bash agent-os/scripts/validate.sh --scripts"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Continue hard runtime preemption separately; current daemon checkpoint wiring covers budget exhaustion, single-use resume claim, and shutdown drain paths.",
+  "updated": "2026-05-10"
+}

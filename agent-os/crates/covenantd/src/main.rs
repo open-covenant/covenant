@@ -170,6 +170,19 @@ async fn main() -> Result<()> {
     );
     info!(path = %budget_path.display(), "budget ledger open");
 
+    let budget_checkpoints_path = home.join("budget").join("checkpoints.jsonl");
+    let budget_checkpoints = Arc::new(
+        covenant_budget::JsonlPauseCheckpointStore::open(budget_checkpoints_path.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "open budget checkpoint log at {}",
+                    budget_checkpoints_path.display()
+                )
+            })?,
+    );
+    info!(path = %budget_checkpoints_path.display(), "budget checkpoint log open");
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -185,7 +198,8 @@ async fn main() -> Result<()> {
         peers,
         budget,
     )
-    .with_home(home.clone());
+    .with_home(home.clone())
+    .with_budget_checkpoints(budget_checkpoints);
 
     server
         .register_agent_budgets()
@@ -246,6 +260,8 @@ async fn main() -> Result<()> {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("shutdown requested");
+            let saved = server.save_shutdown_budget_checkpoints().await;
+            info!(saved, "shutdown budget checkpoints saved");
         }
         res = server.serve(listener) => {
             res?;

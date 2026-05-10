@@ -80,7 +80,7 @@ COVENANT_GVISOR_SCRATCH=$COVENANT_HOME/runtime/gvisor
 
 ## Live gVisor Validation
 
-The runtime crate has an opt-in live test for the real `runsc` dispatch path. It is intentionally ignored by default because the host requirements are not portable. The repeatable setup is documented in [Linux gVisor Live Runner](gvisor-live-runner.md).
+The runtime crate has an opt-in live test for the real `runsc` dispatch path. It is intentionally ignored by default because the host requirements are not portable. The repeatable setup is documented in [Linux gVisor Live Runner](gvisor-live-runner.md), and host readiness is reported by [gVisor Host Readiness](gvisor-host-readiness.md).
 
 ```bash
 cd agent-os

@@ -71,6 +71,7 @@ node agent-os/scripts/validate-readme-copy.mjs
 node agent-os/scripts/validate-source-installer.mjs
 node agent-os/scripts/validate-distribution-readiness.mjs
 node agent-os/scripts/validate-settlement-deployment-readiness.mjs
+node agent-os/scripts/validate-gvisor-host-readiness.mjs
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check

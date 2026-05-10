@@ -24,6 +24,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Release validation language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
+- Linux gVisor CI promotion uses `agent-os/scripts/gvisor-host-readiness.mjs`; host-local live readiness is separate from required CI, pinned rootfs provenance, and public sandbox-readiness claims.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 - Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs` and locally published or checked with `node agent-os/scripts/autonomy-publish-summary.mjs`.
@@ -72,6 +73,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 ## Current Gaps
 
 - No production sandbox for untrusted agents.
+- No required Linux gVisor CI runner; read-only host readiness gates record runsc, rootfs, runner provisioning, and failure-policy blockers.
 - No production on-chain settlement; read-only deployment readiness gates record security-review, oracle, mint authority, and emergency-operation blockers.
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
 - No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
@@ -114,6 +116,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
+- [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
 - [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.

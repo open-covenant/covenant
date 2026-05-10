@@ -1,0 +1,31 @@
+{
+  "id": "status-runtime-execution-automate-linux-ci-host-provisioning-and",
+  "title": "Automate Linux sandbox host readiness",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "agent-os/crates/covenant-runtime",
+    "docs"
+  ],
+  "summary": "Runtime execution has gVisor tests and setup docs, but CI promotion needs host-readiness automation and broader sandbox policy enforcement that fails closed when live prerequisites are missing.",
+  "expectedFailureModes": [
+    "CI claims gVisor coverage on hosts that cannot execute the documented runner.",
+    "Sandbox fallback behavior silently weakens policy enforcement.",
+    "Host provisioning guidance depends on unstated machine-local setup."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human approval is required before making Linux gVisor dispatch mandatory in CI or changing runner host provisioning."
+  ],
+  "nextAction": "Add a read-only Linux runner readiness probe and CI promotion checklist covering runsc, rootfs, network policy, and fallback behavior before enabling mandatory live dispatch.",
+  "updated": "2026-05-10"
+}

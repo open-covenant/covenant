@@ -35,6 +35,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs`; pre-push should pass the exact pushed ref range to the same validator.
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
 - The local Git metadata directory should pass `agent-os/scripts/validate-git-write-access.mjs` before a task is treated as committable; a read-only `.git` directory is a real commit blocker, not a code blocker.
+- Commit and push attribution policy is sourced from `agent-os/autonomy/commit-rotation.json`; changes should pass `agent-os/scripts/validate-commit-rotation.mjs`.
 - Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
 - GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, approved bot account, or a write-enabled GitHub account that is already a contributor on the configured remote.
 - Autonomous sessions should run `agent-os/scripts/autonomy-preflight.mjs` before starting a fresh slice so commit blockers and push blockers are visible separately.
@@ -106,6 +107,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
+- [agent-os/autonomy/commit-rotation.json](../agent-os/autonomy/commit-rotation.json): commit and push attribution policy for autonomous work.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/scripts/autonomy-status-gaps.mjs](../agent-os/scripts/autonomy-status-gaps.mjs): read-only backlog-refill candidates from the capability status matrix.
 - [agent-os/scripts/autonomy-review-artifact.mjs](../agent-os/scripts/autonomy-review-artifact.mjs): unsigned task review artifact scaffold.
@@ -114,6 +116,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
 - [agent-os/scripts/autonomy-publish-summary.mjs](../agent-os/scripts/autonomy-publish-summary.mjs): repository-scoped Markdown publication/check wrapper for sprint summaries.
 - [agent-os/scripts/validate-autonomy-summary.mjs](../agent-os/scripts/validate-autonomy-summary.mjs): sprint summary output validator.
+- [agent-os/scripts/validate-commit-rotation.mjs](../agent-os/scripts/validate-commit-rotation.mjs): commit rotation policy validator.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
 - [docs/a2a-idempotency-policy.md](./a2a-idempotency-policy.md): idempotency policy required before automatic A2A retry.

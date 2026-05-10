@@ -34,6 +34,12 @@ Validate summary output before publishing sprint evidence:
 node agent-os/scripts/validate-autonomy-summary.mjs
 ```
 
+Validate the commit and push attribution policy:
+
+```bash
+node agent-os/scripts/validate-commit-rotation.mjs
+```
+
 Move a task through an allowed transition:
 
 ```bash

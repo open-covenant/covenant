@@ -83,6 +83,12 @@ for (const arg of args) {
 const checks = [
   gitStatusCheck(),
   checkCommand(
+    "commit-rotation",
+    "Commit rotation policy validates",
+    process.execPath,
+    ["agent-os/scripts/validate-commit-rotation.mjs"],
+  ),
+  checkCommand(
     "current-git-identity",
     "Current Git author and committer are neutral",
     process.execPath,

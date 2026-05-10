@@ -1,0 +1,31 @@
+{
+  "id": "status-autonomous-workflow-add-autonomy-next-help-and-flag-validation",
+  "title": "Add autonomy-next help and flag validation",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/autonomy-next.mjs",
+    "agent-os/scripts/validate-autonomy-next-cli.mjs",
+    "agent-os/scripts/validate.sh",
+    "agent-os/autonomy/tasks/README.md",
+    "docs/autonomous-development.md"
+  ],
+  "summary": "autonomy-next has no --help output and accepts unknown flags, which makes autonomous runs harder to resume and debug. Add explicit usage output, reject unknown flags with a non-zero exit, and keep --json/--seed semantics stable.",
+  "expectedFailureModes": [
+    "Unknown flags are silently ignored, causing operators to believe a mode was enabled when it was not.",
+    "autonomy-next output changes without updating docs, so sessions still stall on the selector.",
+    "Help or error paths regress and break deterministic automation wrappers."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy-next-cli.mjs",
+    "node --check agent-os/scripts/autonomy-next.mjs",
+    "node agent-os/scripts/autonomy-next.mjs --help"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Teach autonomy-next to handle --help/-h and unknown flags consistently, then update autonomy task docs to reflect the supported CLI surface.",
+  "updated": "2026-05-10"
+}

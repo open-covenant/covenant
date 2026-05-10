@@ -19,6 +19,8 @@ node agent-os/scripts/autonomy-next.mjs --json
 node agent-os/scripts/autonomy-next.mjs --seed
 ```
 
+`autonomy-next.mjs` rejects unknown flags with exit code 2 so wrappers do not silently ignore a requested mode.
+
 Use `--seed` when every tracked task is integrated or blocked and the backlog still contains task templates. It creates the next task JSON, appends a durable `events.jsonl` seed event, validates the autonomy records, and then prints the selected task.
 
 Continuation check after a commit or push:

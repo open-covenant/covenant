@@ -10,6 +10,9 @@ Operational helpers:
 
 ```bash
 node agent-os/scripts/autonomy-next.mjs
+node agent-os/scripts/autonomy-next.mjs --help
+node agent-os/scripts/autonomy-next.mjs --json
+node agent-os/scripts/autonomy-next.mjs --seed
 node agent-os/scripts/autonomy-continue.mjs
 node agent-os/scripts/autonomy-seed-next.mjs --dry-run
 node agent-os/scripts/autonomy-status-gaps.mjs
@@ -26,6 +29,8 @@ node agent-os/scripts/install-git-hooks.mjs --dry-run
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/provenance.mjs verify-all
 ```
+
+`autonomy-next.mjs` accepts only `--help`, `--json`, and `--seed`. Unknown flags exit non-zero instead of being ignored, which keeps autonomous wrappers honest about the selector mode they requested.
 
 `autonomy-transition.mjs` enforces allowed transitions from `workflow.json`, updates the task record, appends to `agent-os/autonomy/events.jsonl`, and re-runs the autonomy validator.
 
@@ -187,6 +192,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
 | Autonomy summary publication | `node agent-os/scripts/autonomy-publish-summary.mjs --out docs/autonomy-summary.md --since YYYY-MM-DD` | Writes or checks a repository-scoped Markdown summary without staging, committing, pushing, or claiming signing. |
 | Autonomy summary validator | `node agent-os/scripts/validate-autonomy-summary.mjs` | Checks Markdown/JSON summary output, state totals, limit handling, publication check mode, path safety, and invalid-argument rejection. |
+| Autonomy next CLI validator | `node agent-os/scripts/validate-autonomy-next-cli.mjs` | Checks selector syntax, help output, unknown-flag rejection, and JSON output shape. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |

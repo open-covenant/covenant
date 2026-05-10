@@ -18,6 +18,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |
 | `docs/budget-pause-checkpoints.md` | Budget pause checkpoint format and daemon integration boundary. |
 | `docs/identity-provenance.md` | Local identity key and peer-token provenance dry-run boundary. |
+| `docs/privileged-cli-live-matrix.md` | Command-level privileged CLI live coverage contract. |
 | `docs/on-chain-settlement-readiness.md` | On-chain settlement deployment, review, oracle, mint authority, and emergency-operation gates. |
 | `docs/gvisor-host-readiness.md` | Linux gVisor host readiness and CI promotion gates. |
 | `docs/releases/` | Release evidence bundle records for alpha candidates, scaffolded by `agent-os/scripts/alpha-release-bundle.mjs`. |
@@ -51,7 +52,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/agents/research` | Reference research agent. |
 | `agent-os/programs/settlement` | Solana protocol program for agent registration, stake, credits, task escrow, and receipt anchors. |
 | `agent-os/covenant-web` | Local operator web console. |
-| `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrix, and task backlog. |
+| `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrices, and task backlog. |
 | `agent-os/scripts` | Validation, live coverage checks, identity provenance dry-runs, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
 
 ## MCP Bridges

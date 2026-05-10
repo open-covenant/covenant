@@ -14,6 +14,7 @@ Validate the matrix without running live tests:
 
 ```bash
 node agent-os/scripts/validate-live-coverage.mjs
+node agent-os/scripts/validate-privileged-cli-live-matrix.mjs
 node agent-os/scripts/model-availability.mjs
 bash agent-os/scripts/test-stats.sh
 ```
@@ -50,7 +51,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) and [`docs/gvisor-host
 | --- | --- | --- | --- |
 | Daemon IPC core | Covered | daemon ping/intent, CLI ping JSON, CLI intent, CLI intent JSON, CLI resume JSON, CLI version | Resume-success fixture once budget refill semantics can be exercised without long sleeps. |
 | State verifier | Covered | CLI `verify --json` healthy, drift, and targeted repair paths on a real daemon | Typed repair command hints once verifier repair action schemas stabilize. |
-| Memory retention | Covered | CLI memory read JSON, purge JSON, repair detach/backfill/delete JSON outcomes, compaction dry-run/apply JSON envelope, and exact memory receipt correlation | Receipt-correlation backfill coverage for legacy uncorrelated rows, then receipt-batch reconciliation once chain metadata is stable. |
+| Memory retention | Covered | CLI memory read JSON, purge JSON, repair detach/backfill/delete JSON outcomes, compaction dry-run/apply JSON envelope, receipt-backfill dry-run JSON envelope, and exact memory receipt correlation | Receipt-batch reconciliation once chain metadata is stable. |
 | HTTP gateway | Covered | health, version, bearer auth, tools call, audit purge mutation, capabilities purge mutation with scoped rejection | Broaden protected HTTP mutation coverage across memory repair, peer lifecycle, and A2A recovery endpoints. |
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit purge JSON including scoped rejection, audit recent, audit recent JSON, audit verify JSON envelope | Scoped audit query filter coverage once audit predicates become user-selectable. |

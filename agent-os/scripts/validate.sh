@@ -58,6 +58,7 @@ run node ./scripts/validate-git-identity.mjs --ref HEAD --ref origin/main..HEAD
 run node ./scripts/validate-github-cli-account.mjs
 run node ./scripts/validate-readme-copy.mjs
 run node ./scripts/validate-live-coverage.mjs
+run node ./scripts/validate-privileged-cli-live-matrix.mjs
 run node ./scripts/validate-source-installer.mjs
 run node ./scripts/validate-distribution-readiness.mjs
 run node ./scripts/validate-settlement-deployment-readiness.mjs

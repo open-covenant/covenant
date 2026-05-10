@@ -8,6 +8,7 @@
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
+//!   covenant memory plan-receipt-backfill [--limit N] [--json]
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -59,6 +60,7 @@ use covenant_types::{
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
     SettlementReceipt,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 
@@ -110,6 +112,7 @@ fn print_usage() {
     eprintln!(
         "  covenant memory plan-compaction --reason TEXT [--detach-stale-parents] [--delete-working-before-ms M|--delete-working-older-than-ms D] [--delete-episodic-before-ms M|--delete-episodic-older-than-ms D] [--mark-longterm-stale-before-ms M|--mark-longterm-stale-older-than-ms D] [--json]"
     );
+    eprintln!("  covenant memory plan-receipt-backfill [-n N] [--json]  dry-run legacy memory receipt correlation plan");
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
     );
@@ -646,6 +649,61 @@ async fn main() -> Result<()> {
                         print_memory_compaction_plan_response(response, as_json)?;
                     } else {
                         print_memory_compaction_response(response, as_json)?;
+                    }
+                }
+                "plan-receipt-backfill" => {
+                    let mut limit: usize = 100;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--apply" => {
+                                bail!(
+                                    "memory plan-receipt-backfill is read-only and does not accept --apply"
+                                )
+                            }
+                            "-n" | "--limit" => {
+                                i += 1;
+                                let v = args.get(i).context("--limit needs a value")?;
+                                limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+
+                    write_frame(&mut stream, &Request::RecentMemory { tier: None, limit }).await?;
+                    let memories = match read_frame::<_, Response>(&mut stream).await? {
+                        Response::Memories { records } => records,
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    };
+
+                    write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
+                    let receipts = match read_frame::<_, Response>(&mut stream).await? {
+                        Response::Receipts { receipts } => receipts,
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    };
+
+                    let plan = memory_receipt_backfill_plan_json(limit, &memories, &receipts);
+                    if as_json {
+                        println!("{}", serde_json::to_string(&plan)?);
+                    } else {
+                        let records = plan["records"].as_array().map(Vec::len).unwrap_or(0);
+                        let unmatched_receipts = plan["unmatched_legacy_receipts"]
+                            .as_array()
+                            .map(Vec::len)
+                            .unwrap_or(0);
+                        let unmatched_memory = plan["unmatched_memory_records"]
+                            .as_array()
+                            .map(Vec::len)
+                            .unwrap_or(0);
+                        println!(
+                            "receipt backfill plan: {records} candidate(s), {unmatched_receipts} unmatched legacy receipt(s), {unmatched_memory} unmatched memory record(s)"
+                        );
+                        println!("mutation: unsupported; this command only emits a dry-run plan");
                     }
                 }
                 "repair" => {
@@ -2521,6 +2579,89 @@ fn memory_compaction_plan_json(outcome: &MemoryCompactionOutcome) -> serde_json:
     })
 }
 
+fn memory_receipt_backfill_plan_json(
+    limit: usize,
+    memories: &[MemoryRecord],
+    receipts: &[SettlementReceipt],
+) -> serde_json::Value {
+    let memory_receipts = receipts
+        .iter()
+        .filter(|receipt| receipt.resource == ResourceKind::Memory)
+        .collect::<Vec<_>>();
+    let correlated = memory_receipts
+        .iter()
+        .filter_map(|receipt| receipt.memory_record_id)
+        .collect::<HashSet<_>>();
+    let mut used_memory = HashSet::new();
+    let mut records = Vec::new();
+    let mut unmatched_legacy_receipts = Vec::new();
+
+    let legacy_receipts = memory_receipts
+        .iter()
+        .copied()
+        .filter(|receipt| receipt.memory_record_id.is_none())
+        .collect::<Vec<_>>();
+
+    for receipt in &legacy_receipts {
+        let candidate = memories.iter().find(|memory| {
+            memory.owner.pubkey == receipt.payer.pubkey
+                && !correlated.contains(&memory.id)
+                && !used_memory.contains(&memory.id)
+        });
+
+        if let Some(memory) = candidate {
+            used_memory.insert(memory.id);
+            records.push(serde_json::json!({
+                "receipt_id": receipt.id,
+                "memory_record_id": memory.id,
+                "payer_display": receipt.payer.display,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "memory_owner_display": memory.owner.display,
+                "memory_owner_pubkey": memory.owner.pubkey_base58(),
+                "credits_consumed": receipt.credits_consumed,
+                "status": "candidate",
+                "reason": "legacy memory receipt has no memory_record_id and the same owner has an uncorrelated memory record"
+            }));
+        } else {
+            unmatched_legacy_receipts.push(serde_json::json!({
+                "receipt_id": receipt.id,
+                "payer_display": receipt.payer.display,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "credits_consumed": receipt.credits_consumed,
+                "reason": "no uncorrelated memory record for receipt payer in the requested window"
+            }));
+        }
+    }
+
+    let unmatched_memory_records = memories
+        .iter()
+        .filter(|memory| !correlated.contains(&memory.id) && !used_memory.contains(&memory.id))
+        .map(|memory| {
+            serde_json::json!({
+                "memory_record_id": memory.id,
+                "owner_display": memory.owner.display,
+                "owner_pubkey": memory.owner.pubkey_base58(),
+                "tier": memory_tier_slug(memory.tier),
+                "reason": "no legacy receipt candidate for memory owner in the requested window"
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "kind": "memory_receipt_backfill_plan",
+        "mode": "dry_run",
+        "limit": limit,
+        "mutation_supported": false,
+        "records": records,
+        "unmatched_legacy_receipts": unmatched_legacy_receipts,
+        "unmatched_memory_records": unmatched_memory_records,
+        "refusal": {
+            "apply_supported": false,
+            "reason": "receipt backfill mutation is not implemented; review this plan before adding an explicit mutation path with audit evidence"
+        }
+    })
+}
+
 fn memory_read_json(
     mode: &str,
     tier: Option<MemoryTier>,
@@ -3427,6 +3568,103 @@ mod tests {
                 .as_array()
                 .map(Vec::len),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pairs_legacy_receipts_by_owner() {
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let memory_id = uuid::Uuid::from_u128(10);
+        let memory = MemoryRecord {
+            id: memory_id,
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt_id = uuid::Uuid::from_u128(20);
+        let receipt = SettlementReceipt {
+            id: receipt_id,
+            payer: owner.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let value = memory_receipt_backfill_plan_json(100, &[memory], &[receipt]);
+        assert_eq!(value["kind"], "memory_receipt_backfill_plan");
+        assert_eq!(value["mode"], "dry_run");
+        assert_eq!(value["mutation_supported"], false);
+        assert_eq!(value["records"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["records"][0]["receipt_id"], receipt_id.to_string());
+        assert_eq!(
+            value["records"][0]["memory_record_id"],
+            memory_id.to_string()
+        );
+        assert_eq!(value["records"][0]["status"], "candidate");
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(value["refusal"]["apply_supported"], false);
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_lists_unmatched_rows() {
+        let memory_owner = AgentId::new("memory@local", [5u8; 32]);
+        let payer = AgentId::new("payer@local", [6u8; 32]);
+        let memory = MemoryRecord {
+            id: uuid::Uuid::from_u128(30),
+            tier: MemoryTier::LongTerm,
+            owner: memory_owner,
+            text: "unmatched memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(40),
+            payer,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let value = memory_receipt_backfill_plan_json(10, &[memory], &[receipt]);
+        assert_eq!(value["records"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(1)
         );
     }
 

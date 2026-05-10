@@ -3694,6 +3694,39 @@
       "humanEscalation": [],
       "nextAction": "Add SDK compatibility documentation, a report/validator over package metadata and export maps, and update distribution readiness/status without claiming public SDK publication.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-sdk-export-compatibility-fixtures",
+      "title": "Add SDK export compatibility fixtures",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "packages/sdk",
+        "packages/sdk-ui",
+        "agent-os/autonomy"
+      ],
+      "summary": "The SDK compatibility policy validates package metadata, but source export drift still needs committed fixtures before any stronger SDK compatibility claim can be made.",
+      "expectedFailureModes": [
+        "SDK source exports change silently without a fixture diff.",
+        "Compatibility fixtures drift from package metadata and produce false confidence.",
+        "Docs confuse workspace export fixtures with public npm semver guarantees."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-sdk-compatibility.mjs",
+        "node agent-os/scripts/validate-distribution-readiness.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add committed export fixtures for workspace SDK packages, compare them in the SDK compatibility report, and update docs/status without claiming public SDK stability.",
+      "updated": "2026-05-10"
     }
   ]
 }

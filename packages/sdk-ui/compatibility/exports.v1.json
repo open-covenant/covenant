@@ -1,0 +1,11 @@
+{
+  "schema": "covenant.sdk-exports.v1",
+  "package": "@covenant/sdk-ui",
+  "stability": "workspace_alpha_private",
+  "source_exports": [
+    "./auth/session.js",
+    "./auth/solana.js",
+    "./hooks/data.js",
+    "@covenant/sdk"
+  ]
+}

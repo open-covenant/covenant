@@ -20,13 +20,13 @@ The report uses schema `covenant.sdk-compatibility.v1`.
 
 | Package | Current status | Compatibility boundary |
 |---|---|---|
-| `@covenant/sdk` | Workspace alpha, not published to npm | Root export map, TypeScript declarations, and source export list are validated. |
-| `@covenant/sdk-ui` | Private workspace alpha | React hooks remain private until UI package stability and peer dependency policy are approved. |
+| `@covenant/sdk` | Workspace alpha, not published to npm | Root export map, TypeScript declarations, and `packages/sdk/compatibility/exports.v1.json` are validated. |
+| `@covenant/sdk-ui` | Private workspace alpha | React hooks remain private; `packages/sdk-ui/compatibility/exports.v1.json` tracks workspace export drift. |
 
 ## Workspace-Alpha Rules
 
 - Root export maps must stay aligned with `main` and `types` package metadata.
-- Source exports should not be removed or renamed without a compatibility note and distribution readiness update.
+- Source exports should not be removed or renamed without updating the package export fixture, compatibility note, and distribution readiness evidence.
 - README install examples must keep the unpublished workspace boundary visible.
 - Generated protocol bindings are not public-stable until fixture coverage exists for the generated surface.
 

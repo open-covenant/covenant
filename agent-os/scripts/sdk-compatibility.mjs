@@ -57,6 +57,42 @@ function sourceExports(packagePath) {
     .sort();
 }
 
+function exportFixture(definition, exports) {
+  const path = join(definition.path, "compatibility", "exports.v1.json");
+  const absolute = join(repoRoot, path);
+  if (!existsSync(absolute)) {
+    return {
+      path,
+      present: false,
+      matches: false,
+      errors: ["export compatibility fixture is missing"],
+    };
+  }
+
+  const fixture = readJson(absolute);
+  const errors = [];
+  if (fixture.schema !== "covenant.sdk-exports.v1") {
+    errors.push("fixture schema must be covenant.sdk-exports.v1");
+  }
+  if (fixture.package !== definition.public_name) {
+    errors.push(`fixture package must be ${definition.public_name}`);
+  }
+  if (fixture.stability !== definition.stability) {
+    errors.push(`fixture stability must be ${definition.stability}`);
+  }
+  if (JSON.stringify(fixture.source_exports ?? []) !== JSON.stringify(exports)) {
+    errors.push("fixture source_exports do not match src/index.ts");
+  }
+
+  return {
+    path,
+    present: true,
+    matches: errors.length === 0,
+    schema: fixture.schema ?? null,
+    errors,
+  };
+}
+
 function packageReport(definition) {
   const packageJsonPath = join(repoRoot, definition.path, "package.json");
   const pkg = readJson(packageJsonPath);
@@ -84,6 +120,9 @@ function packageReport(definition) {
   if (!pkg.scripts?.build || !pkg.scripts?.typecheck) {
     errors.push("build and typecheck scripts are required");
   }
+  const exports = sourceExports(definition.path);
+  const fixture = exportFixture(definition, exports);
+  errors.push(...fixture.errors);
 
   return {
     id: definition.id,
@@ -99,7 +138,8 @@ function packageReport(definition) {
       types: pkg.types ?? null,
       files: pkg.files ?? [],
     },
-    source_exports: sourceExports(definition.path),
+    source_exports: exports,
+    fixture,
     ok: errors.length === 0,
     errors,
   };
@@ -118,7 +158,7 @@ const report = {
   policy: {
     workspace_alpha: [
       "root export maps must stay aligned with main/types metadata",
-      "source exports must be reviewed before removal or rename",
+      "source exports must match committed compatibility fixtures before removal or rename",
       "README examples must not imply npm publication before release approval",
     ],
     public_sdk_blockers: [

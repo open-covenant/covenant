@@ -71,6 +71,9 @@ for (const pkg of [sdk, sdkUi].filter(Boolean)) {
   if (!Array.isArray(pkg.source_exports) || pkg.source_exports.length === 0) {
     fail(`${pkg.name} must expose at least one source export`);
   }
+  if (pkg.fixture?.matches !== true) {
+    fail(`${pkg.name} export fixture must match source exports`);
+  }
 }
 
 if (!report.blockers.some((blocker) => /npm publication/i.test(blocker))) {

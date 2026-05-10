@@ -1,7 +1,7 @@
 {
   "id": "status-signed-capabilities-scoped-delegated-live-coverage-matrix",
   "title": "Add scoped-delegated live coverage matrix",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

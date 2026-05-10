@@ -1,0 +1,31 @@
+{
+  "id": "alpha-release-review-artifact-readiness",
+  "title": "Add review artifact validation to alpha readiness",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "The alpha readiness report checks handoff recovery but not the unsigned review artifact pipeline. Add the review artifact toolchain validator as a read-only alpha readiness signal so release preparation fails closed when task review evidence cannot be generated and verified.",
+  "expectedFailureModes": [
+    "Alpha readiness omits a broken review artifact pipeline even though autonomous release evidence depends on task review artifacts.",
+    "The readiness check overclaims signed review artifacts instead of validating the unsigned artifact boundary.",
+    "The readiness check writes files, stages changes, commits, or pushes while exercising review artifact validation."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/alpha-release-readiness.mjs --json",
+    "node agent-os/scripts/validate-autonomy-review-artifacts.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Wire validate-autonomy-review-artifacts into alpha-release-readiness, update release docs/status, and validate JSON/text readiness output without writing Git metadata.",
+  "updated": "2026-05-10"
+}

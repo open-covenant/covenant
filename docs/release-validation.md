@@ -59,9 +59,12 @@ Signing, tagging, artifact upload, release announcements, and key rotation are h
 Minimum validation:
 
 ```bash
+node agent-os/scripts/alpha-release-readiness.mjs
 node agent-os/scripts/alpha-release-evidence.mjs
 bash agent-os/scripts/validate.sh --quick
 node agent-os/scripts/validate-autonomy.mjs
+node agent-os/scripts/validate-autonomy-handoff.mjs
+node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-readme-copy.mjs
@@ -77,6 +80,8 @@ bash agent-os/scripts/validate.sh
 ```
 
 Live tests are evidence when their prerequisites are recorded. Linux gVisor evidence should follow `docs/gvisor-live-runner.md`.
+
+`node agent-os/scripts/alpha-release-readiness.mjs --json` is the machine-readable release blocker report. It does not mutate state. It reports dirty working-tree state, neutral Git identity, local Git metadata write access, outgoing commit identity, autonomy validation, handoff toolchain validation, unsigned review artifact validation, README/status drift, live coverage metadata, provenance verification, and GitHub push attribution. Use `--strict` when the report is being used as an acceptance gate rather than a preparatory diagnostic.
 
 ## Review Criteria
 

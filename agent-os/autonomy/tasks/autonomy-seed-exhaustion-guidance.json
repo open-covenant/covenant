@@ -1,0 +1,29 @@
+{
+  "id": "autonomy-seed-exhaustion-guidance",
+  "title": "Improve exhausted backlog guidance",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "agent-os/autonomy/tasks/README.md"
+  ],
+  "summary": "When the autonomy seed queue is exhausted, the command output still points operators at manual backlog editing instead of the validated scaffold workflow. Tighten the error text so autonomous sessions can refill the queue through the existing scaffold command.",
+  "expectedFailureModes": [
+    "Autonomous sessions stall because the exhausted-backlog output omits the scaffold command.",
+    "Operators manually edit backlog templates and skip validator-friendly defaults already provided by the scaffold CLI.",
+    "The exhausted path exits with unclear instructions that do not name the validation and reseed sequence."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-seed-next.mjs 2>&1 | rg \"autonomy-scaffold-backlog-template.mjs --help\"",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Update autonomy-seed-next exhaustion output to reference the scaffold CLI and validation flow, then verify the exhausted path and autonomy records.",
+  "updated": "2026-05-10"
+}

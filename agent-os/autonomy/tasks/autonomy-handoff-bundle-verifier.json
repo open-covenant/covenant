@@ -1,0 +1,30 @@
+{
+  "id": "autonomy-handoff-bundle-verifier",
+  "title": "Add autonomy handoff bundle verifier",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "The handoff bundle can export tracked patches and untracked text content, but there is not yet a separate verifier that checks bundle schema, path safety, and content digests before another environment restores it. Add a read-only verifier for bundle JSON from stdin or file.",
+  "expectedFailureModes": [
+    "A corrupted handoff bundle is accepted and another environment reconstructs the wrong files.",
+    "Unsafe absolute or traversal paths in bundle contents are accepted.",
+    "The verifier writes files or Git metadata while checking a bundle."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-handoff-bundle.mjs --json | node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin",
+    "node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --help",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add an autonomy handoff bundle verifier with stdin/file input, verify patch and untracked-file digests plus path safety, document it in autonomous workflow docs, and validate it against a generated bundle.",
+  "updated": "2026-05-10"
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,6 +70,9 @@ function validationNotes(releaseId, data) {
     .map((command) => `- [ ] \`${command}\` - result: pending`)
     .join("\n");
   const notes = data.notes.map((note) => `- ${note}`).join("\n");
+  const readinessBlockers = data.readiness?.blockers?.length
+    ? data.readiness.blockers.map((blocker) => `- ${blocker}`).join("\n")
+    : "- none";
 
   return `# ${releaseId} Validation Notes
 
@@ -77,10 +81,17 @@ Generated: ${data.generated_at}
 Candidate commit: ${data.commit}
 Branch: ${data.branch}
 Dirty files: ${data.dirty_files}
+Alpha readiness: ${data.readiness?.ready ? "ready" : "blocked"}
 
 ## Required Gates
 
 ${commands}
+
+## Alpha Readiness
+
+Blockers:
+
+${readinessBlockers}
 
 ## Live Prerequisites
 
@@ -98,6 +109,45 @@ Accepted evidence requires dirty files to be 0 and every required gate above to 
 `;
 }
 
+function digestFile(path) {
+  const bytes = readFileSync(path);
+  return {
+    bytes: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
+function bundleFiles(dir, prefix = "") {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const absolutePath = join(dir, entry.name);
+    if (path === "manifest.json") {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      files.push(...bundleFiles(absolutePath, path));
+      continue;
+    }
+    if (!entry.isFile()) {
+      fail(`unsupported bundle entry: ${path}`);
+    }
+    files.push(path);
+  }
+  return files;
+}
+
+function bundleManifest(releaseId, target, files) {
+  return {
+    schema: "covenant.alpha-release-manifest.v1",
+    kind: "alpha_release_manifest",
+    release_id: releaseId,
+    files: files
+      .map((path) => ({ path, ...digestFile(join(target, path)) }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
 const args = parseArgs(process.argv.slice(2));
 if (!args.releaseId) {
   usage();
@@ -113,11 +163,13 @@ if (!target.startsWith(`${releasesDir}${sep}`)) {
 
 const evidencePath = join(target, "evidence.json");
 const notesPath = join(target, "validation.md");
+const manifestPath = join(target, "manifest.json");
 
 if (args.dryRun) {
   console.log(`alpha-release-bundle: would create docs/releases/${args.releaseId}/`);
   console.log("  - evidence.json");
   console.log("  - validation.md");
+  console.log("  - manifest.json");
   process.exit(0);
 }
 
@@ -129,7 +181,9 @@ const data = evidence();
 mkdirSync(target, { recursive: true });
 writeFileSync(evidencePath, `${JSON.stringify(data, null, 2)}\n`);
 writeFileSync(notesPath, validationNotes(args.releaseId, data));
+writeFileSync(manifestPath, `${JSON.stringify(bundleManifest(args.releaseId, target, bundleFiles(target)), null, 2)}\n`);
 
 console.log(`alpha-release-bundle: wrote docs/releases/${args.releaseId}/`);
 console.log("  - evidence.json");
 console.log("  - validation.md");
+console.log("  - manifest.json");

@@ -7,8 +7,8 @@
 //! Marked `#[ignore]` so `cargo test` stays mock-only by default. Run with
 //! `cargo test -p covenant-mcp -- --ignored live_`.
 
-use covenant_mcp::external::bootstrap_remote_tools;
-use covenant_mcp::transport::{McpClient, StdioMcpClient};
+use covenant_mcp::external::{bootstrap_remote_tools, BootstrapError};
+use covenant_mcp::transport::{McpClient, McpClientError, StdioMcpClient};
 use covenant_mcp::Content;
 use std::sync::Arc;
 
@@ -16,7 +16,8 @@ use std::sync::Arc;
 #[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
 async fn live_stdio_mcp_initialize_lists_and_calls() {
     let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
-    let client = StdioMcpClient::spawn(&exe, &[])
+    let args = vec!["--string-ids".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
         .await
         .expect("spawn fake mcp server");
     let client_dyn: Arc<dyn McpClient> = client;
@@ -38,4 +39,25 @@ async fn live_stdio_mcp_initialize_lists_and_calls() {
         Content::Text { text } => assert_eq!(text, "pong: hello"),
         other => panic!("unexpected content: {other:?}"),
     }
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_surfaces_transport_closed_when_server_exits() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--exit-after-initialize".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    let err = match bootstrap_remote_tools(client_dyn).await {
+        Ok(_) => panic!("bootstrap should fail when server exits after initialize"),
+        Err(err) => err,
+    };
+    let transport = match err {
+        BootstrapError::Transport(e) => e,
+        other => panic!("unexpected bootstrap error: {other:?}"),
+    };
+    assert!(matches!(transport, McpClientError::Closed));
 }

@@ -18,6 +18,7 @@ cd covenant
 
 Common checks:
 
+- `bash agent-os/scripts/validate.sh --scripts` for repo guardrails without Rust tooling.
 - `bash agent-os/scripts/validate.sh --quick` for local iteration.
 - `bash agent-os/scripts/validate.sh` before integration.
 - `pnpm --dir landing build` when public docs or the site changed.

@@ -1,0 +1,31 @@
+{
+  "id": "alpha-release-readiness-report",
+  "title": "Add alpha release readiness report",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Alpha evidence bundles can be generated and validated, but there is no single local command that summarizes the repository-level blockers before a human release decision. Add a read-only readiness report that checks dirty state, identity guards, README/status drift, autonomy records, provenance, live coverage metadata, and GitHub push attribution.",
+  "expectedFailureModes": [
+    "Release operators miss a known blocker because release evidence commands are scattered across docs.",
+    "The readiness command mutates state or attempts a push while checking release prerequisites.",
+    "A read-only GitHub push attribution failure is hidden instead of surfaced as a release blocker."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/alpha-release-readiness.mjs --json",
+    "pnpm --dir landing build",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add a read-only alpha release readiness command with text and JSON output, document it in release validation docs and landing docs, and keep push attribution as a reported blocker rather than a mutating step.",
+  "updated": "2026-05-10"
+}

@@ -29,15 +29,24 @@ export default function AlphaReleasePage() {
       <h2>Evidence bundle</h2>
       <p>
         Each candidate should record the evidence helper output, validation
-        outcomes, skipped live prerequisites, provenance links, audit-root
-        attestations when present, and the release decision.
+        outcomes, sanitized alpha readiness blockers, skipped live prerequisites,
+        provenance links, audit-root attestations when present, and the release
+        decision.
       </p>
 
-      <code>{`node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
+      <code>{`node agent-os/scripts/alpha-release-readiness.mjs
+node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
 node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
+node agent-os/scripts/validate-alpha-release-evidence.mjs
 bash agent-os/scripts/validate.sh --quick
 pnpm --dir landing build
 git diff --check`}</code>
+
+      <p>
+        Accepted bundles require alpha readiness to be clear. Draft blocker
+        review can use an explicit blocked-readiness override without turning
+        that draft into accepted release evidence.
+      </p>
 
       <h2>Human-owned decisions</h2>
       <p>

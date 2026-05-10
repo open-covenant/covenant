@@ -17,13 +17,14 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
 - Local memory settlement receipts carry `memory_record_id` for daemon-created memory writes; verifier reconciliation joins exactly when the field exists and falls back to owner/resource counts for legacy receipt rows.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
-- Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, and human approval before any tag or artifact publication.
+- Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, sanitized readiness evidence, and human approval before any tag or artifact publication.
 - Release validation language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 - Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs`.
+- Summary output should pass `agent-os/scripts/validate-autonomy-summary.mjs` before it is used as published sprint evidence.
 
 ## Invariants
 
@@ -33,8 +34,30 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Token bytes, private keys, secrets, hostnames, personal usernames, and machine-local paths should not be logged or committed.
 - Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs`; pre-push should pass the exact pushed ref range to the same validator.
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
+- The local Git metadata directory should pass `agent-os/scripts/validate-git-write-access.mjs` before a task is treated as committable; a read-only `.git` directory is a real commit blocker, not a code blocker.
 - Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
 - GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, or approved bot account.
+- Autonomous sessions should run `agent-os/scripts/autonomy-preflight.mjs` before starting a fresh slice so commit blockers and push blockers are visible separately.
+- If a session cannot commit, `agent-os/scripts/autonomy-dirty-report.mjs --json` should be used as the handoff artifact for dirty paths, active task state, diff stats, and environment blockers.
+- If untracked files exist in a commit-blocked session, `agent-os/scripts/autonomy-handoff-bundle.mjs --json` should be used to export the tracked patch plus bounded UTF-8 untracked file contents for reconstruction in a writable checkout.
+- Handoff bundles should pass `agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin` before another environment restores them.
+- Restore sequencing for a handoff bundle should come from `agent-os/scripts/autonomy-plan-handoff-restore.mjs --stdin` so the base commit, untracked files, tracked patch, and validation order are explicit.
+- Handoff command changes should pass `agent-os/scripts/validate-autonomy-handoff.mjs` so dirty report, bundle export, verification, restore planning, and tamper rejection stay consistent.
+- Alpha readiness includes `agent-os/scripts/validate-autonomy-handoff.mjs`; release work must not proceed from a commit-blocked checkout unless the handoff bundle path can prove the dirty state is recoverable.
+- When the autonomy backlog is exhausted, run `agent-os/scripts/autonomy-status-gaps.mjs --json` before inventing templates. It extracts candidate hardening work from `docs/status.md` without writing files.
+- `agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json` emits unsigned task review evidence. Do not describe review artifacts as signed until signing policy and key custody are implemented.
+- Verify unsigned review artifacts with `agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`; it recomputes source task and event digests from local repository state.
+- Review artifact command changes should pass `agent-os/scripts/validate-autonomy-review-artifacts.mjs` so generation, verification, and tamper rejection stay consistent.
+- Alpha readiness includes `agent-os/scripts/validate-autonomy-review-artifacts.mjs`; release preparation must not treat review evidence as signing evidence until signing policy and key custody exist.
+- Alpha release evidence embeds sanitized `agent-os/scripts/alpha-release-readiness.mjs --json` state. Accepted bundles should reject blocked readiness unless they are explicitly being validated as draft blocker-review artifacts.
+- Alpha release evidence uses schema `covenant.alpha-release-evidence.v1`; bundle validation should fail closed on unversioned or incompatible evidence.
+- Alpha release bundles include `manifest.json` using schema `covenant.alpha-release-manifest.v1`; the manifest locally binds every regular bundle file except itself by relative path, byte count, and SHA-256 digest without claiming signing or transparency publication.
+- Alpha release validation note metadata (`Status`, `Generated`, `Candidate commit`, `Branch`, `Dirty files`, and `Alpha readiness`) must match `evidence.json`.
+- Alpha release bundle validation requires explicit gate outcomes for every evidence command; skipped gates must carry a reason and pending gates are draft-only.
+- Alpha release bundles with decision `accepted` require every evidence command to be checked and `result: passed`; failed or skipped gates belong in rejected or superseded evidence.
+- Alpha release gate outcome lines only count under `## Required Gates`; copied command lines elsewhere in validation notes must not satisfy evidence validation.
+- Alpha release readiness blocker ids only count under `## Alpha Readiness`; copied blocker ids elsewhere in validation notes must not satisfy blocker review.
+- `agent-os/scripts/validate-alpha-release-evidence.mjs` should prove both rejection paths and a synthetic clean/ready accepted bundle path without depending on the current checkout state.
 - If `origin/main` contains a commit that fails `validate-git-identity.mjs`, do not merge it locally; replace the remote ref only through an approved neutral write credential.
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - The root README must pass `node agent-os/scripts/validate-readme-copy.mjs` after public copy or status changes.
@@ -80,10 +103,16 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
+- [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
+- [agent-os/scripts/autonomy-status-gaps.mjs](../agent-os/scripts/autonomy-status-gaps.mjs): read-only backlog-refill candidates from the capability status matrix.
+- [agent-os/scripts/autonomy-review-artifact.mjs](../agent-os/scripts/autonomy-review-artifact.mjs): unsigned task review artifact scaffold.
+- [agent-os/scripts/autonomy-verify-review-artifact.mjs](../agent-os/scripts/autonomy-verify-review-artifact.mjs): verifier for unsigned task review artifacts.
+- [agent-os/scripts/validate-autonomy-review-artifacts.mjs](../agent-os/scripts/validate-autonomy-review-artifacts.mjs): review artifact toolchain validator.
 - [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
+- [agent-os/scripts/validate-autonomy-summary.mjs](../agent-os/scripts/validate-autonomy-summary.mjs): sprint summary output validator.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
 - [docs/a2a-idempotency-policy.md](./a2a-idempotency-policy.md): idempotency policy required before automatic A2A retry.
@@ -93,6 +122,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 From the repository root:
 
 ```bash
+bash agent-os/scripts/validate.sh --scripts
 bash agent-os/scripts/validate.sh --quick
 bash agent-os/scripts/validate.sh
 ```

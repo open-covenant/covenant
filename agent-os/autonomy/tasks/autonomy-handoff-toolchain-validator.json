@@ -1,0 +1,29 @@
+{
+  "id": "autonomy-handoff-toolchain-validator",
+  "title": "Add autonomy handoff toolchain validator",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "The handoff path now has separate dirty report, bundle export, verifier, and restore planner commands. Add one read-only validator that exercises the whole toolchain together so blocked sessions can prove the handoff artifacts are internally consistent.",
+  "expectedFailureModes": [
+    "Individual handoff tools pass alone but fail when piped together.",
+    "The validator misses digest tampering and accepts a corrupt bundle.",
+    "The validator writes files, stages changes, commits, or pushes while checking handoff artifacts."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-autonomy-handoff.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add a validate-autonomy-handoff command that runs the dirty report, bundle export, verifier, restore planner, and expected tamper rejection without writing Git metadata.",
+  "updated": "2026-05-10"
+}

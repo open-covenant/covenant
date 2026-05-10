@@ -1,0 +1,39 @@
+{
+  "id": "alpha-release-decision-outcome-contract",
+  "title": "Bind accepted alpha decisions to passed gates",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "docs/releases/README.md",
+    "docs/alpha-release-contract.md",
+    "docs/project-memory.md",
+    "docs/status.md",
+    "README.md"
+  ],
+  "summary": "Alpha bundle validation should reject an accepted decision when any required gate is failed, skipped, pending, or unchecked, even if draft or environment overrides are supplied.",
+  "expectedFailureModes": [
+    "A bundle with decision accepted contains failed gates but still validates.",
+    "A bundle with decision accepted contains skipped gates but still validates.",
+    "Draft or environment overrides accidentally weaken the accepted-decision gate contract."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "A human release operator must decide whether failed or skipped gates justify rejected or superseded evidence instead of accepted evidence."
+  ],
+  "nextAction": "Track parsed gate outcomes, require accepted decisions to have every evidence command passed, add regression coverage, and document the accepted-decision contract.",
+  "updated": "2026-05-10"
+}

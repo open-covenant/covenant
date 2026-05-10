@@ -28,6 +28,12 @@ node agent-os/scripts/autonomy-continue.mjs
 
 If this command names a task, keep working on that task instead of ending the session with a status report. Stop only when every candidate is blocked, the user explicitly asks to pause, or the execution environment forces a turn boundary.
 
+Validate summary output before publishing sprint evidence:
+
+```bash
+node agent-os/scripts/validate-autonomy-summary.mjs
+```
+
 Move a task through an allowed transition:
 
 ```bash
@@ -35,6 +41,26 @@ node agent-os/scripts/autonomy-transition.mjs memory-drift-repair planned --acto
 ```
 
 Transitions update the task JSON and append an event to `agent-os/autonomy/events.jsonl`. Commit both when the transition represents durable project state.
+
+Export an unsigned review artifact for a task:
+
+```bash
+node agent-os/scripts/autonomy-review-artifact.mjs autonomy-status-gap-report --json
+```
+
+The artifact includes the task record, matching transition events, declared gates, verification commands, and content digests. It is not a signature; signing remains a separate hardening step.
+Verify it before using it as review evidence:
+
+```bash
+node agent-os/scripts/autonomy-review-artifact.mjs autonomy-status-gap-report --json \
+  | node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin
+```
+
+Validate the review artifact pipeline after changing artifact commands:
+
+```bash
+node agent-os/scripts/validate-autonomy-review-artifacts.mjs
+```
 
 Seed the next backlog template directly:
 
@@ -48,7 +74,13 @@ The actor must be one of the workflow roles. The note is validated with the rest
 
 The seeded tasks in this directory come from templates in `agent-os/autonomy/backlog.json`.
 
-When `node agent-os/scripts/autonomy-seed-next.mjs` reports backlog exhaustion, it means every template already has a corresponding JSON file in `agent-os/autonomy/tasks`.
+When `node agent-os/scripts/autonomy-seed-next.mjs` reports backlog exhaustion, it means every template already has a corresponding JSON file in `agent-os/autonomy/tasks`. The command prints the scaffold, validation, and reseed flow so a session can refill the queue without relying on chat history.
+
+Use the status gap report to ground the next templates in public project state:
+
+```bash
+node agent-os/scripts/autonomy-status-gaps.mjs --json
+```
 
 Add a new template with the scaffold CLI, then validate before seeding:
 

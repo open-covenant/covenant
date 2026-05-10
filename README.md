@@ -47,7 +47,7 @@ See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), 
 
 ## Capabilities
 
-<!-- covenant-readme-status-sha256: 511a5d20fc37594f7a3437ea51f67b1fad8900638b29535171e9b2b2949a7af2 -->
+<!-- covenant-readme-status-sha256: 484beddd84c4c4094ef7b26138137e0e4439d66cf1d7020bfb01685efff41a32 -->
 
 Covenant includes:
 
@@ -65,6 +65,12 @@ Covenant includes:
 - CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
 
 ## Validation
+
+Run the scripts-only gate when the change does not need Rust tooling:
+
+```bash
+bash agent-os/scripts/validate.sh --scripts
+```
 
 Run the fast local gate from the repository root:
 

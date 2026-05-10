@@ -12,7 +12,12 @@ Operational helpers:
 node agent-os/scripts/autonomy-next.mjs
 node agent-os/scripts/autonomy-continue.mjs
 node agent-os/scripts/autonomy-seed-next.mjs --dry-run
+node agent-os/scripts/autonomy-status-gaps.mjs
+node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json
+node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json | node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin
+node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09
+node agent-os/scripts/validate-autonomy-summary.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/install-git-hooks.mjs --dry-run
@@ -24,7 +29,7 @@ node agent-os/scripts/provenance.mjs verify-all
 
 `autonomy-continue.mjs` selects the highest-priority unblocked task. If every task is already integrated or blocked, it seeds the next template from `autonomy/backlog.json` through `autonomy-seed-next.mjs` and then returns that new proposed task. This keeps the loop moving without depending on chat history for the next work item.
 
-If `autonomy-continue.mjs` reports that the backlog is exhausted, do not treat that as a blocker by itself. Refill `agent-os/autonomy/backlog.json` from durable project evidence: `docs/status.md`, `docs/live-coverage.md`, `ROADMAP.md`, open task `nextAction` fields, and validated implementation gaps. Add concrete templates with scoped files, failure modes, gates, and verification commands, validate the autonomy records, then rerun the continuation command.
+If `autonomy-continue.mjs` reports that the backlog is exhausted, do not treat that as a blocker by itself. Start with `node agent-os/scripts/autonomy-status-gaps.mjs --json` to extract candidate hardening work from `docs/status.md`, then refill `agent-os/autonomy/backlog.json` from durable project evidence: `docs/status.md`, `docs/live-coverage.md`, `ROADMAP.md`, open task `nextAction` fields, and validated implementation gaps. Add concrete templates with scoped files, failure modes, gates, and verification commands, validate the autonomy records, then rerun the continuation command.
 
 `autonomy-summary.mjs` renders a deterministic sprint summary from task records and the transition log. Use Markdown for handoff notes and `--format json` for machine-readable monitors:
 
@@ -32,6 +37,12 @@ If `autonomy-continue.mjs` reports that the backlog is exhausted, do not treat t
 node agent-os/scripts/autonomy-summary.mjs
 node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09 --format json
 ```
+
+`validate-autonomy-summary.mjs` checks the Markdown and JSON summary surfaces, count consistency, limit handling, and invalid-argument rejection. Run it when changing task state, summary output, or publication automation.
+
+`autonomy-review-artifact.mjs` emits an unsigned review artifact for one task. It binds the task record, matching transition events, declared gates, verification commands, and content digests into one JSON envelope. The artifact is intentionally marked `unsigned` until project signing policy and key custody are implemented.
+Verify the artifact with `autonomy-verify-review-artifact.mjs` before treating it as durable review evidence.
+Run `validate-autonomy-review-artifacts.mjs` when changing review artifact commands so generation, verification, and tamper rejection are tested as one pipeline.
 
 `provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
 
@@ -145,12 +156,25 @@ Use the narrowest sufficient gate during development, then the full gate before 
 
 | Level | Command | Use |
 |---|---|---|
+| Scripts-only gate | `bash agent-os/scripts/validate.sh --scripts` | Docs, autonomy, and scripts changes that only need repo guardrails. |
 | Fast Rust gate | `bash agent-os/scripts/validate.sh --quick` | Early local iteration. |
 | Full Rust gate | `bash agent-os/scripts/validate.sh` | Before integration. |
+| Autonomy environment preflight | `node agent-os/scripts/autonomy-preflight.mjs` | Reports whether the local checkout can commit and whether the configured GitHub identity can push before a new autonomous slice starts. |
+| Status gap report | `node agent-os/scripts/autonomy-status-gaps.mjs --json` | Read-only backlog-refill candidates derived from the public capability status matrix. |
+| Review artifact scaffold | `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json` | Unsigned task review envelope containing task state, transition events, declared verification, and digests. |
+| Review artifact verifier | `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json \| node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin` | Recomputes task and transition-event digests for an unsigned review artifact and rejects stale or tampered evidence. |
+| Review artifact toolchain validator | `node agent-os/scripts/validate-autonomy-review-artifacts.mjs` | Exercises review artifact generation, verification, and digest tamper rejection in one read-only check. |
+| Dirty handoff report | `node agent-os/scripts/autonomy-dirty-report.mjs --json` | Read-only summary of dirty files, diff stats, active tasks, and preflight blockers when a session cannot commit. |
+| Handoff bundle | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json` | Read-only export of the tracked patch, included untracked text files, dirty report, and restore guidance. |
+| Handoff bundle verifier | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json \| node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin` | Verifies bundle schema, path safety, tracked patch digest, and included untracked file digests before restoration. |
+| Handoff restore plan | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json \| node agent-os/scripts/autonomy-plan-handoff-restore.mjs --stdin` | Produces ordered, read-only restore steps for a verified bundle. |
+| Handoff toolchain validator | `node agent-os/scripts/validate-autonomy-handoff.mjs` | Exercises the dirty report, bundle export, verifier, restore planner, and tamper rejection in one read-only check. |
 | Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers by default; pre-push passes the exact pushed ref ranges. |
 | Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes unless the active local Git author and committer resolve to the neutral automation identity. |
+| Git write-access guard | `node agent-os/scripts/validate-git-write-access.mjs` | Verifies the local Git metadata directory can create and remove a transient probe file before staging or committing work. |
 | GitHub push actor guard | `node agent-os/scripts/validate-github-push-identity.mjs` | Refuses GitHub pushes when the transport credential would attribute the ref update to an unapproved account. |
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
+| Autonomy summary validator | `node agent-os/scripts/validate-autonomy-summary.mjs` | Checks Markdown/JSON summary output, state totals, limit handling, and invalid-argument rejection. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
@@ -161,7 +185,14 @@ Live tests are not a substitute for unit tests. They are the signal that a path 
 
 When running a targeted live CLI test directly, build the CLI first with `cargo build -p covenant --locked`; those tests execute the workspace `target/debug/covenant` binary.
 
-Before autonomous commits, run `node agent-os/scripts/configure-git-identity.mjs` in the repository. The history validator still accepts older project pseudonyms for audit continuity, but the current-identity guard only accepts the neutral automation identity for new local work.
+Before autonomous commits, run `node agent-os/scripts/autonomy-preflight.mjs` and `node agent-os/scripts/configure-git-identity.mjs` in the repository. The preflight reports local commit readiness and remote push attribution separately. The history validator still accepts older project pseudonyms for audit continuity, but the current-identity guard only accepts the neutral automation identity for new local work.
+
+When the environment cannot commit, run `node agent-os/scripts/autonomy-dirty-report.mjs --json` before handing off. The report is read-only and records dirty paths, diff stats, active task state, and preflight blockers without staging, committing, pushing, or writing Git metadata.
+
+If untracked files are part of the blocked work, run `node agent-os/scripts/autonomy-handoff-bundle.mjs --json`. The bundle includes the tracked patch and UTF-8 untracked file contents under a size cap, so another writable environment can reconstruct the dirty tree before validation.
+Verify a bundle with `node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin` before restoring it.
+Use `node agent-os/scripts/autonomy-plan-handoff-restore.mjs --stdin` to turn the bundle into ordered restore steps without writing files or Git metadata.
+Run `node agent-os/scripts/validate-autonomy-handoff.mjs` when changing any handoff command so the pipeline is tested as a unit.
 
 ## Project Memory
 
@@ -177,7 +208,12 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue for future autonomous tasks.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
+- `node agent-os/scripts/autonomy-status-gaps.mjs --json`: backlog-refill candidates from the capability status matrix.
+- `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json`: unsigned review artifact scaffold for one autonomy task.
+- `node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`: verifier for unsigned review artifacts.
+- `node agent-os/scripts/validate-autonomy-review-artifacts.mjs`: read-only review artifact toolchain validator.
 - `node agent-os/scripts/autonomy-summary.mjs`: deterministic sprint and handoff summaries from the public task state.
+- `node agent-os/scripts/validate-autonomy-summary.mjs`: validator for sprint summary output.
 - [docs/provenance/README.md](./provenance/README.md): provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.
 - [BUILT.md](../BUILT.md): recursive engineering model and honesty boundaries.

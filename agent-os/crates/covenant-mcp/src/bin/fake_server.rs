@@ -9,6 +9,10 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let exit_after_initialize = args.iter().any(|arg| arg == "--exit-after-initialize");
+    let string_ids = args.iter().any(|arg| arg == "--string-ids");
+
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -27,6 +31,15 @@ fn main() {
         };
 
         let id = req.get("id").cloned();
+        let response_id = if string_ids {
+            match id.as_ref() {
+                Some(Value::Number(n)) => Some(Value::String(n.to_string())),
+                Some(Value::String(s)) => Some(Value::String(s.clone())),
+                other => other.cloned(),
+            }
+        } else {
+            id.clone()
+        };
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
         // Notifications carry no `id` and want no reply.
@@ -70,7 +83,7 @@ fn main() {
             _ => {
                 let err = json!({
                     "jsonrpc": "2.0",
-                    "id": id,
+                    "id": response_id,
                     "error": { "code": -32601, "message": format!("method not found: {method}") }
                 });
                 writeln!(out, "{err}").ok();
@@ -81,7 +94,7 @@ fn main() {
 
         let resp = json!({
             "jsonrpc": "2.0",
-            "id": id,
+            "id": response_id,
             "result": result
         });
         if writeln!(out, "{resp}").is_err() {
@@ -89,6 +102,10 @@ fn main() {
         }
         if out.flush().is_err() {
             break;
+        }
+
+        if exit_after_initialize && method == "initialize" {
+            return;
         }
     }
 }

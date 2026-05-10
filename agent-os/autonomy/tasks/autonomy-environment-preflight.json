@@ -1,0 +1,30 @@
+{
+  "id": "autonomy-environment-preflight",
+  "title": "Add autonomy environment preflight",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "Autonomous runs can now report alpha readiness blockers, but the autonomy loop itself still lacks a focused preflight that tells an agent whether local identity, Git metadata write access, and push attribution are usable before starting a slice. Add a read-only preflight report for autonomous sessions.",
+  "expectedFailureModes": [
+    "Autonomous sessions start implementation despite an environment that cannot stage or commit.",
+    "The preflight hides GitHub push attribution blockers and encourages unsafe remote writes.",
+    "The preflight leaks machine-local paths in machine-readable output."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-preflight.mjs --json",
+    "node agent-os/scripts/autonomy-preflight.mjs --strict",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add an autonomy preflight command with text and JSON output, include Git write-access and identity blockers, document it in the autonomous workflow, and validate the expected local blocker path.",
+  "updated": "2026-05-10"
+}

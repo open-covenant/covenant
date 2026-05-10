@@ -11,6 +11,7 @@
 //! point any in-flight requests resolve with [`McpClientError::Closed`].
 
 use async_trait::async_trait;
+use serde::de::{Error as DeError, Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -49,6 +50,7 @@ pub struct JsonRpcNotification {
 pub struct JsonRpcResponse {
     #[serde(default)]
     pub jsonrpc: String,
+    #[serde(default, deserialize_with = "deserialize_jsonrpc_id")]
     pub id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -63,6 +65,9 @@ pub struct JsonRpcError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
+
+const TRANSPORT_CLOSED_CODE: i64 = -32099;
+const TRANSPORT_CLOSED_MESSAGE: &str = "transport closed";
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpClientError {
@@ -82,11 +87,83 @@ pub enum McpClientError {
 
 impl From<JsonRpcError> for McpClientError {
     fn from(e: JsonRpcError) -> Self {
+        if e.code == TRANSPORT_CLOSED_CODE && e.message == TRANSPORT_CLOSED_MESSAGE {
+            return McpClientError::Closed;
+        }
         McpClientError::Rpc {
             code: e.code,
             message: e.message,
         }
     }
+}
+
+fn deserialize_jsonrpc_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct IdVisitor;
+
+    impl<'de> Visitor<'de> for IdVisitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a JSON-RPC id as a number or numeric string")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(None)
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            if v < 0 {
+                return Err(DeError::invalid_value(Unexpected::Signed(v), &self));
+            }
+            Ok(Some(v as u64))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|_| DeError::invalid_value(Unexpected::Str(v), &self))
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            self.visit_str(&v)
+        }
+    }
+
+    deserializer.deserialize_any(IdVisitor)
 }
 
 #[async_trait]
@@ -325,6 +402,25 @@ mod tests {
         assert!(r.result.is_none());
         let e = r.error.unwrap();
         assert_eq!(e.code, -32601);
+    }
+
+    #[test]
+    fn json_rpc_response_with_numeric_string_id_parses() {
+        let s = r#"{"jsonrpc":"2.0","id":"7","result":{"ok":true}}"#;
+        let r: JsonRpcResponse = serde_json::from_str(s).unwrap();
+        assert_eq!(r.id, Some(7));
+        assert_eq!(r.result.unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn transport_closed_error_maps_to_closed() {
+        let e = JsonRpcError {
+            code: TRANSPORT_CLOSED_CODE,
+            message: TRANSPORT_CLOSED_MESSAGE.to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = e.into();
+        assert!(matches!(mapped, McpClientError::Closed));
     }
 
     #[tokio::test]

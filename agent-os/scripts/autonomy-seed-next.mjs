@@ -70,9 +70,10 @@ const next = backlog.tasks.find((task) => {
 if (!next) {
   fail([
     "autonomy-seed-next: backlog exhausted (no unused templates remain).",
-    "Add a new task template to agent-os/autonomy/backlog.json, then run:",
+    "Scaffold the next task template with:",
+    "  node agent-os/scripts/autonomy-scaffold-backlog-template.mjs --help",
+    "Then validate and seed it:",
     "  node agent-os/scripts/validate-autonomy.mjs",
-    "and re-run:",
     "  node agent-os/scripts/autonomy-next.mjs --seed"
   ].join("\n"), 2);
 }

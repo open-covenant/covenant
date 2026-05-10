@@ -1,0 +1,40 @@
+{
+  "id": "alpha-release-evidence-schema-version",
+  "title": "Version alpha release evidence schema",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/alpha-release-evidence.mjs",
+    "agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "docs/releases/README.md",
+    "docs/alpha-release-contract.md",
+    "docs/project-memory.md",
+    "docs/status.md"
+  ],
+  "summary": "Alpha release evidence should include a stable schema identifier so bundle validators and future release tooling can reject incompatible evidence instead of inferring shape from kind alone.",
+  "expectedFailureModes": [
+    "Future release tooling accepts an unversioned evidence shape after the envelope changes.",
+    "Bundle validation relies on a loose kind field and misses incompatible evidence.",
+    "Docs describe evidence contents without naming the schema contract."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node --check agent-os/scripts/alpha-release-evidence.mjs",
+    "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Schema-breaking release evidence changes require human approval once published evidence exists."
+  ],
+  "nextAction": "Add a schema field to alpha release evidence, require it in bundle validation, document the versioned envelope, and update the release evidence regression check.",
+  "updated": "2026-05-10"
+}

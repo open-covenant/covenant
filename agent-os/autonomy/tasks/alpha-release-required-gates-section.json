@@ -1,0 +1,39 @@
+{
+  "id": "alpha-release-required-gates-section",
+  "title": "Scope alpha gate parsing to required gates",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "docs/releases/README.md",
+    "docs/alpha-release-contract.md",
+    "docs/project-memory.md",
+    "docs/status.md",
+    "README.md"
+  ],
+  "summary": "Alpha bundle validation should only satisfy evidence commands from the Required Gates section so copied command lines elsewhere in validation.md cannot satisfy release acceptance.",
+  "expectedFailureModes": [
+    "A command line outside Required Gates satisfies release acceptance.",
+    "Duplicate command lines inside and outside Required Gates produce ambiguous evidence.",
+    "Docs imply any matching command line in validation notes is enough."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Published bundle format changes require human approval once real public release evidence exists."
+  ],
+  "nextAction": "Parse the Required Gates section explicitly, validate gate result lines only from that section, add regression coverage, and document the section-scoped contract.",
+  "updated": "2026-05-10"
+}

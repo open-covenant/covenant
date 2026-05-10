@@ -17,6 +17,12 @@ The two primary binaries are:
 
 ## Validate
 
+Scripts-only gate:
+
+```bash
+./scripts/validate.sh --scripts
+```
+
 Fast local gate:
 
 ```bash

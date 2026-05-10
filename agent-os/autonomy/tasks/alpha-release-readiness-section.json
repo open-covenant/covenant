@@ -1,0 +1,39 @@
+{
+  "id": "alpha-release-readiness-section",
+  "title": "Scope alpha readiness blockers to readiness section",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "docs/releases/README.md",
+    "docs/alpha-release-contract.md",
+    "docs/project-memory.md",
+    "docs/status.md",
+    "README.md"
+  ],
+  "summary": "Alpha bundle validation should only satisfy readiness blocker evidence from the Alpha Readiness section so copied blocker ids elsewhere in validation.md cannot satisfy blocker review.",
+  "expectedFailureModes": [
+    "A readiness blocker copied outside Alpha Readiness satisfies bundle validation.",
+    "A bundle can omit blocker ids from the Alpha Readiness section but still validate.",
+    "Docs imply blocker ids anywhere in validation notes are enough."
+  ],
+  "gates": [
+    "test_expansion",
+    "docs"
+  ],
+  "verification": [
+    "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+    "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Published bundle format changes require human approval once real public release evidence exists."
+  ],
+  "nextAction": "Parse the Alpha Readiness section explicitly, validate readiness blockers only from that section, add regression coverage, and document the section-scoped blocker contract.",
+  "updated": "2026-05-10"
+}

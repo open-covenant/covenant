@@ -6,18 +6,30 @@ cd "$ROOT"
 
 usage() {
   cat <<'EOF'
-usage: scripts/validate.sh [--quick] [--live]
+usage: scripts/validate.sh [--scripts] [--quick] [--live]
 
-  --quick  run format, repo guards, cargo check, and cargo test
-  --live   run ignored live tests instead of the default mock suite
+  --scripts  run repo guardrails without Rust tooling
+  --quick    run format, repo guards, cargo check, and cargo test
+  --live     run ignored live tests instead of the default mock suite
 EOF
 }
 
 mode="full"
+set_mode() {
+  local next="$1"
+  if [ "$mode" != "full" ] && [ "$mode" != "$next" ]; then
+    printf 'error: choose exactly one mode flag (--scripts, --quick, --live)\n' >&2
+    usage >&2
+    exit 2
+  fi
+  mode="$next"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --quick) mode="quick" ;;
-    --live) mode="live" ;;
+    --scripts) set_mode "scripts" ;;
+    --quick) set_mode "quick" ;;
+    --live) set_mode "live" ;;
     -h|--help)
       usage
       exit 0
@@ -35,7 +47,10 @@ run() {
   "$@"
 }
 
-run cargo fmt --check
+if [ "$mode" != "scripts" ]; then
+  run cargo fmt --check
+fi
+
 run node ./scripts/validate-autonomy.mjs
 run node ./scripts/validate-git-identity.mjs --ref HEAD --ref origin/main..HEAD
 run node ./scripts/validate-github-cli-account.mjs
@@ -46,6 +61,8 @@ run node ./scripts/provenance-self-test.mjs
 run ./scripts/check-no-display-form-a2a.sh
 
 case "$mode" in
+  scripts)
+    ;;
   quick)
     run cargo check --workspace --exclude covenant-settlement-program --locked
     run cargo test --workspace --exclude covenant-settlement-program --locked

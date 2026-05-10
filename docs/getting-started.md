@@ -31,6 +31,7 @@ The built binary lands at `target/debug/covenantd`. Configuration lives under `$
 ## Run the test suite
 
 ```bash
+bash scripts/validate.sh --scripts
 bash scripts/validate.sh --quick
 bash scripts/validate.sh
 ```

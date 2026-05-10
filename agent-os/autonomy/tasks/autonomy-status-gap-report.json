@@ -1,0 +1,31 @@
+{
+  "id": "autonomy-status-gap-report",
+  "title": "Add autonomy status gap report",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs",
+    "agent-os/autonomy/tasks/README.md"
+  ],
+  "summary": "When the autonomy backlog is exhausted, agents need a durable source for the next alpha-critical task. Add a read-only report that extracts candidate hardening work from docs/status.md so backlog refills are grounded in the public capability matrix.",
+  "expectedFailureModes": [
+    "Backlog refills depend on chat history instead of durable project status evidence.",
+    "The gap report misparses the status matrix and drops planned or experimental capabilities.",
+    "The gap report mutates files, stages changes, commits, or pushes while only selecting candidate work."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/autonomy-status-gaps.mjs --json",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add an autonomy-status-gaps command that parses docs/status.md into text and JSON task candidates, document it in the autonomy workflow, and validate the report without mutating Git metadata.",
+  "updated": "2026-05-10"
+}

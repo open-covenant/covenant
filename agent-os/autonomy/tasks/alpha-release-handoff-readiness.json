@@ -1,0 +1,31 @@
+{
+  "id": "alpha-release-handoff-readiness",
+  "title": "Add handoff validation to alpha readiness",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "Alpha readiness now depends on commit-blocked sessions being able to export and verify complete handoff bundles, but the release readiness report does not yet check that handoff toolchain. Add the handoff validator as a read-only readiness signal and document the blocker semantics.",
+  "expectedFailureModes": [
+    "Alpha readiness omits a broken handoff pipeline even though autonomous release preparation depends on dirty work being recoverable.",
+    "The readiness check accidentally writes Git metadata, stages files, commits, or pushes while exercising handoff validation.",
+    "Release docs list handoff validation as required but the machine-readable readiness report cannot expose that blocker."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/alpha-release-readiness.mjs --json",
+    "node agent-os/scripts/validate-autonomy-handoff.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Wire validate-autonomy-handoff into alpha-release-readiness, document the readiness check in release docs, and validate the JSON/text paths without writing Git metadata.",
+  "updated": "2026-05-10"
+}

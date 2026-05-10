@@ -34,12 +34,13 @@ docs/releases/<release-id>/
 
 The bundle should contain:
 
-- `evidence.json`: output from `node agent-os/scripts/alpha-release-evidence.mjs --json`;
+- `evidence.json`: output from `node agent-os/scripts/alpha-release-evidence.mjs --json` using schema `covenant.alpha-release-evidence.v1`;
+- `manifest.json`: output from the bundle scaffold using schema `covenant.alpha-release-manifest.v1`, with relative file paths, byte counts, and SHA-256 digests for every regular bundle file except `manifest.json`;
 - validation notes listing each required command, outcome, host assumptions, and skipped live prerequisites;
 - links to any provenance envelopes or audit-root attestations generated for the candidate;
 - the release decision: draft, accepted, rejected, or superseded.
 
-The evidence helper is read-only. It records the commit, branch, dirty-file count, recommended commands, and release notes. It does not execute the commands and does not create a tag or artifact.
+The evidence helper is read-only. It records the schema version, commit, branch, dirty-file count, sanitized alpha readiness state, recommended commands, and release notes. It does not execute the validation commands and does not create a tag or artifact.
 
 Create the bundle scaffold with:
 
@@ -48,17 +49,24 @@ node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
 node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
 ```
 
-The scaffold writes `evidence.json` and `validation.md`. It refuses to overwrite an existing non-empty bundle unless `--force` is supplied.
-The validator fails accepted release evidence when the bundle is missing files, contains malformed evidence, records dirty files, leaves gates pending, or keeps the decision as `draft`.
+The scaffold writes `evidence.json`, `validation.md`, and `manifest.json`. It refuses to overwrite an existing non-empty bundle unless `--force` is supplied.
+The validator fails accepted release evidence when the bundle is missing files, contains malformed evidence or manifest data, records stale file digests, omits a regular bundle file from the manifest, records dirty files, has header metadata that diverges from `evidence.json`, leaves gates pending, omits gate outcomes, records skipped gates without reasons, keeps the decision as `draft`, omits readiness blocker ids from `## Alpha Readiness`, records unresolved alpha readiness blockers, or marks the candidate `accepted` while any required gate is failed, skipped, pending, or unchecked. Draft preparation can pass `--allow-blocked-readiness` when the bundle is being used to review blockers rather than accept a release.
+The manifest is local digest binding only. It is not a signature, public non-repudiation, or transparency-log publication.
+Each required gate line must appear under `## Required Gates` and use `result: passed`, `result: failed`, `result: skipped: <reason>`, or `result: pending`; `pending` is accepted only in draft validation.
+The release evidence validator includes a synthetic clean accepted bundle fixture so the acceptance path is tested without depending on the current checkout being clean.
 
 ## Minimum Local Gate
 
 Run from the repository root:
 
 ```bash
+node agent-os/scripts/alpha-release-readiness.mjs
 node agent-os/scripts/alpha-release-evidence.mjs --json
+node agent-os/scripts/validate-alpha-release-evidence.mjs
 bash agent-os/scripts/validate.sh --quick
 node agent-os/scripts/validate-autonomy.mjs
+node agent-os/scripts/validate-autonomy-handoff.mjs
+node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-readme-copy.mjs
@@ -68,6 +76,12 @@ git diff --check
 ```
 
 A release candidate should have a clean working tree before evidence is accepted. Dirty output from the evidence helper is useful while preparing a release, but it is not release evidence.
+
+Use `node agent-os/scripts/alpha-release-readiness.mjs --strict` as the final local blocker check before asking a human to approve a tag, signature, publication, or announcement.
+`node agent-os/scripts/alpha-release-evidence.mjs --json` embeds a sanitized readiness projection so release bundles expose blocker ids without storing local command output.
+The readiness report includes Git metadata write access because autonomy can validate code successfully while still being unable to stage or commit in a restricted local checkout.
+It also includes the autonomy handoff toolchain so commit-blocked sessions can prove their tracked patch, untracked file contents, restore plan, and tamper checks are internally consistent before another environment resumes the release work.
+It includes unsigned review artifact validation so release preparation can prove task review evidence can be generated, verified, and rejected when tampered before any future signing layer is introduced.
 
 ## Optional Live Gate
 

@@ -16,14 +16,15 @@ This status matrix separates what exists from what is experimental or planned. U
 | Budget ledger | Implemented | `covenant-budget`, daemon budget tests, `covenant intents resume latest --json`, live CLI resume test | Mid-task pause, save, and resume. |
 | Local settlement receipts | Implemented | `covenant-settlement`, receipt tests, memory-record correlation field | Backfill and migration tooling for legacy uncorrelated receipts. |
 | On-chain settlement | Planned / scaffolded | `agent-os/programs/settlement` | Security review, deployment plan, oracle and mint policy. |
-| Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, sprint summary generator, git identity validator, local pre-push guard | Signed review artifacts and routine publication of sprint summaries. |
+| Autonomous workflow | Experimental | `docs/autonomous-development.md`, `agent-os/autonomy`, validator, transition event log, sprint summary generator/validator, status gap report, unsigned review artifact scaffold/verifier/toolchain validator, autonomy environment preflight, dirty handoff report, handoff bundle export/verifier/restore plan, handoff toolchain validator, git identity validator, Git metadata write-access preflight, local pre-push guard | Signed review artifacts and routine publication of sprint summaries. |
 | Live boundary coverage | Experimental | `agent-os/autonomy/live-coverage.json`, `validate-live-coverage.mjs`, opt-in `live_` tests, verifier drift/repair coverage, external-service gVisor coverage entry, `docs/gvisor-live-runner.md` | Promote the documented Linux gVisor runner into CI once host provisioning is stable, and keep adding mutation-edge live tests where policies are stable. |
 | Public provenance | Experimental | `agent-os/scripts/provenance.mjs`, `docs/provenance/attestations`, audit-root attestation signing/verification support, ADR 0004 audit-root signing policy | Implement key custody, release artifact subjects, and transparency publication. |
-| Distribution and SDK ecosystem | Planned, alpha contract defined | `docs/alpha-release-contract.md` defines a source-built alpha boundary, `docs/releases/README.md` defines evidence bundles, `agent-os/scripts/alpha-release-bundle.mjs` scaffolds local evidence bundles, and `agent-os/scripts/alpha-release-validate-bundle.mjs` validates bundle acceptance gates | Package installers, stable SDKs, signed release artifacts, and upgrade policy. |
+| Distribution and SDK ecosystem | Planned, alpha contract defined | `docs/alpha-release-contract.md` defines a source-built alpha boundary, `docs/releases/README.md` defines evidence bundles, `agent-os/scripts/alpha-release-evidence.mjs` emits `covenant.alpha-release-evidence.v1` with sanitized alpha readiness state, `agent-os/scripts/alpha-release-bundle.mjs` scaffolds local evidence bundles with `covenant.alpha-release-manifest.v1` digest manifests, `agent-os/scripts/alpha-release-validate-bundle.mjs` validates bundle acceptance gates including schema, evidence metadata binding, complete manifest file inventory, manifest digests, section-scoped gate outcomes, skipped-gate reasons, accepted-decision gate consistency, and section-scoped readiness blockers, `agent-os/scripts/validate-alpha-release-evidence.mjs` checks draft override and synthetic accepted-bundle paths, and `agent-os/scripts/alpha-release-readiness.mjs` reports repository-level alpha blockers including handoff and unsigned review-artifact toolchain readiness | Package installers, stable SDKs, signed release artifacts, and upgrade policy. |
 
 ## Validation Signals
 
 - Default Rust gate: `bash agent-os/scripts/validate.sh`
+- Scripts-only gate: `bash agent-os/scripts/validate.sh --scripts`
 - Autonomy artifact gate: `node agent-os/scripts/validate-autonomy.mjs`
 - Git identity guard: `node agent-os/scripts/validate-git-identity.mjs`
 - Provenance gate: `node agent-os/scripts/provenance.mjs verify-all`
@@ -32,5 +33,6 @@ This status matrix separates what exists from what is experimental or planned. U
 - Live coverage matrix gate: `node agent-os/scripts/validate-live-coverage.mjs`
 - Landing docs build: `pnpm --dir landing build`
 - Dependency audit: `bash scripts/audit.sh`
+- Alpha evidence gate: `node agent-os/scripts/validate-alpha-release-evidence.mjs`
 
 Alpha release boundary: `docs/alpha-release-contract.md`

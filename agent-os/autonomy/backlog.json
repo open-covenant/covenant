@@ -1759,6 +1759,967 @@
       "humanEscalation": [],
       "nextAction": "Add a release bundle validator command, document it in the alpha release runbook, and verify help plus a generated self-test bundle.",
       "updated": "2026-05-09"
+    },
+    {
+      "id": "alpha-release-readiness-report",
+      "title": "Add alpha release readiness report",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Alpha evidence bundles can be generated and validated, but there is no single local command that summarizes the repository-level blockers before a human release decision. Add a read-only readiness report that checks dirty state, identity guards, README/status drift, autonomy records, provenance, live coverage metadata, and GitHub push attribution.",
+      "expectedFailureModes": [
+        "Release operators miss a known blocker because release evidence commands are scattered across docs.",
+        "The readiness command mutates state or attempts a push while checking release prerequisites.",
+        "A read-only GitHub push attribution failure is hidden instead of surfaced as a release blocker."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-readiness.mjs --json",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a read-only alpha release readiness command with text and JSON output, document it in release validation docs and landing docs, and keep push attribution as a reported blocker rather than a mutating step.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "git-metadata-write-preflight",
+      "title": "Add Git metadata write preflight",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "landing/app/docs"
+      ],
+      "summary": "Autonomous runs can currently implement and validate a slice before discovering that the local environment cannot write .git/index.lock for staging or commits. Add a read-only-safe preflight that detects whether Git metadata is writable and expose it through alpha readiness reporting.",
+      "expectedFailureModes": [
+        "Autonomous runs only discover a read-only Git index after implementation and validation work is complete.",
+        "The preflight mutates repository history or leaves files behind in .git.",
+        "Alpha readiness hides the Git write-access blocker and implies commits can be made when they cannot."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-git-write-access.mjs --help",
+        "node agent-os/scripts/alpha-release-readiness.mjs --json",
+        "pnpm --dir landing build",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a Git metadata write-access validator, wire it into alpha readiness output, document the blocker semantics, and validate the help/readiness paths.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-environment-preflight",
+      "title": "Add autonomy environment preflight",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Autonomous runs can now report alpha readiness blockers, but the autonomy loop itself still lacks a focused preflight that tells an agent whether local identity, Git metadata write access, and push attribution are usable before starting a slice. Add a read-only preflight report for autonomous sessions.",
+      "expectedFailureModes": [
+        "Autonomous sessions start implementation despite an environment that cannot stage or commit.",
+        "The preflight hides GitHub push attribution blockers and encourages unsafe remote writes.",
+        "The preflight leaks machine-local paths in machine-readable output."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-preflight.mjs --json",
+        "node agent-os/scripts/autonomy-preflight.mjs --strict",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy preflight command with text and JSON output, include Git write-access and identity blockers, document it in the autonomous workflow, and validate the expected local blocker path.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-dirty-handoff-report",
+      "title": "Add autonomy dirty handoff report",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "When Git metadata is read-only, autonomous work can be validated but not committed. Add a read-only handoff report that summarizes dirty files, diff stats, task state, and preflight blockers so another environment can resume without reverse-engineering the working tree.",
+      "expectedFailureModes": [
+        "A blocked autonomous session leaves uncommitted work with no machine-readable handoff.",
+        "The report leaks machine-local paths or private identity metadata.",
+        "The report tries to stage, commit, push, or mutate Git metadata while documenting a dirty tree."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-dirty-report.mjs --json",
+        "node agent-os/scripts/autonomy-dirty-report.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy dirty-report command with text and JSON output, document it in autonomous workflow docs, and validate it against the current dirty tree.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-handoff-bundle",
+      "title": "Add autonomy handoff bundle export",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Dirty reports summarize blocked work, but they do not contain enough content to reconstruct untracked files in another environment. Add a read-only handoff bundle command that emits the tracked patch, untracked text file contents, dirty report, and restore guidance without staging, committing, pushing, or writing Git metadata.",
+      "expectedFailureModes": [
+        "A dirty handoff lists untracked files but omits their contents, making recovery incomplete.",
+        "The bundle leaks machine-local paths or private identity strings.",
+        "The bundle command mutates Git metadata while attempting to export blocked work."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-handoff-bundle.mjs --json",
+        "node agent-os/scripts/autonomy-handoff-bundle.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy handoff bundle command with JSON output, document it in autonomous workflow docs, and validate it against the current dirty tree.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-handoff-bundle-verifier",
+      "title": "Add autonomy handoff bundle verifier",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "The handoff bundle can export tracked patches and untracked text content, but there is not yet a separate verifier that checks bundle schema, path safety, and content digests before another environment restores it. Add a read-only verifier for bundle JSON from stdin or file.",
+      "expectedFailureModes": [
+        "A corrupted handoff bundle is accepted and another environment reconstructs the wrong files.",
+        "Unsafe absolute or traversal paths in bundle contents are accepted.",
+        "The verifier writes files or Git metadata while checking a bundle."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-handoff-bundle.mjs --json | node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin",
+        "node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --help",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy handoff bundle verifier with stdin/file input, verify patch and untracked-file digests plus path safety, document it in autonomous workflow docs, and validate it against a generated bundle.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-handoff-restore-plan",
+      "title": "Add autonomy handoff restore planner",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Handoff bundles can now be exported and verified, but a receiving environment still needs a deterministic, read-only plan for reconstructing tracked patches and untracked files safely. Add a restore planner that reads a verified bundle and emits ordered restore steps without writing files or Git metadata.",
+      "expectedFailureModes": [
+        "A receiving environment applies bundle contents in an unsafe order and loses untracked file data.",
+        "The restore plan omits base commit or blocker context required to decide whether restoration is safe.",
+        "The restore planner writes files or Git metadata while only planning restoration."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-handoff-bundle.mjs --json | node agent-os/scripts/autonomy-plan-handoff-restore.mjs --stdin --json",
+        "node agent-os/scripts/autonomy-plan-handoff-restore.mjs --help",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy handoff restore planner with stdin/file input and text/JSON output, document it in autonomous workflow docs, and validate it against a generated bundle.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-handoff-toolchain-validator",
+      "title": "Add autonomy handoff toolchain validator",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "The handoff path now has separate dirty report, bundle export, verifier, and restore planner commands. Add one read-only validator that exercises the whole toolchain together so blocked sessions can prove the handoff artifacts are internally consistent.",
+      "expectedFailureModes": [
+        "Individual handoff tools pass alone but fail when piped together.",
+        "The validator misses digest tampering and accepts a corrupt bundle.",
+        "The validator writes files, stages changes, commits, or pushes while checking handoff artifacts."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-autonomy-handoff.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a validate-autonomy-handoff command that runs the dirty report, bundle export, verifier, restore planner, and expected tamper rejection without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-handoff-readiness",
+      "title": "Add handoff validation to alpha readiness",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Alpha readiness now depends on commit-blocked sessions being able to export and verify complete handoff bundles, but the release readiness report does not yet check that handoff toolchain. Add the handoff validator as a read-only readiness signal and document the blocker semantics.",
+      "expectedFailureModes": [
+        "Alpha readiness omits a broken handoff pipeline even though autonomous release preparation depends on dirty work being recoverable.",
+        "The readiness check accidentally writes Git metadata, stages files, commits, or pushes while exercising handoff validation.",
+        "Release docs list handoff validation as required but the machine-readable readiness report cannot expose that blocker."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-readiness.mjs --json",
+        "node agent-os/scripts/validate-autonomy-handoff.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Wire validate-autonomy-handoff into alpha-release-readiness, document the readiness check in release docs, and validate the JSON/text paths without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-seed-exhaustion-guidance",
+      "title": "Improve exhausted backlog guidance",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "When the autonomy seed queue is exhausted, the command output still points operators at manual backlog editing instead of the validated scaffold workflow. Tighten the error text so autonomous sessions can refill the queue through the existing scaffold command.",
+      "expectedFailureModes": [
+        "Autonomous sessions stall because the exhausted-backlog output omits the scaffold command.",
+        "Operators manually edit backlog templates and skip validator-friendly defaults already provided by the scaffold CLI.",
+        "The exhausted path exits with unclear instructions that do not name the validation and reseed sequence."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-seed-next.mjs 2>&1 | rg \"autonomy-scaffold-backlog-template.mjs --help\"",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Update autonomy-seed-next exhaustion output to reference the scaffold CLI and validation flow, then verify the exhausted path and autonomy records.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-status-gap-report",
+      "title": "Add autonomy status gap report",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "When the autonomy backlog is exhausted, agents need a durable source for the next alpha-critical task. Add a read-only report that extracts candidate hardening work from docs/status.md so backlog refills are grounded in the public capability matrix.",
+      "expectedFailureModes": [
+        "Backlog refills depend on chat history instead of durable project status evidence.",
+        "The gap report misparses the status matrix and drops planned or experimental capabilities.",
+        "The gap report mutates files, stages changes, commits, or pushes while only selecting candidate work."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-status-gaps.mjs --json",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy-status-gaps command that parses docs/status.md into text and JSON task candidates, document it in the autonomy workflow, and validate the report without mutating Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-review-artifact-scaffold",
+      "title": "Add autonomy review artifact scaffold",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "The status gap report points at signed review artifacts for the autonomous workflow. Add the first truthful step: a read-only unsigned review artifact that binds a task record to its transition events and declared verification commands, without claiming cryptographic signing yet.",
+      "expectedFailureModes": [
+        "Autonomous review evidence remains only in chat or event logs and cannot be exported as one task artifact.",
+        "Docs imply signed review artifacts exist before a signing policy or key custody path is implemented.",
+        "The artifact command writes files, stages changes, commits, or pushes while only summarizing task evidence."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-review-artifact.mjs autonomy-status-gap-report --json",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy-review-artifact command for task records, document the unsigned artifact boundary, update status evidence, and validate JSON/text output without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-review-artifact-verifier",
+      "title": "Add autonomy review artifact verifier",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Unsigned review artifacts now export task evidence, but there is no command that fails closed when a generated artifact drifts from the task record or event log. Add a read-only verifier that checks schema, safe source paths, task metadata, event selection, and digests before signing work begins.",
+      "expectedFailureModes": [
+        "A review artifact with stale task metadata or event digests is accepted as evidence.",
+        "The verifier accepts absolute or traversal source paths from an artifact.",
+        "The verifier writes files, stages changes, commits, or pushes while only checking review evidence."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/autonomy-review-artifact.mjs autonomy-review-artifact-scaffold --json | node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin --json",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an autonomy-verify-review-artifact command for JSON from stdin or file, document the verifier, update status evidence, and validate generated plus tampered artifact paths without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-review-artifact-toolchain-validator",
+      "title": "Add autonomy review artifact toolchain validator",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Review artifact generation and verification now exist as separate commands. Add one read-only validator that exercises generation, verification, and tamper rejection together so future signing work starts from a mechanically checked artifact pipeline.",
+      "expectedFailureModes": [
+        "Review artifact generation and verification pass separately but fail when composed as the pipeline signing work would depend on.",
+        "The validator accepts tampered task or event digests and gives false confidence in review evidence.",
+        "The validator writes files, stages changes, commits, or pushes while checking a read-only review artifact pipeline."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-autonomy-review-artifacts.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a validate-autonomy-review-artifacts command that generates an artifact, verifies it, rejects a tampered digest, document the command, update status evidence, and validate without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-review-artifact-readiness",
+      "title": "Add review artifact validation to alpha readiness",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "The alpha readiness report checks handoff recovery but not the unsigned review artifact pipeline. Add the review artifact toolchain validator as a read-only alpha readiness signal so release preparation fails closed when task review evidence cannot be generated and verified.",
+      "expectedFailureModes": [
+        "Alpha readiness omits a broken review artifact pipeline even though autonomous release evidence depends on task review artifacts.",
+        "The readiness check overclaims signed review artifacts instead of validating the unsigned artifact boundary.",
+        "The readiness check writes files, stages changes, commits, or pushes while exercising review artifact validation."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/alpha-release-readiness.mjs --json",
+        "node agent-os/scripts/validate-autonomy-review-artifacts.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Wire validate-autonomy-review-artifacts into alpha-release-readiness, update release docs/status, and validate JSON/text readiness output without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-summary-validator",
+      "title": "Add autonomy summary validator",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "The autonomous workflow exposes a sprint summary generator, but there is no focused read-only check that its JSON and Markdown outputs remain machine-consumable. Add a validator so routine sprint-summary publication has a stable local gate.",
+      "expectedFailureModes": [
+        "Sprint summaries render for humans but JSON output drifts and breaks machine consumers.",
+        "Summary limits or state totals become inconsistent, making published sprint evidence misleading.",
+        "The validator writes files, stages changes, commits, or pushes while only checking summary output."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-autonomy-summary.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a validate-autonomy-summary command that checks Markdown output, JSON schema shape, count consistency, limit behavior, and invalid-argument rejection without writing Git metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-evidence-readiness-gate",
+      "title": "Gate alpha evidence on readiness state",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-evidence.mjs",
+        "agent-os/scripts/alpha-release-bundle.mjs",
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "landing/app/docs/alpha-release/page.tsx",
+        "README.md"
+      ],
+      "summary": "Alpha release evidence should carry the repository readiness report so draft bundles expose blockers and accepted bundles cannot ignore unresolved release gates.",
+      "expectedFailureModes": [
+        "Accepted release bundles omit unresolved alpha readiness blockers.",
+        "Draft evidence cannot be generated from a dirty or commit-blocked checkout for handoff review.",
+        "Bundle validation accepts malformed readiness JSON or local machine identifiers."
+      ],
+      "gates": [
+        "security",
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-evidence.mjs",
+        "node --check agent-os/scripts/alpha-release-bundle.mjs",
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/alpha-release-evidence.mjs --json",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is still required before creating tags, publishing artifacts, or overriding release blockers."
+      ],
+      "nextAction": "Embed alpha-release-readiness output in alpha release evidence, teach bundle validation to reject blocked accepted evidence, and document the draft override.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-evidence-schema-version",
+      "title": "Version alpha release evidence schema",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-evidence.mjs",
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha release evidence should include a stable schema identifier so bundle validators and future release tooling can reject incompatible evidence instead of inferring shape from kind alone.",
+      "expectedFailureModes": [
+        "Future release tooling accepts an unversioned evidence shape after the envelope changes.",
+        "Bundle validation relies on a loose kind field and misses incompatible evidence.",
+        "Docs describe evidence contents without naming the schema contract."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-evidence.mjs",
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Schema-breaking release evidence changes require human approval once published evidence exists."
+      ],
+      "nextAction": "Add a schema field to alpha release evidence, require it in bundle validation, document the versioned envelope, and update the release evidence regression check.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-gate-result-contract",
+      "title": "Require explicit alpha gate outcomes",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md"
+      ],
+      "summary": "Alpha release bundle validation should require every evidence command to carry an explicit outcome so accepted bundles cannot hide unrun gates by deleting the pending marker.",
+      "expectedFailureModes": [
+        "Accepted release notes omit a gate result for a required evidence command.",
+        "Skipped gates are accepted without a reason.",
+        "Malformed gate result text bypasses acceptance validation."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "A release operator must still decide whether failed or skipped gates allow a rejected, superseded, or human-approved candidate decision."
+      ],
+      "nextAction": "Parse validation.md required-gate lines, require result passed/failed/skipped for every evidence command, require skipped reasons, and document the result contract.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-decision-outcome-contract",
+      "title": "Bind accepted alpha decisions to passed gates",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha bundle validation should reject an accepted decision when any required gate is failed, skipped, pending, or unchecked, even if draft or environment overrides are supplied.",
+      "expectedFailureModes": [
+        "A bundle with decision accepted contains failed gates but still validates.",
+        "A bundle with decision accepted contains skipped gates but still validates.",
+        "Draft or environment overrides accidentally weaken the accepted-decision gate contract."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "A human release operator must decide whether failed or skipped gates justify rejected or superseded evidence instead of accepted evidence."
+      ],
+      "nextAction": "Track parsed gate outcomes, require accepted decisions to have every evidence command passed, add regression coverage, and document the accepted-decision contract.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-accepted-fixture",
+      "title": "Add accepted alpha bundle fixture",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha release evidence validation should prove the happy path too: a clean, ready, all-passed accepted bundle must validate without local environment overrides.",
+      "expectedFailureModes": [
+        "The validator only proves rejection paths and misses a broken accepted-bundle path.",
+        "The synthetic fixture leaves temporary files under docs/releases.",
+        "The fixture relies on current dirty checkout state instead of a deterministic accepted evidence envelope."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Published release schema changes still require human approval once real public bundles exist."
+      ],
+      "nextAction": "Add a synthetic accepted bundle fixture to validate-alpha-release-evidence, document the positive acceptance coverage, and keep the fixture self-cleaning.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-required-gates-section",
+      "title": "Scope alpha gate parsing to required gates",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha bundle validation should only satisfy evidence commands from the Required Gates section so copied command lines elsewhere in validation.md cannot satisfy release acceptance.",
+      "expectedFailureModes": [
+        "A command line outside Required Gates satisfies release acceptance.",
+        "Duplicate command lines inside and outside Required Gates produce ambiguous evidence.",
+        "Docs imply any matching command line in validation notes is enough."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Published bundle format changes require human approval once real public release evidence exists."
+      ],
+      "nextAction": "Parse the Required Gates section explicitly, validate gate result lines only from that section, add regression coverage, and document the section-scoped contract.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-readiness-section",
+      "title": "Scope alpha readiness blockers to readiness section",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha bundle validation should only satisfy readiness blocker evidence from the Alpha Readiness section so copied blocker ids elsewhere in validation.md cannot satisfy blocker review.",
+      "expectedFailureModes": [
+        "A readiness blocker copied outside Alpha Readiness satisfies bundle validation.",
+        "A bundle can omit blocker ids from the Alpha Readiness section but still validate.",
+        "Docs imply blocker ids anywhere in validation notes are enough."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Published bundle format changes require human approval once real public release evidence exists."
+      ],
+      "nextAction": "Parse the Alpha Readiness section explicitly, validate readiness blockers only from that section, add regression coverage, and document the section-scoped blocker contract.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-notes-metadata-binding",
+      "title": "Bind alpha validation notes to evidence metadata",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/project-memory.md",
+        "docs/status.md",
+        "README.md"
+      ],
+      "summary": "Alpha bundle validation should reject validation.md when its generated timestamp, candidate commit, branch, dirty count, readiness state, or status diverges from evidence.json.",
+      "expectedFailureModes": [
+        "validation.md names a different candidate commit than evidence.json but still validates.",
+        "validation.md marks a blocked readiness report as ready but still validates.",
+        "validation.md status diverges from the recorded decision but still validates."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "node --check agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-readme-copy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Published bundle format changes require human approval once real public release evidence exists."
+      ],
+      "nextAction": "Validate top-level validation.md metadata against evidence.json, add mismatch regression coverage, and document the metadata binding contract.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-bundle-digest-manifest",
+      "title": "Add release bundle digest manifest",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-bundle.mjs",
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/status.md",
+        "docs/project-memory.md"
+      ],
+      "summary": "Alpha release bundles currently bind evidence and validation notes, but they do not record stable file digests for bundle contents. Add a deterministic manifest so operators can verify bundle files have not drifted before signatures or public transparency are implemented.",
+      "expectedFailureModes": [
+        "A release bundle file changes after review without any local integrity signal.",
+        "The manifest records nondeterministic metadata that changes on every validation run.",
+        "Docs imply signed or public transparency guarantees when the implementation only provides local digest binding."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Generate manifest.json with SHA-256 digests for evidence.json and validation.md, validate the manifest in the bundle gate, document the contract, and add regression coverage for tampered bundle files.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "alpha-release-manifest-file-inventory",
+      "title": "Require release manifest file inventory",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/alpha-release-bundle.mjs",
+        "agent-os/scripts/alpha-release-validate-bundle.mjs",
+        "agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "docs/releases/README.md",
+        "docs/alpha-release-contract.md",
+        "docs/status.md",
+        "docs/project-memory.md"
+      ],
+      "summary": "The alpha release bundle manifest now records digests for scaffolded files, but the validator should also reject extra bundle files that are not listed in the manifest. Require the manifest inventory to match the bundle's regular files so future provenance or artifact files cannot be added without digest coverage.",
+      "expectedFailureModes": [
+        "A release bundle gains an extra file after review without any manifest digest.",
+        "Recursive bundle files are skipped because only top-level scaffold files are inventoried.",
+        "The validator accepts unsafe or non-portable manifest paths while checking inventory coverage."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "node agent-os/scripts/validate-alpha-release-evidence.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Teach the bundle validator to compare manifest entries with the bundle file inventory, generate recursive relative paths, document the exact coverage rule, and add regression coverage for an unmanifested file.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "validate-scripts-gate",
+      "title": "Add scripts-only validation gate",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/validate.sh",
+        "README.md",
+        "CONTRIBUTING.md",
+        "agent-os/README.md",
+        "docs"
+      ],
+      "summary": "Add a validate.sh mode that runs autonomy, provenance, docs, and repository guardrails without requiring a Rust toolchain.",
+      "expectedFailureModes": [
+        "Contributors in constrained environments cannot run any validation because Rust builds are mandatory.",
+        "Scripts-only validation accidentally invokes cargo and fails when Rust tooling is unavailable.",
+        "Docs imply script-only validation is equivalent to the full integration gate."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "bash agent-os/scripts/validate.sh --scripts",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Extend agent-os/scripts/validate.sh with a --scripts mode and document the new gate.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "mcp-transport-closed-error",
+      "title": "Treat MCP transport EOF as closed",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-mcp"
+      ],
+      "summary": "MCP subprocess servers can exit or EOF unexpectedly. Normalize stdio EOF to a first-class transport closed error so callers can handle crashes and shutdowns predictably.",
+      "expectedFailureModes": [
+        "Tool bootstrap hangs or returns opaque errors when the MCP server exits after initialize.",
+        "EOF on stdout is reported as a JSON-RPC error instead of McpClientError::Closed, making error handling inconsistent.",
+        "Docs/tests claim in-flight requests resolve with Closed but actual behavior diverges."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "cd agent-os && cargo fmt --check",
+        "cd agent-os && cargo test -p covenant-mcp --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Map subprocess EOF to McpClientError::Closed and cover it with fake-server stdio tests.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "mcp-string-id-compat",
+      "title": "Accept string JSON-RPC ids in MCP transport",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-mcp"
+      ],
+      "summary": "Some MCP servers respond with numeric JSON-RPC ids encoded as strings. Accept numeric strings while rejecting non-numeric ids so responses do not hang or route incorrectly.",
+      "expectedFailureModes": [
+        "Response ids like \"1\" fail JSON parsing and leave requests hanging.",
+        "Non-numeric string ids are treated as matching and route responses to the wrong request.",
+        "Fake server cannot simulate string-id responses for live coverage."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "cd agent-os && cargo fmt --check",
+        "cd agent-os && cargo test -p covenant-mcp --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Teach covenant-mcp transport to parse numeric-string response ids and cover it with unit plus fake-server tests.",
+      "updated": "2026-05-10"
     }
   ]
 }

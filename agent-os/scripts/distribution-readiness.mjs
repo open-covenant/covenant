@@ -154,6 +154,57 @@ const nixSection = {
   required_fields: nixSectionRequiredFields,
 };
 
+const debianSectionRequiredFields = [
+  "package_name",
+  "package_version",
+  "control_metadata",
+  "depends",
+  "recommends",
+  "suggests",
+  "architectures",
+  "file_ownership",
+  "service_unit",
+  "postinst",
+  "prerm",
+  "postrm",
+  "install_check",
+  "uninstall_check",
+  "upgrade_check",
+  "rollback_check",
+  "signature_verification",
+];
+
+const debianSection = {
+  schema: "covenant.package-manager-manifest-debian.v1",
+  status: "draft_empty_placeholders",
+  ready_for_debian_review: false,
+  package_name: null,
+  package_version: null,
+  control_metadata: {
+    section: null,
+    priority: null,
+    maintainer: null,
+    homepage: null,
+    description: null,
+  },
+  depends: [],
+  recommends: [],
+  suggests: [],
+  architectures: [],
+  file_ownership: null,
+  service_unit: null,
+  postinst: null,
+  prerm: null,
+  postrm: null,
+  install_check: null,
+  uninstall_check: null,
+  upgrade_check: null,
+  rollback_check: null,
+  signature_verification: null,
+  local_paths_allowed: false,
+  required_fields: debianSectionRequiredFields,
+};
+
 const packageManagerManifestContract = {
   schema: "covenant.package-manager-manifest.v1",
   status: "draft_empty_placeholders",
@@ -196,6 +247,7 @@ const packageManagerManifestContract = {
   })),
   homebrew: homebrewSection,
   nix: nixSection,
+  debian: debianSection,
 };
 
 const gates = [

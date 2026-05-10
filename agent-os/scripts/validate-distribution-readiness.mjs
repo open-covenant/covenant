@@ -283,6 +283,86 @@ if (!nix || typeof nix !== "object") {
   }
 }
 
+const debian = manifest?.debian;
+if (!debian || typeof debian !== "object") {
+  fail("package manager manifest must include a debian section");
+} else {
+  if (debian.schema !== "covenant.package-manager-manifest-debian.v1") {
+    fail("debian section schema must be covenant.package-manager-manifest-debian.v1");
+  }
+  if (debian.status !== "draft_empty_placeholders") {
+    fail("debian section must remain draft_empty_placeholders");
+  }
+  if (debian.ready_for_debian_review !== false) {
+    fail("debian section must not be ready for review while placeholders are empty");
+  }
+  if (debian.local_paths_allowed !== false) {
+    fail("debian section must reject local paths");
+  }
+
+  const debianRequired = [
+    "package_name",
+    "package_version",
+    "control_metadata",
+    "depends",
+    "recommends",
+    "suggests",
+    "architectures",
+    "file_ownership",
+    "service_unit",
+    "postinst",
+    "prerm",
+    "postrm",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ];
+  const debianFields = new Set(debian.required_fields ?? []);
+  for (const field of debianRequired) {
+    if (!debianFields.has(field)) {
+      fail(`debian section required field missing: ${field}`);
+    }
+  }
+
+  for (const field of [
+    "package_name",
+    "package_version",
+    "file_ownership",
+    "service_unit",
+    "postinst",
+    "prerm",
+    "postrm",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ]) {
+    if (debian[field] !== null) {
+      fail(`debian section ${field} must remain null until implemented`);
+    }
+  }
+
+  for (const field of ["depends", "recommends", "suggests", "architectures"]) {
+    if (!Array.isArray(debian[field]) || debian[field].length !== 0) {
+      fail(`debian section ${field} must be an empty array until decided`);
+    }
+  }
+
+  const control = debian.control_metadata;
+  if (!control || typeof control !== "object") {
+    fail("debian section must include a control_metadata placeholder");
+  } else {
+    for (const field of ["section", "priority", "maintainer", "homepage", "description"]) {
+      if (control[field] !== null) {
+        fail(`debian section control_metadata.${field} must remain null until decided`);
+      }
+    }
+  }
+}
+
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",

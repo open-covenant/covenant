@@ -81,6 +81,32 @@ Required nix fields:
 
 `platforms` is an empty array until supported targets (such as `x86_64-linux` or `aarch64-darwin`) are accepted. Nix flake or channel publication, derivation custody, and signing keys remain human-owned.
 
+## Debian Section
+
+`package_manager_manifest.debian` extends the generic channel placeholder with control-file and scriptlet fields. It uses schema `covenant.package-manager-manifest-debian.v1` and stays in `draft_empty_placeholders` with `ready_for_debian_review` false until real control metadata, dependencies, scriptlets, file ownership, service unit, and install/upgrade/rollback evidence exist. The validator rejects machine-local paths and any non-null placeholder.
+
+Required debian fields:
+
+- `package_name`
+- `package_version`
+- `control_metadata`
+- `depends`
+- `recommends`
+- `suggests`
+- `architectures`
+- `file_ownership`
+- `service_unit`
+- `postinst`
+- `prerm`
+- `postrm`
+- `install_check`
+- `uninstall_check`
+- `upgrade_check`
+- `rollback_check`
+- `signature_verification`
+
+`control_metadata` carries `section`, `priority`, `maintainer`, `homepage`, and `description`, each null until decided. `depends`, `recommends`, `suggests`, and `architectures` are empty arrays until concrete decisions land. Debian repository hosting, signing keys, and uploads remain human-owned.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Spawn a fresh agent session in a new terminal window, pointed at
-# HANDOVER.md.
+# Spawn a fresh agent session in a new terminal window, pointed at the
+# autonomy loop entry doc (docs/autonomous-development.md) and ready to
+# call `autonomy-continue.mjs` for the next unblocked task.
 #
 # Used when the current autonomous run has accumulated enough state that a
-# clean context will produce better-quality work on the next sprint chunk
-# (e.g., MCP spec interpretation, Solana SPL programming, Tailwind migration).
+# clean context will produce better-quality work on the next task slice.
 #
 # Trust state for the project folder is assumed cached by the configured
 # agent client. If the script is run for a brand-new folder, the operator may
@@ -20,14 +20,36 @@
 
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+usage: handover.sh [path]
+
+Spawn a fresh agent session in a new terminal window, pointed at the
+autonomy loop entry doc (docs/autonomous-development.md) and ready to
+run autonomy-continue.
+
+  path  optional project directory (defaults to cwd). Must contain
+        docs/autonomous-development.md and agent-os/scripts/.
+
+Environment:
+  AGENT_CMD                       agent client command (default: claude ...)
+  COVENANT_HANDOVER_TRUST_DELAY   seconds to wait before sending the
+                                  trust-prompt Enter keystroke (default: 3)
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
 DIR="${1:-$(pwd)}"
 DIR_ABS="$(cd "$DIR" && pwd)"
-HANDOVER_PATH="$DIR_ABS/HANDOVER.md"
+ENTRY_DOC="$DIR_ABS/docs/autonomous-development.md"
 AGENT_CMD="${AGENT_CMD:-${CLAUDE_CMD:-claude --model claude-opus-4-7 --effort max --dangerously-skip-permissions}}"
 
-if [ ! -f "$HANDOVER_PATH" ]; then
-  echo "handover.sh: no HANDOVER.md at $HANDOVER_PATH" >&2
-  echo "  (write it first; the next session reads it as the canonical entry point)" >&2
+if [ ! -f "$ENTRY_DOC" ]; then
+  echo "handover.sh: no docs/autonomous-development.md at $ENTRY_DOC" >&2
+  echo "  Run handover.sh from the repo root (or pass it as the first argument)." >&2
   exit 1
 fi
 
@@ -73,7 +95,7 @@ if [ -d "$REPO_ROOT/hooks" ]; then
   fi
 fi
 
-PROMPT='Read HANDOVER.md, then WORKFLOW.md, then PROJECT_STATE.md, then the tail of SPRINT_LOG.md (the latest "Resume from here" block). Continue the autonomous sprint loop from there. The previous session paused itself for a clean context; pick up exactly where it left off, with the same rules. Do not stop unless a true blocker appears.'
+PROMPT='Read docs/autonomous-development.md to anchor on the loop, then run `node agent-os/scripts/autonomy-continue.mjs` to pick up the next unblocked task. Drive it through the workflow states (proposed → triaged → planned → in_progress → self_review → cross_review → validation → ready → integrated) using `node agent-os/scripts/autonomy-transition.mjs <id> <state> --actor <role> --note "<why>"`. Run the task'\''s declared verification commands plus `bash agent-os/scripts/validate.sh --scripts`. Commit with the Open Covenant Automation identity (`node agent-os/scripts/configure-git-identity.mjs` configures it) and a conventional-commit subject; push to origin/main when integrated. Do not stop unless every candidate is blocked or a true blocker appears.'
 
 # Build a temporary launch script. Putting the multi-line shell command in a
 # tempfile lets us avoid double-escaping into AppleScript / xterm -e.
@@ -131,6 +153,6 @@ APPLE
 esac
 
 echo "handover.sh: launched ${AGENT_CMD} in a new terminal at $DIR_ABS"
-echo "  next session will read HANDOVER.md and resume from SPRINT_LOG.md's tail"
+echo "  next session will read docs/autonomous-development.md and run autonomy-continue.mjs"
 echo "  session-id: $SESSION_ID (written to $LOCK_PATH)"
 echo "  any older session attempting a commit will be refused by hooks/pre-commit"

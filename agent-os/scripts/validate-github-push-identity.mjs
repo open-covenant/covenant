@@ -7,6 +7,7 @@ import {
 
 const remoteName = process.argv[2] || "origin";
 const suppliedUrl = process.argv[3] || "";
+process.env.COVENANT_IDENTITY_REMOTE = remoteName;
 
 const run = (command, args) =>
   spawnSync(command, args, {

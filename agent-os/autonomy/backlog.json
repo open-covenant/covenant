@@ -2756,6 +2756,37 @@
       "humanEscalation": [],
       "nextAction": "Add optional task_kind to A2ATask, validate non-empty values, prefer it in idempotency cache keys with legacy intent_text fallback, update tests and idempotency docs/status.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-summary-publication",
+      "title": "Add autonomy summary publication command",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/autonomous-development.md",
+        "docs/status.md",
+        "docs/project-memory.md"
+      ],
+      "summary": "The autonomous workflow can generate and validate summaries, but routine sprint publication still requires operators to redirect stdout and hand-check drift. Add a bounded local publication command with check mode so sprint summaries can be written or verified repeatably without touching Git metadata.",
+      "expectedFailureModes": [
+        "The command writes outside the repository or into Git metadata.",
+        "Check mode can pass when the published file has drifted from the generated summary.",
+        "Docs imply review artifacts are signed or publicly published before key custody exists."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy-summary.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a local autonomy summary publication command, validate its write/check behavior, and document the routine sprint-summary publication path without claiming signed review artifacts.",
+      "updated": "2026-05-10"
     }
   ]
 }

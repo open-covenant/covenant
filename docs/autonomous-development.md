@@ -17,6 +17,7 @@ node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json
 node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json | node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin
 node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09
+node agent-os/scripts/autonomy-publish-summary.mjs --stdout --since 2026-05-09
 node agent-os/scripts/validate-autonomy-summary.mjs
 node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
 node agent-os/scripts/validate-git-identity.mjs
@@ -38,7 +39,14 @@ node agent-os/scripts/autonomy-summary.mjs
 node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09 --format json
 ```
 
-`validate-autonomy-summary.mjs` checks the Markdown and JSON summary surfaces, count consistency, limit handling, and invalid-argument rejection. Run it when changing task state, summary output, or publication automation.
+`autonomy-publish-summary.mjs` wraps the Markdown summary in a generated header and either prints it or writes it to a repository-scoped file. Use `--check --out <path>` before treating a checked-in summary as current:
+
+```bash
+node agent-os/scripts/autonomy-publish-summary.mjs --out docs/autonomy-summary.md --since 2026-05-09
+node agent-os/scripts/autonomy-publish-summary.mjs --check --out docs/autonomy-summary.md --since 2026-05-09
+```
+
+`validate-autonomy-summary.mjs` checks the Markdown and JSON summary surfaces, count consistency, limit handling, publication write/check behavior, path safety, and invalid-argument rejection. Run it when changing task state, summary output, or publication automation.
 
 `autonomy-review-artifact.mjs` emits an unsigned review artifact for one task. It binds the task record, matching transition events, declared gates, verification commands, and content digests into one JSON envelope. The artifact is intentionally marked `unsigned` until project signing policy and key custody are implemented.
 Verify the artifact with `autonomy-verify-review-artifact.mjs` before treating it as durable review evidence.
@@ -174,7 +182,8 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Git write-access guard | `node agent-os/scripts/validate-git-write-access.mjs` | Verifies the local Git metadata directory can create and remove a transient probe file before staging or committing work. |
 | GitHub push actor guard | `node agent-os/scripts/validate-github-push-identity.mjs` | Refuses GitHub pushes when the transport credential would attribute the ref update to an unapproved account. |
 | Autonomy summary | `node agent-os/scripts/autonomy-summary.mjs --since YYYY-MM-DD` | Repeatable handoff and sprint evidence from task JSON plus event history. |
-| Autonomy summary validator | `node agent-os/scripts/validate-autonomy-summary.mjs` | Checks Markdown/JSON summary output, state totals, limit handling, and invalid-argument rejection. |
+| Autonomy summary publication | `node agent-os/scripts/autonomy-publish-summary.mjs --out docs/autonomy-summary.md --since YYYY-MM-DD` | Writes or checks a repository-scoped Markdown summary without staging, committing, pushing, or claiming signing. |
+| Autonomy summary validator | `node agent-os/scripts/validate-autonomy-summary.mjs` | Checks Markdown/JSON summary output, state totals, limit handling, publication check mode, path safety, and invalid-argument rejection. |
 | Live coverage matrix | `node agent-os/scripts/validate-live-coverage.mjs` | Ensures opt-in live coverage inventory matches real test files. |
 | Provenance gate | `node agent-os/scripts/provenance.mjs verify-all` | Public task and commit evidence. |
 | Live tests | `cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` from `agent-os/` | Real daemon, subprocess, model, or network paths. |
@@ -213,6 +222,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - `node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`: verifier for unsigned review artifacts.
 - `node agent-os/scripts/validate-autonomy-review-artifacts.mjs`: read-only review artifact toolchain validator.
 - `node agent-os/scripts/autonomy-summary.mjs`: deterministic sprint and handoff summaries from the public task state.
+- `node agent-os/scripts/autonomy-publish-summary.mjs --stdout`: local sprint summary publication wrapper with `--out` and `--check` modes.
 - `node agent-os/scripts/validate-autonomy-summary.mjs`: validator for sprint summary output.
 - [docs/provenance/README.md](./provenance/README.md): provenance envelope contract.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): operating-layer product spec.

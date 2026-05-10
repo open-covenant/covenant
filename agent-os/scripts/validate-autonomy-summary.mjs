@@ -1,5 +1,13 @@
 #!/usr/bin/env node
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, "..", "..");
+const summaryScript = join(here, "autonomy-summary.mjs");
+const publishScript = join(here, "autonomy-publish-summary.mjs");
 
 function usage() {
   console.log(`usage: validate-autonomy-summary
@@ -82,7 +90,7 @@ if (args.length > 0) {
 
 const errors = [];
 
-const markdown = run(["agent-os/scripts/autonomy-summary.mjs", "--limit", "3"]);
+const markdown = run([summaryScript, "--limit", "3"]);
 if (markdown.status !== 0) {
   errors.push(`markdown summary failed: ${markdown.stderr || markdown.stdout}`);
 } else {
@@ -96,7 +104,7 @@ if (markdown.status !== 0) {
   }
 }
 
-const json = run(["agent-os/scripts/autonomy-summary.mjs", "--format", "json", "--limit", "5"]);
+const json = run([summaryScript, "--format", "json", "--limit", "5"]);
 if (json.status !== 0) {
   errors.push(`json summary failed: ${json.stderr || json.stdout}`);
 }
@@ -112,7 +120,7 @@ if (summary) {
 }
 
 const scopedJson = run([
-  "agent-os/scripts/autonomy-summary.mjs",
+  summaryScript,
   "--format",
   "json",
   "--since",
@@ -131,9 +139,88 @@ if (scopedSummary) {
   }
 }
 
-const invalidLimit = run(["agent-os/scripts/autonomy-summary.mjs", "--format", "json", "--limit", "0"]);
+const invalidLimit = run([summaryScript, "--format", "json", "--limit", "0"]);
 if (invalidLimit.status === 0) {
   errors.push("autonomy-summary should reject --limit 0");
+}
+
+let tempDir = null;
+try {
+  mkdirSync(join(repoRoot, "reports"), { recursive: true });
+  tempDir = mkdtempSync(join(repoRoot, "reports", "autonomy-summary-validator-"));
+  const outPath = join(tempDir, "summary.md");
+  const publish = run([
+    publishScript,
+    "--out",
+    outPath,
+    "--since",
+    "1970-01-01",
+    "--limit",
+    "2",
+  ]);
+  if (publish.status !== 0) {
+    errors.push(`published summary write failed: ${publish.stderr || publish.stdout}`);
+  } else {
+    const published = readFileSync(outPath, "utf8");
+    if (!published.startsWith("<!-- Generated from autonomy task records.")) {
+      errors.push("published summary should start with generated-source comment");
+    }
+    if (!published.includes("# Autonomy Summary since 1970-01-01")) {
+      errors.push("published summary should include scoped Markdown summary");
+    }
+
+    const check = run([
+      publishScript,
+      "--check",
+      "--out",
+      outPath,
+      "--since",
+      "1970-01-01",
+      "--limit",
+      "2",
+    ]);
+    if (check.status !== 0) {
+      errors.push(`published summary check failed: ${check.stderr || check.stdout}`);
+    }
+
+    writeFileSync(outPath, `${published}\nmanual drift\n`);
+    const drift = run([
+      publishScript,
+      "--check",
+      "--out",
+      outPath,
+      "--since",
+      "1970-01-01",
+      "--limit",
+      "2",
+    ]);
+    if (drift.status === 0) {
+      errors.push("published summary check should reject drift");
+    }
+  }
+
+  const publishStdout = run([
+    publishScript,
+    "--stdout",
+    "--since",
+    "1970-01-01",
+    "--limit",
+    "1",
+  ]);
+  if (publishStdout.status !== 0) {
+    errors.push(`published summary stdout failed: ${publishStdout.stderr || publishStdout.stdout}`);
+  } else if (!publishStdout.stdout.includes("Validate with: node agent-os/scripts/autonomy-publish-summary.mjs --check")) {
+    errors.push("published summary stdout should include check command");
+  }
+
+  const outside = run([publishScript, "--out", "../outside.md"]);
+  if (outside.status === 0) {
+    errors.push("published summary should reject paths outside the repository");
+  }
+} finally {
+  if (tempDir) {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 if (errors.length > 0) {

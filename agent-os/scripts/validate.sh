@@ -52,6 +52,7 @@ if [ "$mode" != "scripts" ]; then
 fi
 
 run node ./scripts/validate-autonomy.mjs
+run node ./scripts/validate-autonomy-summary.mjs
 run node ./scripts/validate-git-identity.mjs --ref HEAD --ref origin/main..HEAD
 run node ./scripts/validate-github-cli-account.mjs
 run node ./scripts/validate-readme-copy.mjs

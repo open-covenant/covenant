@@ -23,7 +23,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
-- Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs`.
+- Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs` and locally published or checked with `node agent-os/scripts/autonomy-publish-summary.mjs`.
 - Summary output should pass `agent-os/scripts/validate-autonomy-summary.mjs` before it is used as published sprint evidence.
 
 ## Invariants
@@ -36,7 +36,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
 - The local Git metadata directory should pass `agent-os/scripts/validate-git-write-access.mjs` before a task is treated as committable; a read-only `.git` directory is a real commit blocker, not a code blocker.
 - Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
-- GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, or approved bot account.
+- GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, approved bot account, or a write-enabled GitHub account that is already a contributor on the configured remote.
 - Autonomous sessions should run `agent-os/scripts/autonomy-preflight.mjs` before starting a fresh slice so commit blockers and push blockers are visible separately.
 - If a session cannot commit, `agent-os/scripts/autonomy-dirty-report.mjs --json` should be used as the handoff artifact for dirty paths, active task state, diff stats, and environment blockers.
 - If untracked files exist in a commit-blocked session, `agent-os/scripts/autonomy-handoff-bundle.mjs --json` should be used to export the tracked patch plus bounded UTF-8 untracked file contents for reconstruction in a writable checkout.
@@ -58,7 +58,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Alpha release gate outcome lines only count under `## Required Gates`; copied command lines elsewhere in validation notes must not satisfy evidence validation.
 - Alpha release readiness blocker ids only count under `## Alpha Readiness`; copied blocker ids elsewhere in validation notes must not satisfy blocker review.
 - `agent-os/scripts/validate-alpha-release-evidence.mjs` should prove both rejection paths and a synthetic clean/ready accepted bundle path without depending on the current checkout state.
-- If `origin/main` contains a commit that fails `validate-git-identity.mjs`, do not merge it locally; replace the remote ref only through an approved neutral write credential.
+- If `origin/main` contains a commit that still fails `validate-git-identity.mjs` after remote-contributor expansion, do not merge it locally; replace the remote ref only through an approved neutral write credential.
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - The root README must pass `node agent-os/scripts/validate-readme-copy.mjs` after public copy or status changes.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
@@ -112,6 +112,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/scripts/autonomy-verify-review-artifact.mjs](../agent-os/scripts/autonomy-verify-review-artifact.mjs): verifier for unsigned task review artifacts.
 - [agent-os/scripts/validate-autonomy-review-artifacts.mjs](../agent-os/scripts/validate-autonomy-review-artifacts.mjs): review artifact toolchain validator.
 - [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
+- [agent-os/scripts/autonomy-publish-summary.mjs](../agent-os/scripts/autonomy-publish-summary.mjs): repository-scoped Markdown publication/check wrapper for sprint summaries.
 - [agent-os/scripts/validate-autonomy-summary.mjs](../agent-os/scripts/validate-autonomy-summary.mjs): sprint summary output validator.
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.

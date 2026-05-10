@@ -52,7 +52,9 @@ const sourceInstall = run(process.execPath, ["agent-os/scripts/validate-source-i
 const sourceInstallOk = sourceInstall.status === 0;
 const sourceUpgrade = run(process.execPath, ["agent-os/scripts/validate-source-install-upgrade-plan.mjs"]);
 const sourceUpgradeOk = sourceUpgrade.status === 0;
-const sourceAlphaOk = sourceInstallOk && sourceUpgradeOk;
+const sourceRollback = run(process.execPath, ["agent-os/scripts/validate-source-install-rollback.mjs"]);
+const sourceRollbackOk = sourceRollback.status === 0;
+const sourceAlphaOk = sourceInstallOk && sourceUpgradeOk && sourceRollbackOk;
 
 const gates = [
   {
@@ -86,6 +88,23 @@ const gates = [
     blockers: sourceUpgradeOk ? [] : ["source install upgrade preflight validation failed"],
     human_decision_required: false,
     output: textOutput(sourceUpgrade),
+  },
+  {
+    id: "source-rollback-checkpoint",
+    title: "Source install rollback checkpoint",
+    scope: "source_alpha",
+    status: sourceRollbackOk ? "implemented" : "blocked",
+    ok: sourceRollbackOk,
+    command: "node agent-os/scripts/validate-source-install-rollback.mjs",
+    evidence: [
+      "agent-os/scripts/install-source.mjs",
+      "agent-os/scripts/source-install-rollback.mjs",
+      "agent-os/scripts/validate-source-install-rollback.mjs",
+      "docs/source-install.md",
+    ],
+    blockers: sourceRollbackOk ? [] : ["source install rollback checkpoint validation failed"],
+    human_decision_required: false,
+    output: textOutput(sourceRollback),
   },
   {
     id: "package-manager-distribution",
@@ -137,13 +156,14 @@ const gates = [
     ok: false,
     evidence: [
       "agent-os/scripts/source-install-upgrade-plan.mjs",
+      "agent-os/scripts/source-install-rollback.mjs",
       "agent-os/scripts/validate-source-install-upgrade-plan.mjs",
+      "agent-os/scripts/validate-source-install-rollback.mjs",
       "docs/source-install.md",
     ],
     blockers: [
-      "source install upgrade preflight is read-only and requires operator review",
-      "automatic rollback mutation is not implemented",
-      "rollback audit evidence is not emitted",
+      "source rollback is local-prefix only and not package-manager rollback",
+      "public rollback policy is not approved",
       "installer migration checks are not covered across releases",
     ],
     human_decision_required: true,

@@ -55,6 +55,7 @@ const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",
   "source-upgrade-preflight",
+  "source-rollback-checkpoint",
   "package-manager-distribution",
   "signed-release-artifacts",
   "sdk-stability",
@@ -79,6 +80,17 @@ if (
   !sourceUpgrade.evidence.some((item) => item.endsWith("source-install-upgrade-plan.mjs"))
 ) {
   fail("source upgrade preflight must list its report script as evidence");
+}
+
+const sourceRollback = gates.get("source-rollback-checkpoint");
+if (sourceRollback && sourceRollback.ok !== true) {
+  fail("source rollback checkpoint gate must pass");
+}
+if (
+  sourceRollback &&
+  !sourceRollback.evidence.some((item) => item.endsWith("source-install-rollback.mjs"))
+) {
+  fail("source rollback checkpoint must list its rollback script as evidence");
 }
 
 for (const id of [
@@ -111,9 +123,9 @@ if (
 const upgrade = gates.get("upgrade-policy");
 if (
   upgrade &&
-  !upgrade.blockers.some((blocker) => /automatic rollback/i.test(blocker))
+  !upgrade.blockers.some((blocker) => /package-manager rollback/i.test(blocker))
 ) {
-  fail("upgrade-policy must keep automatic rollback blocked");
+  fail("upgrade-policy must keep public package rollback blocked");
 }
 
 if (errors.length > 0) {

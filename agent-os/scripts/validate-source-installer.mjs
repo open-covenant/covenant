@@ -48,6 +48,9 @@ if (!Array.isArray(plan.build?.command) || plan.build.command[0] !== "cargo") {
 if (plan.build?.cwd !== "agent-os") {
   fail("build cwd must stay repository-relative");
 }
+if (!plan.build?.artifact_dir || isAbsolute(plan.build.artifact_dir) || plan.build.artifact_dir.includes("..")) {
+  fail("build artifact_dir must stay repository-relative");
+}
 if (!Array.isArray(plan.writes) || plan.writes.length !== 3) {
   fail("plan must include two binaries and one manifest write");
 }

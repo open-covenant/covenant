@@ -72,6 +72,7 @@ node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-readme-copy.mjs
 node agent-os/scripts/validate-source-installer.mjs
+node agent-os/scripts/validate-distribution-readiness.mjs
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check
@@ -85,6 +86,7 @@ The readiness report includes Git metadata write access because autonomy can val
 It also includes the autonomy handoff toolchain so commit-blocked sessions can prove their tracked patch, untracked file contents, restore plan, and tamper checks are internally consistent before another environment resumes the release work.
 It includes unsigned review artifact validation so release preparation can prove task review evidence can be generated, verified, and rejected when tampered before any future signing layer is introduced.
 Source install evidence follows `docs/source-install.md`; it is a local source-built install path, not a signed binary distribution.
+Distribution graduation evidence follows `docs/distribution-readiness.md`; source-alpha readiness can pass while public package, signing, SDK, and upgrade gates remain blocked.
 
 ## Optional Live Gate
 

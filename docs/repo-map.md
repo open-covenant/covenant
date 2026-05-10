@@ -11,6 +11,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/` | Repository-level documentation that should remain readable without running the docs site. |
 | `docs/decisions/` | Architecture decision records. |
 | `docs/alpha-release-contract.md` | Source alpha boundary, non-claims, evidence bundle expectations, and human-owned release decisions. |
+| `docs/distribution-readiness.md` | Public distribution, signing, SDK stability, and upgrade graduation gates. |
 | `docs/release-validation.md` | Release evidence profile and validation requirements. |
 | `docs/protocol-versioning.md` | IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy. |
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |

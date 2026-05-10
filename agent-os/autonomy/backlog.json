@@ -2960,6 +2960,483 @@
       "humanEscalation": [],
       "nextAction": "Define a small persisted checkpoint format for mid-task state and add tests proving pause+resume preserves ledger invariants.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-source-installer",
+      "title": "Add source alpha installer",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Distribution remains planned even though the alpha boundary is source-built. Add a local source installer that builds the daemon and CLI into an operator-selected prefix, records an install manifest, and documents the unsupported packaging boundary without claiming signed release artifacts or stable SDKs.",
+      "expectedFailureModes": [
+        "Installer writes outside the requested prefix or depends on machine-local absolute paths.",
+        "Installer output implies signed release artifacts, package-manager support, or stable SDK guarantees that do not exist.",
+        "Dry-run and validation paths drift from the real install plan, making alpha setup evidence unreliable."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --scripts",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add an inspectable source installer script, install manifest shape, docs, and validation coverage for dry-run behavior.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-and-sdk-ecosystem-package-installers-stable-sdks-signed",
+      "title": "Plan package installers and SDK stability gates",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "After the source alpha installer lands, distribution still needs a staged package-installer, SDK-stability, signed-artifact, and upgrade-policy plan that separates implementable local checks from human-owned release approval.",
+      "expectedFailureModes": [
+        "Package or SDK docs imply stable public support before release gates exist.",
+        "Readiness checks cannot distinguish local installer support from signed artifact publication.",
+        "Upgrade guidance omits rollback or compatibility boundaries for alpha operators."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before tagging, signing, publishing package artifacts, or announcing SDK stability."
+      ],
+      "nextAction": "Define the package and SDK graduation gates, add machine-checkable readiness output, and keep tag signing and artifact publication explicitly human-approved.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-on-chain-settlement-security-review-deployment-plan-oracle-and",
+      "title": "Plan settlement deployment security gates",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/programs/settlement",
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "The settlement program is scaffolded, but production deployment needs security-review evidence, deployment sequencing, oracle assumptions, mint policy, and failure handling before any on-chain release claim.",
+      "expectedFailureModes": [
+        "Docs imply an audited or deployed settlement program before review evidence exists.",
+        "Oracle and mint authority assumptions remain implicit and cannot be checked before deployment.",
+        "Deployment guidance lacks rollback, pause, or emergency key-handling boundaries."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before deploying programs, changing mint authorities, selecting oracle sources, or accepting a security review."
+      ],
+      "nextAction": "Add a read-only deployment readiness plan that enumerates required audits, oracle inputs, mint authority controls, and local validation commands without deploying anything.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-runtime-execution-automate-linux-ci-host-provisioning-and",
+      "title": "Automate Linux sandbox host readiness",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/crates/covenant-runtime",
+        "docs"
+      ],
+      "summary": "Runtime execution has gVisor tests and setup docs, but CI promotion needs host-readiness automation and broader sandbox policy enforcement that fails closed when live prerequisites are missing.",
+      "expectedFailureModes": [
+        "CI claims gVisor coverage on hosts that cannot execute the documented runner.",
+        "Sandbox fallback behavior silently weakens policy enforcement.",
+        "Host provisioning guidance depends on unstated machine-local setup."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before making Linux gVisor dispatch mandatory in CI or changing runner host provisioning."
+      ],
+      "nextAction": "Add a read-only Linux runner readiness probe and CI promotion checklist covering runsc, rootfs, network policy, and fallback behavior before enabling mandatory live dispatch.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-autonomous-workflow-signed-review-artifacts-backed-by-key",
+      "title": "Define signed review artifact custody",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/autonomy",
+        "docs/provenance",
+        "docs"
+      ],
+      "summary": "Autonomous workflow artifacts are currently unsigned. The next slice should define a project-key custody contract and add verifier plumbing that can accept signed review artifacts once a public key is approved.",
+      "expectedFailureModes": [
+        "Unsigned review artifacts are treated as release-grade evidence.",
+        "Verifier code accepts signatures without binding artifact schema, task id, and commit subject.",
+        "Docs choose or expose private key material instead of documenting custody boundaries."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before selecting, publishing, rotating, or using a project signing key."
+      ],
+      "nextAction": "Design the signed review artifact envelope, add dry-run verifier fixtures, and document key custody inputs without generating or publishing a real project signing key.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-live-boundary-coverage-promote-the-documented-linux-gvisor-runner",
+      "title": "Promote live gVisor coverage safely",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/autonomy",
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Live boundary coverage tracks opt-in gVisor dispatch, but promotion needs explicit prerequisites, skipped-gate semantics, and mutation-edge coverage expansion that does not break non-Linux contributors.",
+      "expectedFailureModes": [
+        "Live coverage validation passes while required gVisor prerequisites are absent in CI.",
+        "Unsupported local platforms are reported as regressions instead of documented skips.",
+        "Mutation-edge tests expand without recording the policy boundary they enforce."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before requiring Linux gVisor live tests on every CI run."
+      ],
+      "nextAction": "Add live coverage metadata for Linux gVisor CI promotion prerequisites and a validation check that distinguishes unsupported hosts from real live-test failures.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-public-provenance-implement-key-custody-release-artifact",
+      "title": "Plan release provenance publication",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/provenance",
+        "docs"
+      ],
+      "summary": "Public provenance can verify local envelopes, but release artifacts still need key-custody policy, artifact subject binding, and transparency-publication gates before public provenance claims.",
+      "expectedFailureModes": [
+        "Release provenance claims are made without a public key custody decision.",
+        "Artifact subjects are not bound to file digests and validation evidence.",
+        "Transparency publication is implied before a verifiable publication target exists."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before publishing public keys, release signatures, or transparency-log entries."
+      ],
+      "nextAction": "Add release-provenance readiness output that checks artifact subject metadata and key-custody placeholders without publishing transparency entries.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-a2a-messaging-add-per-peer-repair-visibility-coverage-if",
+      "title": "Add A2A repair visibility planning",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-a2a",
+        "agent-os/crates/covenantd",
+        "docs"
+      ],
+      "summary": "A2A repair is operator-owned today. If delegated repair expands, operators need per-peer visibility and tests that prove retries and repairs cannot hide peer-specific failures.",
+      "expectedFailureModes": [
+        "Delegated repair can mutate peer queues without operator-visible peer attribution.",
+        "Retry visibility aggregates failures in a way that hides one failing peer.",
+        "Tests only cover operator repair and miss delegated denial paths."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a bounded per-peer repair visibility plan or read-only report, with tests around peer filters and delegated-repair denial paths.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-audit-log-add-project-key-custody-and-release",
+      "title": "Plan audit root release custody",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-audit",
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "Audit-root attestations can be signed locally, but release publication needs project key custody and an explicit publication sequence before transparency-log work.",
+      "expectedFailureModes": [
+        "Audit-root signatures are presented as project release signatures without custody approval.",
+        "Release publication guidance omits audit root subject binding.",
+        "Verifier fixtures pass without detecting mismatched release and audit-root metadata."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before using a project audit signing key or publishing release audit roots."
+      ],
+      "nextAction": "Add a release-audit custody checklist and verifier fixture that binds audit roots to release subjects without requiring a real project key.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-budget-ledger-wire-checkpoint-save-claim-into-daemon",
+      "title": "Wire budget checkpoints into daemon pauses",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenantd",
+        "agent-os/crates/covenant-budget",
+        "agent-os/crates/covenant",
+        "docs"
+      ],
+      "summary": "Budget checkpoint records exist, but daemon runtime pause and operator-requested shutdown paths need to save and claim checkpoints so resume semantics survive real daemon control flow.",
+      "expectedFailureModes": [
+        "Daemon pause writes budget events without creating a resumable checkpoint.",
+        "Resume can claim the same checkpoint more than once across daemon restarts.",
+        "Operator shutdown skips checkpoint persistence and loses pause state."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Wire checkpoint save and single-use claim into daemon pause/shutdown handling, then add daemon and CLI regression coverage.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-ipc-and-http-gateway-add-v2-fixtures-before-the-first-breaking",
+      "title": "Add protocol v2 fixture skeleton",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-ipc",
+        "agent-os/crates/covenantd",
+        "docs"
+      ],
+      "summary": "Protocol v1 replay exists, but the repository needs a v2 fixture skeleton before the first breaking schema change so compatibility expectations are captured before implementation pressure.",
+      "expectedFailureModes": [
+        "A breaking response shape lands without a v2 fixture proving the migration boundary.",
+        "V2 placeholder fixtures pass while still being parsed as v1 metadata.",
+        "Docs describe protocol migration policy but tests cannot detect missing v2 evidence."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add v2 fixture directories and parser guards that fail closed until a deliberate schema bump records fixtures, migration notes, and compatibility expectations.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-memory-store-receipt-backfill-tooling-for-legacy",
+      "title": "Add memory receipt backfill dry-run",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-memory",
+        "agent-os/crates/covenant",
+        "agent-os/crates/covenantd",
+        "docs"
+      ],
+      "summary": "Memory planning reports identify legacy uncorrelated rows, but operators still need a backfill dry-run and migration boundary before any receipt mutation tool exists.",
+      "expectedFailureModes": [
+        "Backfill tooling mutates memory rows without a dry-run review step.",
+        "Legacy uncorrelated rows are counted without stable row identifiers for operator review.",
+        "Receipt correlation changes are not auditable before mutation."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a read-only receipt-backfill plan that lists legacy rows, expected receipt correlations, and refusal behavior for unsupported mutations.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-signed-capabilities-broaden-live-coverage-for-scoped-delegated",
+      "title": "Broaden delegated capability live coverage",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-permissions",
+        "agent-os/crates/covenantd",
+        "agent-os/crates/covenant",
+        "agent-os/autonomy"
+      ],
+      "summary": "Capability enforcement is broad, but live coverage should keep expanding around scoped delegated paths where production mutation boundaries depend on dispatch-time allowlists.",
+      "expectedFailureModes": [
+        "Delegated mutation paths pass unit tests but fail real daemon/CLI authorization flow.",
+        "Live coverage metadata does not name the capability namespace being enforced.",
+        "Allowlist tests cover positive paths but omit scoped denial evidence."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add one delegated live coverage slice for a scoped mutation namespace, including denial and allowed-path evidence in live coverage metadata.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-identity-and-peer-auth-public-attestation-and-key-provenance",
+      "title": "Plan identity attestation provenance",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-identity",
+        "agent-os/crates/covenant-peer-auth",
+        "docs"
+      ],
+      "summary": "Identity and peer auth work locally, but public attestation needs key provenance and rotation evidence before peers can trust exported identity claims.",
+      "expectedFailureModes": [
+        "Peer identity attestations omit key provenance or rotation context.",
+        "Exported identity data exposes local personal identifiers or host-specific paths.",
+        "Rotation tests do not bind old and new keys to an auditable subject."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval is required before publishing public identity attestations or peer-auth keys."
+      ],
+      "nextAction": "Add a key-provenance attestation plan or dry-run exporter that records identity subject, peer key metadata, and rotation history without publishing it.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-local-daemon-privileged-command-live-matrix",
+      "title": "Complete privileged CLI live matrix",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant",
+        "agent-os/crates/covenantd",
+        "agent-os/autonomy"
+      ],
+      "summary": "Local daemon and CLI coverage has expanded, but the remaining privileged verbs need an explicit live coverage matrix so future changes cannot claim complete coverage prematurely.",
+      "expectedFailureModes": [
+        "Status claims complete privileged CLI live coverage without a verb-level matrix.",
+        "New privileged commands land without live coverage metadata.",
+        "Coverage validation cannot distinguish intentionally deferred verbs from missing tests."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Generate or document the privileged-command live matrix, mark covered and uncovered verbs, and add the next missing live test slice.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-local-settlement-receipts-backfill-and-migration-tooling-for-legacy",
+      "title": "Add settlement receipt migration planning",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-settlement",
+        "agent-os/crates/covenant",
+        "docs"
+      ],
+      "summary": "Local settlement receipts have correlation fields, but legacy receipt backfill and migration tooling need a dry-run plan before mutation support.",
+      "expectedFailureModes": [
+        "Legacy settlement receipts are mutated without a dry-run migration review.",
+        "Receipt backfill cannot distinguish missing memory correlation from malformed receipt data.",
+        "Migration docs omit rollback and audit expectations."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a settlement receipt migration dry-run that reports legacy uncorrelated receipts, expected correlation inputs, and unsupported mutation refusal behavior.",
+      "updated": "2026-05-10"
     }
   ]
 }

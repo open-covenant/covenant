@@ -15,6 +15,22 @@ The two primary binaries are:
 - `target/debug/covenantd`: local daemon
 - `target/debug/covenant`: CLI client
 
+## Source Install
+
+Preview the local alpha install plan:
+
+```bash
+node scripts/install-source.mjs --prefix /tmp/covenant-alpha --dry-run --json
+```
+
+Install the daemon and CLI from source:
+
+```bash
+node scripts/install-source.mjs --prefix /tmp/covenant-alpha --profile release
+```
+
+The installer copies `covenantd` and `covenant` into `<prefix>/bin` and writes `<prefix>/share/covenant/install-manifest.json`. See [`../docs/source-install.md`](../docs/source-install.md) for the source-built alpha boundary.
+
 ## Validate
 
 Scripts-only gate:

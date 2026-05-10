@@ -1,0 +1,28 @@
+{
+  "id": "status-distribution-source-installer",
+  "title": "Add source alpha installer",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "Distribution remains planned even though the alpha boundary is source-built. Add a local source installer that builds the daemon and CLI into an operator-selected prefix, records an install manifest, and documents the unsupported packaging boundary without claiming signed release artifacts or stable SDKs.",
+  "expectedFailureModes": [
+    "Installer writes outside the requested prefix or depends on machine-local absolute paths.",
+    "Installer output implies signed release artifacts, package-manager support, or stable SDK guarantees that do not exist.",
+    "Dry-run and validation paths drift from the real install plan, making alpha setup evidence unreliable."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --scripts",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Define package-manager distribution, signed release artifacts, stable SDK boundaries, and upgrade policy.",
+  "updated": "2026-05-10"
+}

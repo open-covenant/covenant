@@ -42,17 +42,15 @@ if (report.ready_for_operator_repair_visibility !== true) {
   fail("operator repair visibility gates must pass");
 }
 if (report.ready_for_delegated_repair !== false) {
-  fail("delegated repair must remain blocked until peer-scoped reporting and denial coverage exist");
+  fail("delegated repair must remain blocked until human release review approves automation");
 }
 
 const requirements = new Set(report.delegated_repair_requirements ?? []);
-for (const requirement of [
-  "live peer-mismatched repair denial coverage",
-  "human review before delegated repair automation",
-]) {
-  if (!requirements.has(requirement)) {
-    fail(`missing delegated repair requirement: ${requirement}`);
-  }
+if (!requirements.has("human review before delegated repair automation")) {
+  fail("missing delegated repair requirement: human review before delegated repair automation");
+}
+if (requirements.has("live peer-mismatched repair denial coverage")) {
+  fail("live peer-mismatched repair denial coverage should no longer be a remaining requirement");
 }
 
 if (report.per_peer_repair_report?.schema !== "covenant.a2a-peer-repair-report.v1") {
@@ -73,6 +71,7 @@ for (const id of [
   "live-operator-repair-coverage",
   "per-peer-repair-report",
   "delegated-repair-denial-coverage",
+  "delegated-repair-release-review",
 ]) {
   if (!gates.has(id)) {
     fail(`missing gate: ${id}`);
@@ -101,17 +100,33 @@ if (!perPeerReport?.evidence?.includes("agent-os/scripts/a2a-peer-repair-report.
 
 const delegatedDenial = gates.get("delegated-repair-denial-coverage");
 if (delegatedDenial) {
-  if (delegatedDenial.ok !== false) {
-    fail("delegated-repair-denial-coverage must not be reported ready yet");
+  if (delegatedDenial.ok !== true) {
+    fail("delegated-repair-denial-coverage must pass after live coverage lands");
   }
-  if (delegatedDenial.status !== "partial") {
-    fail("delegated-repair-denial-coverage must be partial until live coverage lands");
+  if (delegatedDenial.status !== "implemented") {
+    fail("delegated-repair-denial-coverage must be implemented after live coverage lands");
   }
   if (!delegatedDenial.evidence?.includes("docs/a2a-repair-authorization.md")) {
     fail("delegated-repair-denial-coverage must name authorization policy evidence");
   }
-  if (!Array.isArray(delegatedDenial.blockers) || delegatedDenial.blockers.length === 0) {
-    fail("delegated-repair-denial-coverage must list blockers");
+  if (!delegatedDenial.evidence?.includes("agent-os/crates/covenantd/tests/live_a2a.rs")) {
+    fail("delegated-repair-denial-coverage must name live A2A denial test evidence");
+  }
+  if (!Array.isArray(delegatedDenial.blockers) || delegatedDenial.blockers.length !== 0) {
+    fail("delegated-repair-denial-coverage must not list blockers after live coverage lands");
+  }
+}
+
+const releaseReview = gates.get("delegated-repair-release-review");
+if (releaseReview) {
+  if (releaseReview.ok !== false || releaseReview.status !== "human_required") {
+    fail("delegated-repair-release-review must remain human_required");
+  }
+  if (releaseReview.human_decision_required !== true) {
+    fail("delegated-repair-release-review must require a human decision");
+  }
+  if (!Array.isArray(releaseReview.blockers) || releaseReview.blockers.length === 0) {
+    fail("delegated-repair-release-review must name the human review blocker");
   }
 }
 

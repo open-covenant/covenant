@@ -7,7 +7,7 @@ The machine-readable matrix lives at `agent-os/autonomy/live-coverage.json`. It 
 - mock or fixture-driven tests;
 - opt-in live test files;
 - current coverage status;
-- scoped delegated capability evidence, when a live test exercises non-operator authority boundaries;
+- scoped delegated capability evidence, including denial-only boundaries that remain release-blocked;
 - the next meaningful gap.
 
 Validate the matrix without running live tests:
@@ -58,7 +58,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) and [`docs/gvisor-host
 | Ignore policy gate | Covered | CLI ignore check JSON, ignored-dispatch side-effect fixture | Scoped ignore override coverage once override policy semantics exist. |
 | Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, scoped delegated `peers.revoke` denial/allowance, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures; broaden delegated scope evidence beyond peer revoke. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |
-| A2A mailbox and restart durability | Covered | duplex, admission gate, CLI compact JSON, CLI repair including stale-lease rejection, CLI retry-stale JSON, CLI status JSON, restart replay, opt-in retry scheduler live coverage | Per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks. |
+| A2A mailbox and restart durability | Covered | duplex, admission gate, delegated repair peer-mismatch denial, CLI compact JSON, CLI repair including stale-lease rejection, CLI retry-stale JSON, CLI status JSON, restart replay, opt-in retry scheduler live coverage | Human release review before delegated A2A repair automation expands beyond denial-only evidence. |
 | MCP subprocess transport | Covered | CLI tools list JSON, CLI tools call JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
 | Linux gVisor runtime dispatch | External service | `live_gvisor.rs`; host readiness report distinguishes unsupported host or unset rootfs skips from configured `runsc`/rootfs failures | Automate the documented Linux `runsc` runner on a pinned rootfs. |

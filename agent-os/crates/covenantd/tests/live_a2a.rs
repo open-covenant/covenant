@@ -7,11 +7,16 @@
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_a2a -- --ignored live_`.
 
-use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency, A2ATask, A2ATaskQueueState, A2ATaskResult};
+use covenant_a2a::{
+    A2ADuplicateRisk, A2ADuplicateSafety, A2AIdempotency, A2ARepairCommand, A2ARepairRequest,
+    A2ATask, A2ATaskQueueState, A2ATaskResult,
+};
 use covenant_audit::AuditKind;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_mcp::Content;
+use covenant_peer_auth::{JsonlPeerRegistry, PeerEntry, PeerRegistry, PeerToken};
 use covenant_types::AgentId;
+use serde_json::json;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -50,10 +55,27 @@ async fn read_operator_token(home: &std::path::Path) -> String {
 
 async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) {
     let token_b58 = read_operator_token(home).await;
-    match req(stream, Request::Authenticate { token_b58 }).await {
+    authenticate_token(stream, &token_b58).await;
+}
+
+async fn authenticate_token(stream: &mut UnixStream, token_b58: &str) {
+    match req(
+        stream,
+        Request::Authenticate {
+            token_b58: token_b58.to_string(),
+        },
+    )
+    .await
+    {
         Response::Authenticated { .. } => {}
         other => panic!("authenticate failed: {other:?}"),
     }
+}
+
+async fn authenticated_stream(sock: &std::path::Path, token_b58: &str) -> UnixStream {
+    let mut stream = UnixStream::connect(sock).await.expect("connect");
+    authenticate_token(&mut stream, token_b58).await;
+    stream
 }
 
 /// Reads the daemon's on-disk ed25519 public key bytes — same value the
@@ -479,5 +501,214 @@ async fn live_covenantd_a2a_recipient_admission_gate_rejects_unallowed() {
     }
 
     drop(stream);
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + rejects peer-mismatched delegated A2A repair"]
+async fn live_covenantd_a2a_repair_rejects_peer_mismatched_delegation() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let delegate_token = PeerToken::from_bytes([41u8; 32]);
+    let delegate_token_b58 = delegate_token.to_b58();
+    let delegate = AgentId::new("delegate-a2a-repair@local", [42u8; 32]);
+
+    {
+        let registry = JsonlPeerRegistry::open(home.path().join("peers").join("registry.jsonl"))
+            .await
+            .expect("open seed registry");
+        registry
+            .register(PeerEntry {
+                token: delegate_token,
+                agent_id: delegate.clone(),
+                registered_at: 1_700_000_000_000,
+            })
+            .await
+            .expect("seed delegate");
+    }
+
+    let port = pick_free_port();
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+
+    let operator_token = read_operator_token(home.path()).await;
+    let operator = AgentId::new("user@local", read_peer_pubkey(home.path()));
+    let task = A2ATask {
+        id: Uuid::new_v4(),
+        sender: operator.clone(),
+        recipient: delegate.clone(),
+        intent_text: "live delegated repair denial".into(),
+        task_kind: None,
+        parent: None,
+        deadline_ms: None,
+        idempotency: None,
+    };
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::GrantCapability {
+                action: format!("a2a.recv.{}", operator.display),
+                scope: Some(json!({
+                    "version": 1,
+                    "peer_pubkey_b58": operator.pubkey_base58(),
+                    "task_id": task.id.to_string()
+                })),
+                expires_at: None,
+            },
+        )
+        .await
+        {
+            Response::CapabilityGranted { action, .. } => {
+                assert_eq!(action, format!("a2a.recv.{}", operator.display));
+            }
+            other => panic!("delegate recv grant failed: {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = authenticated_stream(&sock, &operator_token).await;
+        match req(
+            &mut stream,
+            Request::GrantCapability {
+                action: format!("a2a.send.{}", delegate.display),
+                scope: Some(json!({
+                    "version": 1,
+                    "peer_pubkey_b58": delegate.pubkey_base58(),
+                    "task_id": task.id.to_string()
+                })),
+                expires_at: None,
+            },
+        )
+        .await
+        {
+            Response::CapabilityGranted { action, .. } => {
+                assert_eq!(action, format!("a2a.send.{}", delegate.display));
+            }
+            other => panic!("operator send grant failed: {other:?}"),
+        }
+        match req(&mut stream, Request::SendA2ATask { task: task.clone() }).await {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("send failed: {other:?}"),
+        }
+    }
+
+    let lease_id = {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(&mut stream, Request::TryRecvA2ATask).await {
+            Response::A2ATaskOpt { task: Some(got) } => assert_eq!(got.id, task.id),
+            other => panic!("delegate lease failed: {other:?}"),
+        }
+        match req(
+            &mut stream,
+            Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            },
+        )
+        .await
+        {
+            Response::A2AQueue { tasks, .. } => tasks
+                .into_iter()
+                .find(|entry| entry.task.id == task.id)
+                .and_then(|entry| entry.lease_id)
+                .expect("leased task entry with lease id"),
+            other => panic!("queue lookup failed: {other:?}"),
+        }
+    };
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::GrantCapability {
+                action: "a2a.repair.requeue".into(),
+                scope: Some(json!({
+                    "version": 1,
+                    "peer_pubkey_b58": delegate.pubkey_base58(),
+                    "task_id": task.id.to_string(),
+                    "lease_id": lease_id.to_string(),
+                    "duplicate_risk": "idempotent"
+                })),
+                expires_at: None,
+            },
+        )
+        .await
+        {
+            Response::CapabilityGranted { action, .. } => {
+                assert_eq!(action, "a2a.repair.requeue");
+            }
+            other => panic!("delegate repair grant failed: {other:?}"),
+        }
+
+        match req(
+            &mut stream,
+            Request::RepairA2ATask {
+                request: A2ARepairRequest {
+                    task_id: task.id,
+                    command: A2ARepairCommand::Requeue {
+                        lease_id: Some(lease_id),
+                        duplicate_risk: A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "live delegated repair denial probe".into(),
+                },
+            },
+        )
+        .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "peer-mismatched delegated repair must reject by scope: {message:?}"
+            ),
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+
+        match req(
+            &mut stream,
+            Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+            },
+        )
+        .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == task.id)
+                    .expect("task remains visible after rejected repair");
+                assert_eq!(entry.state, A2ATaskQueueState::InFlight);
+                assert_eq!(entry.lease_id, Some(lease_id));
+            }
+            other => panic!("queue lookup after denial failed: {other:?}"),
+        }
+
+        match req(&mut stream, Request::RecentAudit { limit: 50 }).await {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action, .. }
+                        if action == "a2a.repair.requeue"
+                )
+            })),
+            other => panic!("audit lookup failed: {other:?}"),
+        }
+    }
+
     let _ = child.kill().await;
 }

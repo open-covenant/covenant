@@ -121,7 +121,15 @@ function assertScopeCoverage(surface) {
     const source = assertPath(coverage.liveTest, "scopeCoverage.liveTest", surface.id);
     assertLiveTest(coverage.liveTest, source, surface.id);
     assertStringArray(coverage.deniedEvidence, "scopeCoverage.deniedEvidence", surface.id);
-    assertStringArray(coverage.allowedEvidence, "scopeCoverage.allowedEvidence", surface.id);
+    if (coverage.allowedEvidence !== undefined) {
+      assertStringArray(coverage.allowedEvidence, "scopeCoverage.allowedEvidence", surface.id);
+    }
+    if (coverage.blockedEvidence !== undefined) {
+      assertStringArray(coverage.blockedEvidence, "scopeCoverage.blockedEvidence", surface.id);
+    }
+    if (coverage.allowedEvidence === undefined && coverage.blockedEvidence === undefined) {
+      fail(`${surface.id}: scopeCoverage must include allowedEvidence or blockedEvidence`);
+    }
     count += 1;
   }
   return count;

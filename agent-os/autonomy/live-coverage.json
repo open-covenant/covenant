@@ -173,7 +173,23 @@
         "agent-os/crates/covenantd/tests/live_restart_a2a.rs"
       ],
       "status": "covered",
-      "nextGap": "Add per-peer A2A repair visibility coverage if delegated repair moves beyond operator-owned tasks."
+      "nextGap": "Human release review is required before delegated A2A repair automation expands beyond denial-only evidence.",
+      "scopeCoverage": [
+        {
+          "namespace": "a2a.repair.requeue",
+          "delegated": true,
+          "liveTest": "agent-os/crates/covenantd/tests/live_a2a.rs",
+          "deniedEvidence": [
+            "recipient peer with a visible leased task and peer-mismatched repair scope is rejected before mutation",
+            "rejected delegated repair leaves the task in_flight with the original lease_id",
+            "capability_scope_rejected audit evidence records a2a.repair.requeue"
+          ],
+          "blockedEvidence": [
+            "delegated repair automation remains disabled until explicit human release review",
+            "operator-owned repair remains covered separately by live_cli_a2a_repair.rs"
+          ]
+        }
+      ]
     },
     {
       "id": "mcp-subprocess",

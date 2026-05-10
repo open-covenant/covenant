@@ -1,6 +1,6 @@
 # A2A Repair Visibility
 
-A2A repair is currently operator-owned. Requeue, force-error, retry-stale, and scheduler scans are visible through CLI/IPC/HTTP surfaces and audit rows, but delegated repair should not expand until per-peer visibility and denial coverage exist.
+A2A repair is currently operator-owned. Requeue, force-error, retry-stale, and scheduler scans are visible through CLI/IPC/HTTP surfaces and audit rows. Delegated repair denial is covered across daemon and live IPC boundaries, but delegated repair automation remains blocked until explicit human release review.
 
 Run the read-only visibility report from the repository root:
 
@@ -45,16 +45,15 @@ Delegated repair authorization is specified separately in [A2A Repair Authorizat
 | `cli-repair-surfaces` | Implemented | `agent-os/crates/covenant/src/main.rs` |
 | `live-operator-repair-coverage` | Implemented | live A2A repair, retry-stale, and restart tests |
 | `per-peer-repair-report` | Implemented | `agent-os/scripts/a2a-peer-repair-report.mjs` and validator fixture |
-| `delegated-repair-denial-coverage` | Partially implemented | unit peer-mismatched scope denial; live coverage still required |
+| `delegated-repair-denial-coverage` | Implemented | unit and live peer-mismatched scope denial |
+| `delegated-repair-release-review` | Human required | release review before cross-peer repair automation |
 
-`ready_for_operator_repair_visibility` can be true while `ready_for_delegated_repair` remains false. That is the expected state until live tests prove a peer cannot repair another peer's leased task across the authenticated daemon boundary.
+`ready_for_operator_repair_visibility` can be true while `ready_for_delegated_repair` remains false. That is the expected state: denial evidence exists, but a human release decision is still required before non-operator repair automation is enabled.
 
 ## Delegated Repair Requirements
 
-Remaining delegated repair needs:
+Remaining delegated repair requirement:
 
-- peer-mismatched repair denial tests;
-- capability-scope denial fixtures;
-- live delegated repair denial coverage.
+- explicit human review before delegated repair automation is enabled.
 
-Until those exist, repair authority should remain operator-owned.
+Until that review is complete, repair authority should remain operator-owned.

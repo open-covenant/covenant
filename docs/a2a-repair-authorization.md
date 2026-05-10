@@ -38,10 +38,10 @@ Scoped delegated repair uses a versioned scope object:
 
 ## Denial Evidence
 
-The regression test `a2a_repair_rejects_peer_mismatched_delegated_scope` proves the important delegated case: a recipient can see and lease a task, but a repair capability scoped to the wrong counterparty pubkey is rejected before mutation and records a `capability_scope_rejected` audit row.
+The daemon regression test `a2a_repair_rejects_peer_mismatched_delegated_scope` proves the important delegated case: a recipient can see and lease a task, but a repair capability scoped to the wrong counterparty pubkey is rejected before mutation and records a `capability_scope_rejected` audit row.
 
-Delegated repair is still not release-ready. Remaining gates:
+The opt-in live IPC test `live_covenantd_a2a_repair_rejects_peer_mismatched_delegation` covers the same boundary across a spawned daemon with a pre-seeded delegate peer. It proves the rejected repair leaves the task in flight with the original lease and records `a2a.repair.requeue` scope-rejection audit evidence.
 
-- live peer-mismatched delegated repair coverage;
-- delegated authorization policy in public operator docs;
+Delegated repair is still not release-ready. Remaining gate:
+
 - explicit review before enabling non-operator repair automation.

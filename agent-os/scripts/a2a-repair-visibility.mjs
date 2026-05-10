@@ -61,6 +61,10 @@ const perPeerRepairReportOk = exists("agent-os/scripts/a2a-peer-repair-report.mj
 const delegatedRepairPolicyOk = exists("docs/a2a-repair-authorization.md")
   && exists("agent-os/scripts/validate-a2a-repair-authorization.mjs")
   && contains("agent-os/crates/covenantd/src/lib.rs", "a2a_repair_rejects_peer_mismatched_delegated_scope");
+const liveDelegatedRepairDenialOk = delegatedRepairPolicyOk
+  && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "live_covenantd_a2a_repair_rejects_peer_mismatched_delegation")
+  && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "CapabilityScopeRejected")
+  && contains("agent-os/autonomy/live-coverage.json", "a2a.repair.requeue");
 
 const gates = [
   {
@@ -125,16 +129,26 @@ const gates = [
   {
     id: "delegated-repair-denial-coverage",
     title: "Delegated repair denial coverage",
-    status: delegatedRepairPolicyOk ? "partial" : "planned",
-    ok: false,
-    evidence: delegatedRepairPolicyOk
+    status: liveDelegatedRepairDenialOk ? "implemented" : delegatedRepairPolicyOk ? "partial" : "planned",
+    ok: liveDelegatedRepairDenialOk,
+    evidence: liveDelegatedRepairDenialOk
+      ? [
+          "docs/a2a-repair-authorization.md",
+          "agent-os/scripts/validate-a2a-repair-authorization.mjs",
+          "agent-os/crates/covenantd/src/lib.rs",
+          "agent-os/crates/covenantd/tests/live_a2a.rs",
+          "agent-os/autonomy/live-coverage.json",
+        ]
+      : delegatedRepairPolicyOk
       ? [
           "docs/a2a-repair-authorization.md",
           "agent-os/scripts/validate-a2a-repair-authorization.mjs",
           "agent-os/crates/covenantd/src/lib.rs",
         ]
       : [],
-    blockers: delegatedRepairPolicyOk
+    blockers: liveDelegatedRepairDenialOk
+      ? []
+      : delegatedRepairPolicyOk
       ? ["live peer-mismatched delegated repair coverage is still required before delegated repair expands"]
       : [
           "delegated repair expansion is not implemented",
@@ -142,6 +156,15 @@ const gates = [
           "capability-scope denial fixtures for peer-mismatched repair are not present",
         ],
     human_decision_required: false,
+  },
+  {
+    id: "delegated-repair-release-review",
+    title: "Delegated repair release review",
+    status: "human_required",
+    ok: false,
+    evidence: ["docs/a2a-repair-authorization.md", "docs/a2a-repair-visibility.md"],
+    blockers: ["human review is required before delegated repair automation is enabled for cross-peer operators"],
+    human_decision_required: true,
   },
 ];
 
@@ -166,10 +189,12 @@ const report = {
     command: "node agent-os/scripts/a2a-peer-repair-report.mjs --status status.json --retry retry.json --json",
     validator: "node agent-os/scripts/validate-a2a-peer-repair-report.mjs",
   },
-  delegated_repair_requirements: [
-    "live peer-mismatched repair denial coverage",
-    "human review before delegated repair automation",
-  ],
+  delegated_repair_requirements: liveDelegatedRepairDenialOk
+    ? ["human review before delegated repair automation"]
+    : [
+        "live peer-mismatched repair denial coverage",
+        "human review before delegated repair automation",
+      ],
   gates,
 };
 

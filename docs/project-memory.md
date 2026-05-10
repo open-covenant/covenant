@@ -88,6 +88,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Budget pause checkpoints exist as a portable JSONL-backed primitive in `covenant-budget`; daemon runtime wiring for automatic save/claim on real mid-task suspension remains future hardening.
 - Audit integrity is local tamper evidence only; immutable retention, public key custody, release publication, and transparency-log publication are not implemented.
 - A2A has lease-age status filters, manual requeue and force-error repair through IPC/HTTP/CLI, explicit task-kind metadata with legacy `intent_text` fallback for idempotency cache keys, receiver-side idempotency result caching, an explicit disabled-by-default retry gate, and an opt-in daemon scheduler that reuses the same bounded idempotent retry policy with audit-visible scan summaries.
+- A2A repair visibility uses `agent-os/scripts/a2a-repair-visibility.mjs`; operator repair visibility is separate from delegated repair, per-peer repair reports, and peer-mismatched denial coverage.
 
 ## Human Authority Boundary
 
@@ -139,6 +140,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/README.md](../agent-os/README.md): local daemon workspace.
 - [agent-os/00_spec.md](../agent-os/00_spec.md): product spec.
 - [docs/a2a-idempotency-policy.md](./a2a-idempotency-policy.md): idempotency policy required before automatic A2A retry.
+- [docs/a2a-repair-visibility.md](./a2a-repair-visibility.md): operator repair visibility and delegated repair gate contract.
 
 ## Validation
 

@@ -1,0 +1,31 @@
+{
+  "id": "status-ipc-http-gateway-v2-fixture-contract",
+  "title": "Define v2 IPC/HTTP fixture contract",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/ipc-and-http-gateway.md",
+    "docs/status.md"
+  ],
+  "summary": "Adding concrete v2 fixtures requires an intentional protocol bump and is human-owned. Before that decision, define the *contract* a v2 fixture pair must satisfy (file layout, naming, schema-version field, migration-note format) as docs + a validator that runs only when v2 fixtures appear. Keeps the protocol-bump decision human-gated while making the eventual landing deterministic.",
+  "expectedFailureModes": [
+    "v2 fixtures land later with inconsistent file layouts because the contract was never written down.",
+    "The validator is over-eager and fires on legacy v1 fixtures, blocking unrelated work.",
+    "docs/status.md is updated to imply v2 fixtures exist before the protocol bump decision is made."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "The actual decision to bump the IPC/HTTP protocol to v2 and publish v2 fixtures remains human-owned."
+  ],
+  "nextAction": "Document the v2 IPC/HTTP fixture contract in docs/ipc-and-http-gateway.md (file layout, schema-version field, migration-note pairing rules), implement a validator that no-ops when no v2 fixture exists and fails with a clear remediation when the contract is violated, and link from docs/status.md without claiming v2 fixtures ship.",
+  "updated": "2026-05-10"
+}

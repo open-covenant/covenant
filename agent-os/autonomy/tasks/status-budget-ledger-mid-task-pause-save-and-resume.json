@@ -1,0 +1,28 @@
+{
+  "id": "status-budget-ledger-mid-task-pause-save-and-resume",
+  "title": "Budget ledger: mid-task pause, save, and resume",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-budget",
+    "agent-os/crates/covenant-types"
+  ],
+  "summary": "Budget ledger is implemented and hardened, but long-running tasks still assume uninterrupted execution. Add an explicit pause/save/resume path so operators can safely stop and continue without losing ledger consistency.",
+  "expectedFailureModes": [
+    "A paused task loses budget state and double-spends on resume.",
+    "Checkpoint format is non-deterministic or leaks machine-local paths, breaking auditability.",
+    "Resume path fails to validate invariants and allows inconsistent ledger rows."
+  ],
+  "gates": [
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-budget --locked",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Wire the checkpoint store into daemon runtime pause and operator-requested shutdown paths.",
+  "updated": "2026-05-10"
+}

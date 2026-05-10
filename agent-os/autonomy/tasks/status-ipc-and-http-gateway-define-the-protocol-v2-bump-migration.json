@@ -1,0 +1,30 @@
+{
+  "id": "status-ipc-and-http-gateway-define-the-protocol-v2-bump-migration",
+  "title": "IPC/HTTP gateway: define protocol v2 bump + migration harness",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-ipc",
+    "agent-os/crates/covenant-router",
+    "docs"
+  ],
+  "summary": "Protocol JSON shapes are stabilizing, but there is no explicit migration harness for the first breaking change. Define a v2 bump policy + a small compatibility test harness so future schema changes are intentional and testable.",
+  "expectedFailureModes": [
+    "A breaking schema change lands without a version bump and silently breaks clients.",
+    "No replay harness exists, so compatibility claims rely on memory instead of fixtures.",
+    "Version negotiation drifts and produces ambiguous errors at runtime."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant-ipc --locked",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Write a short protocol versioning/migration note and add a compatibility harness test that can replay v1 fixtures against the current parser.",
+  "updated": "2026-05-10"
+}

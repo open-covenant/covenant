@@ -47,7 +47,7 @@ See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), 
 
 ## Capabilities
 
-<!-- covenant-readme-status-sha256: 8eff192cfc6b815e9d7522a3589ee6ada97455cd8db7b9140a33a7dc7e066b02 -->
+<!-- covenant-readme-status-sha256: d677270ffca0b99619fb399ed224d1fd96af16dbe05496bf77c99a291b58a0fc -->
 
 Covenant includes:
 
@@ -58,6 +58,7 @@ Covenant includes:
 - Append-only audit log with structured event types, bounded reads, retention purge, and local hash-chain verification.
 - SQLite-backed project memory across working, episodic, and long-term tiers.
 - MCP adapter, native tool integration, and A2A mailbox primitives.
+- Budget ledger primitives with persisted pause checkpoint storage for single-use resume handoff.
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
 - Unsigned or locally signed audit-root attestations for local integrity reports.

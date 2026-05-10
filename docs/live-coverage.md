@@ -57,7 +57,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | MCP subprocess transport | Covered | CLI tools list JSON, CLI tools call JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
 | Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Automate the documented Linux `runsc` runner on a pinned rootfs. |
-| Budget enforcement | Covered | daemon rejection when budget exhausts, CLI resume, CLI resume JSON | Budget resume success after pause/resume policy lands. |
+| Budget enforcement | Covered | daemon rejection when budget exhausts, CLI resume, CLI resume JSON | Budget resume success after runtime checkpoint wiring lands. |
 | Settlement receipts and chain gates | Covered | daemon dispatch writes/reads receipts after `chain.receipts`, CLI `chain status --json`, CLI `chain flush-receipts --json`, CLI `receipts recent --json`, CLI `chain receipt-batches --json` | Scoped receipt filter coverage once receipt query predicates become user-selectable. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Pin the supported model set and expand opt-in live Ollama coverage. |
 

@@ -63,6 +63,7 @@ run node ./scripts/validate-distribution-readiness.mjs
 run node ./scripts/validate-settlement-deployment-readiness.mjs
 run node ./scripts/validate-gvisor-host-readiness.mjs
 run node ./scripts/validate-release-provenance-readiness.mjs
+run node ./scripts/validate-a2a-repair-visibility.mjs
 run node ./scripts/provenance.mjs verify-all
 run node ./scripts/provenance-self-test.mjs
 run ./scripts/check-no-display-form-a2a.sh

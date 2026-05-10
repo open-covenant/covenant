@@ -1,0 +1,28 @@
+{
+  "id": "status-a2a-messaging-add-per-peer-repair-visibility-coverage-if",
+  "title": "Add A2A repair visibility planning",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "docs"
+  ],
+  "summary": "A2A repair is operator-owned today. If delegated repair expands, operators need per-peer visibility and tests that prove retries and repairs cannot hide peer-specific failures.",
+  "expectedFailureModes": [
+    "Delegated repair can mutate peer queues without operator-visible peer attribution.",
+    "Retry visibility aggregates failures in a way that hides one failing peer.",
+    "Tests only cover operator repair and miss delegated denial paths."
+  ],
+  "gates": [
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add a bounded per-peer repair visibility plan or read-only report, with tests around peer filters and delegated-repair denial paths.",
+  "updated": "2026-05-10"
+}

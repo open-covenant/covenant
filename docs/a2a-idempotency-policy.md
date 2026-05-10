@@ -116,3 +116,5 @@ Manual lease repair already requires an explicit duplicate-risk posture (`idempo
 ## Follow-up work
 
 - Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
+
+Read-only readiness for that boundary lives in [A2A Repair Visibility](a2a-repair-visibility.md).

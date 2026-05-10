@@ -99,6 +99,15 @@ covenant a2a force-error <task-id> \
 
 HTTP uses `POST /a2a/repair` with the same `A2ARepairRequest` JSON shape as IPC. Repair calls are rejected unless the authenticated peer can see the in-flight task and holds `a2a.repair.requeue` or `a2a.repair.force_error`, depending on the command. Non-empty A2A scopes are enforced at dispatch: `task_id`, `lease_id`, `peer_pubkey_b58`, and `duplicate_risk` must match the concrete repair request.
 
+Repair visibility readiness is tracked by:
+
+```bash
+node agent-os/scripts/a2a-repair-visibility.mjs --json
+node agent-os/scripts/validate-a2a-repair-visibility.mjs
+```
+
+See [A2A Repair Visibility](a2a-repair-visibility.md) for the delegated-repair boundary.
+
 ## Idempotency and Retry Policy
 
 Covenant A2A is deliberately conservative about retry. The daemon persists work, leases it explicitly, and refuses to redeliver automatically after restart. Tasks can carry optional task-level idempotency metadata, and the daemon exposes a disabled-by-default retry gate that requeues only stale, idempotent in-flight leases when an operator explicitly enables a bounded scan.

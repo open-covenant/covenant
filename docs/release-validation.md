@@ -73,6 +73,7 @@ node agent-os/scripts/validate-distribution-readiness.mjs
 node agent-os/scripts/validate-settlement-deployment-readiness.mjs
 node agent-os/scripts/validate-gvisor-host-readiness.mjs
 node agent-os/scripts/validate-release-provenance-readiness.mjs
+node agent-os/scripts/validate-a2a-repair-visibility.mjs
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check

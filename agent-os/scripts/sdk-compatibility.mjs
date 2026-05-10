@@ -93,6 +93,63 @@ function exportFixture(definition, exports) {
   };
 }
 
+function instructionDescriptors() {
+  const source = readFileSync(join(repoRoot, "packages", "sdk", "src", "solana", "instructions.ts"), "utf8");
+  return [...source.matchAll(/instruction:\s+'([^']+)'[\s\S]*?accounts:\s+\[([\s\S]*?)\][\s\S]*?data:\s+\{([\s\S]*?)\n\s+\}/g)]
+    .map((match) => ({
+      name: match[1],
+      accounts: [...match[2].matchAll(/meta\('([^']+)'/g)].map((account) => account[1]),
+      data_keys: [...match[3].matchAll(/^\s+([a-z_]+):/gm)].map((field) => field[1]).sort(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function instructionFixture() {
+  const path = "packages/sdk/compatibility/instructions.v1.json";
+  const absolute = join(repoRoot, path);
+  const descriptors = instructionDescriptors();
+  if (!existsSync(absolute)) {
+    return {
+      path,
+      present: false,
+      matches: false,
+      descriptors,
+      errors: ["instruction compatibility fixture is missing"],
+    };
+  }
+
+  const fixture = readJson(absolute);
+  const normalizedFixture = (fixture.instructions ?? [])
+    .map((instruction) => ({
+      name: instruction.name,
+      accounts: instruction.accounts ?? [],
+      data_keys: [...(instruction.data_keys ?? [])].sort(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const errors = [];
+  if (fixture.schema !== "covenant.sdk-instructions.v1") {
+    errors.push("instruction fixture schema must be covenant.sdk-instructions.v1");
+  }
+  if (fixture.package !== "@covenant/sdk") {
+    errors.push("instruction fixture package must be @covenant/sdk");
+  }
+  if (fixture.stability !== "workspace_alpha") {
+    errors.push("instruction fixture stability must be workspace_alpha");
+  }
+  if (JSON.stringify(normalizedFixture) !== JSON.stringify(descriptors)) {
+    errors.push("instruction fixture does not match src/solana/instructions.ts");
+  }
+
+  return {
+    path,
+    present: true,
+    matches: errors.length === 0,
+    schema: fixture.schema ?? null,
+    descriptors,
+    errors,
+  };
+}
+
 function packageReport(definition) {
   const packageJsonPath = join(repoRoot, definition.path, "package.json");
   const pkg = readJson(packageJsonPath);
@@ -146,7 +203,8 @@ function packageReport(definition) {
 }
 
 const packages = packageDirs.map(packageReport);
-const metadataOk = packages.every((pkg) => pkg.ok);
+const instructions = instructionFixture();
+const metadataOk = packages.every((pkg) => pkg.ok) && instructions.matches;
 
 const report = {
   kind: "covenant_sdk_compatibility",
@@ -155,10 +213,12 @@ const report = {
   ready_for_workspace_alpha: metadataOk,
   ready_for_public_sdk: false,
   packages,
+  instruction_fixture: instructions,
   policy: {
     workspace_alpha: [
       "root export maps must stay aligned with main/types metadata",
       "source exports must match committed compatibility fixtures before removal or rename",
+      "Solana instruction descriptor shape must match committed compatibility fixtures before generated bindings exist",
       "README examples must not imply npm publication before release approval",
     ],
     public_sdk_blockers: [

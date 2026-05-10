@@ -82,6 +82,12 @@ if (!report.blockers.some((blocker) => /npm publication/i.test(blocker))) {
 if (!report.blockers.some((blocker) => /protocol bindings/i.test(blocker))) {
   fail("public SDK blockers must include protocol binding fixtures");
 }
+if (report.instruction_fixture?.matches !== true) {
+  fail("SDK instruction fixture must match source descriptors");
+}
+if (!Array.isArray(report.instruction_fixture?.descriptors) || report.instruction_fixture.descriptors.length < 4) {
+  fail("SDK instruction fixture must include the current descriptor surface");
+}
 
 if (errors.length > 0) {
   console.error("validate-sdk-compatibility: failed");

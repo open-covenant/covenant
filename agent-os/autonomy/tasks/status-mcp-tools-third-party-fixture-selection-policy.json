@@ -1,0 +1,31 @@
+{
+  "id": "status-mcp-tools-third-party-fixture-selection-policy",
+  "title": "Define third-party MCP server fixture selection policy",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs",
+    "docs/status.md"
+  ],
+  "summary": "Before adding an opt-in third-party MCP server fixture, define the selection policy (provenance pinning, license check, opt-in default-off semantics, reproducible build evidence) as a docs+validator contract. Avoids landing a fixture that quietly imports an unvetted dependency surface.",
+  "expectedFailureModes": [
+    "A third-party MCP fixture lands without a documented selection policy and pulls in an unvetted dependency surface.",
+    "Selection policy exists in prose but has no validator hook, so a future deletion of required fields slips through review.",
+    "docs/status.md is updated to imply an opt-in fixture is available before the policy itself is reviewed."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Final fixture selection, vendor allowlist, and any external network access remain human-owned."
+  ],
+  "nextAction": "Document the third-party MCP fixture selection policy in docs/mcp-tools.md (or a sibling page), add a validator that scans the policy fields for completeness, and link from docs/status.md MCP tools row without claiming a fixture is shipping.",
+  "updated": "2026-05-10"
+}

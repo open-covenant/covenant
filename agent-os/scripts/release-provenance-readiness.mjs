@@ -64,6 +64,14 @@ const auditRootPolicyOk = containsAll("docs/decisions/0004-audit-root-signing-po
   "GitHub Actions OIDC",
   "offline project key",
 ]);
+const auditRootReleaseSubjectOk = containsAll("agent-os/scripts/provenance.mjs", [
+  "releaseSubjectSha256",
+  "release subject metadata mismatch",
+])
+  && containsAll("agent-os/scripts/provenance-self-test.mjs", [
+    "release-subject.json",
+    "release subject metadata mismatch",
+  ]);
 const reviewSigningOk = containsAll("docs/provenance/review-artifact-signing.md", [
   "covenant.autonomy-review-signature.v1",
   "human_approval_required",
@@ -96,6 +104,15 @@ const gates = [
     evidence: ["docs/decisions/0004-audit-root-signing-policy.md"],
     blockers: auditRootPolicyOk ? [] : ["audit-root signing policy does not define acceptable project signing identities"],
     human_decision_required: true,
+  },
+  {
+    id: "audit-root-release-subject-binding",
+    title: "Audit-root release subject binding",
+    status: auditRootReleaseSubjectOk ? "implemented" : "missing",
+    ok: auditRootReleaseSubjectOk,
+    evidence: ["agent-os/scripts/provenance.mjs", "agent-os/scripts/provenance-self-test.mjs"],
+    blockers: auditRootReleaseSubjectOk ? [] : ["audit-root verifier does not bind release targets to release subject digests"],
+    human_decision_required: false,
   },
   {
     id: "review-artifact-signing-contract",
@@ -151,6 +168,7 @@ const localGateIds = new Set([
   "release-subject-schema",
   "local-provenance-verifier",
   "audit-root-signing-policy",
+  "audit-root-release-subject-binding",
   "review-artifact-signing-contract",
 ]);
 const localGates = gates.filter((gate) => localGateIds.has(gate.id));

@@ -60,6 +60,17 @@ function sha256(input) {
   return createHash("sha256").update(input).digest("hex");
 }
 
+function gitCommit(ref) {
+  const result = spawnSync("git", ["rev-parse", `${ref}^{commit}`], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(`git rev-parse failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
 function withPayloadDigest(value) {
   const { payloadSha256, ...payload } = value;
   return { ...payload, payloadSha256: sha256(stableJson(payload)) };
@@ -122,6 +133,84 @@ try {
   ]);
   expectOk(["audit-root", "verify", "--file", auditRoot]);
   expectOk(["verify", "--file", auditRoot]);
+
+  const releaseId = "v0.1.0-alpha.1";
+  const releaseCommit = gitCommit("20ff55e");
+  const releaseSubject = join(tempDir, "release-subject.json");
+  const releaseSubjectEnvelope = {
+    schema: "covenant.provenance.release.v1",
+    generatedAt: "2026-05-09T00:00:00.000Z",
+    subject: {
+      kind: "release_bundle",
+      repository: "open-covenant/covenant",
+      releaseId,
+      tag: releaseId,
+      commit: releaseCommit,
+      artifacts: [
+        {
+          name: "covenant-source",
+          filename: `covenant-${releaseId}.tar.gz`,
+          sha256: "c".repeat(64),
+          sizeBytes: 123,
+        },
+      ],
+    },
+    validation: [
+      {
+        command: "bash agent-os/scripts/validate.sh --quick",
+        status: "passed",
+      },
+    ],
+  };
+  writeFileSync(releaseSubject, `${JSON.stringify(releaseSubjectEnvelope, null, 2)}\n`);
+
+  const releaseAuditRoot = join(tempDir, "release-audit-root.json");
+  expectOk([
+    "audit-root",
+    "write",
+    "--report",
+    auditReport,
+    "--release",
+    releaseId,
+    "--release-subject",
+    releaseSubject,
+    "--commit",
+    releaseCommit,
+    "--out",
+    releaseAuditRoot,
+    "--validation",
+    "covenant audit verify=passed",
+  ]);
+  expectOk(["audit-root", "verify", "--file", releaseAuditRoot]);
+
+  const releaseAuditRootOriginal = JSON.parse(readFileSync(releaseAuditRoot, "utf8"));
+  const releaseSubjectTamper = join(tempDir, "release-subject-tamper.json");
+  const tamperedReleaseSubject = {
+    ...releaseAuditRootOriginal.target.releaseSubject,
+    subject: {
+      ...releaseAuditRootOriginal.target.releaseSubject.subject,
+      releaseId: "v0.1.0-alpha.2",
+    },
+  };
+  writeFileSync(
+    releaseSubjectTamper,
+    `${JSON.stringify(
+      withPayloadDigest({
+        ...releaseAuditRootOriginal,
+        target: {
+          ...releaseAuditRootOriginal.target,
+          releaseSubject: tamperedReleaseSubject,
+          releaseSubjectSha256: sha256(stableJson(tamperedReleaseSubject)),
+        },
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  expectFail(
+    ["audit-root", "verify", "--file", releaseSubjectTamper],
+    "release subject metadata mismatch",
+  );
 
   const { privateKey } = generateKeyPairSync("ed25519");
   const signingKey = join(tempDir, "audit-root-signing-key.pem");

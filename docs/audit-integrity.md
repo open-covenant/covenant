@@ -104,3 +104,5 @@ node agent-os/scripts/provenance.mjs audit-root verify \
 ```
 
 Signed payloads are local cryptographic integrity evidence for the embedded key. Public non-repudiation still depends on a reviewed project key custody and publication process.
+
+Release-target audit roots can also bind an embedded `covenant.provenance.release.v1` release subject digest. See [audit root release custody](./provenance/audit-root-release-custody.md) for the local verifier contract and the human custody checklist.

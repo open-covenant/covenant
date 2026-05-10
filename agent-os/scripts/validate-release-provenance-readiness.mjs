@@ -65,6 +65,7 @@ for (const id of [
   "release-subject-schema",
   "local-provenance-verifier",
   "audit-root-signing-policy",
+  "audit-root-release-subject-binding",
   "review-artifact-signing-contract",
   "project-key-custody",
   "release-artifact-subject-verifier",
@@ -79,6 +80,7 @@ for (const id of [
   "release-subject-schema",
   "local-provenance-verifier",
   "audit-root-signing-policy",
+  "audit-root-release-subject-binding",
   "review-artifact-signing-contract",
 ]) {
   const gate = gates.get(id);

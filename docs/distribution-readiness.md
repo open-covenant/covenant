@@ -23,9 +23,10 @@ The report uses schema `covenant.distribution-readiness.v1`. It does not tag, si
 | `source-alpha-install` | Implemented | `agent-os/scripts/install-source.mjs`, `agent-os/scripts/validate-source-installer.mjs`, `docs/source-install.md` | No publication decision. |
 | `source-upgrade-preflight` | Implemented | `agent-os/scripts/source-install-upgrade-plan.mjs`, `agent-os/scripts/validate-source-install-upgrade-plan.mjs`, `docs/source-install.md` | Operator review before reinstalling over an existing prefix. |
 | `source-rollback-checkpoint` | Implemented | `agent-os/scripts/source-install-rollback.mjs`, `agent-os/scripts/validate-source-install-rollback.mjs`, `docs/source-install.md` | Local source rollback only. |
+| `sdk-compatibility-policy` | Implemented | `docs/sdk-compatibility.md`, `agent-os/scripts/sdk-compatibility.mjs`, `agent-os/scripts/validate-sdk-compatibility.mjs` | Public semver and npm publication approval. |
 | `package-manager-distribution` | Planned | None yet | Artifact destinations and publication approval. |
 | `signed-release-artifacts` | Planned | `docs/provenance/release-subjects.md` | Project signing key custody, signature publication, and revocation policy. |
-| `sdk-stability` | Planned | `packages/sdk/README.md`, `packages/sdk-ui/README.md` | SDK stability commitment and publication approval. |
+| `sdk-stability` | Experimental | Workspace-alpha compatibility policy | SDK stability commitment and publication approval. |
 | `upgrade-policy` | Experimental | Source upgrade preflight and local rollback checkpoints | Public package rollback and rollback announcement language. |
 
 `ready_for_source_alpha` can be true while `ready_for_public_distribution` is false. That is the expected alpha state until package-manager installation, release signing, SDK compatibility, and upgrade rollback evidence exist.

@@ -3661,6 +3661,39 @@
       "humanEscalation": [],
       "nextAction": "Teach the source installer to preserve replaced files in a bounded checkpoint, add a rollback command and validator, and update distribution docs to distinguish source rollback from public package rollback.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-sdk-compatibility-policy",
+      "title": "Add SDK compatibility policy",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "packages/sdk",
+        "packages/sdk-ui",
+        "agent-os/autonomy"
+      ],
+      "summary": "Distribution readiness still lists SDK stability as planned even though workspace packages already expose typed surfaces. Add a machine-readable SDK compatibility report and policy that distinguishes workspace-alpha SDK evidence from public npm stability.",
+      "expectedFailureModes": [
+        "SDK packages drift without a documented compatibility boundary or export-map check.",
+        "Distribution readiness implies public SDK stability before npm publication and protocol binding fixtures exist.",
+        "Package metadata changes break consumers because workspace-alpha and public-stable surfaces are not separated."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-sdk-compatibility.mjs",
+        "node agent-os/scripts/validate-distribution-readiness.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add SDK compatibility documentation, a report/validator over package metadata and export maps, and update distribution readiness/status without claiming public SDK publication.",
+      "updated": "2026-05-10"
     }
   ]
 }

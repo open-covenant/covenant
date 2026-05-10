@@ -56,6 +56,7 @@ for (const id of [
   "source-alpha-install",
   "source-upgrade-preflight",
   "source-rollback-checkpoint",
+  "sdk-compatibility-policy",
   "package-manager-distribution",
   "signed-release-artifacts",
   "sdk-stability",
@@ -93,6 +94,17 @@ if (
   fail("source rollback checkpoint must list its rollback script as evidence");
 }
 
+const sdkCompatibility = gates.get("sdk-compatibility-policy");
+if (sdkCompatibility && sdkCompatibility.ok !== true) {
+  fail("sdk compatibility policy gate must pass");
+}
+if (
+  sdkCompatibility &&
+  !sdkCompatibility.evidence.some((item) => item.endsWith("sdk-compatibility.mjs"))
+) {
+  fail("sdk compatibility policy must list its report script as evidence");
+}
+
 for (const id of [
   "package-manager-distribution",
   "signed-release-artifacts",
@@ -126,6 +138,14 @@ if (
   !upgrade.blockers.some((blocker) => /package-manager rollback/i.test(blocker))
 ) {
   fail("upgrade-policy must keep public package rollback blocked");
+}
+
+const sdk = gates.get("sdk-stability");
+if (
+  sdk &&
+  !sdk.blockers.some((blocker) => /generated protocol bindings/i.test(blocker))
+) {
+  fail("sdk-stability must keep generated protocol binding fixtures blocked");
 }
 
 if (errors.length > 0) {

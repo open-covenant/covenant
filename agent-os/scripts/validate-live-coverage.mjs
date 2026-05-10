@@ -49,6 +49,55 @@ function assertLiveTest(path, source, surfaceId) {
   }
 }
 
+function assertStringArray(value, field, surfaceId) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail(`${surfaceId}: ${field} must be a non-empty array`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      fail(`${surfaceId}: ${field} entries must be non-empty strings`);
+    }
+  }
+}
+
+function assertCommand(value, field, surfaceId) {
+  if (typeof value !== "string" || value.trim() === "") {
+    fail(`${surfaceId}: ${field} must be a non-empty command`);
+  }
+  const [command, script] = value.split(/\s+/);
+  if (command !== "node" || !script) {
+    fail(`${surfaceId}: ${field} must be a node script command`);
+  }
+  assertPath(script, field, surfaceId);
+}
+
+function assertPromotion(surface) {
+  const promotion = surface.promotion;
+  if (!promotion || typeof promotion !== "object") {
+    fail(`${surface.id}: promotion metadata is required`);
+  }
+  assertCommand(promotion.readinessCommand, "promotion.readinessCommand", surface.id);
+  assertCommand(promotion.validatorCommand, "promotion.validatorCommand", surface.id);
+  if (promotion.requiredCi !== false) {
+    fail(`${surface.id}: promotion.requiredCi must remain false until CI promotion is approved`);
+  }
+  if (promotion.humanApprovalRequired !== true) {
+    fail(`${surface.id}: promotion.humanApprovalRequired must be true`);
+  }
+  assertStringArray(promotion.prerequisites, "promotion.prerequisites", surface.id);
+  assertStringArray(promotion.prerequisiteSkips, "promotion.prerequisiteSkips", surface.id);
+  assertStringArray(promotion.realFailures, "promotion.realFailures", surface.id);
+
+  const skipText = promotion.prerequisiteSkips.join("\n").toLowerCase();
+  const failureText = promotion.realFailures.join("\n").toLowerCase();
+  if (!skipText.includes("non-linux") || !skipText.includes("rootfs unset")) {
+    fail(`${surface.id}: promotion.prerequisiteSkips must distinguish unsupported host and unset rootfs`);
+  }
+  if (!failureText.includes("invalid") || !failureText.includes("runsc")) {
+    fail(`${surface.id}: promotion.realFailures must distinguish configured rootfs/runsc failures`);
+  }
+}
+
 const matrix = readJson(matrixPath);
 if (matrix.version !== 1) fail("version must be 1");
 if (!Array.isArray(matrix.surfaces) || matrix.surfaces.length === 0) {
@@ -80,6 +129,10 @@ for (const surface of matrix.surfaces) {
     fail(`${surface.id}: nextGap is required`);
   }
 
+  if (surface.promotion) {
+    assertPromotion(surface);
+  }
+
   for (const path of surface.mockTests) {
     assertPath(path, "mockTests", surface.id);
   }
@@ -94,6 +147,12 @@ for (const surface of matrix.surfaces) {
     liveCount += surface.liveTests.length;
   }
 }
+
+const gvisor = matrix.surfaces.find((surface) => surface.id === "runtime-linux-gvisor");
+if (!gvisor) {
+  fail("runtime-linux-gvisor surface is required");
+}
+assertPromotion(gvisor);
 
 console.log(
   `validate-live-coverage: ok (${matrix.surfaces.length} surfaces, ${liveCount} live test files, ${mockOnlyCount} mock-only surfaces)`,

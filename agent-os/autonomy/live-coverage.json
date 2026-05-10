@@ -201,6 +201,28 @@
         "agent-os/crates/covenant-runtime/tests/live_gvisor.rs"
       ],
       "status": "external_service",
+      "promotion": {
+        "readinessCommand": "node agent-os/scripts/gvisor-host-readiness.mjs --json",
+        "validatorCommand": "node agent-os/scripts/validate-gvisor-host-readiness.mjs",
+        "requiredCi": false,
+        "humanApprovalRequired": true,
+        "prerequisites": [
+          "Linux host",
+          "runsc executable on PATH or COVENANT_LIVE_RUNSC",
+          "COVENANT_LIVE_GVISOR_ROOTFS containing bin/sh",
+          "pinned rootfs provenance before required CI"
+        ],
+        "prerequisiteSkips": [
+          "non-Linux host",
+          "COVENANT_LIVE_GVISOR_ROOTFS unset"
+        ],
+        "realFailures": [
+          "COVENANT_LIVE_GVISOR_ROOTFS set but invalid",
+          "runsc unavailable when a rootfs is configured",
+          "sandbox startup failure",
+          "trusted-local fallback for sandbox-required agents"
+        ]
+      },
       "nextGap": "Promote the documented Linux runsc runner to CI on a pinned minimal rootfs before claiming sandbox-grade execution."
     },
     {

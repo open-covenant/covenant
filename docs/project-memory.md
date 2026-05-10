@@ -25,6 +25,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Linux gVisor CI promotion uses `agent-os/scripts/gvisor-host-readiness.mjs`; host-local live readiness is separate from required CI, pinned rootfs provenance, and public sandbox-readiness claims.
+- The live coverage matrix records Linux gVisor promotion metadata, including prerequisite skips versus real configured-host failures; default validation must not require non-Linux hosts to run gVisor.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 - Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs` and locally published or checked with `node agent-os/scripts/autonomy-publish-summary.mjs`.

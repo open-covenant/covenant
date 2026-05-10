@@ -1524,3 +1524,4 @@
 {"timestamp":"2026-05-10T20:52:14.048Z","taskId":"status-distribution-debian-manifest-section-contract","from":"self_review","to":"cross_review","actorRole":"reviewer","note":"Cross-review: additive debian block; no claim that .deb ships; validator path-safety walk now covers debian subtree."}
 {"timestamp":"2026-05-10T20:52:14.100Z","taskId":"status-distribution-debian-manifest-section-contract","from":"cross_review","to":"validation","actorRole":"verifier","note":"Validation: validate-distribution-readiness ok, validate.sh --scripts ok, git diff --check ok."}
 {"timestamp":"2026-05-10T20:52:14.153Z","taskId":"status-distribution-debian-manifest-section-contract","from":"validation","to":"ready","actorRole":"verifier","note":"Docs gate satisfied; ready to integrate."}
+{"timestamp":"2026-05-10T20:52:20.397Z","taskId":"status-distribution-debian-manifest-section-contract","from":"ready","to":"integrated","actorRole":"implementer","note":"Committed; pushing."}

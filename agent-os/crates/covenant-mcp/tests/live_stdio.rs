@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
 async fn live_stdio_mcp_initialize_lists_and_calls() {
     let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
-    let args = vec!["--string-ids".to_string()];
+    let args = vec!["--string-ids".to_string(), "--stderr-noise".to_string()];
     let client = StdioMcpClient::spawn(&exe, &args)
         .await
         .expect("spawn fake mcp server");
@@ -37,6 +37,59 @@ async fn live_stdio_mcp_initialize_lists_and_calls() {
     assert!(!r.is_error);
     match &r.content[0] {
         Content::Text { text } => assert_eq!(text, "pong: hello"),
+        other => panic!("unexpected content: {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_handles_split_stdout_response() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--split-response".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap remote tools over split stdio response");
+    let r = tools[0]
+        .call(serde_json::json!({ "text": "delayed" }))
+        .await
+        .expect("tools/call over split stdio response");
+
+    match &r.content[0] {
+        Content::Text { text } => assert_eq!(text, "pong: delayed"),
+        other => panic!("unexpected content: {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_handles_large_tool_payload() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args: Vec<String> = Vec::new();
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap remote tools over real stdio");
+    let payload = "x".repeat(64 * 1024);
+    let r = tools[0]
+        .call(serde_json::json!({ "text": payload }))
+        .await
+        .expect("tools/call with large payload over real stdio");
+
+    match &r.content[0] {
+        Content::Text { text } => {
+            assert_eq!(text.len(), "pong: ".len() + payload.len());
+            assert!(text.starts_with("pong: "));
+            assert!(text.ends_with(&payload));
+        }
         other => panic!("unexpected content: {other:?}"),
     }
 }

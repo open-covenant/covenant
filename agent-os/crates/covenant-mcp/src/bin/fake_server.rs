@@ -7,15 +7,34 @@
 
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::thread;
+use std::time::Duration;
+
+fn write_response(out: &mut impl Write, response: &Value, split_response: bool) -> io::Result<()> {
+    if split_response {
+        write!(out, "{response}")?;
+        out.flush()?;
+        thread::sleep(Duration::from_millis(10));
+        writeln!(out)?;
+    } else {
+        writeln!(out, "{response}")?;
+    }
+    out.flush()
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let exit_after_initialize = args.iter().any(|arg| arg == "--exit-after-initialize");
     let string_ids = args.iter().any(|arg| arg == "--string-ids");
+    let stderr_noise = args.iter().any(|arg| arg == "--stderr-noise");
+    let split_response = args.iter().any(|arg| arg == "--split-response");
 
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    if stderr_noise {
+        eprintln!("fake-mcp: stderr noise enabled");
+    }
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -24,6 +43,9 @@ fn main() {
         };
         if line.trim().is_empty() {
             continue;
+        }
+        if stderr_noise {
+            eprintln!("fake-mcp: received line");
         }
         let req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
@@ -86,8 +108,7 @@ fn main() {
                     "id": response_id,
                     "error": { "code": -32601, "message": format!("method not found: {method}") }
                 });
-                writeln!(out, "{err}").ok();
-                out.flush().ok();
+                let _ = write_response(&mut out, &err, split_response);
                 continue;
             }
         };
@@ -97,10 +118,7 @@ fn main() {
             "id": response_id,
             "result": result
         });
-        if writeln!(out, "{resp}").is_err() {
-            break;
-        }
-        if out.flush().is_err() {
+        if write_response(&mut out, &resp, split_response).is_err() {
             break;
         }
 

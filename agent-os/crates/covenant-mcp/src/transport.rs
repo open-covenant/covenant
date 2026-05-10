@@ -413,6 +413,19 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_response_with_whitespace_string_id_parses() {
+        let s = r#"{"jsonrpc":"2.0","id":" 7 ","result":{"ok":true}}"#;
+        let r: JsonRpcResponse = serde_json::from_str(s).unwrap();
+        assert_eq!(r.id, Some(7));
+    }
+
+    #[test]
+    fn json_rpc_response_with_non_numeric_string_id_errors() {
+        let s = r#"{"jsonrpc":"2.0","id":"nope","result":{"ok":true}}"#;
+        assert!(serde_json::from_str::<JsonRpcResponse>(s).is_err());
+    }
+
+    #[test]
     fn transport_closed_error_maps_to_closed() {
         let e = JsonRpcError {
             code: TRANSPORT_CLOSED_CODE,

@@ -84,6 +84,13 @@ for (const arg of args) {
 const checks = [
   cleanTreeCheck(),
   checkCommand(
+    "commit-rotation",
+    "Commit rotation policy validates",
+    process.execPath,
+    ["agent-os/scripts/validate-commit-rotation.mjs"],
+    ["commit", "push"],
+  ),
+  checkCommand(
     "current-git-identity",
     "Current Git author and committer are neutral",
     process.execPath,

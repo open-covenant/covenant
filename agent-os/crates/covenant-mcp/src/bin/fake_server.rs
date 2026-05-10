@@ -3,7 +3,9 @@
 //! the spec for the `live_` integration test in `tests/live_stdio.rs`:
 //! `initialize`, `notifications/initialized`, `tools/list`, `tools/call`.
 //!
-//! Single tool: `ping` — returns the `text` argument prefixed with "pong: ".
+//! Default tool: `ping` — returns the `text` argument prefixed with
+//! "pong: ". `--multi-tool` also exposes `sum` and `fail` so live tests
+//! can exercise JSON content and tool-level error results.
 
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -28,6 +30,7 @@ fn main() {
     let string_ids = args.iter().any(|arg| arg == "--string-ids");
     let stderr_noise = args.iter().any(|arg| arg == "--stderr-noise");
     let split_response = args.iter().any(|arg| arg == "--split-response");
+    let multi_tool = args.iter().any(|arg| arg == "--multi-tool");
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -75,8 +78,8 @@ fn main() {
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "fake", "version": "0.0.1" }
             }),
-            "tools/list" => json!({
-                "tools": [{
+            "tools/list" => {
+                let mut tools = vec![json!({
                     "name": "ping",
                     "description": "echoes its `text` argument back with a pong prefix",
                     "inputSchema": {
@@ -84,23 +87,77 @@ fn main() {
                         "properties": { "text": { "type": "string" } },
                         "required": ["text"]
                     }
-                }]
-            }),
+                })];
+                if multi_tool {
+                    tools.push(json!({
+                        "name": "sum",
+                        "description": "adds two integer arguments and returns JSON content",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "a": { "type": "integer" },
+                                "b": { "type": "integer" }
+                            },
+                            "required": ["a", "b"]
+                        }
+                    }));
+                    tools.push(json!({
+                        "name": "fail",
+                        "description": "returns a tool-level error result",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                        }
+                    }));
+                }
+                json!({ "tools": tools })
+            }
             "tools/call" => {
+                let name = req
+                    .get("params")
+                    .and_then(|p| p.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("ping");
                 let args = req
                     .get("params")
                     .and_then(|p| p.get("arguments"))
                     .cloned()
                     .unwrap_or(Value::Null);
-                let text = args
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                json!({
-                    "content": [{ "type": "text", "text": format!("pong: {text}") }],
-                    "isError": false
-                })
+                match name {
+                    "ping" => {
+                        let text = args
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        json!({
+                            "content": [{ "type": "text", "text": format!("pong: {text}") }],
+                            "isError": false
+                        })
+                    }
+                    "sum" if multi_tool => {
+                        let a = args.get("a").and_then(Value::as_i64).unwrap_or(0);
+                        let b = args.get("b").and_then(Value::as_i64).unwrap_or(0);
+                        json!({
+                            "content": [{ "type": "json", "value": { "sum": a + b } }],
+                            "isError": false
+                        })
+                    }
+                    "fail" if multi_tool => json!({
+                        "content": [{ "type": "text", "text": "forced tool failure" }],
+                        "isError": true
+                    }),
+                    _ => {
+                        let err = json!({
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "error": { "code": -32602, "message": format!("unknown tool: {name}") }
+                        });
+                        let _ = write_response(&mut out, &err, split_response);
+                        continue;
+                    }
+                }
             }
             _ => {
                 let err = json!({

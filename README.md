@@ -47,7 +47,7 @@ See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), 
 
 ## Capabilities
 
-<!-- covenant-readme-status-sha256: 65e0d5d33fb5344cab1692490deb71ba081ec98ca626e3b366c463b786a6f3f3 -->
+<!-- covenant-readme-status-sha256: d1bee1798046edbacc8ba07c5c3da2b8d06d9957637e13e82eef6f290e157b8e -->
 
 Covenant includes:
 

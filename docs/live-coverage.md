@@ -33,12 +33,15 @@ cargo test -p covenantd --test live_cli_version -- --ignored live_cli_version_re
 Linux gVisor runtime coverage has host prerequisites outside the default suite. Use the repeatable runner guide before interpreting a pass or failure as sandbox evidence:
 
 ```bash
+node agent-os/scripts/gvisor-host-readiness.mjs --json
+node agent-os/scripts/validate-gvisor-host-readiness.mjs
+
 cd agent-os
 COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \
   cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
 ```
 
-See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux host, `runsc`, rootfs, and CI adoption contract.
+See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) and [`docs/gvisor-host-readiness.md`](gvisor-host-readiness.md) for the required Linux host, `runsc`, rootfs, CI adoption contract, and skip-versus-failure semantics.
 
 ## Current Surface Map
 
@@ -56,7 +59,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) for the required Linux
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI compact JSON, CLI repair including stale-lease rejection, CLI retry-stale JSON, CLI status JSON, restart replay, opt-in retry scheduler live coverage | Per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks. |
 | MCP subprocess transport | Covered | CLI tools list JSON, CLI tools call JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |
 | Runtime and reference agent subprocess | Covered | research subprocess, malformed stdout rejection, daemon dispatch to research agent | Daemon-level dispatch failure assertions after operator-facing failure receipts are formalized. |
-| Linux gVisor runtime dispatch | External service | `live_gvisor.rs` | Automate the documented Linux `runsc` runner on a pinned rootfs. |
+| Linux gVisor runtime dispatch | External service | `live_gvisor.rs`; host readiness report distinguishes unsupported host or unset rootfs skips from configured `runsc`/rootfs failures | Automate the documented Linux `runsc` runner on a pinned rootfs. |
 | Budget enforcement | Covered | daemon rejection when budget exhausts, CLI resume, CLI resume JSON | Budget resume success after runtime checkpoint wiring lands. |
 | Settlement receipts and chain gates | Covered | daemon dispatch writes/reads receipts after `chain.receipts`, CLI `chain status --json`, CLI `chain flush-receipts --json`, CLI `receipts recent --json`, CLI `chain receipt-batches --json` | Scoped receipt filter coverage once receipt query predicates become user-selectable. |
 | Local model and full acceptance path | External service | Ollama and full acceptance tests | Pin the supported model set and expand opt-in live Ollama coverage. |

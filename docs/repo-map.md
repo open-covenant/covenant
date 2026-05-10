@@ -19,10 +19,11 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/a2a-repair-authorization.md` | Delegated A2A repair authorization scope and denial policy. |
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |
 | `docs/settlement-receipt-migration.md` | Settlement receipt JSONL migration dry-run and mutation boundary. |
+| `docs/settlement-oracle-policy.md` | Settlement oracle source, update authority, staleness, manipulation, outage, and deployment-binding readiness gates. |
 | `docs/budget-pause-checkpoints.md` | Budget pause checkpoint format and daemon integration boundary. |
 | `docs/identity-provenance.md` | Local identity key and peer-token provenance dry-run boundary. |
 | `docs/privileged-cli-live-matrix.md` | Command-level privileged CLI live coverage contract. |
-| `docs/on-chain-settlement-readiness.md` | On-chain settlement deployment, review, oracle, mint authority, and emergency-operation gates. |
+| `docs/on-chain-settlement-readiness.md` | On-chain settlement deployment, review, oracle policy, mint authority, and emergency-operation gates. |
 | `docs/gvisor-host-readiness.md` | Linux gVisor host readiness and CI promotion gates. |
 | `docs/releases/` | Release evidence bundle records for alpha candidates, scaffolded by `agent-os/scripts/alpha-release-bundle.mjs`. |
 | `docs/provenance/` | Provenance contract and committed attestation envelopes. |

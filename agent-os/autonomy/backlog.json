@@ -3759,6 +3759,40 @@
       "humanEscalation": [],
       "nextAction": "Add SDK instruction descriptor fixtures, compare them in the SDK compatibility report, and update docs/status without claiming generated binding or public npm stability.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-on-chain-settlement-oracle-policy-readiness",
+      "title": "Add settlement oracle policy readiness",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "agent-os/autonomy"
+      ],
+      "summary": "Settlement deployment readiness lists oracle policy as a human-owned blocker with no dedicated local evidence. Add a read-only oracle policy readiness report and validator that define source selection, update authority, staleness, manipulation, outage, and deployment-binding requirements without selecting a production oracle.",
+      "expectedFailureModes": [
+        "Deployment readiness keeps reporting an oracle-policy blocker without concrete local evidence for what must be decided before on-chain release.",
+        "Docs imply production oracle readiness before a source, update authority, stale-data policy, manipulation controls, and outage behavior are selected and reviewed.",
+        "Autonomous agents cannot distinguish locally validated oracle policy scaffolding from human-owned oracle source and deployment decisions."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-settlement-oracle-policy.mjs",
+        "node agent-os/scripts/validate-settlement-deployment-readiness.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human approval remains required for production oracle source selection, update authority custody, and deployment binding."
+      ],
+      "nextAction": "Add the settlement oracle policy readiness report, validator, docs, and deployment-readiness evidence while keeping production oracle selection human-owned.",
+      "updated": "2026-05-10"
     }
   ]
 }

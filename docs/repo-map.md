@@ -12,6 +12,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/decisions/` | Architecture decision records. |
 | `docs/alpha-release-contract.md` | Source alpha boundary, non-claims, evidence bundle expectations, and human-owned release decisions. |
 | `docs/distribution-readiness.md` | Source install preflight and rollback, public distribution, signing, SDK stability, and upgrade graduation gates. |
+| `docs/package-manager-readiness.md` | Package-manager manifest, checksum, install/uninstall CI, signing, and publication readiness gates. |
 | `docs/sdk-compatibility.md` | Workspace-alpha SDK compatibility policy and public SDK blockers. |
 | `docs/release-validation.md` | Release evidence profile and validation requirements. |
 | `docs/protocol-versioning.md` | IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy. |

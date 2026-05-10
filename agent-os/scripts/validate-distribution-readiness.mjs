@@ -105,6 +105,22 @@ if (
   fail("sdk compatibility policy must list its report script as evidence");
 }
 
+const packageManager = gates.get("package-manager-distribution");
+if (packageManager) {
+  if (packageManager.status !== "documented") {
+    fail("package-manager-distribution must report documented local evidence");
+  }
+  for (const evidence of [
+    "docs/package-manager-readiness.md",
+    "agent-os/scripts/package-manager-readiness.mjs",
+    "agent-os/scripts/validate-package-manager-readiness.mjs",
+  ]) {
+    if (!Array.isArray(packageManager.evidence) || !packageManager.evidence.includes(evidence)) {
+      fail(`package-manager-distribution must include evidence: ${evidence}`);
+    }
+  }
+}
+
 for (const id of [
   "package-manager-distribution",
   "signed-release-artifacts",

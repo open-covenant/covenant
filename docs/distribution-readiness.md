@@ -24,7 +24,7 @@ The report uses schema `covenant.distribution-readiness.v1`. It does not tag, si
 | `source-upgrade-preflight` | Implemented | `agent-os/scripts/source-install-upgrade-plan.mjs`, `agent-os/scripts/validate-source-install-upgrade-plan.mjs`, `docs/source-install.md` | Operator review before reinstalling over an existing prefix. |
 | `source-rollback-checkpoint` | Implemented | `agent-os/scripts/source-install-rollback.mjs`, `agent-os/scripts/validate-source-install-rollback.mjs`, `docs/source-install.md` | Local source rollback only. |
 | `sdk-compatibility-policy` | Implemented | `docs/sdk-compatibility.md`, `agent-os/scripts/sdk-compatibility.mjs`, `agent-os/scripts/validate-sdk-compatibility.mjs` | Public semver and npm publication approval. |
-| `package-manager-distribution` | Planned | None yet | Artifact destinations and publication approval. |
+| `package-manager-distribution` | Documented, manifests blocked | `docs/package-manager-readiness.md`, `agent-os/scripts/package-manager-readiness.mjs`, `agent-os/scripts/validate-package-manager-readiness.mjs` | Artifact hosting, signing keys, registry ownership, and publication approval. |
 | `signed-release-artifacts` | Planned | `docs/provenance/release-subjects.md` | Project signing key custody, signature publication, and revocation policy. |
 | `sdk-stability` | Experimental | Workspace-alpha compatibility policy | SDK stability commitment and publication approval. |
 | `upgrade-policy` | Experimental | Source upgrade preflight and local rollback checkpoints | Public package rollback and rollback announcement language. |
@@ -35,7 +35,7 @@ The report uses schema `covenant.distribution-readiness.v1`. It does not tag, si
 
 Public distribution can move forward only after:
 
-- package-manager manifests and install/uninstall CI coverage exist;
+- package-manager manifests and install/uninstall/upgrade/rollback CI coverage exist;
 - release artifact subjects bind file digests, validation evidence, and the release id;
 - project signing key custody and rotation policy are approved;
 - SDK semantic versioning and compatibility fixtures are defined;

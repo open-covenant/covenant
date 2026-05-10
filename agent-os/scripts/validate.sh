@@ -63,6 +63,7 @@ run node ./scripts/validate-source-installer.mjs
 run node ./scripts/validate-source-install-upgrade-plan.mjs
 run node ./scripts/validate-source-install-rollback.mjs
 run node ./scripts/validate-sdk-compatibility.mjs
+run node ./scripts/validate-package-manager-readiness.mjs
 run node ./scripts/validate-distribution-readiness.mjs
 run node ./scripts/validate-settlement-oracle-policy.mjs
 run node ./scripts/validate-settlement-deployment-readiness.mjs

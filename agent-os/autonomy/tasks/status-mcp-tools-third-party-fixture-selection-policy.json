@@ -1,7 +1,7 @@
 {
   "id": "status-mcp-tools-third-party-fixture-selection-policy",
   "title": "Define third-party MCP server fixture selection policy",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

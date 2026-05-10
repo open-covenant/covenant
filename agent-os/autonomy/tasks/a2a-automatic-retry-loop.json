@@ -1,0 +1,40 @@
+{
+  "id": "a2a-automatic-retry-loop",
+  "title": "Implement opt-in automatic retry for idempotent A2A tasks",
+  "state": "proposed",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant-audit",
+    "docs",
+    "landing/app/docs"
+  ],
+  "summary": "Add an opt-in retry loop that requeues only tasks marked idempotent after stale leases, records audit evidence for each retry decision, and keeps retry behavior bounded and observable.",
+  "expectedFailureModes": [
+    "Retry automation requeues non-idempotent tasks and causes duplicate external effects.",
+    "Retries happen silently without operator-visible audit evidence or attempt counters.",
+    "Backoff and max attempts are implicit and lead to runaway retry storms."
+  ],
+  "gates": [
+    "plan",
+    "security",
+    "test_expansion",
+    "docs",
+    "escalation"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenantd a2a --locked",
+    "cd agent-os && cargo test -p covenant-audit --locked",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Approval before enabling automatic retry by default or retrying operator_accepted tasks."
+  ],
+  "nextAction": "Implement a bounded retry scheduler for stale leases that requeues only idempotent tasks and emits audit rows describing each retry decision.",
+  "updated": "2026-05-09"
+}

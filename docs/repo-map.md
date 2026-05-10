@@ -16,6 +16,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/protocol-versioning.md` | IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy. |
 | `docs/a2a-repair-visibility.md` | A2A repair visibility and delegated repair gate contract. |
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |
+| `docs/settlement-receipt-migration.md` | Settlement receipt JSONL migration dry-run and mutation boundary. |
 | `docs/budget-pause-checkpoints.md` | Budget pause checkpoint format and daemon integration boundary. |
 | `docs/identity-provenance.md` | Local identity key and peer-token provenance dry-run boundary. |
 | `docs/privileged-cli-live-matrix.md` | Command-level privileged CLI live coverage contract. |
@@ -48,12 +49,12 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/crates/covenant-a2a` | Agent-to-agent task and mailbox primitives. |
 | `agent-os/crates/covenant-peer-auth` | Peer registry, tokens, revocation, and list filters. |
 | `agent-os/crates/covenant-budget` | Credit budget ledger, exhaustion behavior, and pause checkpoint storage. |
-| `agent-os/crates/covenant-settlement` | Local settlement receipt ledger. |
+| `agent-os/crates/covenant-settlement` | Local settlement receipt ledger, receipt batching, and typed receipt migration plan shape. |
 | `agent-os/agents/research` | Reference research agent. |
 | `agent-os/programs/settlement` | Solana protocol program for agent registration, stake, credits, task escrow, and receipt anchors. |
 | `agent-os/covenant-web` | Local operator web console. |
 | `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrices, and task backlog. |
-| `agent-os/scripts` | Validation, live coverage checks, identity provenance dry-runs, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
+| `agent-os/scripts` | Validation, live coverage checks, identity and settlement receipt provenance dry-runs, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
 
 ## MCP Bridges
 

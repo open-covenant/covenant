@@ -42,6 +42,14 @@ The plan reads recent memory records and recent receipts through existing daemon
 
 `plan-receipt-backfill` rejects `--apply`. It does not mutate memory, rewrite settlement receipts, or emit audit rows. Any future mutation path must be a separate command with explicit before/after receipt evidence and authorization.
 
+For ledger-level review before mutation design, run the settlement receipt migration planner against the receipt JSONL:
+
+```bash
+node agent-os/scripts/settlement-receipt-migration.mjs --json
+```
+
+That planner separates malformed rows from well-formed legacy memory receipts. It is also read-only and rejects `--apply`; see [Settlement Receipt Migration](./settlement-receipt-migration.md).
+
 ## Apply Boundary
 
 Use `covenant memory compact --apply` only after a dry-run plan has been reviewed and the operator has granted the matching `memory.compaction.apply` capability. Apply mode mutates memory and records daemon audit evidence. Receipt backfill mutation for legacy uncorrelated rows is still future work; the current receipt-backfill command is a dry-run planning surface only.
@@ -55,4 +63,5 @@ A safe scheduler should:
 - apply only when the operator policy says the plan is acceptable;
 - never synthesize or backfill receipts during the read-only planning step;
 - run `plan-receipt-backfill --json` before designing any receipt mutation;
+- run `settlement-receipt-migration.mjs --json` against exported receipt ledgers before designing JSONL migration tooling;
 - escalate if candidate deletions affect records whose settlement receipts cannot be reconciled.

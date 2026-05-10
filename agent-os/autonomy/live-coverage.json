@@ -204,7 +204,21 @@
         "agent-os/crates/covenant-mcp/tests/live_stdio.rs"
       ],
       "status": "covered",
-      "nextGap": "Add live coverage for a nontrivial third-party MCP server once fixture selection is stable."
+      "nextGap": "Add an opt-in third-party MCP server fixture after fixture selection is stable and dependency provenance is pinned.",
+      "compatibilityEvidence": {
+        "fixture": "agent-os/crates/covenant-mcp/src/bin/fake_server.rs --multi-tool",
+        "liveTest": "agent-os/crates/covenant-mcp/tests/live_stdio.rs",
+        "validator": "node agent-os/scripts/validate-mcp-live-compatibility.mjs",
+        "covered": [
+          "numeric and string JSON-RPC response ids",
+          "multi-tool stdio compatibility",
+          "JSON content result parsing",
+          "tool-level isError result parsing",
+          "split stdout responses",
+          "large tool payloads",
+          "transport closed after subprocess exit"
+        ]
+      }
     },
     {
       "id": "runtime-agent-subprocess",

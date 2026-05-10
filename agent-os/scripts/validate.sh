@@ -66,6 +66,7 @@ run node ./scripts/validate-settlement-receipt-migration.mjs
 run node ./scripts/validate-gvisor-host-readiness.mjs
 run node ./scripts/validate-release-provenance-readiness.mjs
 run node ./scripts/validate-identity-provenance.mjs
+run node ./scripts/validate-mcp-live-compatibility.mjs
 run node ./scripts/validate-a2a-repair-authorization.mjs
 run node ./scripts/validate-a2a-peer-repair-report.mjs
 run node ./scripts/validate-a2a-repair-visibility.mjs

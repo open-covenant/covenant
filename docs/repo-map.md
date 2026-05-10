@@ -55,7 +55,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/programs/settlement` | Solana protocol program for agent registration, stake, credits, task escrow, and receipt anchors. |
 | `agent-os/covenant-web` | Local operator web console. |
 | `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrices, and task backlog. |
-| `agent-os/scripts` | Validation, live coverage checks, identity and settlement receipt provenance dry-runs, A2A repair visibility/authorization checks, A2A peer repair reports, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
+| `agent-os/scripts` | Validation, live coverage checks, MCP compatibility checks, identity and settlement receipt provenance dry-runs, A2A repair visibility/authorization checks, A2A peer repair reports, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
 
 ## MCP Bridges
 

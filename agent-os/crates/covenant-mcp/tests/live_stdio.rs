@@ -96,6 +96,54 @@ async fn live_stdio_mcp_handles_large_tool_payload() {
 
 #[tokio::test]
 #[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_handles_multi_tool_json_and_error_results() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--multi-tool".to_string(), "--string-ids".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap multi-tool remote tools over real stdio");
+    let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+    assert_eq!(
+        names,
+        vec!["ping".to_string(), "sum".to_string(), "fail".to_string()]
+    );
+
+    let sum = tools
+        .iter()
+        .find(|tool| tool.name() == "sum")
+        .expect("sum tool");
+    let sum_result = sum
+        .call(serde_json::json!({ "a": 2, "b": 5 }))
+        .await
+        .expect("sum tool call over real stdio");
+    assert!(!sum_result.is_error);
+    match &sum_result.content[0] {
+        Content::Json { value } => assert_eq!(value["sum"], 7),
+        other => panic!("unexpected sum content: {other:?}"),
+    }
+
+    let fail = tools
+        .iter()
+        .find(|tool| tool.name() == "fail")
+        .expect("fail tool");
+    let fail_result = fail
+        .call(serde_json::json!({}))
+        .await
+        .expect("tool-level errors stay in successful JSON-RPC responses");
+    assert!(fail_result.is_error);
+    match &fail_result.content[0] {
+        Content::Text { text } => assert_eq!(text, "forced tool failure"),
+        other => panic!("unexpected failure content: {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
 async fn live_stdio_mcp_surfaces_transport_closed_when_server_exits() {
     let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
     let args = vec!["--exit-after-initialize".to_string()];

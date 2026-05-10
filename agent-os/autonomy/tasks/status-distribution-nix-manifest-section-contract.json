@@ -1,7 +1,7 @@
 {
   "id": "status-distribution-nix-manifest-section-contract",
   "title": "Define nix manifest section contract",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

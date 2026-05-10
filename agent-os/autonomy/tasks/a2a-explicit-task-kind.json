@@ -1,0 +1,36 @@
+{
+  "id": "a2a-explicit-task-kind",
+  "title": "Add explicit A2A task kind metadata",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant",
+    "docs/a2a-idempotency-policy.md",
+    "docs/status.md",
+    "docs/project-memory.md"
+  ],
+  "summary": "A2A idempotency caching still derives task kind from intent text. Add an optional explicit task_kind field so retries and duplicate-result replay can group logical work by stable type without coupling cache keys to human-readable instructions.",
+  "expectedFailureModes": [
+    "Idempotent duplicate replay misses equivalent tasks because intent text changed while the logical task kind stayed the same.",
+    "Blank task kind metadata is accepted and creates ambiguous cache keys.",
+    "Legacy tasks without task_kind fail to deserialize or lose the existing intent_text fallback."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion",
+    "security"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "cd agent-os && cargo test -p covenant-a2a task_kind --locked",
+    "cd agent-os && cargo test -p covenant-a2a idempotency --locked",
+    "cd agent-os && cargo test -p covenantd a2a_auto_retry --locked",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add optional task_kind to A2ATask, validate non-empty values, prefer it in idempotency cache keys with legacy intent_text fallback, update tests and idempotency docs/status.",
+  "updated": "2026-05-10"
+}

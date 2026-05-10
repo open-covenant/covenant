@@ -109,6 +109,7 @@ async fn live_covenantd_a2a_duplex_with_capability_gating() {
         sender: peer.clone(),
         recipient: peer.clone(),
         intent_text: "find recent papers".into(),
+        task_kind: None,
         parent: None,
         deadline_ms: None,
         idempotency: None,
@@ -284,6 +285,7 @@ async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
         sender: peer.clone(),
         recipient: peer.clone(),
         intent_text: "scheduler live retry".into(),
+        task_kind: None,
         parent: None,
         deadline_ms: None,
         idempotency: Some(A2AIdempotency::new(
@@ -432,6 +434,7 @@ async fn live_covenantd_a2a_recipient_admission_gate_rejects_unallowed() {
         sender: peer.clone(),
         recipient: foreign_recipient.clone(),
         intent_text: "spam".into(),
+        task_kind: None,
         parent: None,
         deadline_ms: None,
         idempotency: None,

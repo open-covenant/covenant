@@ -1,7 +1,7 @@
 {
   "id": "a2a-automatic-retry-loop",
   "title": "Implement opt-in automatic retry for idempotent A2A tasks",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "medium",
   "ownerRole": "implementer",
   "scope": [
@@ -36,5 +36,5 @@
     "Approval before enabling automatic retry by default or retrying operator_accepted tasks."
   ],
   "nextAction": "Implement a bounded retry scheduler for stale leases that requeues only idempotent tasks and emits audit rows describing each retry decision.",
-  "updated": "2026-05-09"
+  "updated": "2026-05-10"
 }

@@ -22,6 +22,7 @@ Tasks may carry explicit idempotency metadata in the `A2ATask` envelope:
 
 ```json
 {
+  "task_kind": "release.notes",
   "idempotency": {
     "duplicate_safety": "idempotent",
     "key": "agent:logical-work-unit"
@@ -29,7 +30,13 @@ Tasks may carry explicit idempotency metadata in the `A2ATask` envelope:
 }
 ```
 
-The daemon validates that a present key is non-empty, persists the metadata in the mailbox log, and returns it through queue/status surfaces. Missing metadata is treated as unsafe for automated requeue.
+The daemon validates that a present `task_kind` and idempotency key are non-empty, persists the metadata in the mailbox log, and returns it through queue/status surfaces. Missing idempotency metadata is treated as unsafe for automated requeue.
+
+### Task kind
+
+`task_kind` is an optional stable type for the logical operation being delegated. When present, it is part of the receiver-side idempotency cache key. When absent, Covenant falls back to `intent_text` so legacy tasks keep their existing behavior.
+
+Use `task_kind` for durable categories such as `release.notes`, `code.review`, or `memory.compaction`; keep free-form instructions in `intent_text`.
 
 ### Idempotency class
 
@@ -50,12 +57,10 @@ When an idempotent task posts a result, the mailbox stores a cached result paylo
 
 - sender public key;
 - recipient public key;
-- current task kind;
+- task kind, using explicit `task_kind` when present and `intent_text` as the legacy fallback;
 - idempotency key.
 
 A later task with the same cache key is not leased to the recipient. The mailbox immediately queues a replayed result for the new task id, preserving the original status, content, and error message. JSONL-backed mailboxes persist cache entries in the event log; task compaction removes resolved task history but keeps cache entries so future duplicates can still short-circuit after restart.
-
-The current task kind is derived from the task intent text. That is deliberately conservative until A2A has an explicit typed task-kind field.
 
 ## Explicit retry gate
 
@@ -110,4 +115,4 @@ Manual lease repair already requires an explicit duplicate-risk posture (`idempo
 
 ## Follow-up work
 
-- Add an explicit A2A task-kind field so cache keys no longer depend on intent text.
+- Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.

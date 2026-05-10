@@ -100,6 +100,8 @@ pub struct A2ATask {
     pub recipient: AgentId,
     pub intent_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_ms: Option<u64>,
@@ -443,6 +445,15 @@ fn validate_repair_request(request: &A2ARepairRequest) -> Result<(), A2AError> {
 }
 
 fn validate_task(task: &A2ATask) -> Result<(), A2AError> {
+    if task
+        .task_kind
+        .as_deref()
+        .is_some_and(|kind| kind.trim().is_empty())
+    {
+        return Err(A2AError::InvalidTask(
+            "task_kind must not be empty when present".into(),
+        ));
+    }
     if let Some(idempotency) = &task.idempotency {
         if idempotency.key.trim().is_empty() {
             return Err(A2AError::InvalidTask(
@@ -465,7 +476,13 @@ fn idempotency_cache_key(task: &A2ATask) -> Option<A2AIdempotencyCacheKey> {
     Some(A2AIdempotencyCacheKey {
         sender_pubkey_b58: task.sender.pubkey_base58(),
         recipient_pubkey_b58: task.recipient.pubkey_base58(),
-        task_kind: task.intent_text.clone(),
+        task_kind: task
+            .task_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|kind| !kind.is_empty())
+            .unwrap_or(&task.intent_text)
+            .to_owned(),
         key: key.to_owned(),
     })
 }
@@ -1505,6 +1522,7 @@ mod tests {
             sender: dummy_agent("orchestrator@local"),
             recipient: dummy_agent("research@local"),
             intent_text: "find recent papers on agent memory".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -1537,6 +1555,18 @@ mod tests {
     }
 
     #[test]
+    fn task_round_trips_task_kind_metadata() {
+        let mut t = dummy_task();
+        t.task_kind = Some("research.lookup".into());
+
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(s.contains("\"task_kind\":\"research.lookup\""));
+
+        let back: A2ATask = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.task_kind.as_deref(), Some("research.lookup"));
+    }
+
+    #[test]
     fn task_deserializes_legacy_without_idempotency_metadata() {
         let value = serde_json::json!({
             "id": Uuid::nil(),
@@ -1548,6 +1578,7 @@ mod tests {
         let task: A2ATask = serde_json::from_value(value).unwrap();
         assert_eq!(task.id, Uuid::nil());
         assert_eq!(task.idempotency, None);
+        assert_eq!(task.task_kind, None);
     }
 
     #[test]
@@ -1683,6 +1714,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_empty_task_kind() {
+        let m = InMemoryMailbox::new();
+        let mut t = dummy_task();
+        t.task_kind = Some("   ".into());
+
+        let err = m.send_task(t).await.unwrap_err();
+        assert!(matches!(err, A2AError::InvalidTask(_)));
+    }
+
+    #[tokio::test]
     async fn in_memory_replays_cached_idempotent_result_without_delivery() {
         let m = InMemoryMailbox::new();
         let mut first = dummy_task();
@@ -1719,6 +1760,45 @@ mod tests {
         assert_eq!(replayed.task_id, duplicate.id);
         assert_eq!(replayed.status, A2ATaskStatus::Ok);
         assert_eq!(replayed.content, vec![Content::text("cached answer")]);
+    }
+
+    #[tokio::test]
+    async fn task_kind_drives_idempotency_cache_when_present() {
+        let m = InMemoryMailbox::new();
+        let mut first = dummy_task();
+        first.intent_text = "draft release notes for alpha one".into();
+        first.task_kind = Some("release.notes".into());
+        first.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "release:v0.1.0-alpha.1",
+        ));
+        m.send_task(first.clone()).await.unwrap();
+        let _ = m
+            .try_recv_task_for(&first.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        m.send_result(A2ATaskResult::ok(
+            first.id,
+            vec![Content::text("notes ready")],
+        ))
+        .await
+        .unwrap();
+
+        let mut duplicate = first.clone();
+        duplicate.id = Uuid::new_v4();
+        duplicate.intent_text = "write final alpha release notes".into();
+        m.send_task(duplicate.clone()).await.unwrap();
+
+        assert!(m
+            .try_recv_task_for(&duplicate.recipient)
+            .await
+            .unwrap()
+            .is_none());
+        let _ = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
+        let replayed = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
+        assert_eq!(replayed.task_id, duplicate.id);
+        assert_eq!(replayed.content, vec![Content::text("notes ready")]);
     }
 
     #[tokio::test]
@@ -2200,6 +2280,7 @@ mod tests {
             sender: alice.clone(),
             recipient: bob.clone(),
             intent_text: "1".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2209,6 +2290,7 @@ mod tests {
             sender: alice.clone(),
             recipient: carol.clone(),
             intent_text: "2".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2218,6 +2300,7 @@ mod tests {
             sender: alice.clone(),
             recipient: bob.clone(),
             intent_text: "3".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2250,6 +2333,7 @@ mod tests {
             sender: dummy_agent("alice@local"),
             recipient: bob.clone(),
             intent_text: "for bob only".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2271,6 +2355,7 @@ mod tests {
             sender: alice.clone(),
             recipient: dummy_agent("research@local"),
             intent_text: "alice's".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2280,6 +2365,7 @@ mod tests {
             sender: alice.clone(),
             recipient: dummy_agent("research@local"),
             intent_text: "alice's other".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2289,6 +2375,7 @@ mod tests {
             sender: dan.clone(),
             recipient: dummy_agent("research@local"),
             intent_text: "dan's".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,
@@ -2347,6 +2434,7 @@ mod tests {
             sender,
             recipient,
             intent_text: "x".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,

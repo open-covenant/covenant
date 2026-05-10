@@ -108,6 +108,7 @@ fn task(peer: &AgentId, text: &str) -> A2ATask {
         sender: peer.clone(),
         recipient: peer.clone(),
         intent_text: text.to_string(),
+        task_kind: None,
         parent: None,
         deadline_ms: None,
         idempotency: None,

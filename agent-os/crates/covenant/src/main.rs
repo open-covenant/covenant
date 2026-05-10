@@ -3543,6 +3543,7 @@ mod tests {
             sender,
             recipient,
             intent_text: "status probe".into(),
+            task_kind: None,
             parent: None,
             deadline_ms: None,
             idempotency: None,

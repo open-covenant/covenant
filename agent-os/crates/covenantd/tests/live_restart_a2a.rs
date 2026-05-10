@@ -121,6 +121,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
         sender: peer.clone(),
         recipient: peer.clone(),
         intent_text: "find recent papers".into(),
+        task_kind: None,
         parent: None,
         deadline_ms: None,
         idempotency: None,

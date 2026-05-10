@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,9 +8,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 function usage() {
-  console.log(`usage: autonomy-verify-review-artifact (--stdin | <artifact.json>) [--json]
+  console.log(`usage: autonomy-verify-review-artifact (--stdin | <artifact.json>) [--json] [--trusted-public-key-spki-base64 value]
 
-Verify an unsigned autonomy review artifact against the local task record and transition log without writing files or Git metadata.`);
+Verify an autonomy review artifact against the local task record and transition log without writing files or Git metadata.
+
+Signed artifacts require an explicit trusted ed25519 SPKI public key in base64 DER form.`);
 }
 
 function sha256(text) {
@@ -103,7 +105,106 @@ function taskEnvelope(task) {
   };
 }
 
-function validateArtifact(artifact) {
+function signingPayload(artifact) {
+  return Buffer.from(JSON.stringify({
+    ...artifact,
+    signing: {
+      ...artifact.signing,
+      signature: "",
+    },
+  }));
+}
+
+function publicKeyFromSpkiBase64(value, errors) {
+  if (!value) return null;
+  let der;
+  try {
+    der = Buffer.from(value, "base64");
+  } catch (error) {
+    errors.push(`trusted public key is not base64: ${error.message}`);
+    return null;
+  }
+  if (der.length === 0) {
+    errors.push("trusted public key is empty");
+    return null;
+  }
+  try {
+    return {
+      der,
+      key: createPublicKey({
+        key: der,
+        format: "der",
+        type: "spki",
+      }),
+    };
+  } catch (error) {
+    errors.push(`trusted public key is not a valid SPKI key: ${error.message}`);
+    return null;
+  }
+}
+
+function validateSigning(artifact, trustedPublicKey, errors) {
+  const signing = artifact?.signing;
+  if (signing?.status === "unsigned") {
+    return;
+  }
+
+  if (signing?.status !== "signed") {
+    errors.push("signing.status must be unsigned or signed");
+    return;
+  }
+  if (signing.schema !== "covenant.autonomy-review-signature.v1") {
+    errors.push("signing.schema must be covenant.autonomy-review-signature.v1");
+  }
+  if (signing.algorithm !== "ed25519") {
+    errors.push("signing.algorithm must be ed25519");
+  }
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(signing.key_id || "")) {
+    errors.push("signing.key_id must be a stable lowercase key id");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(signing.signed_at || "")) {
+    errors.push("signing.signed_at must be ISO-like");
+  }
+  if (!/^[a-f0-9]{64}$/.test(signing.public_key_spki_sha256 || "")) {
+    errors.push("signing.public_key_spki_sha256 must be lowercase sha256 hex");
+  }
+  if (typeof signing.signature !== "string" || signing.signature.length === 0) {
+    errors.push("signing.signature is required for signed artifacts");
+  }
+  if (!safePath(signing.custody?.policy || "")) {
+    errors.push("signing.custody.policy must be a safe repository-relative path");
+  }
+  if (signing.custody?.human_approval_required !== true) {
+    errors.push("signing.custody.human_approval_required must be true");
+  }
+  if (!trustedPublicKey) {
+    errors.push("signed artifacts require --trusted-public-key-spki-base64");
+    return;
+  }
+
+  const trustedDigest = sha256(trustedPublicKey.der);
+  if (signing.public_key_spki_sha256 !== trustedDigest) {
+    errors.push("signing.public_key_spki_sha256 does not match trusted public key");
+    return;
+  }
+
+  let signature;
+  try {
+    signature = Buffer.from(signing.signature, "base64");
+  } catch (error) {
+    errors.push(`signing.signature is not base64: ${error.message}`);
+    return;
+  }
+  if (signature.length === 0) {
+    errors.push("signing.signature is empty");
+    return;
+  }
+  if (!verify(null, signingPayload(artifact), trustedPublicKey.key, signature)) {
+    errors.push("signing.signature does not verify");
+  }
+}
+
+function validateArtifact(artifact, trustedPublicKey = null) {
   const errors = [];
 
   if (artifact?.kind !== "autonomy_review_artifact") {
@@ -121,9 +222,7 @@ function validateArtifact(artifact) {
   if (!safePath(artifact?.source?.events_path)) {
     errors.push("source.events_path must be a safe repository-relative path");
   }
-  if (artifact?.signing?.status !== "unsigned") {
-    errors.push("signing.status must be unsigned until review artifact signing is implemented");
-  }
+  validateSigning(artifact, trustedPublicKey, errors);
 
   const taskId = artifact?.task?.id;
   if (!/^[a-z0-9][a-z0-9-]*$/.test(taskId || "")) {
@@ -193,13 +292,20 @@ if (argv.includes("--help") || argv.includes("-h")) {
 let asJson = false;
 let fromStdin = false;
 let file = "";
-for (const arg of argv) {
+let trustedPublicKeySpkiBase64 = "";
+for (let index = 0; index < argv.length; index += 1) {
+  const arg = argv[index];
   if (arg === "--json") {
     asJson = true;
     continue;
   }
   if (arg === "--stdin") {
     fromStdin = true;
+    continue;
+  }
+  if (arg === "--trusted-public-key-spki-base64") {
+    trustedPublicKeySpkiBase64 = argv[index + 1] ?? "";
+    index += 1;
     continue;
   }
   if (!file) {
@@ -215,6 +321,8 @@ if ((fromStdin && file) || (!fromStdin && !file)) {
   process.exit(2);
 }
 
+const keyErrors = [];
+const trustedPublicKey = publicKeyFromSpkiBase64(trustedPublicKeySpkiBase64, keyErrors);
 let artifact;
 try {
   const input = fromStdin ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
@@ -225,7 +333,7 @@ try {
   process.exit(1);
 }
 
-const errors = validateArtifact(artifact);
+const errors = [...keyErrors, ...validateArtifact(artifact, trustedPublicKey)];
 const report = {
   kind: "autonomy_review_artifact_verification",
   valid: errors.length === 0,

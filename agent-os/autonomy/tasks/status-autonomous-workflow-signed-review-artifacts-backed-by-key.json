@@ -1,0 +1,32 @@
+{
+  "id": "status-autonomous-workflow-signed-review-artifacts-backed-by-key",
+  "title": "Define signed review artifact custody",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "agent-os/autonomy",
+    "docs/provenance",
+    "docs"
+  ],
+  "summary": "Autonomous workflow artifacts are currently unsigned. The next slice should define a project-key custody contract and add verifier plumbing that can accept signed review artifacts once a public key is approved.",
+  "expectedFailureModes": [
+    "Unsigned review artifacts are treated as release-grade evidence.",
+    "Verifier code accepts signatures without binding artifact schema, task id, and commit subject.",
+    "Docs choose or expose private key material instead of documenting custody boundaries."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human approval is required before selecting, publishing, rotating, or using a project signing key."
+  ],
+  "nextAction": "Design the signed review artifact envelope, add dry-run verifier fixtures, and document key custody inputs without generating or publishing a real project signing key.",
+  "updated": "2026-05-10"
+}

@@ -31,6 +31,8 @@ node agent-os/scripts/provenance.mjs verify-all
 
 `agent-os/scripts/validate.sh` runs `verify-all` automatically.
 
+Review artifact signing is defined separately in [review-artifact-signing.md](review-artifact-signing.md). The verifier can check signed review artifacts when an approved project public key is supplied, but generated review artifacts remain unsigned by default.
+
 Generate an audit-root attestation from `covenant audit verify` output:
 
 ```bash
@@ -92,5 +94,6 @@ For `covenant.audit-root-attestation.v1`, the verifier also checks:
 - Signed audit-root attestations prove payload integrity for the embedded public key. Public trust still requires a project-controlled key policy, release process, and transparency publication.
 - Validation entries record evidence from the producing operator or automation; the verifier checks envelope consistency, not whether every command was re-run.
 - Release artifact subject schema is defined in docs/provenance/release-subjects.md; implementation is still planned.
+- Review artifact signing has verifier support behind an explicit trusted public key input; project key custody and publication remain planned work.
 
 Audit root signing policy is tracked in [ADR 0004](../decisions/0004-audit-root-signing-policy.md). The current implementation defines and verifies detached `audit-root-attestation.v1` payloads and local ed25519 signatures. Project key custody, release publication, and transparency-log publication remain planned work.

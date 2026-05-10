@@ -51,6 +51,7 @@ node agent-os/scripts/autonomy-publish-summary.mjs --check --out docs/autonomy-s
 
 `autonomy-review-artifact.mjs` emits an unsigned review artifact for one task. It binds the task record, matching transition events, declared gates, verification commands, and content digests into one JSON envelope. The artifact is intentionally marked `unsigned` until project signing policy and key custody are implemented.
 Verify the artifact with `autonomy-verify-review-artifact.mjs` before treating it as durable review evidence.
+Signed review artifacts use the same envelope plus `covenant.autonomy-review-signature.v1`; verification requires an explicit trusted ed25519 SPKI public key. See [review artifact signing](provenance/review-artifact-signing.md) for the custody boundary.
 Run `validate-autonomy-review-artifacts.mjs` when changing review artifact commands so generation, verification, and tamper rejection are tested as one pipeline.
 
 `provenance.mjs` verifies committed provenance envelopes that bind a Git commit to task state, transition events, changed file blobs, and recorded validation.
@@ -171,8 +172,8 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Autonomy environment preflight | `node agent-os/scripts/autonomy-preflight.mjs` | Reports whether the local checkout can commit and whether the configured GitHub identity can push before a new autonomous slice starts. |
 | Status gap report | `node agent-os/scripts/autonomy-status-gaps.mjs --json` | Read-only backlog-refill candidates derived from the public capability status matrix. |
 | Review artifact scaffold | `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json` | Unsigned task review envelope containing task state, transition events, declared verification, and digests. |
-| Review artifact verifier | `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json \| node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin` | Recomputes task and transition-event digests for an unsigned review artifact and rejects stale or tampered evidence. |
-| Review artifact toolchain validator | `node agent-os/scripts/validate-autonomy-review-artifacts.mjs` | Exercises review artifact generation, verification, and digest tamper rejection in one read-only check. |
+| Review artifact verifier | `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json \| node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin` | Recomputes task and transition-event digests for a review artifact and rejects stale or tampered evidence. Signed artifacts require an explicit trusted public key. |
+| Review artifact toolchain validator | `node agent-os/scripts/validate-autonomy-review-artifacts.mjs` | Exercises review artifact generation, unsigned verification, signed fixture verification, and tamper rejection in one read-only check. |
 | Dirty handoff report | `node agent-os/scripts/autonomy-dirty-report.mjs --json` | Read-only summary of dirty files, diff stats, active tasks, and preflight blockers when a session cannot commit. |
 | Handoff bundle | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json` | Read-only export of the tracked patch, included untracked text files, dirty report, and restore guidance. |
 | Handoff bundle verifier | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json \| node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin` | Verifies bundle schema, path safety, tracked patch digest, and included untracked file digests before restoration. |
@@ -221,7 +222,7 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
 - `node agent-os/scripts/autonomy-status-gaps.mjs --json`: backlog-refill candidates from the capability status matrix.
 - `node agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json`: unsigned review artifact scaffold for one autonomy task.
-- `node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`: verifier for unsigned review artifacts.
+- `node agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`: verifier for unsigned review artifacts and signed artifacts with an explicit trusted public key.
 - `node agent-os/scripts/validate-autonomy-review-artifacts.mjs`: read-only review artifact toolchain validator.
 - `node agent-os/scripts/autonomy-summary.mjs`: deterministic sprint and handoff summaries from the public task state.
 - `node agent-os/scripts/autonomy-publish-summary.mjs --stdout`: local sprint summary publication wrapper with `--out` and `--check` modes.

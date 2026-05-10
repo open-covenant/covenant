@@ -86,6 +86,22 @@ for (const id of [
   }
 }
 
+const oraclePolicy = gates.get("oracle-policy");
+if (oraclePolicy) {
+  if (oraclePolicy.status !== "documented") {
+    fail("oracle-policy must report documented local evidence");
+  }
+  for (const evidence of [
+    "docs/settlement-oracle-policy.md",
+    "agent-os/scripts/settlement-oracle-policy.mjs",
+    "agent-os/scripts/validate-settlement-oracle-policy.mjs",
+  ]) {
+    if (!Array.isArray(oraclePolicy.evidence) || !oraclePolicy.evidence.includes(evidence)) {
+      fail(`oracle-policy must include evidence: ${evidence}`);
+    }
+  }
+}
+
 if (!Array.isArray(report.human_decisions) || report.human_decisions.length < 5) {
   fail("human deployment decisions must be explicit");
 }

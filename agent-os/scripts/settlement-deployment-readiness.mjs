@@ -42,6 +42,10 @@ const localReceiptsOk =
   exists("agent-os/crates/covenant-settlement/Cargo.toml") &&
   exists("agent-os/crates/covenant-settlement/src/lib.rs");
 const readinessDocOk = exists("docs/on-chain-settlement-readiness.md");
+const oraclePolicyDocOk = exists("docs/settlement-oracle-policy.md");
+const oraclePolicyReportOk = exists("agent-os/scripts/settlement-oracle-policy.mjs");
+const oraclePolicyValidatorOk = exists("agent-os/scripts/validate-settlement-oracle-policy.mjs");
+const oraclePolicyEvidenceOk = oraclePolicyDocOk && oraclePolicyReportOk && oraclePolicyValidatorOk;
 
 const gates = [
   {
@@ -92,13 +96,19 @@ const gates = [
   {
     id: "oracle-policy",
     title: "Oracle and pricing policy",
-    status: "planned",
+    status: oraclePolicyEvidenceOk ? "documented" : "planned",
     ok: false,
-    evidence: [],
+    evidence: [
+      ...(oraclePolicyDocOk ? ["docs/settlement-oracle-policy.md"] : []),
+      ...(oraclePolicyReportOk ? ["agent-os/scripts/settlement-oracle-policy.mjs"] : []),
+      ...(oraclePolicyValidatorOk
+        ? ["agent-os/scripts/validate-settlement-oracle-policy.mjs"]
+        : []),
+    ],
     blockers: [
-      "oracle sources are not selected",
-      "pricing update authority and stale-data behavior are not approved",
-      "manipulation and outage handling are not tested",
+      "production oracle sources are not selected",
+      "pricing update authority and stale-data behavior are not approved for a selected source",
+      "manipulation, outage, and deployment-binding behavior are documented but not tested",
     ],
     human_decision_required: true,
   },

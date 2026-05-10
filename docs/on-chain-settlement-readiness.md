@@ -24,7 +24,7 @@ The report uses schema `covenant.settlement-deployment-readiness.v1`. It does no
 | `local-receipt-ledger` | Implemented | `agent-os/crates/covenant-settlement` | No deployment decision. |
 | `deployment-runbook` | Documented | `docs/on-chain-settlement-readiness.md` | No deployment decision. |
 | `security-review` | Planned | None yet | Review scope, acceptance, and remediation approval. |
-| `oracle-policy` | Planned | None yet | Oracle source selection and update authority. |
+| `oracle-policy` | Documented, source selection blocked | `docs/settlement-oracle-policy.md`, `agent-os/scripts/settlement-oracle-policy.mjs`, `agent-os/scripts/validate-settlement-oracle-policy.mjs` | Oracle source selection, update authority, freshness, manipulation, outage, and deployment binding. |
 | `mint-authority-policy` | Planned | None yet | Mint authority, treasury custody, and rotation approval. |
 | `emergency-operations` | Planned | Program pause surface only | Pause, rollback, redeploy, signer quorum, and incident authority. |
 
@@ -36,7 +36,7 @@ Before deployment, the operator should have:
 
 - accepted security review evidence tied to the exact program commit;
 - a deployment target, upgrade authority, and rollback plan;
-- oracle source, update cadence, stale-data behavior, and outage behavior;
+- oracle source, update authority, freshness, manipulation, outage, and deployment-binding evidence;
 - mint authority custody, treasury ownership, and rotation records;
 - emergency pause authority, redeploy sequencing, and signer quorum;
 - local and on-chain validation commands with pass/fail/skipped outcomes.

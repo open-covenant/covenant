@@ -15,9 +15,8 @@
 #   scripts/handover.sh path/to/dir                     # specific project dir
 #   AGENT_CMD='claude --dangerously-skip-permissions' scripts/handover.sh
 #
-# AGENT_CMD runs in an interactive zsh subshell (#!/bin/zsh -i), and the
-# command is NOT exec'd, so aliases defined in ~/.zshrc resolve. Default
-# is `cc --effort max`, where `cc` is the operator's claude alias.
+# AGENT_CMD is invoked as a literal command in a non-interactive subshell, so
+# zsh aliases do not resolve here.
 
 set -euo pipefail
 
@@ -46,15 +45,19 @@ esac
 DIR="${1:-$(pwd)}"
 DIR_ABS="$(cd "$DIR" && pwd)"
 ENTRY_DOC="$DIR_ABS/docs/autonomous-development.md"
-# Default invokes the operator's `cc` zsh alias (defined in ~/.zshrc) and
-# adds --effort max for deep-work autonomous runs. The launch script runs
-# under `#!/bin/zsh -i` and does not `exec` the command, so .zshrc is
-# sourced and the alias expands. Override via AGENT_CMD for non-zsh hosts.
-AGENT_CMD="${AGENT_CMD:-${CLAUDE_CMD:-cc --effort max}}"
+AGENT_CMD="${AGENT_CMD:-${CLAUDE_CMD:-claude --model claude-opus-4-7 --effort max --dangerously-skip-permissions}}"
 
 if [ ! -f "$ENTRY_DOC" ]; then
   echo "handover.sh: no docs/autonomous-development.md at $ENTRY_DOC" >&2
   echo "  Run handover.sh from the repo root (or pass it as the first argument)." >&2
+  exit 1
+fi
+
+AGENT_BIN="${AGENT_CMD%% *}"
+if ! command -v "$AGENT_BIN" >/dev/null 2>&1; then
+  echo "handover.sh: '$AGENT_BIN' not found on PATH." >&2
+  echo "  Set AGENT_CMD to the agent client binary + flags, e.g.:" >&2
+  echo "  AGENT_CMD='claude --dangerously-skip-permissions' scripts/handover.sh" >&2
   exit 1
 fi
 
@@ -100,13 +103,11 @@ LAUNCH=$(mktemp -t covenant-handover-XXXXXX)
 chmod 0700 "$LAUNCH"
 cat >"$LAUNCH" <<EOF
 #!/bin/zsh -i
-# Auto-removed after launch. Interactive zsh sources ~/.zshrc so user
-# aliases (e.g. cc='claude --model ... --dangerously-skip-permissions')
-# resolve. Note: do NOT exec — exec'd command words bypass alias expansion
-# and would resolve cc to /usr/bin/cc (clang) instead of the alias.
+# Auto-removed after launch; the new agent session captures the handover
+# from HANDOVER.md, not this file.
 cd $(printf '%q' "$DIR_ABS")
 export COVENANT_SESSION_ID=$(printf '%q' "$SESSION_ID")
-${AGENT_CMD} $(printf '%q' "$PROMPT")
+exec ${AGENT_CMD} $(printf '%q' "$PROMPT")
 EOF
 
 case "$(uname -s)" in

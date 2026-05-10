@@ -363,6 +363,88 @@ if (!debian || typeof debian !== "object") {
   }
 }
 
+const rpm = manifest?.rpm;
+if (!rpm || typeof rpm !== "object") {
+  fail("package manager manifest must include an rpm section");
+} else {
+  if (rpm.schema !== "covenant.package-manager-manifest-rpm.v1") {
+    fail("rpm section schema must be covenant.package-manager-manifest-rpm.v1");
+  }
+  if (rpm.status !== "draft_empty_placeholders") {
+    fail("rpm section must remain draft_empty_placeholders");
+  }
+  if (rpm.ready_for_rpm_review !== false) {
+    fail("rpm section must not be ready for review while placeholders are empty");
+  }
+  if (rpm.local_paths_allowed !== false) {
+    fail("rpm section must reject local paths");
+  }
+
+  const rpmRequired = [
+    "package_name",
+    "package_version",
+    "spec_metadata",
+    "requires",
+    "recommends",
+    "suggests",
+    "architectures",
+    "file_ownership",
+    "service_unit",
+    "pre_scriptlet",
+    "post_scriptlet",
+    "preun_scriptlet",
+    "postun_scriptlet",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ];
+  const rpmFields = new Set(rpm.required_fields ?? []);
+  for (const field of rpmRequired) {
+    if (!rpmFields.has(field)) {
+      fail(`rpm section required field missing: ${field}`);
+    }
+  }
+
+  for (const field of [
+    "package_name",
+    "package_version",
+    "file_ownership",
+    "service_unit",
+    "pre_scriptlet",
+    "post_scriptlet",
+    "preun_scriptlet",
+    "postun_scriptlet",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ]) {
+    if (rpm[field] !== null) {
+      fail(`rpm section ${field} must remain null until implemented`);
+    }
+  }
+
+  for (const field of ["requires", "recommends", "suggests", "architectures"]) {
+    if (!Array.isArray(rpm[field]) || rpm[field].length !== 0) {
+      fail(`rpm section ${field} must be an empty array until decided`);
+    }
+  }
+
+  const spec = rpm.spec_metadata;
+  if (!spec || typeof spec !== "object") {
+    fail("rpm section must include a spec_metadata placeholder");
+  } else {
+    for (const field of ["summary", "license", "url", "group", "vendor"]) {
+      if (spec[field] !== null) {
+        fail(`rpm section spec_metadata.${field} must remain null until decided`);
+      }
+    }
+  }
+}
+
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",

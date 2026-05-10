@@ -205,6 +205,59 @@ const debianSection = {
   required_fields: debianSectionRequiredFields,
 };
 
+const rpmSectionRequiredFields = [
+  "package_name",
+  "package_version",
+  "spec_metadata",
+  "requires",
+  "recommends",
+  "suggests",
+  "architectures",
+  "file_ownership",
+  "service_unit",
+  "pre_scriptlet",
+  "post_scriptlet",
+  "preun_scriptlet",
+  "postun_scriptlet",
+  "install_check",
+  "uninstall_check",
+  "upgrade_check",
+  "rollback_check",
+  "signature_verification",
+];
+
+const rpmSection = {
+  schema: "covenant.package-manager-manifest-rpm.v1",
+  status: "draft_empty_placeholders",
+  ready_for_rpm_review: false,
+  package_name: null,
+  package_version: null,
+  spec_metadata: {
+    summary: null,
+    license: null,
+    url: null,
+    group: null,
+    vendor: null,
+  },
+  requires: [],
+  recommends: [],
+  suggests: [],
+  architectures: [],
+  file_ownership: null,
+  service_unit: null,
+  pre_scriptlet: null,
+  post_scriptlet: null,
+  preun_scriptlet: null,
+  postun_scriptlet: null,
+  install_check: null,
+  uninstall_check: null,
+  upgrade_check: null,
+  rollback_check: null,
+  signature_verification: null,
+  local_paths_allowed: false,
+  required_fields: rpmSectionRequiredFields,
+};
+
 const packageManagerManifestContract = {
   schema: "covenant.package-manager-manifest.v1",
   status: "draft_empty_placeholders",
@@ -248,6 +301,7 @@ const packageManagerManifestContract = {
   homebrew: homebrewSection,
   nix: nixSection,
   debian: debianSection,
+  rpm: rpmSection,
 };
 
 const gates = [

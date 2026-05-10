@@ -107,6 +107,33 @@ Required debian fields:
 
 `control_metadata` carries `section`, `priority`, `maintainer`, `homepage`, and `description`, each null until decided. `depends`, `recommends`, `suggests`, and `architectures` are empty arrays until concrete decisions land. Debian repository hosting, signing keys, and uploads remain human-owned.
 
+## RPM Section
+
+`package_manager_manifest.rpm` extends the generic channel placeholder with spec-file and scriptlet fields. It uses schema `covenant.package-manager-manifest-rpm.v1` and stays in `draft_empty_placeholders` with `ready_for_rpm_review` false until real spec metadata, requires, scriptlets, file ownership, service unit, and install/upgrade/rollback evidence exist. The validator rejects machine-local paths and any non-null placeholder.
+
+Required rpm fields:
+
+- `package_name`
+- `package_version`
+- `spec_metadata`
+- `requires`
+- `recommends`
+- `suggests`
+- `architectures`
+- `file_ownership`
+- `service_unit`
+- `pre_scriptlet`
+- `post_scriptlet`
+- `preun_scriptlet`
+- `postun_scriptlet`
+- `install_check`
+- `uninstall_check`
+- `upgrade_check`
+- `rollback_check`
+- `signature_verification`
+
+`spec_metadata` carries `summary`, `license`, `url`, `group`, and `vendor`, each null until decided. `requires`, `recommends`, `suggests`, and `architectures` are empty arrays until concrete decisions land. RPM repository hosting, signing keys, and uploads remain human-owned.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |

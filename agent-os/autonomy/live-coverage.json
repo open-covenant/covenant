@@ -59,7 +59,19 @@
         "agent-os/crates/covenantd/tests/live_http_audit_purge.rs"
       ],
       "status": "covered",
-      "nextGap": "Broaden protected HTTP mutation coverage across memory repair, peer lifecycle, and A2A recovery endpoints."
+      "nextGap": "Broaden protected HTTP mutation coverage across memory repair, peer lifecycle, and A2A recovery endpoints.",
+      "scopeEvidence": [
+        {
+          "namespace": "tool.call.echo",
+          "liveTest": "agent-os/crates/covenantd/tests/live_http_tools_call.rs",
+          "deniedEvidence": [
+            "HTTP tools/call rejects a mismatched arguments object under a scoped tool.call.echo grant before dispatch"
+          ],
+          "allowedEvidence": [
+            "HTTP tools/call permits the exact arguments.allow object under the same scoped grant"
+          ]
+        }
+      ]
     },
     {
       "id": "cli-capabilities",

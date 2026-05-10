@@ -44,6 +44,8 @@ Rules:
 - `arguments.allow` is an optional exact JSON argument allowlist. When present on `tool.call.<name>`, the daemon rejects calls whose full argument object does not exactly match it.
 - Networked tools should add explicit host or origin fields before enforcement.
 
+Live HTTP coverage pins this boundary for `tool.call.echo`: a scoped grant rejects a mismatched argument object before dispatch and permits only the exact allowed object.
+
 ### `memory.*`
 
 Use for memory reads, writes, repair, compaction, and purge.

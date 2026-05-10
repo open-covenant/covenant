@@ -14,6 +14,7 @@ Pick the next unblocked task:
 
 ```bash
 node agent-os/scripts/autonomy-next.mjs
+node agent-os/scripts/autonomy-next.mjs --help
 node agent-os/scripts/autonomy-next.mjs --json
 node agent-os/scripts/autonomy-next.mjs --seed
 ```

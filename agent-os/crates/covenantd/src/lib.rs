@@ -4677,6 +4677,7 @@ fn budget_resume_state(
     state
 }
 
+#[allow(clippy::too_many_arguments)]
 fn budget_pause_checkpoint(
     intent_id: Uuid,
     agent: AgentId,

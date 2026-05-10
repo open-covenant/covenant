@@ -1,0 +1,106 @@
+name: gvisor-live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent-os/crates/covenant-runtime/**'
+      - 'agent-os/ci/gvisor-runner-record.json'
+      - '.github/workflows/gvisor-live.yml'
+  pull_request:
+    paths:
+      - 'agent-os/crates/covenant-runtime/**'
+      - 'agent-os/ci/gvisor-runner-record.json'
+      - '.github/workflows/gvisor-live.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gvisor-live:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: agent-os
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: read pinned runner record
+        id: record
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          record="agent-os/ci/gvisor-runner-record.json"
+          status="$(jq -r .status "$record")"
+          if [ "$status" != "accepted" ]; then
+            echo "runner record status is '$status'; expected 'accepted' before running live gVisor CI" >&2
+            exit 1
+          fi
+          {
+            echo "runsc_release_url=$(jq -r .runsc.release_url "$record")"
+            echo "runsc_checksum_url=$(jq -r .runsc.checksum_url "$record")"
+            echo "rootfs_release_url=$(jq -r .rootfs.release_url "$record")"
+            echo "rootfs_checksum_url=$(jq -r .rootfs.checksum_url "$record")"
+            echo "rootfs_release_id=$(jq -r .rootfs.release_id "$record")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: install runsc with checksum verification
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL "${{ steps.record.outputs.runsc_release_url }}" -o "$tmp/runsc"
+          curl -fsSL "${{ steps.record.outputs.runsc_checksum_url }}" -o "$tmp/runsc.sha512"
+          (cd "$tmp" && sha512sum -c runsc.sha512)
+          chmod +x "$tmp/runsc"
+          sudo install -m 0755 "$tmp/runsc" /usr/local/bin/runsc
+          runsc --version
+
+      - name: install rootfs with checksum verification
+        id: rootfs
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL "${{ steps.record.outputs.rootfs_release_url }}" -o "$tmp/rootfs.tar.gz"
+          curl -fsSL "${{ steps.record.outputs.rootfs_checksum_url }}" -o "$tmp/rootfs.tar.gz.sha256"
+          published="$(awk '{print $1}' "$tmp/rootfs.tar.gz.sha256")"
+          observed="$(sha256sum "$tmp/rootfs.tar.gz" | awk '{print $1}')"
+          if [ "$published" != "$observed" ]; then
+            echo "rootfs sha256 mismatch: published=$published observed=$observed" >&2
+            exit 1
+          fi
+          rootfs_dir="$GITHUB_WORKSPACE/.covenant-live/rootfs"
+          mkdir -p "$rootfs_dir"
+          tar -C "$rootfs_dir" -xzf "$tmp/rootfs.tar.gz"
+          test -x "$rootfs_dir/bin/sh"
+          echo "rootfs_dir=$rootfs_dir" >> "$GITHUB_OUTPUT"
+          rm -rf "$tmp"
+
+      - name: install rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.1
+        with:
+          workspaces: agent-os
+
+      - name: run live gvisor test
+        env:
+          COVENANT_LIVE_RUNSC: /usr/local/bin/runsc
+          COVENANT_LIVE_GVISOR_ROOTFS: ${{ steps.rootfs.outputs.rootfs_dir }}
+        run: |
+          cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
+
+      - name: validate runner record post-run
+        working-directory: ${{ github.workspace }}
+        run: |
+          node agent-os/scripts/validate-gvisor-host-readiness.mjs
+          node agent-os/scripts/validate-gvisor-runner-promotion-readiness.mjs

@@ -17,6 +17,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
 - Local memory settlement receipts carry `memory_record_id` for daemon-created memory writes; verifier reconciliation joins exactly when the field exists and falls back to owner/resource counts for legacy receipt rows.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
+- Release provenance readiness uses `agent-os/scripts/release-provenance-readiness.mjs`; local subject and verifier planning is separate from project key custody, artifact publication, and transparency-log publication.
 - Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, sanitized readiness evidence, and human approval before any tag or artifact publication.
 - Source installs use `agent-os/scripts/install-source.mjs`; it builds `covenantd` and `covenant` into an operator-selected local prefix and records a relative-path manifest without claiming signed packages or SDK stability.
 - Distribution graduation uses `agent-os/scripts/distribution-readiness.mjs`; source-alpha install readiness is separate from package-manager distribution, signed artifacts, SDK stability, and upgrade safety.
@@ -78,6 +79,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No required Linux gVisor CI runner; read-only host readiness gates record runsc, rootfs, runner provisioning, and failure-policy blockers.
 - No production on-chain settlement; read-only deployment readiness gates record security-review, oracle, mint authority, and emergency-operation blockers.
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
+- No public release provenance publication; read-only release provenance gates record project key custody, artifact subject verifier, and transparency publication blockers.
 - No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
 - Multi-peer operation is experimental.
 - Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
@@ -120,6 +122,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
+- [docs/provenance/release-readiness.md](./provenance/release-readiness.md): release provenance readiness gates.
 - [docs/provenance/review-artifact-signing.md](./provenance/review-artifact-signing.md): signed review artifact envelope and custody boundary.
 - [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.

@@ -1,7 +1,7 @@
 {
   "id": "status-distribution-homebrew-manifest-section-contract",
   "title": "Define homebrew manifest section contract",
-  "state": "ready",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [

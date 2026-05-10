@@ -47,7 +47,7 @@ See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), 
 
 ## Capabilities
 
-<!-- covenant-readme-status-sha256: d677270ffca0b99619fb399ed224d1fd96af16dbe05496bf77c99a291b58a0fc -->
+<!-- covenant-readme-status-sha256: f8235dc0bfd5ee79be6d1932a11e30d3a22bbe48070ea200cee148a09c184ffb -->
 
 Covenant includes:
 
@@ -63,6 +63,7 @@ Covenant includes:
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
 - Unsigned or locally signed audit-root attestations for local integrity reports.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
+- Source-built local installer for the daemon and CLI with a relative-path install manifest.
 - CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
 
 ## Validation

@@ -9,10 +9,11 @@ The alpha boundary exists to keep public release language aligned with implement
 An alpha candidate may claim:
 
 - the repository builds from source on supported developer hosts;
+- the daemon and CLI can be installed from source into a local prefix with an inspectable install manifest;
 - the local daemon, CLI, IPC, HTTP gateway, memory, audit, identity, permissions, peer auth, A2A, budget, and local receipt surfaces are covered by the documented validation profile;
 - live tests exist for selected real process, CLI, daemon, HTTP, model, A2A, MCP, and sandbox boundaries where prerequisites are available;
 - provenance envelopes and audit-root attestations provide local consistency evidence;
-- distributed settlement, installers, SDK publication, signed release artifacts, and transparency-log publication remain planned work.
+- distributed settlement, package-manager distribution, SDK publication, signed release artifacts, and transparency-log publication remain planned work.
 
 An alpha candidate must not claim:
 
@@ -70,6 +71,7 @@ node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-readme-copy.mjs
+node agent-os/scripts/validate-source-installer.mjs
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check
@@ -82,6 +84,7 @@ Use `node agent-os/scripts/alpha-release-readiness.mjs --strict` as the final lo
 The readiness report includes Git metadata write access because autonomy can validate code successfully while still being unable to stage or commit in a restricted local checkout.
 It also includes the autonomy handoff toolchain so commit-blocked sessions can prove their tracked patch, untracked file contents, restore plan, and tamper checks are internally consistent before another environment resumes the release work.
 It includes unsigned review artifact validation so release preparation can prove task review evidence can be generated, verified, and rejected when tampered before any future signing layer is introduced.
+Source install evidence follows `docs/source-install.md`; it is a local source-built install path, not a signed binary distribution.
 
 ## Optional Live Gate
 
@@ -116,4 +119,4 @@ The source alpha boundary can be tightened when:
 - project signing custody is decided and automated through a neutral project identity;
 - signed release attestations verify in CI;
 - live sandbox validation runs on a reproducible Linux host;
-- installer and package distribution paths are documented and tested.
+- package distribution paths and upgrade policy are documented and tested.

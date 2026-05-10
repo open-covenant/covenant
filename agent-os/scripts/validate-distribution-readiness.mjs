@@ -218,6 +218,71 @@ if (!homebrew || typeof homebrew !== "object") {
   }
 }
 
+const nix = manifest?.nix;
+if (!nix || typeof nix !== "object") {
+  fail("package manager manifest must include a nix section");
+} else {
+  if (nix.schema !== "covenant.package-manager-manifest-nix.v1") {
+    fail("nix section schema must be covenant.package-manager-manifest-nix.v1");
+  }
+  if (nix.status !== "draft_empty_placeholders") {
+    fail("nix section must remain draft_empty_placeholders");
+  }
+  if (nix.ready_for_nix_review !== false) {
+    fail("nix section must not be ready for review while placeholders are empty");
+  }
+  if (nix.local_paths_allowed !== false) {
+    fail("nix section must reject local paths");
+  }
+
+  const nixRequired = [
+    "flake_source",
+    "flake_ref",
+    "derivation_path",
+    "derivation_hash",
+    "package_name",
+    "package_version",
+    "platforms",
+    "binary_path",
+    "service_module",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ];
+  const nixFields = new Set(nix.required_fields ?? []);
+  for (const field of nixRequired) {
+    if (!nixFields.has(field)) {
+      fail(`nix section required field missing: ${field}`);
+    }
+  }
+
+  for (const field of [
+    "flake_source",
+    "flake_ref",
+    "derivation_path",
+    "derivation_hash",
+    "package_name",
+    "package_version",
+    "binary_path",
+    "service_module",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ]) {
+    if (nix[field] !== null) {
+      fail(`nix section ${field} must remain null until implemented`);
+    }
+  }
+
+  if (!Array.isArray(nix.platforms) || nix.platforms.length !== 0) {
+    fail("nix section platforms must be an empty array until decided");
+  }
+}
+
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",

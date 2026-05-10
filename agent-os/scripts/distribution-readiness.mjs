@@ -115,6 +115,45 @@ const homebrewSection = {
   required_fields: homebrewSectionRequiredFields,
 };
 
+const nixSectionRequiredFields = [
+  "flake_source",
+  "flake_ref",
+  "derivation_path",
+  "derivation_hash",
+  "package_name",
+  "package_version",
+  "platforms",
+  "binary_path",
+  "service_module",
+  "install_check",
+  "uninstall_check",
+  "upgrade_check",
+  "rollback_check",
+  "signature_verification",
+];
+
+const nixSection = {
+  schema: "covenant.package-manager-manifest-nix.v1",
+  status: "draft_empty_placeholders",
+  ready_for_nix_review: false,
+  flake_source: null,
+  flake_ref: null,
+  derivation_path: null,
+  derivation_hash: null,
+  package_name: null,
+  package_version: null,
+  platforms: [],
+  binary_path: null,
+  service_module: null,
+  install_check: null,
+  uninstall_check: null,
+  upgrade_check: null,
+  rollback_check: null,
+  signature_verification: null,
+  local_paths_allowed: false,
+  required_fields: nixSectionRequiredFields,
+};
+
 const packageManagerManifestContract = {
   schema: "covenant.package-manager-manifest.v1",
   status: "draft_empty_placeholders",
@@ -156,6 +195,7 @@ const packageManagerManifestContract = {
     local_paths_allowed: false,
   })),
   homebrew: homebrewSection,
+  nix: nixSection,
 };
 
 const gates = [

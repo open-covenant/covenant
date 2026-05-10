@@ -1,0 +1,31 @@
+{
+  "id": "status-distribution-nix-manifest-section-contract",
+  "title": "Define nix manifest section contract",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/distribution-readiness.md",
+    "docs/status.md"
+  ],
+  "summary": "Extend the package-manager manifest contract with a nix-specific manifest section (flake/derivation, hashes, supported platforms, binary paths, service module placeholder) following the homebrew section pattern, with empty placeholders and a validator hook. Publication and signing remain human-owned.",
+  "expectedFailureModes": [
+    "Nix manifest section ships without a schema validator and drifts into machine-local store paths.",
+    "docs/status.md overclaims nix flake or derivation availability before publication custody is decided.",
+    "Validator hook is added but not wired into validate.sh --scripts, so regressions slip past CI."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Nix flake hosting, derivation custody, and signing keys remain human-owned."
+  ],
+  "nextAction": "Add a nix section to the package-manager manifest schema with required fields (flake source, derivation hash, platforms, binary path, service module), emit empty placeholders, register a validator hook, and document the contract in docs/distribution-readiness.md without claiming nix is shipping.",
+  "updated": "2026-05-10"
+}

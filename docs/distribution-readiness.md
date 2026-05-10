@@ -58,6 +58,29 @@ Required homebrew fields:
 
 `bottle` carries `enabled`, `cellar`, and an empty `bottles` array until prebuilt-bottle decisions are accepted. Homebrew tap publication, formula custody, and signing keys remain human-owned.
 
+## Nix Section
+
+`package_manager_manifest.nix` extends the generic channel placeholder with flake/derivation-specific fields. It uses schema `covenant.package-manager-manifest-nix.v1` and stays in `draft_empty_placeholders` with `ready_for_nix_review` false until a real flake or derivation, pinned source, derivation hash, supported platforms, and install/upgrade/rollback evidence exist. The validator rejects machine-local paths and any non-null placeholder.
+
+Required nix fields:
+
+- `flake_source`
+- `flake_ref`
+- `derivation_path`
+- `derivation_hash`
+- `package_name`
+- `package_version`
+- `platforms`
+- `binary_path`
+- `service_module`
+- `install_check`
+- `uninstall_check`
+- `upgrade_check`
+- `rollback_check`
+- `signature_verification`
+
+`platforms` is an empty array until supported targets (such as `x86_64-linux` or `aarch64-darwin`) are accepted. Nix flake or channel publication, derivation custody, and signing keys remain human-owned.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |

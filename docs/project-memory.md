@@ -20,6 +20,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, sanitized readiness evidence, and human approval before any tag or artifact publication.
 - Source installs use `agent-os/scripts/install-source.mjs`; it builds `covenantd` and `covenant` into an operator-selected local prefix and records a relative-path manifest without claiming signed packages or SDK stability.
 - Distribution graduation uses `agent-os/scripts/distribution-readiness.mjs`; source-alpha install readiness is separate from package-manager distribution, signed artifacts, SDK stability, and upgrade safety.
+- On-chain settlement deployment readiness uses `agent-os/scripts/settlement-deployment-readiness.mjs`; local scaffold readiness is separate from deployment, security-review acceptance, oracle policy, mint authority custody, and emergency operations.
 - Release validation language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
@@ -71,7 +72,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 ## Current Gaps
 
 - No production sandbox for untrusted agents.
-- No production on-chain settlement.
+- No production on-chain settlement; read-only deployment readiness gates record security-review, oracle, mint authority, and emergency-operation blockers.
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
 - No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
 - Multi-peer operation is experimental.
@@ -107,6 +108,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/memory-maintenance.md](./memory-maintenance.md): read-only compaction planning and receipt backfill boundary.
 - [docs/source-install.md](./source-install.md): source-built local installer and manifest contract.
 - [docs/distribution-readiness.md](./distribution-readiness.md): public distribution, signing, SDK stability, and upgrade gate contract.
+- [docs/on-chain-settlement-readiness.md](./on-chain-settlement-readiness.md): on-chain deployment, oracle, mint authority, and emergency-operation gate contract.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.

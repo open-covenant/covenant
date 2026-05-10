@@ -33,6 +33,31 @@ Required manifest fields:
 
 The validator keeps `ready_for_manifest_review` false while placeholders are empty and rejects machine-local paths in the manifest contract.
 
+## Homebrew Section
+
+`package_manager_manifest.homebrew` extends the generic channel placeholder with formula-specific fields. It uses schema `covenant.package-manager-manifest-homebrew.v1` and stays in `draft_empty_placeholders` with `ready_for_homebrew_review` false until a real formula, immutable artifact URL, checksum, signature verification, and install/upgrade/rollback evidence exist. The validator rejects machine-local paths and any non-null placeholder.
+
+Required homebrew fields:
+
+- `tap`
+- `formula_path`
+- `formula_class_name`
+- `formula_version`
+- `artifact_url`
+- `artifact_sha256`
+- `bottle`
+- `caveats`
+- `service_definition`
+- `test_block`
+- `livecheck`
+- `install_check`
+- `uninstall_check`
+- `upgrade_check`
+- `rollback_check`
+- `signature_verification`
+
+`bottle` carries `enabled`, `cellar`, and an empty `bottles` array until prebuilt-bottle decisions are accepted. Homebrew tap publication, formula custody, and signing keys remain human-owned.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |

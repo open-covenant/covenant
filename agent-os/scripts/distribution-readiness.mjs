@@ -68,6 +68,53 @@ const packageReadinessValidatorOk = exists("agent-os/scripts/validate-package-ma
 const packageReadinessEvidenceOk =
   packageReadinessDocOk && packageReadinessReportOk && packageReadinessValidatorOk;
 
+const homebrewSectionRequiredFields = [
+  "tap",
+  "formula_path",
+  "formula_class_name",
+  "formula_version",
+  "artifact_url",
+  "artifact_sha256",
+  "bottle",
+  "caveats",
+  "service_definition",
+  "test_block",
+  "livecheck",
+  "install_check",
+  "uninstall_check",
+  "upgrade_check",
+  "rollback_check",
+  "signature_verification",
+];
+
+const homebrewSection = {
+  schema: "covenant.package-manager-manifest-homebrew.v1",
+  status: "draft_empty_placeholders",
+  ready_for_homebrew_review: false,
+  tap: null,
+  formula_path: null,
+  formula_class_name: null,
+  formula_version: null,
+  artifact_url: null,
+  artifact_sha256: null,
+  bottle: {
+    enabled: null,
+    cellar: null,
+    bottles: [],
+  },
+  caveats: null,
+  service_definition: null,
+  test_block: null,
+  livecheck: null,
+  install_check: null,
+  uninstall_check: null,
+  upgrade_check: null,
+  rollback_check: null,
+  signature_verification: null,
+  local_paths_allowed: false,
+  required_fields: homebrewSectionRequiredFields,
+};
+
 const packageManagerManifestContract = {
   schema: "covenant.package-manager-manifest.v1",
   status: "draft_empty_placeholders",
@@ -108,6 +155,7 @@ const packageManagerManifestContract = {
     rollback_check: null,
     local_paths_allowed: false,
   })),
+  homebrew: homebrewSection,
 };
 
 const gates = [

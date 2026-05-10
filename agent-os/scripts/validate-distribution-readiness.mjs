@@ -138,6 +138,86 @@ function visit(value, path = "package_manager_manifest") {
 }
 visit(manifest);
 
+const homebrew = manifest?.homebrew;
+if (!homebrew || typeof homebrew !== "object") {
+  fail("package manager manifest must include a homebrew section");
+} else {
+  if (homebrew.schema !== "covenant.package-manager-manifest-homebrew.v1") {
+    fail("homebrew section schema must be covenant.package-manager-manifest-homebrew.v1");
+  }
+  if (homebrew.status !== "draft_empty_placeholders") {
+    fail("homebrew section must remain draft_empty_placeholders");
+  }
+  if (homebrew.ready_for_homebrew_review !== false) {
+    fail("homebrew section must not be ready for review while placeholders are empty");
+  }
+  if (homebrew.local_paths_allowed !== false) {
+    fail("homebrew section must reject local paths");
+  }
+
+  const homebrewRequired = [
+    "tap",
+    "formula_path",
+    "formula_class_name",
+    "formula_version",
+    "artifact_url",
+    "artifact_sha256",
+    "bottle",
+    "caveats",
+    "service_definition",
+    "test_block",
+    "livecheck",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ];
+  const homebrewFields = new Set(homebrew.required_fields ?? []);
+  for (const field of homebrewRequired) {
+    if (!homebrewFields.has(field)) {
+      fail(`homebrew section required field missing: ${field}`);
+    }
+  }
+
+  for (const field of [
+    "tap",
+    "formula_path",
+    "formula_class_name",
+    "formula_version",
+    "artifact_url",
+    "artifact_sha256",
+    "caveats",
+    "service_definition",
+    "test_block",
+    "livecheck",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+    "signature_verification",
+  ]) {
+    if (homebrew[field] !== null) {
+      fail(`homebrew section ${field} must remain null until implemented`);
+    }
+  }
+
+  const bottle = homebrew.bottle;
+  if (!bottle || typeof bottle !== "object") {
+    fail("homebrew section must include a bottle placeholder");
+  } else {
+    if (bottle.enabled !== null) {
+      fail("homebrew section bottle.enabled must remain null until decided");
+    }
+    if (bottle.cellar !== null) {
+      fail("homebrew section bottle.cellar must remain null until decided");
+    }
+    if (!Array.isArray(bottle.bottles) || bottle.bottles.length !== 0) {
+      fail("homebrew section bottle.bottles must be an empty array");
+    }
+  }
+}
+
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",

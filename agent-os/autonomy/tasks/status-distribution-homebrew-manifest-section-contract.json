@@ -1,0 +1,31 @@
+{
+  "id": "status-distribution-homebrew-manifest-section-contract",
+  "title": "Define homebrew manifest section contract",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/distribution-readiness.md",
+    "docs/status.md"
+  ],
+  "summary": "Extend the package-manager manifest contract (from status-distribution-and-sdk-ecosystem-add-package-manager-manifest-contract) with a homebrew-specific manifest section: schema, empty placeholders, and a validator hook so future homebrew formula evidence can be checked deterministically. Publication and signing remain human-owned.",
+  "expectedFailureModes": [
+    "Homebrew manifest section ships without a schema validator and drifts into machine-local paths.",
+    "docs/status.md overclaims homebrew formula availability before publication custody is decided.",
+    "Validator hook is added but not wired into validate.sh --scripts, so regressions slip past CI."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Homebrew tap publication, formula custody, and signing keys remain human-owned."
+  ],
+  "nextAction": "Add a homebrew section to the package-manager manifest schema with required fields, emit empty placeholders, register a validator hook, and document the contract in docs/distribution-readiness.md without claiming homebrew is shipping.",
+  "updated": "2026-05-10"
+}

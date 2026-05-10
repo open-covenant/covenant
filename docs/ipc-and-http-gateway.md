@@ -11,13 +11,7 @@ The actual decision to bump the protocol to v2 and publish v2 fixtures remains h
 
 ## v2 Fixture Contract
 
-The contract is enforced by:
-
-```bash
-node agent-os/scripts/validate-ipc-http-gateway-v2-fixture-contract.mjs
-```
-
-The validator no-ops while no `*.v2.json` files exist under `agent-os/crates/covenant-ipc/tests/fixtures/v2/`. Once a v2 fixture appears, the validator enforces the rules below and emits a remediation pointer when any rule is violated.
+The contract is enforced by an internal validator. The validator no-ops while no `*.v2.json` files exist under `agent-os/crates/covenant-ipc/tests/fixtures/v2/`. Once a v2 fixture appears, the validator enforces the rules below and emits a remediation pointer when any rule is violated.
 
 ### File Layout
 

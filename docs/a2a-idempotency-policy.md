@@ -115,6 +115,4 @@ Manual lease repair already requires an explicit duplicate-risk posture (`idempo
 
 ## Follow-up work
 
-- Keep delegated repair automation blocked behind `node agent-os/scripts/a2a-repair-release-review.mjs --strict` until a human accepts the release marker.
-
-Read-only readiness for that boundary lives in [A2A Repair Visibility](a2a-repair-visibility.md).
+- Keep delegated repair automation blocked behind the internal release-review gate until a human accepts the release marker.

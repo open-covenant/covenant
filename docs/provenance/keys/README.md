@@ -65,10 +65,4 @@ Compromise response:
 
 ## Validation
 
-```bash
-node agent-os/scripts/validate-project-keys.mjs
-```
-
-The validator confirms `keys.json` schema correctness, that each `active` entry has a matching SPKI file whose SHA-256 equals `spki_sha256`, that retired/revoked entries have well-formed status fields, that no `key_id` is re-used, and that no entry mixes status fields it should not have.
-
-The validator does not generate keys, fetch external resources, or modify the manifest.
+The `keys.json` manifest is validated by internal tooling that confirms schema correctness, that each `active` entry has a matching SPKI file whose SHA-256 equals `spki_sha256`, that retired/revoked entries have well-formed status fields, that no `key_id` is re-used, and that no entry mixes status fields it should not have. The validator does not generate keys, fetch external resources, or modify the manifest.

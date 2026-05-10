@@ -42,17 +42,98 @@ agent-os/PROJECT_STATE.md
 agent-os/BLOCKERS.md
 agent-os/PRODUCTION_READINESS.md
 agent-os/WORKFLOW.md
-agent-os/autonomy/commit-rotation.json
-agent-os/scripts/commit-rotation.mjs
-agent-os/scripts/git-identity-policy.mjs
-agent-os/scripts/identity-policy.mjs
-agent-os/scripts/identity-rotation.mjs
+agent-os/autonomy/
 
 # Internal docs: ADRs, capability/coverage matrices, readiness reports,
 # engineering process. Frontier-lab posture: process and gap-bearing
 # matrices stay local; public-facing protocol/API/provenance docs remain
 # tracked under docs/.
 docs/internal/
+
+# Internal scripts: identity/auth tooling, engineering-loop scripts,
+# readiness reports, internal-doc validators. Only the source-code build
+# entry point (validate.sh) and the public provenance verifier
+# (provenance.mjs) stay tracked.
+agent-os/scripts/a2a-peer-repair-report.mjs
+agent-os/scripts/a2a-repair-release-review.mjs
+agent-os/scripts/a2a-repair-visibility.mjs
+agent-os/scripts/alpha-release-bundle.mjs
+agent-os/scripts/alpha-release-evidence.mjs
+agent-os/scripts/alpha-release-readiness.mjs
+agent-os/scripts/alpha-release-validate-bundle.mjs
+agent-os/scripts/autonomy-continue.mjs
+agent-os/scripts/autonomy-dirty-report.mjs
+agent-os/scripts/autonomy-handoff-bundle.mjs
+agent-os/scripts/autonomy-next.mjs
+agent-os/scripts/autonomy-plan-handoff-restore.mjs
+agent-os/scripts/autonomy-preflight.mjs
+agent-os/scripts/autonomy-publish-summary.mjs
+agent-os/scripts/autonomy-review-artifact.mjs
+agent-os/scripts/autonomy-scaffold-backlog-template.mjs
+agent-os/scripts/autonomy-seed-next.mjs
+agent-os/scripts/autonomy-status-gaps.mjs
+agent-os/scripts/autonomy-summary.mjs
+agent-os/scripts/autonomy-transition.mjs
+agent-os/scripts/autonomy-verify-handoff-bundle.mjs
+agent-os/scripts/autonomy-verify-review-artifact.mjs
+agent-os/scripts/check-no-display-form-a2a.sh
+agent-os/scripts/commit-rotation.mjs
+agent-os/scripts/configure-git-identity.mjs
+agent-os/scripts/distribution-readiness.mjs
+agent-os/scripts/git-identity-policy.mjs
+agent-os/scripts/gvisor-host-readiness.mjs
+agent-os/scripts/gvisor-runner-promotion-readiness.mjs
+agent-os/scripts/handover.sh
+agent-os/scripts/identity-policy.mjs
+agent-os/scripts/identity-provenance.mjs
+agent-os/scripts/identity-rotation.mjs
+agent-os/scripts/install-git-hooks.mjs
+agent-os/scripts/package-manager-readiness.mjs
+agent-os/scripts/provenance-self-test.mjs
+agent-os/scripts/release-artifact-subject.mjs
+agent-os/scripts/release-provenance-readiness.mjs
+agent-os/scripts/review-signing-readiness.mjs
+agent-os/scripts/settlement-deployment-readiness.mjs
+agent-os/scripts/settlement-oracle-policy.mjs
+agent-os/scripts/settlement-receipt-migration.mjs
+agent-os/scripts/validate-a2a-peer-repair-report.mjs
+agent-os/scripts/validate-a2a-repair-authorization.mjs
+agent-os/scripts/validate-a2a-repair-release-review.mjs
+agent-os/scripts/validate-a2a-repair-visibility.mjs
+agent-os/scripts/validate-alpha-release-evidence.mjs
+agent-os/scripts/validate-autonomy-handoff.mjs
+agent-os/scripts/validate-autonomy-next-cli.mjs
+agent-os/scripts/validate-autonomy-review-artifacts.mjs
+agent-os/scripts/validate-autonomy-summary.mjs
+agent-os/scripts/validate-autonomy.mjs
+agent-os/scripts/validate-commit-rotation.mjs
+agent-os/scripts/validate-current-git-identity.mjs
+agent-os/scripts/validate-distribution-readiness.mjs
+agent-os/scripts/validate-git-identity.mjs
+agent-os/scripts/validate-git-write-access.mjs
+agent-os/scripts/validate-github-cli-account.mjs
+agent-os/scripts/validate-github-push-identity.mjs
+agent-os/scripts/validate-gvisor-host-readiness.mjs
+agent-os/scripts/validate-gvisor-runner-promotion-readiness.mjs
+agent-os/scripts/validate-identity-provenance.mjs
+agent-os/scripts/validate-ipc-http-gateway-v2-fixture-contract.mjs
+agent-os/scripts/validate-live-coverage.mjs
+agent-os/scripts/validate-mcp-fixture-selection-policy.mjs
+agent-os/scripts/validate-mcp-live-compatibility.mjs
+agent-os/scripts/validate-package-manager-readiness.mjs
+agent-os/scripts/validate-privileged-cli-live-matrix.mjs
+agent-os/scripts/validate-release-artifact-subject.mjs
+agent-os/scripts/validate-release-provenance-readiness.mjs
+agent-os/scripts/validate-review-signing-readiness.mjs
+agent-os/scripts/validate-sdk-compatibility.mjs
+agent-os/scripts/validate-settlement-deployment-readiness.mjs
+agent-os/scripts/validate-settlement-oracle-policy.mjs
+agent-os/scripts/validate-settlement-receipt-migration.mjs
+agent-os/scripts/validate-signed-capabilities-live-coverage.mjs
+agent-os/scripts/validate-source-install-rollback.mjs
+agent-os/scripts/validate-source-install-upgrade-plan.mjs
+agent-os/scripts/validate-source-installer.mjs
+agent-os/scripts/validate-status-evidence.mjs
 
 playwright-report/
 test-results/

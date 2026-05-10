@@ -77,26 +77,10 @@ Rollback verifies every backup digest before copying files back into place. Appl
 
 ## Validation
 
-Validate the dry-run contract:
-
-```bash
-node agent-os/scripts/validate-source-installer.mjs
-```
-
-Validate the upgrade preflight contract:
-
-```bash
-node agent-os/scripts/validate-source-install-upgrade-plan.mjs
-```
-
-Validate rollback checkpoints:
-
-```bash
-node agent-os/scripts/validate-source-install-rollback.mjs
-```
-
-The scripts-only gate runs the same check:
+Run the public guard:
 
 ```bash
 bash agent-os/scripts/validate.sh --scripts
 ```
+
+Detailed installer, upgrade-preflight, and rollback contract validators are maintained internally.

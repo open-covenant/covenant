@@ -8,13 +8,7 @@ Run the compatibility report from the repository root:
 node agent-os/scripts/sdk-compatibility.mjs --json
 ```
 
-Validate the report contract:
-
-```bash
-node agent-os/scripts/validate-sdk-compatibility.mjs
-```
-
-The report uses schema `covenant.sdk-compatibility.v1`.
+The report uses schema `covenant.sdk-compatibility.v1`. The report-contract validator is maintained internally.
 
 ## Current Packages
 

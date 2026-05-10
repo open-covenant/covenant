@@ -59,22 +59,7 @@ Optional artifact fields:
 - `platform`: `{ os, arch }` for binaries
 - `uri`: published URL (informational; not trusted for verification)
 
-Verify a release bundle subject against local artifact bytes before using it as release evidence:
-
-```bash
-node agent-os/scripts/release-artifact-subject.mjs \
-  --subject path/to/release-subject.json \
-  --artifact-root path/to/artifacts \
-  --json
-```
-
-Validate the verifier with fixtures:
-
-```bash
-node agent-os/scripts/validate-release-artifact-subject.mjs
-```
-
-The verifier checks schema, repository, release id, commit, artifact names, relative filenames, SHA-256 digests, byte counts, and private-string hygiene. It does not sign, upload, publish, or write transparency-log entries.
+The release-subject verifier checks schema, repository, release id, commit, artifact names, relative filenames, SHA-256 digests, byte counts, and private-string hygiene. It does not sign, upload, publish, or write transparency-log entries. The verifier tooling is maintained internally.
 
 ## Example (illustrative)
 

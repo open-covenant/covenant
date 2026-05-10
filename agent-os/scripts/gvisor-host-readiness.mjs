@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -212,6 +212,67 @@ const localLiveGateIds = new Set([
   "runtime-policy-evidence",
 ]);
 const localLiveGates = gates.filter((gate) => localLiveGateIds.has(gate.id));
+
+const acceptedRecordPath = join(repoRoot, "agent-os/ci/gvisor-runner-record.json");
+let acceptedRecord = null;
+if (existsSync(acceptedRecordPath)) {
+  try {
+    const parsed = JSON.parse(readFileSync(acceptedRecordPath, "utf8"));
+    if (parsed && parsed.schema === "covenant.gvisor-runner-metadata.v1") {
+      acceptedRecord = parsed;
+    }
+  } catch {
+    acceptedRecord = null;
+  }
+}
+
+const runnerStatus = acceptedRecord?.status === "accepted" ? "accepted" : "unpinned";
+const runnerMetadata = {
+  schema: "covenant.gvisor-runner-metadata.v1",
+  status: runnerStatus,
+  ready_for_required_ci: runnerStatus === "accepted",
+  required_fields: requiredRunnerMetadataFields,
+  approved_by: acceptedRecord?.approved_by ?? null,
+  approved_at: acceptedRecord?.approved_at ?? null,
+  redaction: {
+    local_paths_recorded: false,
+    rootfs_path_recorded: false,
+    runsc_path_recorded: false,
+  },
+  runsc: {
+    observed_version: runscVersionLine,
+    command_source: runsc === "runsc" ? "PATH" : "COVENANT_LIVE_RUNSC",
+    source: acceptedRecord?.runsc?.release_url ?? null,
+    digest_sha256: null,
+    release_id: acceptedRecord?.runsc?.release_id ?? null,
+    checksum_url: acceptedRecord?.runsc?.checksum_url ?? null,
+    platform: acceptedRecord?.runsc?.platform ?? null,
+  },
+  rootfs: {
+    configured: Boolean(rootfs),
+    has_bin_sh: rootfsStatus.ok,
+    source: acceptedRecord?.rootfs?.release_url ?? null,
+    digest_sha256: null,
+    architecture: acceptedRecord?.rootfs?.architecture ?? null,
+    release_id: acceptedRecord?.rootfs?.release_id ?? null,
+    checksum_url: acceptedRecord?.rootfs?.checksum_url ?? null,
+  },
+  host: {
+    platform: process.platform,
+    arch: process.arch,
+    kernel: acceptedRecord?.host?.kernel_min ?? null,
+    linux_required: true,
+    ci_runner_label: acceptedRecord?.host?.ci_runner_label ?? null,
+    target_platform: acceptedRecord?.host?.platform ?? null,
+    target_arch: acceptedRecord?.host?.arch ?? null,
+  },
+  policy: {
+    failure_mode: acceptedRecord?.policy?.failure_mode ?? null,
+    unsupported_host_policy: acceptedRecord?.policy?.unsupported_host_policy ?? null,
+    required_scope: acceptedRecord?.policy?.required_scope ?? null,
+  },
+};
+
 const blockers = gates
   .filter((gate) => !gate.ok)
   .map((gate) => gate.id);
@@ -223,40 +284,7 @@ const report = {
   ready_for_local_live_gvisor: localLiveGates.every((gate) => gate.ok),
   ready_for_required_ci: false,
   blockers,
-  runner_metadata: {
-    schema: "covenant.gvisor-runner-metadata.v1",
-    status: "unpinned",
-    ready_for_required_ci: false,
-    required_fields: requiredRunnerMetadataFields,
-    redaction: {
-      local_paths_recorded: false,
-      rootfs_path_recorded: false,
-      runsc_path_recorded: false,
-    },
-    runsc: {
-      observed_version: runscVersionLine,
-      command_source: runsc === "runsc" ? "PATH" : "COVENANT_LIVE_RUNSC",
-      source: null,
-      digest_sha256: null,
-    },
-    rootfs: {
-      configured: Boolean(rootfs),
-      has_bin_sh: rootfsStatus.ok,
-      source: null,
-      digest_sha256: null,
-      architecture: null,
-    },
-    host: {
-      platform: process.platform,
-      arch: process.arch,
-      kernel: null,
-      linux_required: true,
-    },
-    policy: {
-      failure_mode: null,
-      unsupported_host_policy: null,
-    },
-  },
+  runner_metadata: runnerMetadata,
   host: {
     platform: process.platform,
     arch: process.arch,

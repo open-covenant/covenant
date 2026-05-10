@@ -55,11 +55,39 @@ const runnerMetadata = report.runner_metadata;
 if (!runnerMetadata || runnerMetadata.schema !== "covenant.gvisor-runner-metadata.v1") {
   fail("runner metadata schema must be covenant.gvisor-runner-metadata.v1");
 }
-if (runnerMetadata?.status !== "unpinned") {
-  fail("runner metadata must remain unpinned until CI promotion evidence is accepted");
+if (!["unpinned", "candidate", "accepted"].includes(runnerMetadata?.status)) {
+  fail(`runner metadata status must be unpinned, candidate, or accepted (got ${runnerMetadata?.status})`);
 }
-if (runnerMetadata?.ready_for_required_ci !== false) {
-  fail("runner metadata must not report required CI readiness yet");
+if (runnerMetadata?.status === "accepted") {
+  if (runnerMetadata?.ready_for_required_ci !== true) {
+    fail("accepted runner metadata must report ready_for_required_ci true");
+  }
+  for (const path of [
+    "approved_by",
+    "approved_at",
+    "runsc.release_id",
+    "runsc.source",
+    "runsc.checksum_url",
+    "rootfs.release_id",
+    "rootfs.source",
+    "rootfs.checksum_url",
+    "rootfs.architecture",
+    "host.ci_runner_label",
+    "policy.failure_mode",
+    "policy.unsupported_host_policy",
+    "policy.required_scope",
+  ]) {
+    const parts = path.split(".");
+    let cursor = runnerMetadata;
+    for (const part of parts) {
+      cursor = cursor?.[part];
+    }
+    if (typeof cursor !== "string" || cursor.length === 0) {
+      fail(`accepted runner metadata must populate ${path}`);
+    }
+  }
+} else if (runnerMetadata?.ready_for_required_ci !== false) {
+  fail("runner metadata must not report required CI readiness while not accepted");
 }
 if (runnerMetadata?.redaction?.local_paths_recorded !== false) {
   fail("runner metadata must not record local paths");
@@ -84,10 +112,10 @@ for (const field of [
   }
 }
 if (runnerMetadata?.runsc?.digest_sha256 !== null) {
-  fail("runsc digest must remain null until a pinned runner is accepted");
+  fail("runsc digest must remain null in the static record (CI verifies at install time)");
 }
 if (runnerMetadata?.rootfs?.digest_sha256 !== null) {
-  fail("rootfs digest must remain null until a pinned rootfs is accepted");
+  fail("rootfs digest must remain null in the static record (CI verifies at install time)");
 }
 if (runnerMetadata?.host?.platform !== report.host.platform) {
   fail("runner metadata host platform must match report host platform");

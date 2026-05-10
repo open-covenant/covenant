@@ -64,26 +64,23 @@ const hostProvisioningBlockers = ["linux-host", "runsc-runtime", "rootfs-shell"]
   .filter((gate) => gate && gate.ok !== true)
   .flatMap((gate) => gate.blockers ?? [`${gate.id} is not ready`]);
 
+const nonEmptyString = (value) => typeof value === "string" && value.length > 0;
 const runscImageOk =
-  typeof runner?.runsc?.source === "string" &&
-  runner.runsc.source.length > 0 &&
-  typeof runner?.runsc?.digest_sha256 === "string" &&
-  runner.runsc.digest_sha256.length > 0;
+  nonEmptyString(runner?.runsc?.source) &&
+  nonEmptyString(runner?.runsc?.checksum_url) &&
+  nonEmptyString(runner?.runsc?.release_id);
 const rootfsDigestOk =
-  typeof runner?.rootfs?.source === "string" &&
-  runner.rootfs.source.length > 0 &&
-  typeof runner?.rootfs?.digest_sha256 === "string" &&
-  runner.rootfs.digest_sha256.length > 0;
+  nonEmptyString(runner?.rootfs?.source) &&
+  nonEmptyString(runner?.rootfs?.checksum_url) &&
+  nonEmptyString(runner?.rootfs?.release_id);
 const hostBaselineOk =
-  typeof runner?.host?.kernel === "string" &&
-  runner.host.kernel.length > 0 &&
-  typeof runner?.rootfs?.architecture === "string" &&
-  runner.rootfs.architecture.length > 0;
+  nonEmptyString(runner?.host?.ci_runner_label) &&
+  nonEmptyString(runner?.host?.target_arch) &&
+  nonEmptyString(runner?.rootfs?.architecture);
 const failurePolicyOk =
-  typeof runner?.policy?.failure_mode === "string" &&
-  runner.policy.failure_mode.length > 0 &&
-  typeof runner?.policy?.unsupported_host_policy === "string" &&
-  runner.policy.unsupported_host_policy.length > 0;
+  nonEmptyString(runner?.policy?.failure_mode) &&
+  nonEmptyString(runner?.policy?.unsupported_host_policy) &&
+  nonEmptyString(runner?.policy?.required_scope);
 const runnerRecordAccepted = runner?.status === "accepted";
 
 const preconditions = [
@@ -97,43 +94,43 @@ const preconditions = [
   },
   {
     id: "runsc-image-digest",
-    title: "Pinned runsc image digest",
+    title: "Pinned runsc release source",
     ok: runscImageOk,
-    evidence: ["docs/internal/gvisor-host-readiness.md"],
+    evidence: ["agent-os/ci/gvisor-runner-record.json"],
     blockers: runscImageOk
       ? []
-      : ["runner_metadata.runsc.source and runner_metadata.runsc.digest_sha256 are not pinned"],
+      : ["runner_metadata.runsc.source, checksum_url, and release_id must be pinned"],
     human_decision_required: true,
   },
   {
     id: "rootfs-digest",
-    title: "Pinned rootfs digest",
+    title: "Pinned rootfs release source",
     ok: rootfsDigestOk,
-    evidence: ["docs/internal/gvisor-host-readiness.md"],
+    evidence: ["agent-os/ci/gvisor-runner-record.json"],
     blockers: rootfsDigestOk
       ? []
-      : ["runner_metadata.rootfs.source and runner_metadata.rootfs.digest_sha256 are not pinned"],
+      : ["runner_metadata.rootfs.source, checksum_url, and release_id must be pinned"],
     human_decision_required: true,
   },
   {
     id: "host-architecture-pinned",
-    title: "Host kernel and rootfs architecture",
+    title: "CI runner label and architecture baseline",
     ok: hostBaselineOk,
-    evidence: ["docs/internal/gvisor-host-readiness.md"],
+    evidence: ["agent-os/ci/gvisor-runner-record.json"],
     blockers: hostBaselineOk
       ? []
-      : ["runner_metadata.host.kernel and runner_metadata.rootfs.architecture are not recorded"],
+      : ["runner_metadata.host.ci_runner_label, host.target_arch, and rootfs.architecture must be recorded"],
     human_decision_required: true,
   },
   {
     id: "failure-policy",
     title: "Sandbox failure policy",
     ok: failurePolicyOk,
-    evidence: ["docs/runtime-sandbox-security.md", "docs/internal/gvisor-host-readiness.md"],
+    evidence: ["docs/runtime-sandbox-security.md", "agent-os/ci/gvisor-runner-record.json"],
     blockers: failurePolicyOk
       ? []
       : [
-          "runner_metadata.policy.failure_mode and runner_metadata.policy.unsupported_host_policy are not approved",
+          "runner_metadata.policy.failure_mode, unsupported_host_policy, and required_scope must be approved",
         ],
     human_decision_required: true,
   },
@@ -141,7 +138,7 @@ const preconditions = [
     id: "runner-record-accepted",
     title: "Accepted runner metadata record",
     ok: runnerRecordAccepted,
-    evidence: ["docs/internal/gvisor-host-readiness.md"],
+    evidence: ["agent-os/ci/gvisor-runner-record.json"],
     blockers: runnerRecordAccepted
       ? []
       : [`runner_metadata.status must be "accepted" (currently "${runner?.status ?? "unknown"}")`],

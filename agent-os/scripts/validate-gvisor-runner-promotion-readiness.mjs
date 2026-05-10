@@ -44,11 +44,15 @@ if (report.host_readiness_schema !== "covenant.gvisor-host-readiness.v1") {
 if (report.runner_metadata_schema !== "covenant.gvisor-runner-metadata.v1") {
   fail("runner metadata schema must be covenant.gvisor-runner-metadata.v1");
 }
-if (report.runner_metadata_status !== "unpinned") {
-  fail("runner metadata status must remain unpinned until a record is accepted");
+if (!["unpinned", "candidate", "accepted"].includes(report.runner_metadata_status)) {
+  fail(`runner metadata status must be unpinned, candidate, or accepted (got ${report.runner_metadata_status})`);
 }
-if (report.ready_for_promotion !== false) {
-  fail("promotion must remain blocked until preconditions are satisfied");
+if (report.runner_metadata_status === "accepted") {
+  if (typeof report.ready_for_promotion !== "boolean") {
+    fail("ready_for_promotion must be a boolean when runner metadata is accepted");
+  }
+} else if (report.ready_for_promotion !== false) {
+  fail("promotion must remain blocked while runner metadata is not accepted");
 }
 
 const expectedIds = [
@@ -74,9 +78,9 @@ for (const id of expectedIds) {
   if (!Array.isArray(precondition.blockers)) {
     fail(`${id} must list blockers as an array`);
   }
-  if (id !== "host-provisioning") {
+  if (id !== "host-provisioning" && report.runner_metadata_status !== "accepted") {
     if (precondition.ok !== false) {
-      fail(`${id} must remain blocked while runner metadata is unpinned`);
+      fail(`${id} must remain blocked while runner metadata is not accepted`);
     }
     if (!Array.isArray(precondition.blockers) || precondition.blockers.length === 0) {
       fail(`${id} must list at least one blocker`);

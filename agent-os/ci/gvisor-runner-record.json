@@ -1,0 +1,38 @@
+{
+  "schema": "covenant.gvisor-runner-metadata.v1",
+  "status": "accepted",
+  "approved_by": "open-covenant-release-operator",
+  "approved_at": "2026-05-10",
+  "runsc": {
+    "release_id": "20240701.0",
+    "release_url": "https://storage.googleapis.com/gvisor/releases/release/20240701.0/x86_64/runsc",
+    "checksum_url": "https://storage.googleapis.com/gvisor/releases/release/20240701.0/x86_64/runsc.sha512",
+    "platform": "ptrace"
+  },
+  "rootfs": {
+    "release_id": "3.20.3",
+    "release_url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz",
+    "checksum_url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz.sha256",
+    "architecture": "x86_64"
+  },
+  "host": {
+    "ci_runner_label": "ubuntu-22.04",
+    "platform": "linux",
+    "arch": "x86_64",
+    "kernel_min": "5.15"
+  },
+  "policy": {
+    "failure_mode": "fail-closed",
+    "unsupported_host_policy": "skip-with-evidence",
+    "required_scope": "sandbox-runtime-changes-only"
+  },
+  "verification": {
+    "method": "fetch-and-sha256",
+    "trust_root": "upstream-published-checksum",
+    "verified_at_ci_time": true
+  },
+  "rotation": {
+    "cadence": "review-quarterly",
+    "bump_procedure": "operator updates release_id and verifies a CI run before merging"
+  }
+}

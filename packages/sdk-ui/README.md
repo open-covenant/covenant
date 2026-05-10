@@ -13,4 +13,4 @@ Requires `QueryClientProvider` and a Solana wallet capable of message signing.
 
 ## Stability
 
-This package is a private workspace-alpha UI SDK surface. Keep it private until public React hook stability, peer dependency policy, npm publication, and rollback/deprecation policy are approved.
+This package is a private workspace-alpha UI SDK surface. `compatibility/exports.v1.json` tracks hook export drift, but the package must stay private until public React hook stability, peer dependency policy, npm publication, and rollback/deprecation policy are approved.

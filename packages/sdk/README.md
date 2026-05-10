@@ -14,7 +14,7 @@ Not yet published to npm. Use `workspace:*` within the monorepo.
 
 ## Stability
 
-This package is a workspace-alpha SDK surface. The root export map and source exports are checked by `node agent-os/scripts/validate-sdk-compatibility.mjs`, but public npm publication, generated protocol binding compatibility, and semver support windows are not approved yet.
+This package is a workspace-alpha SDK surface. The root export map and `compatibility/exports.v1.json` fixture are checked by `node agent-os/scripts/validate-sdk-compatibility.mjs`, but public npm publication, generated protocol binding compatibility, and semver support windows are not approved yet.
 
 ## Quick Start
 

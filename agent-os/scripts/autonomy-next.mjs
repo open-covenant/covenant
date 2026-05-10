@@ -9,9 +9,45 @@ const root = resolve(here, "..");
 const tasksDir = join(root, "autonomy", "tasks");
 const workflow = JSON.parse(readFileSync(join(root, "autonomy", "workflow.json"), "utf8"));
 
-const args = new Set(process.argv.slice(2));
-const asJson = args.has("--json");
-const seed = args.has("--seed");
+const usage = (stream = process.stdout) => {
+  stream.write(`usage: node agent-os/scripts/autonomy-next.mjs [--json] [--seed] [--help]\n\n`);
+  stream.write("  --json  Print a structured result (next + candidates + seeded output).\n");
+  stream.write("  --seed  Attempt to seed the next task template if the queue is empty.\n");
+  stream.write("  --help  Show this help.\n");
+};
+
+const rawArgs = process.argv.slice(2);
+let asJson = false;
+let seed = false;
+let help = false;
+const unknownArgs = [];
+
+for (const arg of rawArgs) {
+  if (arg === "--json") {
+    asJson = true;
+    continue;
+  }
+  if (arg === "--seed") {
+    seed = true;
+    continue;
+  }
+  if (arg === "--help" || arg === "-h") {
+    help = true;
+    continue;
+  }
+  unknownArgs.push(arg);
+}
+
+if (unknownArgs.length > 0) {
+  process.stderr.write(`autonomy-next: unknown argument(s): ${unknownArgs.join(" ")}\n\n`);
+  usage(process.stderr);
+  process.exit(2);
+}
+
+if (help) {
+  usage();
+  process.exit(0);
+}
 
 const validation = spawnSync(process.execPath, [join(root, "scripts", "validate-autonomy.mjs")], {
   cwd: resolve(root, ".."),
@@ -82,6 +118,13 @@ if (seedOutput) {
 }
 
 if (!next) {
+  if (!seed) {
+    console.log("No unblocked autonomous task is ready.");
+    console.log("");
+    console.log("Try seeding from the backlog:");
+    console.log("  node agent-os/scripts/autonomy-next.mjs --seed");
+    process.exit(0);
+  }
   console.log("No unblocked autonomous task is ready.");
   process.exit(0);
 }

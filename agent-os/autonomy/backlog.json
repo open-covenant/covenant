@@ -3856,6 +3856,179 @@
       ],
       "nextAction": "Add package-manager distribution readiness evidence, wire it into distribution readiness, and update docs/status while publication and signing remain human-owned.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-backlog-refill-2026-05-10-v2",
+      "title": "Refill autonomy backlog templates (2026-05-10 v2)",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/autonomy/backlog.json",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Autonomy sessions are stalled again because every backlog template already exists under agent-os/autonomy/tasks. Append a fresh batch of alpha-critical templates grounded in docs/status gaps so autonomy-next can keep seeding new work without chat context.",
+      "expectedFailureModes": [
+        "Autonomy sessions stall because backlog exhaustion prevents seeding new tasks.",
+        "New templates fail validate-autonomy due to missing fields, invalid enums, or duplicated ids.",
+        "Templates include machine-local paths or non-portable verification commands, making the record unverifiable."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Append a small set of new templates (>=5) derived from node agent-os/scripts/autonomy-status-gaps.mjs, with realistic scopes, gates, and deterministic verification commands.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-autonomous-workflow-add-autonomy-next-help-and-flag-validation",
+      "title": "Add autonomy-next help and flag validation",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/autonomy-next.mjs",
+        "agent-os/autonomy/tasks/README.md",
+        "docs/autonomous-development.md"
+      ],
+      "summary": "autonomy-next has no --help output and accepts unknown flags, which makes autonomous runs harder to resume and debug. Add explicit usage output, reject unknown flags with a non-zero exit, and keep --json/--seed semantics stable.",
+      "expectedFailureModes": [
+        "Unknown flags are silently ignored, causing operators to believe a mode was enabled when it was not.",
+        "autonomy-next output changes without updating docs, so sessions still stall on the selector.",
+        "Help or error paths regress and break deterministic automation wrappers."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node --check agent-os/scripts/autonomy-next.mjs",
+        "node agent-os/scripts/autonomy-next.mjs --help"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Teach autonomy-next to handle --help/-h and unknown flags consistently, then update autonomy task docs to reflect the supported CLI surface.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-autonomous-workflow-validate-status-evidence-paths-exist",
+      "title": "Validate docs/status.md evidence paths exist",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "agent-os/scripts/validate.sh",
+        "docs/status.md"
+      ],
+      "summary": "docs/status.md is treated as public capability evidence, but nothing currently enforces that backticked file paths still exist. Add a validator that parses backticked relative paths in docs/status.md and fails when they are missing, then wire it into the scripts validation gate.",
+      "expectedFailureModes": [
+        "docs/status.md references files that were renamed or removed without anyone noticing.",
+        "The validator mis-parses non-path backticks and creates noisy false positives.",
+        "validate.sh --scripts does not run the status evidence validator, so the check never blocks drift."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-status-evidence.mjs",
+        "bash agent-os/scripts/validate.sh --scripts"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Implement validate-status-evidence.mjs, run it from validate.sh --scripts, and keep docs/status.md validation signals aligned.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-a2a-messaging-add-human-release-review-gate",
+      "title": "Add human release review gate for A2A repair automation",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-a2a",
+        "agent-os/crates/covenantd",
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "A2A delegated repair automation is still in hardening and should not expand beyond current evidence without an explicit human release review. Add a lightweight decision record plus a validator/config guard so enabling expanded repair automation requires an acknowledged review.",
+      "expectedFailureModes": [
+        "Expanded delegated repair automation is enabled without any durable human review evidence.",
+        "Docs claim a human release review exists but the runtime has no guard that enforces it.",
+        "The guard is too strict or unclear, blocking intended opt-in test coverage without a documented override."
+      ],
+      "gates": [
+        "security",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-a2a-repair-authorization.mjs",
+        "bash agent-os/scripts/validate.sh --scripts"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Define a decision record and enforcement hook that keeps expanded A2A repair automation gated behind an explicit human review marker.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-runtime-execution-pin-gvisor-runner-metadata-schema",
+      "title": "Pin gVisor runner metadata schema",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/gvisor-host-readiness.mjs",
+        "agent-os/scripts/validate-gvisor-host-readiness.mjs",
+        "docs/gvisor-host-readiness.md",
+        "docs/status.md"
+      ],
+      "summary": "Runtime execution hardening needs a pinned, inspectable record of the Linux gVisor runner inputs (runsc version, rootfs digest/source, and host prerequisites) before CI promotion. Define a small schema and validation hook so future CI enablement is auditable and repeatable.",
+      "expectedFailureModes": [
+        "CI promotion proceeds without a pinned runsc/rootfs record, making failures non-reproducible.",
+        "Docs claim the runner is pinned but the output schema is missing or inconsistent across hosts.",
+        "Validator allows machine-local paths or unpinned binaries, undermining auditability."
+      ],
+      "gates": [
+        "docs",
+        "plan"
+      ],
+      "verification": [
+        "node agent-os/scripts/gvisor-host-readiness.mjs --json",
+        "node agent-os/scripts/validate-gvisor-host-readiness.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Extend gvisor host readiness outputs/docs with pinned runner metadata fields and add a validator that enforces the schema when CI promotion work begins.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-and-sdk-ecosystem-add-package-manager-manifest-contract",
+      "title": "Define package-manager manifest contract",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts/distribution-readiness.mjs",
+        "agent-os/scripts/validate-distribution-readiness.mjs",
+        "docs/distribution-readiness.md",
+        "docs/status.md"
+      ],
+      "summary": "Distribution readiness calls out package-manager manifests as a missing graduation gate, but the repository does not yet define a deterministic manifest format for what would be published. Define a simple manifest schema plus generator/validator hooks so future packaging work has auditable inputs.",
+      "expectedFailureModes": [
+        "Future packaging work ships without a deterministic manifest, causing drift between docs and published artifacts.",
+        "Manifest generation depends on machine-local state or versions, making it non-reproducible.",
+        "Readiness docs claim a manifest exists while validators do not enforce its presence or schema."
+      ],
+      "gates": [
+        "docs",
+        "plan"
+      ],
+      "verification": [
+        "node agent-os/scripts/distribution-readiness.mjs --json",
+        "node agent-os/scripts/validate-distribution-readiness.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Extend distribution-readiness to emit a draft package-manager manifest section (schema + empty placeholders), add a validator hook, and document the contract in docs/distribution-readiness.md.",
+      "updated": "2026-05-10"
     }
   ]
 }

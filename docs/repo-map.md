@@ -15,6 +15,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/release-validation.md` | Release evidence profile and validation requirements. |
 | `docs/protocol-versioning.md` | IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy. |
 | `docs/a2a-repair-visibility.md` | A2A repair visibility and delegated repair gate contract. |
+| `docs/a2a-repair-authorization.md` | Delegated A2A repair authorization scope and denial policy. |
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |
 | `docs/settlement-receipt-migration.md` | Settlement receipt JSONL migration dry-run and mutation boundary. |
 | `docs/budget-pause-checkpoints.md` | Budget pause checkpoint format and daemon integration boundary. |

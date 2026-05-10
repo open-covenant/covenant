@@ -58,6 +58,9 @@ const perPeerRepairReportOk = exists("agent-os/scripts/a2a-peer-repair-report.mj
   && exists("agent-os/scripts/validate-a2a-peer-repair-report.mjs")
   && contains("docs/a2a-repair-visibility.md", "a2a-peer-repair-report.mjs")
   && contains("docs/a2a-repair-visibility.md", "covenant.a2a-peer-repair-report.v1");
+const delegatedRepairPolicyOk = exists("docs/a2a-repair-authorization.md")
+  && exists("agent-os/scripts/validate-a2a-repair-authorization.mjs")
+  && contains("agent-os/crates/covenantd/src/lib.rs", "a2a_repair_rejects_peer_mismatched_delegated_scope");
 
 const gates = [
   {
@@ -122,14 +125,22 @@ const gates = [
   {
     id: "delegated-repair-denial-coverage",
     title: "Delegated repair denial coverage",
-    status: "planned",
+    status: delegatedRepairPolicyOk ? "partial" : "planned",
     ok: false,
-    evidence: [],
-    blockers: [
-      "delegated repair expansion is not implemented",
-      "tests do not yet prove a peer cannot repair another peer's leased task",
-      "capability-scope denial fixtures for peer-mismatched repair are not present",
-    ],
+    evidence: delegatedRepairPolicyOk
+      ? [
+          "docs/a2a-repair-authorization.md",
+          "agent-os/scripts/validate-a2a-repair-authorization.mjs",
+          "agent-os/crates/covenantd/src/lib.rs",
+        ]
+      : [],
+    blockers: delegatedRepairPolicyOk
+      ? ["live peer-mismatched delegated repair coverage is still required before delegated repair expands"]
+      : [
+          "delegated repair expansion is not implemented",
+          "tests do not yet prove a peer cannot repair another peer's leased task",
+          "capability-scope denial fixtures for peer-mismatched repair are not present",
+        ],
     human_decision_required: false,
   },
 ];
@@ -156,9 +167,8 @@ const report = {
     validator: "node agent-os/scripts/validate-a2a-peer-repair-report.mjs",
   },
   delegated_repair_requirements: [
-    "peer-mismatched repair denial tests",
-    "capability-scope denial fixtures",
-    "delegated repair authorization policy",
+    "live peer-mismatched repair denial coverage",
+    "human review before delegated repair automation",
   ],
   gates,
 };

@@ -47,9 +47,8 @@ if (report.ready_for_delegated_repair !== false) {
 
 const requirements = new Set(report.delegated_repair_requirements ?? []);
 for (const requirement of [
-  "peer-mismatched repair denial tests",
-  "capability-scope denial fixtures",
-  "delegated repair authorization policy",
+  "live peer-mismatched repair denial coverage",
+  "human review before delegated repair automation",
 ]) {
   if (!requirements.has(requirement)) {
     fail(`missing delegated repair requirement: ${requirement}`);
@@ -104,6 +103,12 @@ const delegatedDenial = gates.get("delegated-repair-denial-coverage");
 if (delegatedDenial) {
   if (delegatedDenial.ok !== false) {
     fail("delegated-repair-denial-coverage must not be reported ready yet");
+  }
+  if (delegatedDenial.status !== "partial") {
+    fail("delegated-repair-denial-coverage must be partial until live coverage lands");
+  }
+  if (!delegatedDenial.evidence?.includes("docs/a2a-repair-authorization.md")) {
+    fail("delegated-repair-denial-coverage must name authorization policy evidence");
   }
   if (!Array.isArray(delegatedDenial.blockers) || delegatedDenial.blockers.length === 0) {
     fail("delegated-repair-denial-coverage must list blockers");

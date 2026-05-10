@@ -1,0 +1,29 @@
+{
+  "id": "status-signed-capabilities-broaden-live-coverage-for-scoped-delegated",
+  "title": "Broaden delegated capability live coverage",
+  "state": "proposed",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-permissions",
+    "agent-os/crates/covenantd",
+    "agent-os/crates/covenant",
+    "agent-os/autonomy"
+  ],
+  "summary": "Capability enforcement is broad, but live coverage should keep expanding around scoped delegated paths where production mutation boundaries depend on dispatch-time allowlists.",
+  "expectedFailureModes": [
+    "Delegated mutation paths pass unit tests but fail real daemon/CLI authorization flow.",
+    "Live coverage metadata does not name the capability namespace being enforced.",
+    "Allowlist tests cover positive paths but omit scoped denial evidence."
+  ],
+  "gates": [
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Add one delegated live coverage slice for a scoped mutation namespace, including denial and allowed-path evidence in live coverage metadata.",
+  "updated": "2026-05-10"
+}

@@ -19,6 +19,7 @@
 use covenant_ipc::{read_frame, write_frame, IpcError, Request, Response};
 use covenant_peer_auth::{JsonlPeerRegistry, PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_types::AgentId;
+use serde_json::json;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -67,6 +68,14 @@ async fn authenticate(stream: &mut UnixStream, token_b58: &str) -> Response {
         },
     )
     .await
+}
+
+async fn authenticated_stream(sock: &std::path::Path, token_b58: &str) -> UnixStream {
+    let mut stream = UnixStream::connect(sock).await.expect("connect");
+    match authenticate(&mut stream, token_b58).await {
+        Response::Authenticated { .. } => stream,
+        other => panic!("authentication failed: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -211,6 +220,187 @@ async fn live_covenantd_peers_revoke_terminates_authentication() {
         match req(&mut stream, Request::Ping).await {
             Response::Pong => {}
             other => panic!("post-revoke operator ping failed: {other:?}"),
+        }
+    }
+
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + verifies scoped delegated peers.revoke over IPC"]
+async fn live_covenantd_peer_revoke_honors_scoped_delegation() {
+    let home = tempfile::tempdir().expect("tempdir");
+
+    let delegate_token = PeerToken::from_bytes([21u8; 32]);
+    let delegate_token_b58 = delegate_token.to_b58();
+    let delegate_pubkey = [22u8; 32];
+    let delegate_display = "delegate-revoke@local";
+
+    let allowed_token = PeerToken::from_bytes([23u8; 32]);
+    let allowed_token_b58 = allowed_token.to_b58();
+    let allowed_scope_prefix: String = allowed_token_b58.chars().take(10).collect();
+    let allowed_summary_prefix: String = allowed_token_b58.chars().take(6).collect();
+    let allowed_pubkey = [24u8; 32];
+    let allowed_display = "allowed-revoke-target@local";
+
+    let denied_token = PeerToken::from_bytes([25u8; 32]);
+    let denied_token_b58 = denied_token.to_b58();
+    let denied_pubkey = [26u8; 32];
+    let denied_display = "denied-revoke-target@local";
+
+    let registry_path = home.path().join("peers").join("registry.jsonl");
+    {
+        let registry = JsonlPeerRegistry::open(registry_path)
+            .await
+            .expect("open seed registry");
+        for entry in [
+            PeerEntry {
+                token: delegate_token,
+                agent_id: AgentId::new(delegate_display, delegate_pubkey),
+                registered_at: 1_700_000_000_000,
+            },
+            PeerEntry {
+                token: allowed_token,
+                agent_id: AgentId::new(allowed_display, allowed_pubkey),
+                registered_at: 1_700_000_000_001,
+            },
+            PeerEntry {
+                token: denied_token,
+                agent_id: AgentId::new(denied_display, denied_pubkey),
+                registered_at: 1_700_000_000_002,
+            },
+        ] {
+            registry.register(entry).await.expect("seed peer");
+        }
+    }
+
+    let port = pick_free_port();
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+    let _operator_token = read_operator_token(home.path()).await;
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::RevokePeer {
+                token_prefix: allowed_token_b58.clone(),
+                force: false,
+                match_limit: None,
+            },
+        )
+        .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("capability"),
+                "missing delegated grant must be rejected by capability gate: {message:?}"
+            ),
+            other => panic!("missing grant must reject delegated revoke, got {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::GrantCapability {
+                action: "peers.revoke".into(),
+                scope: Some(json!({
+                    "version": 1,
+                    "token_prefix": allowed_scope_prefix,
+                    "force": false
+                })),
+                expires_at: None,
+            },
+        )
+        .await
+        {
+            Response::CapabilityGranted {
+                subject_display,
+                action,
+                ..
+            } => {
+                assert_eq!(subject_display, delegate_display);
+                assert_eq!(action, "peers.revoke");
+            }
+            other => panic!("delegated scoped grant must succeed, got {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::RevokePeer {
+                token_prefix: denied_token_b58.clone(),
+                force: false,
+                match_limit: None,
+            },
+        )
+        .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "mismatched delegated token_prefix must be rejected by scope: {message:?}"
+            ),
+            other => panic!("scoped delegated revoke must reject wrong token, got {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = authenticated_stream(&sock, &denied_token_b58).await;
+        match req(&mut stream, Request::Ping).await {
+            Response::Pong => {}
+            other => panic!("denied target must remain live after scoped rejection, got {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
+        match req(
+            &mut stream,
+            Request::RevokePeer {
+                token_prefix: allowed_token_b58.clone(),
+                force: false,
+                match_limit: None,
+            },
+        )
+        .await
+        {
+            Response::PeerRevoked {
+                outcome: RevokeOutcome::Revoked(summary),
+            } => {
+                assert_eq!(summary.agent_id.display, allowed_display);
+                assert_eq!(summary.agent_id.pubkey, allowed_pubkey);
+                assert_eq!(summary.token_prefix, allowed_summary_prefix);
+            }
+            other => panic!("scoped delegated revoke must allow matching token, got {other:?}"),
+        }
+    }
+
+    {
+        let mut stream = UnixStream::connect(&sock).await.expect("connect");
+        match authenticate(&mut stream, &allowed_token_b58).await {
+            Response::AuthenticationFailed { reason } => assert!(
+                reason.contains("unknown") || reason.contains("revoked"),
+                "revoked target rejection must name token state: {reason:?}"
+            ),
+            other => panic!("allowed target must be revoked, got {other:?}"),
         }
     }
 

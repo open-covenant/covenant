@@ -98,6 +98,35 @@ function assertPromotion(surface) {
   }
 }
 
+function assertScopeCoverage(surface) {
+  if (surface.scopeCoverage === undefined) return 0;
+  if (!Array.isArray(surface.scopeCoverage) || surface.scopeCoverage.length === 0) {
+    fail(`${surface.id}: scopeCoverage must be a non-empty array when present`);
+  }
+
+  let count = 0;
+  for (const coverage of surface.scopeCoverage) {
+    if (!coverage || typeof coverage !== "object") {
+      fail(`${surface.id}: scopeCoverage entries must be objects`);
+    }
+    if (typeof coverage.namespace !== "string" || !coverage.namespace.includes(".")) {
+      fail(`${surface.id}: scopeCoverage.namespace must name an action namespace`);
+    }
+    if (coverage.delegated !== true) {
+      fail(`${surface.id}: scopeCoverage.delegated must be true for delegated scope evidence`);
+    }
+    if (!surface.liveTests.includes(coverage.liveTest)) {
+      fail(`${surface.id}: scopeCoverage.liveTest must be listed in liveTests`);
+    }
+    const source = assertPath(coverage.liveTest, "scopeCoverage.liveTest", surface.id);
+    assertLiveTest(coverage.liveTest, source, surface.id);
+    assertStringArray(coverage.deniedEvidence, "scopeCoverage.deniedEvidence", surface.id);
+    assertStringArray(coverage.allowedEvidence, "scopeCoverage.allowedEvidence", surface.id);
+    count += 1;
+  }
+  return count;
+}
+
 const matrix = readJson(matrixPath);
 if (matrix.version !== 1) fail("version must be 1");
 if (!Array.isArray(matrix.surfaces) || matrix.surfaces.length === 0) {
@@ -107,6 +136,7 @@ if (!Array.isArray(matrix.surfaces) || matrix.surfaces.length === 0) {
 const ids = new Set();
 let liveCount = 0;
 let mockOnlyCount = 0;
+let scopedDelegatedCount = 0;
 
 for (const surface of matrix.surfaces) {
   if (!surface || typeof surface !== "object") fail("surface must be an object");
@@ -132,6 +162,7 @@ for (const surface of matrix.surfaces) {
   if (surface.promotion) {
     assertPromotion(surface);
   }
+  scopedDelegatedCount += assertScopeCoverage(surface);
 
   for (const path of surface.mockTests) {
     assertPath(path, "mockTests", surface.id);
@@ -154,6 +185,10 @@ if (!gvisor) {
 }
 assertPromotion(gvisor);
 
+if (scopedDelegatedCount === 0) {
+  fail("at least one delegated scoped capability live coverage entry is required");
+}
+
 console.log(
-  `validate-live-coverage: ok (${matrix.surfaces.length} surfaces, ${liveCount} live test files, ${mockOnlyCount} mock-only surfaces)`,
+  `validate-live-coverage: ok (${matrix.surfaces.length} surfaces, ${liveCount} live test files, ${mockOnlyCount} mock-only surfaces, ${scopedDelegatedCount} scoped delegated entries)`,
 );

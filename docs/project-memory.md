@@ -27,7 +27,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
 - Linux gVisor CI promotion uses `agent-os/scripts/gvisor-host-readiness.mjs`; host-local live readiness is separate from required CI, pinned rootfs provenance, and public sandbox-readiness claims.
-- The live coverage matrix records Linux gVisor promotion metadata, including prerequisite skips versus real configured-host failures; default validation must not require non-Linux hosts to run gVisor.
+- The live coverage matrix records Linux gVisor promotion metadata and scoped delegated capability evidence, including prerequisite skips versus real configured-host failures; default validation must not require non-Linux hosts to run gVisor.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
 - Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs` and locally published or checked with `node agent-os/scripts/autonomy-publish-summary.mjs`.
@@ -83,7 +83,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No public release provenance publication; read-only release provenance gates record project key custody, artifact subject verifier, and transparency publication blockers.
 - No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
 - Multi-peer operation is experimental.
-- Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
+- Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths; live coverage now pins scoped delegated `peers.revoke` denial and allowed mutation evidence.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
 - Memory maintenance has read-only `covenant memory plan-compaction --json` and `covenant memory plan-receipt-backfill --json` planning surfaces; receipt backfill for legacy uncorrelated rows remains future mutation work.
 - Budget pause checkpoints are wired through the daemon for budget-exhausted dispatches, single-use resume claims, and shutdown drains of active budgeted dispatches; hard subprocess preemption remains future runtime work.

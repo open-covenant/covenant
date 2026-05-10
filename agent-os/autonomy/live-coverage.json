@@ -124,8 +124,22 @@
         "agent-os/crates/covenantd/tests/live_cli_peers_rotate_json.rs",
         "agent-os/crates/covenantd/tests/live_rotate_token.rs"
       ],
+      "scopeCoverage": [
+        {
+          "namespace": "peers.revoke",
+          "delegated": true,
+          "liveTest": "agent-os/crates/covenantd/tests/live_peers_revoke.rs",
+          "deniedEvidence": [
+            "non-operator peer without peers.revoke is rejected before mutation",
+            "non-operator peer with mismatched token_prefix scope is rejected before mutation"
+          ],
+          "allowedEvidence": [
+            "non-operator peer with matching token_prefix and force scope revokes only the scoped target"
+          ]
+        }
+      ],
       "status": "covered",
-      "nextGap": "Add live forced self-revoke recovery coverage only if recovery fixtures are isolated to temp homes."
+      "nextGap": "Add live forced self-revoke recovery coverage only if recovery fixtures are isolated to temp homes; broaden delegated scope evidence beyond peer revoke."
     },
     {
       "id": "peer-listing",

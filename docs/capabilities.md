@@ -133,6 +133,8 @@ Rules:
 - `before_ms` narrows `peers.purge`; the requested cutoff must be less than or equal to the scoped value.
 - `self` is reserved for self-targeting peer and identity operations; when present, it must match the daemon's concrete self-target predicate.
 
+Live coverage pins this boundary through a non-operator `peers.revoke` case: missing grants are denied, mismatched `token_prefix` scopes are denied before mutation, and a matching token-prefix scope revokes only the scoped target.
+
 ### `chain.*`
 
 Use for local settlement and receipt batching.

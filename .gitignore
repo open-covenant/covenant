@@ -42,6 +42,8 @@ agent-os/PROJECT_STATE.md
 agent-os/BLOCKERS.md
 agent-os/PRODUCTION_READINESS.md
 agent-os/WORKFLOW.md
+agent-os/autonomy/commit-rotation.json
+agent-os/scripts/git-identity-policy.mjs
 
 playwright-report/
 test-results/

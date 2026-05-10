@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { approvedIdentitySummary, identityViolation } from "./git-identity-policy.mjs";
+import { approvedIdentitySummary, identityViolation } from "./identity-policy.mjs";
 
 const recordSeparator = "\x1e";
 const fieldSeparator = "\x1f";

@@ -46,7 +46,9 @@ for (const account of rotation.approvedGithubAccounts) {
 }
 
 if (identityKeys.size === 0 && !rotation.allowConfiguredRemoteGitIdentities) {
-  errors.push("at least one approved Git identity is required when remote Git identities are disabled");
+  errors.push(
+    "at least one approved Git identity is required when remote Git identities are disabled",
+  );
 }
 
 if (githubAccounts.size === 0 && !rotation.allowConfiguredRemoteGithubContributors) {

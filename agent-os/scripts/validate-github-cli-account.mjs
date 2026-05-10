@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   approvedGithubCliAccountSummary,
   githubCliAccountViolation,
-} from "./git-identity-policy.mjs";
+} from "./identity-policy.mjs";
 
 const gh = (args) =>
   spawnSync("gh", args, {

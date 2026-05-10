@@ -178,7 +178,7 @@ Use the narrowest sufficient gate during development, then the full gate before 
 | Handoff bundle verifier | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json \| node agent-os/scripts/autonomy-verify-handoff-bundle.mjs --stdin` | Verifies bundle schema, path safety, tracked patch digest, and included untracked file digests before restoration. |
 | Handoff restore plan | `node agent-os/scripts/autonomy-handoff-bundle.mjs --json \| node agent-os/scripts/autonomy-plan-handoff-restore.mjs --stdin` | Produces ordered, read-only restore steps for a verified bundle. |
 | Handoff toolchain validator | `node agent-os/scripts/validate-autonomy-handoff.mjs` | Exercises the dirty report, bundle export, verifier, restore planner, and tamper rejection in one read-only check. |
-| Commit rotation policy | `node agent-os/scripts/validate-commit-rotation.mjs` | Validates the repo-local commit and push attribution policy consumed by Git identity guards, autonomy preflight, and release readiness. |
+| Commit rotation policy | `node agent-os/scripts/validate-commit-rotation.mjs` | Validates the commit and push attribution policy consumed by Git identity guards, autonomy preflight, and release readiness. |
 | Git identity guard | `node agent-os/scripts/validate-git-identity.mjs` | Scans recent local and upstream commit authors/committers by default; pre-push passes the exact pushed ref ranges. |
 | Current identity guard | `node agent-os/scripts/validate-current-git-identity.mjs` | Refuses commits and pushes unless the active local Git author and committer resolve to the neutral automation identity. |
 | Git write-access guard | `node agent-os/scripts/validate-git-write-access.mjs` | Verifies the local Git metadata directory can create and remove a transient probe file before staging or committing work. |
@@ -217,7 +217,6 @@ Tracked memory should be durable, concise, and useful to future contributors:
 - [docs/live-coverage.md](./live-coverage.md): live boundary coverage matrix.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): machine-readable lifecycle, roles, gates, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue for future autonomous tasks.
-- [agent-os/autonomy/commit-rotation.json](../agent-os/autonomy/commit-rotation.json): commit and push attribution policy.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/autonomy/events.jsonl](../agent-os/autonomy/events.jsonl): append-only task transition log.
 - `node agent-os/scripts/autonomy-status-gaps.mjs --json`: backlog-refill candidates from the capability status matrix.

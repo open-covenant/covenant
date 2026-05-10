@@ -6,6 +6,23 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 export const commitRotationPath = join(scriptDir, "..", "autonomy", "commit-rotation.json");
 
 const schema = "covenant.commit-rotation.v1";
+const defaultCommitRotation = {
+  schema,
+  remote: "origin",
+  currentGitIdentity: {
+    name: "Open Covenant Automation",
+    email: "opencovenant@users.noreply.github.com",
+  },
+  approvedGitIdentities: [
+    {
+      name: "Open Covenant Automation",
+      email: "opencovenant@users.noreply.github.com",
+    },
+  ],
+  approvedGithubAccounts: ["OpenCovenant", "kamiyobot"],
+  allowConfiguredRemoteGitIdentities: true,
+  allowConfiguredRemoteGithubContributors: true,
+};
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -57,15 +74,17 @@ function parseAccountList(value, path, errors) {
   return value.map((account, index) => requiredString(account, `${path}[${index}]`, errors));
 }
 
-export function loadCommitRotation(path = commitRotationPath) {
-  const errors = [];
-  let data;
+function cloneRotation(rotation) {
+  return {
+    ...rotation,
+    currentGitIdentity: { ...rotation.currentGitIdentity },
+    approvedGitIdentities: rotation.approvedGitIdentities.map((identity) => ({ ...identity })),
+    approvedGithubAccounts: [...rotation.approvedGithubAccounts],
+  };
+}
 
-  try {
-    data = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new Error(`cannot read commit rotation file: ${error.message}`);
-  }
+function parseCommitRotation(data) {
+  const errors = [];
 
   if (!isObject(data)) {
     throw new Error("commit rotation file must contain an object");
@@ -106,4 +125,19 @@ export function loadCommitRotation(path = commitRotationPath) {
   }
 
   return rotation;
+}
+
+export function loadCommitRotation(path = commitRotationPath) {
+  let data;
+
+  try {
+    data = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return cloneRotation(defaultCommitRotation);
+    }
+    throw new Error(`cannot read commit rotation file: ${error.message}`);
+  }
+
+  return parseCommitRotation(data);
 }

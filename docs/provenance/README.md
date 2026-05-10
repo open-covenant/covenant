@@ -47,6 +47,18 @@ node agent-os/scripts/provenance.mjs audit-root write \
   --validation "covenant audit verify=passed"
 ```
 
+Bind a release-target audit root to a release subject:
+
+```bash
+node agent-os/scripts/provenance.mjs audit-root write \
+  --report audit-report.json \
+  --release v0.1.0-alpha.1 \
+  --release-subject release-subject.json \
+  --commit HEAD \
+  --out docs/provenance/audit-roots/<commit>-audit-root.json \
+  --validation "covenant audit verify=passed"
+```
+
 Add a detached ed25519 signature when a project signing key is available:
 
 ```bash
@@ -85,6 +97,7 @@ For `covenant.audit-root-attestation.v1`, the verifier also checks:
 - The report has no failure diagnostics.
 - The subject commit is canonical.
 - Task targets match the task snapshot stored in the subject commit.
+- Release targets with `releaseSubject` match repository, release id, commit, artifact metadata, validation evidence, and `releaseSubjectSha256`.
 - Unsigned signing blocks are explicitly unsigned.
 - Signed blocks use ed25519, include canonical SPKI public key material, match the public-key digest, and verify against the canonical payload with `signing.signature` cleared.
 
@@ -94,8 +107,9 @@ For `covenant.audit-root-attestation.v1`, the verifier also checks:
 - Envelopes are not transparency-log entries.
 - Signed audit-root attestations prove payload integrity for the embedded public key. Public trust still requires a project-controlled key policy, release process, and transparency publication.
 - Validation entries record evidence from the producing operator or automation; the verifier checks envelope consistency, not whether every command was re-run.
-- Release artifact subject schema is defined in docs/provenance/release-subjects.md; implementation is still planned.
+- Release artifact subject schema is defined in docs/provenance/release-subjects.md. Audit-root release targets can bind an embedded release subject digest; produced artifact file verification remains planned.
 - Review artifact signing has verifier support behind an explicit trusted public key input; project key custody and publication remain planned work.
 - Release provenance readiness has a read-only gate report; public release provenance remains blocked until key custody, subject verification, and transparency publication are implemented.
+  See [audit-root release custody](audit-root-release-custody.md) for the local release-subject binding contract.
 
 Audit root signing policy is tracked in [ADR 0004](../decisions/0004-audit-root-signing-policy.md). The current implementation defines and verifies detached `audit-root-attestation.v1` payloads and local ed25519 signatures. Project key custody, release publication, and transparency-log publication remain planned work.

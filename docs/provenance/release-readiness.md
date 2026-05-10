@@ -23,6 +23,7 @@ The report uses schema `covenant.release-provenance-readiness.v1`. It does not g
 | `release-subject-schema` | Documented | `docs/provenance/release-subjects.md` | No publication decision. |
 | `local-provenance-verifier` | Implemented | `agent-os/scripts/provenance.mjs` | No publication decision. |
 | `audit-root-signing-policy` | Documented | `docs/decisions/0004-audit-root-signing-policy.md` | Project signing identity approval. |
+| `audit-root-release-subject-binding` | Implemented | `agent-os/scripts/provenance.mjs`, `agent-os/scripts/provenance-self-test.mjs` | No signing key approval. |
 | `review-artifact-signing-contract` | Documented | `docs/provenance/review-artifact-signing.md` | Project review key approval. |
 | `project-key-custody` | Planned | Signing policy docs | Key custody, publication, rotation, and revocation. |
 | `release-artifact-subject-verifier` | Planned | Subject schema docs | Implementation of release artifact digest verification. |

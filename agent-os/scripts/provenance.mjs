@@ -43,7 +43,7 @@ const forbiddenPatterns = [
 function usage() {
   console.error(`usage:
   node agent-os/scripts/provenance.mjs write --task <id> --out <path> [--commit <sha>] [--validation "command=passed"]
-  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"] [--signing-key <pem> --key-id <id>]
+  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--release-subject <path>] [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"] [--signing-key <pem> --key-id <id>]
   node agent-os/scripts/provenance.mjs audit-root verify --file <path>
   node agent-os/scripts/provenance.mjs verify --file <path>
   node agent-os/scripts/provenance.mjs verify-all [--dir <path>]`);
@@ -345,9 +345,71 @@ function attest(taskId, commit, validationValues) {
   return { ...payload, payloadSha256: sha256(stableJson(payload)) };
 }
 
-function auditRootTarget(commit, taskId, releaseId) {
+function validateReleaseSubject(value, context) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context}: release subject must be an object`);
+  }
+  if (value.schema !== "covenant.provenance.release.v1") {
+    throw new Error(`${context}: unsupported release subject schema`);
+  }
+  assertIsoTimestamp(value.generatedAt, `${context}: generatedAt`);
+  const subject = value.subject;
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) {
+    throw new Error(`${context}: subject must be an object`);
+  }
+  if (subject.kind !== "release_bundle") {
+    throw new Error(`${context}: subject.kind must be release_bundle`);
+  }
+  assertRepository(subject.repository);
+  assertReleaseId(subject.releaseId);
+  const commit = fullCommit(subject.commit);
+  if (commit !== subject.commit) {
+    throw new Error(`${context}: subject commit is not canonical`);
+  }
+  if (!Array.isArray(subject.artifacts) || subject.artifacts.length === 0) {
+    throw new Error(`${context}: subject.artifacts must be non-empty`);
+  }
+  for (const [index, artifact] of subject.artifacts.entries()) {
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+      throw new Error(`${context}: artifact ${index} must be an object`);
+    }
+    if (typeof artifact.name !== "string" || artifact.name.trim() === "") {
+      throw new Error(`${context}: artifact ${index} name must be non-empty`);
+    }
+    assertHex64(artifact.sha256, `${context}: artifact ${index} sha256`);
+    if (!Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 0) {
+      throw new Error(`${context}: artifact ${index} sizeBytes must be a non-negative integer`);
+    }
+  }
+  if (!Array.isArray(value.validation) || value.validation.length === 0) {
+    throw new Error(`${context}: validation evidence must be non-empty`);
+  }
+  for (const [index, item] of value.validation.entries()) {
+    if (
+      !item ||
+      typeof item.command !== "string" ||
+      item.command.trim() === "" ||
+      !["passed", "failed", "skipped"].includes(item.status)
+    ) {
+      throw new Error(`${context}: validation ${index} is invalid`);
+    }
+  }
+  return value;
+}
+
+function readReleaseSubject(path) {
+  return validateReleaseSubject(
+    JSON.parse(readFileSync(resolve(repoRoot, path), "utf8")),
+    "--release-subject",
+  );
+}
+
+function auditRootTarget(commit, taskId, releaseId, releaseSubjectPath, repository) {
   if ((taskId && releaseId) || (!taskId && !releaseId)) {
     throw new Error("audit-root attestation requires exactly one of --task or --release");
+  }
+  if (releaseSubjectPath && !releaseId) {
+    throw new Error("--release-subject requires --release");
   }
   if (taskId) {
     const task = taskSnapshot(commit, taskId);
@@ -361,10 +423,29 @@ function auditRootTarget(commit, taskId, releaseId) {
       snapshotSha256: sha256(stableJson(task)),
     };
   }
+  return releaseRootTarget(commit, releaseId, releaseSubjectPath, repository);
+}
+
+function releaseRootTarget(commit, releaseId, releaseSubjectPath, repository) {
   assertReleaseId(releaseId);
-  return {
+  const target = {
     kind: "release",
     id: releaseId,
+  };
+  if (!releaseSubjectPath) return target;
+  const releaseSubject = readReleaseSubject(releaseSubjectPath);
+  const subject = releaseSubject.subject;
+  if (
+    subject.releaseId !== releaseId ||
+    subject.repository !== repository ||
+    subject.commit !== commit
+  ) {
+    throw new Error("--release-subject metadata does not match --release, --repository, and --commit");
+  }
+  return {
+    ...target,
+    releaseSubject,
+    releaseSubjectSha256: sha256(stableJson(releaseSubject)),
   };
 }
 
@@ -376,6 +457,28 @@ function auditReportFromPayload(auditRoot) {
     root_hash_hex: auditRoot.rootHashHex,
     failures: auditRoot.failures,
   };
+}
+
+function assertReleaseSubjectBinding(target, commit, repository, attestationPath) {
+  assertReleaseId(target.id);
+  if (target.releaseSubject === undefined) {
+    return;
+  }
+  const subjectEnvelope = validateReleaseSubject(
+    target.releaseSubject,
+    `${attestationPath}: target.releaseSubject`,
+  );
+  const subject = subjectEnvelope.subject;
+  if (
+    subject.releaseId !== target.id ||
+    subject.repository !== repository ||
+    subject.commit !== commit
+  ) {
+    throw new Error(`${attestationPath}: release subject metadata mismatch`);
+  }
+  if (target.releaseSubjectSha256 !== sha256(stableJson(subjectEnvelope))) {
+    throw new Error(`${attestationPath}: release subject digest mismatch`);
+  }
 }
 
 function signAuditRootPayload(payload, signingKeyPath, keyId) {
@@ -470,7 +573,13 @@ function auditRootAttest(options) {
       kind: "git_commit",
       commit: resolvedCommit,
     },
-    target: auditRootTarget(resolvedCommit, options.taskId, options.releaseId),
+    target: auditRootTarget(
+      resolvedCommit,
+      options.taskId,
+      options.releaseId,
+      options.releaseSubject,
+      repository,
+    ),
     auditRoot: {
       events: report.events,
       anchors: report.anchors,
@@ -493,6 +602,7 @@ function auditRootAttest(options) {
       "The audit root was produced from a valid covenant audit verify report.",
       "The subject commit is resolved from the local Git object database.",
       "Task targets are bound to the task snapshot stored in the subject commit.",
+      "Release targets may bind an explicit release subject digest before project key custody exists.",
     ],
     limits: [
       "This alpha audit-root attestation is not a signature.",
@@ -613,7 +723,7 @@ function verifyAuditRoot(attestationPath) {
       throw new Error(`${attestationPath}: task snapshot digest mismatch`);
     }
   } else if (attestation.target?.kind === "release") {
-    assertReleaseId(attestation.target.id);
+    assertReleaseSubjectBinding(attestation.target, commit, attestation.repository, attestationPath);
   } else {
     throw new Error(`${attestationPath}: unsupported target kind`);
   }
@@ -686,6 +796,7 @@ try {
         commit: one(flags, "commit", "HEAD"),
         taskId: one(flags, "task"),
         releaseId: one(flags, "release"),
+        releaseSubject: one(flags, "release-subject"),
         repository: one(flags, "repository", defaultRepository),
         previousRoot: one(flags, "previous-root"),
         validationValues: many(flags, "validation"),

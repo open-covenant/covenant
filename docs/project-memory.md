@@ -14,7 +14,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
-- Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, and unsigned or locally signed `audit-root-attestation.v1` payload generation/verification.
+- Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, unsigned or locally signed `audit-root-attestation.v1` payload generation/verification, and release-target audit-root binding to embedded release subject digests.
 - Local memory settlement receipts carry `memory_record_id` for daemon-created memory writes; verifier reconciliation joins exactly when the field exists and falls back to owner/resource counts for legacy receipt rows.
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Release provenance readiness uses `agent-os/scripts/release-provenance-readiness.mjs`; local subject and verifier planning is separate from project key custody, artifact publication, and transparency-log publication.
@@ -119,6 +119,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
+- [docs/provenance/audit-root-release-custody.md](./provenance/audit-root-release-custody.md): audit-root release-subject binding and custody checklist.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.

@@ -31,6 +31,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - The live coverage matrix records Linux gVisor promotion metadata and scoped delegated capability evidence, including prerequisite skips versus real configured-host failures; default validation must not require non-Linux hosts to run gVisor.
 - Live tests exist but are opt-in and cover selected real process, socket, restart, HTTP, CLI, and external-service boundaries.
 - Live boundary coverage is tracked in `agent-os/autonomy/live-coverage.json` and summarized in `docs/live-coverage.md`.
+- Privileged CLI live coverage is tracked at verb level in `agent-os/autonomy/privileged-cli-live-matrix.json`; deferred rows must name the implementation boundary that blocks live coverage.
 - Autonomous sprint state can be summarized with `node agent-os/scripts/autonomy-summary.mjs` and locally published or checked with `node agent-os/scripts/autonomy-publish-summary.mjs`.
 - Summary output should pass `agent-os/scripts/validate-autonomy-summary.mjs` before it is used as published sprint evidence.
 
@@ -125,6 +126,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/provenance/audit-root-release-custody.md](./provenance/audit-root-release-custody.md): audit-root release-subject binding and custody checklist.
 - [docs/identity-provenance.md](./identity-provenance.md): local identity key and peer-token provenance dry-run boundary.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
+- [docs/privileged-cli-live-matrix.md](./privileged-cli-live-matrix.md): command-level privileged CLI live coverage contract.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.

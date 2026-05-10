@@ -7,6 +7,7 @@ The machine-readable matrix lives at `agent-os/autonomy/live-coverage.json`. It 
 - mock or fixture-driven tests;
 - opt-in live test files;
 - current coverage status;
+- scoped delegated capability evidence, when a live test exercises non-operator authority boundaries;
 - the next meaningful gap.
 
 Validate the matrix without running live tests:
@@ -54,7 +55,7 @@ See [`docs/gvisor-live-runner.md`](gvisor-live-runner.md) and [`docs/gvisor-host
 | CLI capability lifecycle | Covered | grant, grant JSON, grant with expiry, recent, recent JSON, revoke, revoke JSON, purge JSON | Purge failure-mode coverage for scoped retention limits once retention policy is stable. |
 | CLI audit feed | Covered | audit purge JSON including scoped rejection, audit recent, audit recent JSON, audit verify JSON envelope | Scoped audit query filter coverage once audit predicates become user-selectable. |
 | Ignore policy gate | Covered | CLI ignore check JSON, ignored-dispatch side-effect fixture | Scoped ignore override coverage once override policy semantics exist. |
-| Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures. |
+| Peer authentication and token lifecycle | Covered | auth rejection, purge JSON, revoke, scoped delegated `peers.revoke` denial/allowance, CLI revoke JSON, CLI self-revoke rejection, restart revoke, token rotation, CLI rotation JSON | Forced self-revoke recovery only with isolated temp-home fixtures; broaden delegated scope evidence beyond peer revoke. |
 | Peer listing and status filters | Covered | list, JSON list/truncation, live-only, revoked-only | Prefix-filter JSON coverage if automation begins relying on prefix narrowing. |
 | A2A mailbox and restart durability | Covered | duplex, admission gate, CLI compact JSON, CLI repair including stale-lease rejection, CLI retry-stale JSON, CLI status JSON, restart replay, opt-in retry scheduler live coverage | Per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks. |
 | MCP subprocess transport | Covered | CLI tools list JSON, CLI tools call JSON, stdio initialize/list/call | Third-party fixture once selection is stable. |

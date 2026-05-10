@@ -1,7 +1,7 @@
 {
   "id": "status-signed-capabilities-broaden-live-coverage-for-scoped-delegated",
   "title": "Broaden delegated capability live coverage",
-  "state": "proposed",
+  "state": "integrated",
   "priority": "high",
   "ownerRole": "implementer",
   "scope": [
@@ -20,10 +20,15 @@
     "test_expansion"
   ],
   "verification": [
+    "cargo fmt --all -- --check",
+    "cargo test -p covenantd --test live_peers_revoke --locked -- --ignored live_covenantd_peer_revoke_honors_scoped_delegation",
+    "node agent-os/scripts/validate-live-coverage.mjs",
     "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate-readme-copy.mjs",
+    "bash agent-os/scripts/validate.sh --scripts",
     "git diff --check"
   ],
   "humanEscalation": [],
-  "nextAction": "Add one delegated live coverage slice for a scoped mutation namespace, including denial and allowed-path evidence in live coverage metadata.",
+  "nextAction": "Broaden delegated scoped live evidence beyond peers.revoke, with A2A repair or chain receipt mutation as the next highest-risk namespace.",
   "updated": "2026-05-10"
 }

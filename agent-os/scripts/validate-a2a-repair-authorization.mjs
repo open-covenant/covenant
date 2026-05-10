@@ -35,6 +35,8 @@ const docs = requireIncludes("docs/a2a-repair-authorization.md", [
   "counterparty",
   "capability_scope_rejected",
   "Delegated repair is still not release-ready",
+  "covenant.a2a-delegated-repair-release-review.v1",
+  "a2a-repair-release-review.mjs --strict",
 ]);
 
 const daemon = requireIncludes("agent-os/crates/covenantd/src/lib.rs", [
@@ -47,9 +49,19 @@ const daemon = requireIncludes("agent-os/crates/covenantd/src/lib.rs", [
 requireIncludes("docs/a2a-repair-visibility.md", [
   "a2a-repair-authorization.md",
   "delegated authorization policy",
+  "a2a-repair-release-review.mjs",
+  "covenant.a2a-delegated-repair-release-review.v1",
 ]);
 
-if (docs.includes("/Users/") || daemon.includes("/Users/")) {
+requireIncludes("docs/decisions/0005-a2a-delegated-repair-release-review.md", [
+  "covenant.a2a-delegated-repair-release-review.v1",
+  "node agent-os/scripts/a2a-repair-release-review.mjs --strict",
+  "counterparty_binding",
+  "duplicate_risk_policy",
+]);
+
+const home = process.env.HOME;
+if (home && (docs.includes(home) || daemon.includes(home))) {
   fail("authorization evidence must not contain absolute home paths");
 }
 

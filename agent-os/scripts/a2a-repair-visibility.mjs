@@ -65,6 +65,11 @@ const liveDelegatedRepairDenialOk = delegatedRepairPolicyOk
   && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "live_covenantd_a2a_repair_rejects_peer_mismatched_delegation")
   && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "CapabilityScopeRejected")
   && contains("agent-os/autonomy/live-coverage.json", "a2a.repair.requeue");
+const delegatedRepairReleaseReviewGuardOk = exists("docs/decisions/0005-a2a-delegated-repair-release-review.md")
+  && exists("agent-os/scripts/a2a-repair-release-review.mjs")
+  && exists("agent-os/scripts/validate-a2a-repair-release-review.mjs")
+  && contains("docs/a2a-repair-authorization.md", "covenant.a2a-delegated-repair-release-review.v1")
+  && contains("docs/a2a-repair-visibility.md", "a2a-repair-release-review.mjs");
 
 const gates = [
   {
@@ -162,8 +167,19 @@ const gates = [
     title: "Delegated repair release review",
     status: "human_required",
     ok: false,
-    evidence: ["docs/a2a-repair-authorization.md", "docs/a2a-repair-visibility.md"],
-    blockers: ["human review is required before delegated repair automation is enabled for cross-peer operators"],
+    evidence: [
+      "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+      "docs/a2a-repair-authorization.md",
+      "docs/a2a-repair-visibility.md",
+      "agent-os/scripts/a2a-repair-release-review.mjs",
+      "agent-os/scripts/validate-a2a-repair-release-review.mjs",
+    ],
+    blockers: delegatedRepairReleaseReviewGuardOk
+      ? ["human release review marker is required before delegated repair automation is enabled for cross-peer operators"]
+      : [
+          "delegated repair release review guard is missing",
+          "human release review marker is required before delegated repair automation is enabled for cross-peer operators",
+        ],
     human_decision_required: true,
   },
 ];
@@ -189,11 +205,19 @@ const report = {
     command: "node agent-os/scripts/a2a-peer-repair-report.mjs --status status.json --retry retry.json --json",
     validator: "node agent-os/scripts/validate-a2a-peer-repair-report.mjs",
   },
+  delegated_repair_release_review: {
+    schema: "covenant.a2a-repair-release-review.v1",
+    marker_schema: "covenant.a2a-delegated-repair-release-review.v1",
+    default_marker: "docs/a2a-delegated-repair-release-review.json",
+    command: "node agent-os/scripts/a2a-repair-release-review.mjs --json",
+    strict_command: "node agent-os/scripts/a2a-repair-release-review.mjs --strict",
+    validator: "node agent-os/scripts/validate-a2a-repair-release-review.mjs",
+  },
   delegated_repair_requirements: liveDelegatedRepairDenialOk
-    ? ["human review before delegated repair automation"]
+    ? ["human release review marker before delegated repair automation"]
     : [
         "live peer-mismatched repair denial coverage",
-        "human review before delegated repair automation",
+        "human release review marker before delegated repair automation",
       ],
   gates,
 };

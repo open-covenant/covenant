@@ -36,6 +36,16 @@ node agent-os/scripts/validate-a2a-peer-repair-report.mjs
 
 Delegated repair authorization is specified separately in [A2A Repair Authorization](./a2a-repair-authorization.md). The delegated authorization policy binds repair authority to the task id, lease id, duplicate-risk posture, and peer counterparty pubkey.
 
+Delegated repair release approval is a separate gate:
+
+```bash
+node agent-os/scripts/a2a-repair-release-review.mjs --json
+node agent-os/scripts/a2a-repair-release-review.mjs --strict
+node agent-os/scripts/validate-a2a-repair-release-review.mjs
+```
+
+The release-review report uses schema `covenant.a2a-repair-release-review.v1`. Its approval marker uses schema `covenant.a2a-delegated-repair-release-review.v1` and defaults to `docs/a2a-delegated-repair-release-review.json`. The repository intentionally does not commit that marker today, so strict mode must fail until a human accepts the release scope.
+
 ## Gates
 
 | Gate | Current state | Evidence |
@@ -46,7 +56,7 @@ Delegated repair authorization is specified separately in [A2A Repair Authorizat
 | `live-operator-repair-coverage` | Implemented | live A2A repair, retry-stale, and restart tests |
 | `per-peer-repair-report` | Implemented | `agent-os/scripts/a2a-peer-repair-report.mjs` and validator fixture |
 | `delegated-repair-denial-coverage` | Implemented | unit and live peer-mismatched scope denial |
-| `delegated-repair-release-review` | Human required | release review before cross-peer repair automation |
+| `delegated-repair-release-review` | Human required | ADR 0005, release-review report, strict marker validator |
 
 `ready_for_operator_repair_visibility` can be true while `ready_for_delegated_repair` remains false. That is the expected state: denial evidence exists, but a human release decision is still required before non-operator repair automation is enabled.
 
@@ -54,6 +64,6 @@ Delegated repair authorization is specified separately in [A2A Repair Authorizat
 
 Remaining delegated repair requirement:
 
-- explicit human review before delegated repair automation is enabled.
+- explicit human release-review marker before delegated repair automation is enabled.
 
 Until that review is complete, repair authority should remain operator-owned.

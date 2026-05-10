@@ -171,5 +171,5 @@ The scheduler remains:
 
 ## Remaining Work
 
-- Add per-peer repair visibility coverage if delegated repair moves beyond operator-owned tasks.
+- Keep delegated repair automation blocked behind `node agent-os/scripts/a2a-repair-release-review.mjs --strict` until a human accepts the release marker.
 - Add an explicit A2A task-kind field so idempotency cache keys no longer depend on intent text.

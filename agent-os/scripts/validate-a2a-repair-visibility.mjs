@@ -46,8 +46,8 @@ if (report.ready_for_delegated_repair !== false) {
 }
 
 const requirements = new Set(report.delegated_repair_requirements ?? []);
-if (!requirements.has("human review before delegated repair automation")) {
-  fail("missing delegated repair requirement: human review before delegated repair automation");
+if (!requirements.has("human release review marker before delegated repair automation")) {
+  fail("missing delegated repair requirement: human release review marker before delegated repair automation");
 }
 if (requirements.has("live peer-mismatched repair denial coverage")) {
   fail("live peer-mismatched repair denial coverage should no longer be a remaining requirement");
@@ -61,6 +61,27 @@ if (
   !== "node agent-os/scripts/validate-a2a-peer-repair-report.mjs"
 ) {
   fail("per-peer repair report validator reference missing");
+}
+if (report.delegated_repair_release_review?.schema !== "covenant.a2a-repair-release-review.v1") {
+  fail("delegated repair release-review report schema reference missing");
+}
+if (
+  report.delegated_repair_release_review?.marker_schema
+  !== "covenant.a2a-delegated-repair-release-review.v1"
+) {
+  fail("delegated repair release-review marker schema reference missing");
+}
+if (
+  report.delegated_repair_release_review?.strict_command
+  !== "node agent-os/scripts/a2a-repair-release-review.mjs --strict"
+) {
+  fail("delegated repair release-review strict command reference missing");
+}
+if (
+  report.delegated_repair_release_review?.validator
+  !== "node agent-os/scripts/validate-a2a-repair-release-review.mjs"
+) {
+  fail("delegated repair release-review validator reference missing");
 }
 
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
@@ -127,6 +148,15 @@ if (releaseReview) {
   }
   if (!Array.isArray(releaseReview.blockers) || releaseReview.blockers.length === 0) {
     fail("delegated-repair-release-review must name the human review blocker");
+  }
+  for (const path of [
+    "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+    "agent-os/scripts/a2a-repair-release-review.mjs",
+    "agent-os/scripts/validate-a2a-repair-release-review.mjs",
+  ]) {
+    if (!releaseReview.evidence?.includes(path)) {
+      fail(`delegated-repair-release-review must name evidence: ${path}`);
+    }
   }
 }
 

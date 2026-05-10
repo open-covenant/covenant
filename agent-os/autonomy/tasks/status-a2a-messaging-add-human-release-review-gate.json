@@ -1,0 +1,30 @@
+{
+  "id": "status-a2a-messaging-add-human-release-review-gate",
+  "title": "Add human release review gate for A2A repair automation",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant-a2a",
+    "agent-os/crates/covenantd",
+    "agent-os/scripts",
+    "docs"
+  ],
+  "summary": "A2A delegated repair automation is still in hardening and should not expand beyond current evidence without an explicit human release review. Add a lightweight decision record plus a validator/config guard so enabling expanded repair automation requires an acknowledged review.",
+  "expectedFailureModes": [
+    "Expanded delegated repair automation is enabled without any durable human review evidence.",
+    "Docs claim a human release review exists but the runtime has no guard that enforces it.",
+    "The guard is too strict or unclear, blocking intended opt-in test coverage without a documented override."
+  ],
+  "gates": [
+    "security",
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-a2a-repair-authorization.mjs",
+    "bash agent-os/scripts/validate.sh --scripts"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Define a decision record and enforcement hook that keeps expanded A2A repair automation gated behind an explicit human review marker.",
+  "updated": "2026-05-10"
+}

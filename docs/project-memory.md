@@ -92,7 +92,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Budget pause checkpoints are wired through the daemon for budget-exhausted dispatches, single-use resume claims, and shutdown drains of active budgeted dispatches; hard subprocess preemption remains future runtime work.
 - Audit integrity is local tamper evidence only; immutable retention, public key custody, release publication, and transparency-log publication are not implemented.
 - A2A has lease-age status filters, manual requeue and force-error repair through IPC/HTTP/CLI, explicit task-kind metadata with legacy `intent_text` fallback for idempotency cache keys, receiver-side idempotency result caching, an explicit disabled-by-default retry gate, and an opt-in daemon scheduler that reuses the same bounded idempotent retry policy with audit-visible scan summaries.
-- A2A repair visibility uses `agent-os/scripts/a2a-repair-visibility.mjs`; per-peer repair reports use `agent-os/scripts/a2a-peer-repair-report.mjs` against exported status/retry JSON. Delegated repair authorization is documented in `docs/a2a-repair-authorization.md` and has daemon plus live peer-mismatched scope denial coverage; delegated repair remains blocked until explicit human release review.
+- A2A repair visibility uses `agent-os/scripts/a2a-repair-visibility.mjs`; per-peer repair reports use `agent-os/scripts/a2a-peer-repair-report.mjs` against exported status/retry JSON. Delegated repair authorization is documented in `docs/a2a-repair-authorization.md` and has daemon plus live peer-mismatched scope denial coverage; delegated repair remains blocked until an explicit `covenant.a2a-delegated-repair-release-review.v1` marker passes `agent-os/scripts/a2a-repair-release-review.mjs --strict`.
 - MCP subprocess coverage uses the in-repo fake server for numeric/string JSON-RPC ids, split stdout, large payloads, multi-tool stdio compatibility, JSON content, tool-level `isError` results, and transport-closed behavior; a true third-party fixture remains blocked on fixture selection and dependency provenance.
 
 ## Human Authority Boundary
@@ -126,6 +126,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
+- [docs/decisions/0005-a2a-delegated-repair-release-review.md](./decisions/0005-a2a-delegated-repair-release-review.md): human release-review gate for delegated A2A repair automation.
 - [docs/provenance/audit-root-release-custody.md](./provenance/audit-root-release-custody.md): audit-root release-subject binding and custody checklist.
 - [docs/identity-provenance.md](./identity-provenance.md): local identity key and peer-token provenance dry-run boundary.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.

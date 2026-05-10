@@ -18,6 +18,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/protocol-versioning.md` | IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy. |
 | `docs/a2a-repair-visibility.md` | A2A repair visibility and delegated repair gate contract. |
 | `docs/a2a-repair-authorization.md` | Delegated A2A repair authorization scope and denial policy. |
+| `docs/decisions/0005-a2a-delegated-repair-release-review.md` | Human release-review marker policy for delegated A2A repair automation. |
 | `docs/memory-maintenance.md` | Memory compaction planning and receipt backfill boundary. |
 | `docs/settlement-receipt-migration.md` | Settlement receipt JSONL migration dry-run and mutation boundary. |
 | `docs/settlement-oracle-policy.md` | Settlement oracle source, update authority, staleness, manipulation, outage, and deployment-binding readiness gates. |
@@ -58,7 +59,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `agent-os/programs/settlement` | Solana protocol program for agent registration, stake, credits, task escrow, and receipt anchors. |
 | `agent-os/covenant-web` | Local operator web console. |
 | `agent-os/autonomy` | Machine-readable autonomous workflow, live coverage matrices, and task backlog. |
-| `agent-os/scripts` | Validation, live coverage checks, MCP compatibility checks, identity and settlement receipt provenance dry-runs, A2A repair visibility/authorization checks, A2A peer repair reports, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
+| `agent-os/scripts` | Validation, live coverage checks, MCP compatibility checks, identity and settlement receipt provenance dry-runs, A2A repair visibility/authorization/release-review checks, A2A peer repair reports, autonomy summaries, provenance verification, test inventory, handoff, and regression guards. |
 
 ## MCP Bridges
 

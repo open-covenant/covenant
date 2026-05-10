@@ -45,3 +45,11 @@ The opt-in live IPC test `live_covenantd_a2a_repair_rejects_peer_mismatched_dele
 Delegated repair is still not release-ready. Remaining gate:
 
 - explicit review before enabling non-operator repair automation.
+
+That review is an executable release gate, not an informal note. The accepted marker schema is `covenant.a2a-delegated-repair-release-review.v1`; the default marker path is `docs/a2a-delegated-repair-release-review.json`. The marker must preserve task, lease, counterparty, and duplicate-risk scope requirements and must pass:
+
+```bash
+node agent-os/scripts/a2a-repair-release-review.mjs --strict
+```
+
+Until that strict gate passes with a human-accepted marker, delegated repair automation remains blocked even though peer-mismatched denial coverage exists.

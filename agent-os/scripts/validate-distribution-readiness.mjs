@@ -505,12 +505,12 @@ if (packageManager) {
     fail("package-manager-distribution must report documented local evidence");
   }
   for (const evidence of [
-    "docs/package-manager-readiness.md",
+    "docs/internal/package-manager-readiness.md",
     "agent-os/scripts/package-manager-readiness.mjs",
     "agent-os/scripts/validate-package-manager-readiness.mjs",
     "agent-os/scripts/distribution-readiness.mjs",
     "agent-os/scripts/validate-distribution-readiness.mjs",
-    "docs/distribution-readiness.md",
+    "docs/internal/distribution-readiness.md",
   ]) {
     if (!Array.isArray(packageManager.evidence) || !packageManager.evidence.includes(evidence)) {
       fail(`package-manager-distribution must include evidence: ${evidence}`);

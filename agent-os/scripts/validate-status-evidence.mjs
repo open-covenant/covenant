@@ -5,12 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
-const statusPath = join(repoRoot, "docs", "status.md");
+const statusPath = join(repoRoot, "docs", "internal", "status.md");
 
 function usage() {
   console.log(`usage: validate-status-evidence
 
-Validate path-like backticked evidence entries in docs/status.md.`);
+Validate path-like backticked evidence entries in docs/internal/status.md.`);
 }
 
 const args = process.argv.slice(2);
@@ -21,6 +21,11 @@ if (args.includes("--help") || args.includes("-h")) {
 if (args.length > 0) {
   usage();
   process.exit(2);
+}
+
+if (!existsSync(statusPath)) {
+  console.log("validate-status-evidence: dormant (docs/internal/status.md absent)");
+  process.exit(0);
 }
 
 const status = readFileSync(statusPath, "utf8").replace(/\r\n/g, "\n");

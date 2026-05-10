@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
-const statusPath = join(repoRoot, "docs", "status.md");
+const statusPath = join(repoRoot, "docs", "internal", "status.md");
+const statusRel = "docs/internal/status.md";
 
 function usage() {
   console.log(`usage: autonomy-status-gaps [--json]
 
-Report autonomous task candidates from docs/status.md without mutating files or Git metadata.`);
+Report autonomous task candidates from ${statusRel} without mutating files or Git metadata.`);
 }
 
 function fail(message, code = 1) {
@@ -77,11 +78,28 @@ for (const arg of args) {
   }
 }
 
+if (!existsSync(statusPath)) {
+  if (asJson) {
+    console.log(JSON.stringify({
+      kind: "autonomy_status_gaps",
+      generated_at: new Date().toISOString(),
+      source: statusRel,
+      candidate_count: 0,
+      candidates: [],
+      dormant: true,
+      dormant_reason: `${statusRel} absent`,
+    }, null, 2));
+  } else {
+    console.log(`autonomy-status-gaps: dormant (${statusRel} absent)`);
+  }
+  process.exit(0);
+}
+
 let status;
 try {
   status = readFileSync(statusPath, "utf8").replace(/\r\n/g, "\n");
 } catch (error) {
-  fail(`autonomy-status-gaps: cannot read docs/status.md: ${error.message}`);
+  fail(`autonomy-status-gaps: cannot read ${statusRel}: ${error.message}`);
 }
 
 const candidates = [];
@@ -110,7 +128,7 @@ for (const line of status.split("\n")) {
 }
 
 if (candidates.length === 0) {
-  fail("autonomy-status-gaps: no capability rows found in docs/status.md");
+  fail(`autonomy-status-gaps: no capability rows found in ${statusRel}`);
 }
 
 const categoryRank = new Map([

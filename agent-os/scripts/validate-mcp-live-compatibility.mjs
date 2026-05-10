@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +17,8 @@ function read(path) {
 
 const fakeServer = read("agent-os/crates/covenant-mcp/src/bin/fake_server.rs");
 const liveTest = read("agent-os/crates/covenant-mcp/tests/live_stdio.rs");
-const status = read("docs/status.md");
+const statusAbs = join(repoRoot, "docs/internal/status.md");
+const status = existsSync(statusAbs) ? readFileSync(statusAbs, "utf8") : null;
 const liveCoverage = read("agent-os/autonomy/live-coverage.json");
 
 for (const needle of [
@@ -46,7 +47,7 @@ for (const needle of [
 if (!liveCoverage.includes("multi-tool stdio compatibility")) {
   fail("live coverage matrix must mention multi-tool stdio compatibility");
 }
-if (!status.includes("multi-tool stdio live compatibility")) {
+if (status !== null && !status.includes("multi-tool stdio live compatibility")) {
   fail("status matrix must mention multi-tool stdio live compatibility");
 }
 

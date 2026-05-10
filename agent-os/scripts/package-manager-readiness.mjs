@@ -31,7 +31,7 @@ for (const arg of args) {
   }
 }
 
-const policyDocOk = exists("docs/package-manager-readiness.md");
+const policyDocOk = exists("docs/internal/package-manager-readiness.md");
 const distributionBindingOk = exists("agent-os/scripts/distribution-readiness.mjs");
 const validatorOk = exists("agent-os/scripts/validate-package-manager-readiness.mjs");
 
@@ -41,7 +41,7 @@ const localEvidence = [
     title: "Package-manager readiness document",
     status: policyDocOk ? "documented" : "blocked",
     ok: policyDocOk,
-    evidence: policyDocOk ? ["docs/package-manager-readiness.md"] : [],
+    evidence: policyDocOk ? ["docs/internal/package-manager-readiness.md"] : [],
     blockers: policyDocOk ? [] : ["package-manager readiness document is missing"],
   },
   {
@@ -68,7 +68,7 @@ const requirements = [
     title: "Homebrew manifest",
     status: "planned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "formula source URL and checksum are not bound to a release artifact",
       "install, service, caveat, uninstall, and upgrade behavior are not tested",
@@ -80,7 +80,7 @@ const requirements = [
     title: "Nix package manifest",
     status: "planned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "Nix derivation or flake package is not implemented",
       "hashes, platforms, service module behavior, and binary paths are not validated",
@@ -92,7 +92,7 @@ const requirements = [
     title: "Linux package manifests",
     status: "planned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "Debian and RPM package metadata are not implemented",
       "system service integration, uninstall behavior, and file ownership are not tested",
@@ -104,7 +104,7 @@ const requirements = [
     title: "Artifact source and checksum binding",
     status: "human-owned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "release artifact hosting destination is not approved",
       "package manifests are not bound to release manifest digests",
@@ -116,7 +116,7 @@ const requirements = [
     title: "Release signing verification",
     status: "human-owned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "project release signing key custody is not approved",
       "package-manager install path does not verify published signatures",
@@ -128,7 +128,7 @@ const requirements = [
     title: "Install and uninstall CI",
     status: "planned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "package install and uninstall checks are not running in CI",
       "upgrade and rollback behavior are not validated across package formats",
@@ -140,7 +140,7 @@ const requirements = [
     title: "Publication approval",
     status: "human-owned",
     ok: false,
-    evidence: ["docs/package-manager-readiness.md"],
+    evidence: ["docs/internal/package-manager-readiness.md"],
     blockers: [
       "package registry accounts and publication destinations are not approved",
       "public package announcement and rollback policy are not accepted",

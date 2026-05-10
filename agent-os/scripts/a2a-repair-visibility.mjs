@@ -65,7 +65,7 @@ const liveDelegatedRepairDenialOk = delegatedRepairPolicyOk
   && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "live_covenantd_a2a_repair_rejects_peer_mismatched_delegation")
   && contains("agent-os/crates/covenantd/tests/live_a2a.rs", "CapabilityScopeRejected")
   && contains("agent-os/autonomy/live-coverage.json", "a2a.repair.requeue");
-const delegatedRepairReleaseReviewGuardOk = exists("docs/decisions/0005-a2a-delegated-repair-release-review.md")
+const delegatedRepairReleaseReviewGuardOk = exists("docs/internal/decisions/0005-a2a-delegated-repair-release-review.md")
   && exists("agent-os/scripts/a2a-repair-release-review.mjs")
   && exists("agent-os/scripts/validate-a2a-repair-release-review.mjs")
   && contains("docs/a2a-repair-authorization.md", "covenant.a2a-delegated-repair-release-review.v1")
@@ -168,7 +168,7 @@ const gates = [
     status: "human_required",
     ok: false,
     evidence: [
-      "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+      "docs/internal/decisions/0005-a2a-delegated-repair-release-review.md",
       "docs/a2a-repair-authorization.md",
       "docs/a2a-repair-visibility.md",
       "agent-os/scripts/a2a-repair-release-review.mjs",

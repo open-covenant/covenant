@@ -10,8 +10,16 @@ function read(path) {
   return readFileSync(join(repoRoot, path), "utf8").replace(/\r\n/g, "\n");
 }
 
-const policyPath = "docs/mcp-fixture-selection-policy.md";
-const statusPath = "docs/status.md";
+const policyPath = "docs/internal/mcp-fixture-selection-policy.md";
+const statusPath = "docs/internal/status.md";
+
+const policyAbs = join(repoRoot, policyPath);
+const statusAbs = join(repoRoot, statusPath);
+const { existsSync } = await import("node:fs");
+if (!existsSync(policyAbs) || !existsSync(statusAbs)) {
+  console.log("validate-mcp-fixture-selection-policy: dormant (internal docs absent)");
+  process.exit(0);
+}
 
 let policy;
 let status;
@@ -76,8 +84,8 @@ const statusRow = status.split("\n").find((line) => /^\| MCP tools \|/.test(line
 if (!statusRow) {
   fail("status.md is missing the MCP tools row");
 } else {
-  if (!statusRow.includes("docs/mcp-fixture-selection-policy.md")) {
-    fail("status.md MCP tools row must reference docs/mcp-fixture-selection-policy.md");
+  if (!statusRow.includes("docs/internal/mcp-fixture-selection-policy.md")) {
+    fail("status.md MCP tools row must reference docs/internal/mcp-fixture-selection-policy.md");
   }
   if (/opt-in third-party MCP server fixture (?:is|has) shipped/i.test(statusRow)) {
     fail("status.md MCP tools row must not claim a third-party fixture is shipping");

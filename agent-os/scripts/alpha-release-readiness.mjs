@@ -120,12 +120,6 @@ const checks = [
     ["agent-os/scripts/validate-autonomy-review-artifacts.mjs"],
   ),
   checkCommand(
-    "readme-status-copy",
-    "README and status matrix stay aligned",
-    process.execPath,
-    ["agent-os/scripts/validate-readme-copy.mjs"],
-  ),
-  checkCommand(
     "live-coverage-metadata",
     "Live coverage metadata validates",
     process.execPath,

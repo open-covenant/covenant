@@ -111,7 +111,7 @@ function plan(bundle) {
       {
         order: 5,
         action: "validate",
-        detail: "Run node agent-os/scripts/validate-autonomy.mjs, node agent-os/scripts/validate-readme-copy.mjs, git diff --check, and any task-specific checks before commit.",
+        detail: "Run node agent-os/scripts/validate-autonomy.mjs, git diff --check, and any task-specific checks before commit.",
       },
     ],
   };

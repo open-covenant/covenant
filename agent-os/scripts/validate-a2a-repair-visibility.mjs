@@ -150,7 +150,7 @@ if (releaseReview) {
     fail("delegated-repair-release-review must name the human review blocker");
   }
   for (const path of [
-    "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+    "docs/internal/decisions/0005-a2a-delegated-repair-release-review.md",
     "agent-os/scripts/a2a-repair-release-review.mjs",
     "agent-os/scripts/validate-a2a-repair-release-review.mjs",
   ]) {

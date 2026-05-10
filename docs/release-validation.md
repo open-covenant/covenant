@@ -27,8 +27,8 @@ Release evidence should include:
 - release commit and tag candidate;
 - supported host assumptions: macOS or Linux for trusted-local development, Linux-only for gVisor live validation;
 - exact validation commands and pass/fail/skipped outcomes;
-- capability status matrix from `docs/status.md`;
-- live boundary coverage matrix from `docs/live-coverage.md`;
+- capability status matrix from the internal status record;
+- live boundary coverage matrix from the internal coverage record;
 - runtime security boundary from `docs/runtime-sandbox-security.md`;
 - provenance envelope for the release task or release commit;
 - audit-root attestation when the release process generates one.
@@ -67,7 +67,6 @@ node agent-os/scripts/validate-autonomy-handoff.mjs
 node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
-node agent-os/scripts/validate-readme-copy.mjs
 node agent-os/scripts/validate-source-installer.mjs
 node agent-os/scripts/validate-distribution-readiness.mjs
 node agent-os/scripts/validate-settlement-deployment-readiness.mjs
@@ -85,7 +84,7 @@ Full Rust validation:
 bash agent-os/scripts/validate.sh
 ```
 
-Live tests are evidence when their prerequisites are recorded. Linux gVisor evidence should follow `docs/gvisor-live-runner.md`.
+Live tests are evidence when their prerequisites are recorded. Linux gVisor evidence follows the internal runner readiness contract.
 
 `node agent-os/scripts/alpha-release-readiness.mjs --json` is the machine-readable release blocker report. It does not mutate state. It reports dirty working-tree state, neutral Git identity, local Git metadata write access, outgoing commit identity, autonomy validation, handoff toolchain validation, unsigned review artifact validation, README/status drift, live coverage metadata, provenance verification, and GitHub push attribution. Use `--strict` when the report is being used as an acceptance gate rather than a preparatory diagnostic.
 

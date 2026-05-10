@@ -42,4 +42,4 @@ Before the first breaking change lands:
 2. Keep v1 fixtures committed until the code intentionally drops v1 support.
 3. Add parser tests for every supported compatibility window.
 4. Add `docs/protocol-migrations/v2.md`.
-5. Update `docs/status.md`, this document, and release notes with the migration boundary.
+5. Update the internal status matrix, this document, and release notes with the migration boundary.

@@ -11,7 +11,7 @@ const markerSchema = "covenant.a2a-delegated-repair-release-review.v1";
 const defaultMarker = "docs/a2a-delegated-repair-release-review.json";
 const allowedActions = new Set(["a2a.repair.requeue", "a2a.repair.force_error"]);
 const requiredEvidence = [
-  "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+  "docs/internal/decisions/0005-a2a-delegated-repair-release-review.md",
   "docs/a2a-repair-authorization.md",
   "docs/a2a-repair-visibility.md",
   "agent-os/scripts/validate-a2a-repair-authorization.mjs",
@@ -255,7 +255,7 @@ const report = {
   },
   accepted_scope: marker.acceptedScope,
   evidence: [
-    "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+    "docs/internal/decisions/0005-a2a-delegated-repair-release-review.md",
     "docs/a2a-repair-authorization.md",
     "docs/a2a-repair-visibility.md",
     "agent-os/scripts/a2a-repair-release-review.mjs",

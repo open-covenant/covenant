@@ -99,7 +99,7 @@ const preconditions = [
     id: "runsc-image-digest",
     title: "Pinned runsc image digest",
     ok: runscImageOk,
-    evidence: ["docs/gvisor-host-readiness.md"],
+    evidence: ["docs/internal/gvisor-host-readiness.md"],
     blockers: runscImageOk
       ? []
       : ["runner_metadata.runsc.source and runner_metadata.runsc.digest_sha256 are not pinned"],
@@ -109,7 +109,7 @@ const preconditions = [
     id: "rootfs-digest",
     title: "Pinned rootfs digest",
     ok: rootfsDigestOk,
-    evidence: ["docs/gvisor-host-readiness.md"],
+    evidence: ["docs/internal/gvisor-host-readiness.md"],
     blockers: rootfsDigestOk
       ? []
       : ["runner_metadata.rootfs.source and runner_metadata.rootfs.digest_sha256 are not pinned"],
@@ -119,7 +119,7 @@ const preconditions = [
     id: "host-architecture-pinned",
     title: "Host kernel and rootfs architecture",
     ok: hostBaselineOk,
-    evidence: ["docs/gvisor-host-readiness.md"],
+    evidence: ["docs/internal/gvisor-host-readiness.md"],
     blockers: hostBaselineOk
       ? []
       : ["runner_metadata.host.kernel and runner_metadata.rootfs.architecture are not recorded"],
@@ -129,7 +129,7 @@ const preconditions = [
     id: "failure-policy",
     title: "Sandbox failure policy",
     ok: failurePolicyOk,
-    evidence: ["docs/runtime-sandbox-security.md", "docs/gvisor-host-readiness.md"],
+    evidence: ["docs/runtime-sandbox-security.md", "docs/internal/gvisor-host-readiness.md"],
     blockers: failurePolicyOk
       ? []
       : [
@@ -141,7 +141,7 @@ const preconditions = [
     id: "runner-record-accepted",
     title: "Accepted runner metadata record",
     ok: runnerRecordAccepted,
-    evidence: ["docs/gvisor-host-readiness.md"],
+    evidence: ["docs/internal/gvisor-host-readiness.md"],
     blockers: runnerRecordAccepted
       ? []
       : [`runner_metadata.status must be "accepted" (currently "${runner?.status ?? "unknown"}")`],

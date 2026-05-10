@@ -2,7 +2,7 @@
 
 Covenant is developed with an autonomous engineering loop that mirrors the operating-layer primitives in the codebase. The loop is not presented as full self-improvement, full autonomy, or a benchmarked replacement for maintainers. It is an inspectable process for letting agents perform bounded engineering work while preserving review, provenance, and human authority boundaries.
 
-The detailed protocol lives in [docs/autonomous-development.md](./docs/autonomous-development.md). This file records how the public project relates to that loop.
+This file records how the public project relates to that loop. The detailed engineering protocol is maintained internally.
 
 ## What Is Real Today
 

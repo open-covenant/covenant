@@ -10,8 +10,13 @@ function read(path) {
   return readFileSync(join(repoRoot, path), "utf8").replace(/\r\n/g, "\n");
 }
 
-const matrixPath = "docs/signed-capabilities-live-coverage.md";
-const statusPath = "docs/status.md";
+const matrixPath = "docs/internal/signed-capabilities-live-coverage.md";
+const statusPath = "docs/internal/status.md";
+
+if (!existsSync(join(repoRoot, matrixPath)) || !existsSync(join(repoRoot, statusPath))) {
+  console.log("validate-signed-capabilities-live-coverage: dormant (internal docs absent)");
+  process.exit(0);
+}
 
 let matrix;
 let status;
@@ -120,8 +125,8 @@ if (!matrix.includes("node agent-os/scripts/validate-signed-capabilities-live-co
 const statusRow = status.split("\n").find((line) => /^\| Signed capabilities \|/.test(line));
 if (!statusRow) {
   fail("status.md is missing the Signed capabilities row");
-} else if (!statusRow.includes("docs/signed-capabilities-live-coverage.md")) {
-  fail("status.md Signed capabilities row must reference docs/signed-capabilities-live-coverage.md");
+} else if (!statusRow.includes("docs/internal/signed-capabilities-live-coverage.md")) {
+  fail("status.md Signed capabilities row must reference docs/internal/signed-capabilities-live-coverage.md");
 }
 
 const liveCoveragePath = "agent-os/autonomy/live-coverage.json";

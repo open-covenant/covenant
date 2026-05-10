@@ -142,7 +142,7 @@ if (runnerMetadataSchema) {
     fail("runner-metadata-schema must pass from repository files");
   }
   for (const path of [
-    "docs/gvisor-host-readiness.md",
+    "docs/internal/gvisor-host-readiness.md",
     "agent-os/scripts/gvisor-host-readiness.mjs",
     "agent-os/scripts/validate-gvisor-host-readiness.mjs",
   ]) {

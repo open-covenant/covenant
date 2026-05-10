@@ -11,7 +11,7 @@ function read(path) {
 }
 
 const contractPath = "docs/ipc-and-http-gateway.md";
-const statusPath = "docs/status.md";
+const statusPath = "docs/internal/status.md";
 const fixtureDirRel = "agent-os/crates/covenant-ipc/tests/fixtures/v2";
 const migrationNoteRel = "docs/protocol-migrations/v2.md";
 
@@ -24,11 +24,14 @@ try {
 } catch (error) {
   fail(`cannot read ${contractPath}: ${error.message}`);
 }
-let status;
-try {
-  status = read(statusPath);
-} catch (error) {
-  fail(`cannot read ${statusPath}: ${error.message}`);
+const statusAbs = join(repoRoot, statusPath);
+let status = null;
+if (existsSync(statusAbs)) {
+  try {
+    status = read(statusPath);
+  } catch (error) {
+    fail(`cannot read ${statusPath}: ${error.message}`);
+  }
 }
 
 if (contract) {

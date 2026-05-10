@@ -46,6 +46,12 @@ agent-os/autonomy/commit-rotation.json
 agent-os/scripts/commit-rotation.mjs
 agent-os/scripts/git-identity-policy.mjs
 
+# Internal docs: ADRs, capability/coverage matrices, readiness reports,
+# engineering process. Frontier-lab posture: process and gap-bearing
+# matrices stay local; public-facing protocol/API/provenance docs remain
+# tracked under docs/.
+docs/internal/
+
 playwright-report/
 test-results/
 

@@ -41,7 +41,7 @@ const programScaffoldOk =
 const localReceiptsOk =
   exists("agent-os/crates/covenant-settlement/Cargo.toml") &&
   exists("agent-os/crates/covenant-settlement/src/lib.rs");
-const readinessDocOk = exists("docs/on-chain-settlement-readiness.md");
+const readinessDocOk = exists("docs/internal/on-chain-settlement-readiness.md");
 const oraclePolicyDocOk = exists("docs/settlement-oracle-policy.md");
 const oraclePolicyReportOk = exists("agent-os/scripts/settlement-oracle-policy.mjs");
 const oraclePolicyValidatorOk = exists("agent-os/scripts/validate-settlement-oracle-policy.mjs");
@@ -77,7 +77,7 @@ const gates = [
     title: "Deployment runbook",
     status: readinessDocOk ? "documented" : "blocked",
     ok: readinessDocOk,
-    evidence: readinessDocOk ? ["docs/on-chain-settlement-readiness.md"] : [],
+    evidence: readinessDocOk ? ["docs/internal/on-chain-settlement-readiness.md"] : [],
     blockers: readinessDocOk ? [] : ["deployment readiness runbook is missing"],
     human_decision_required: false,
   },

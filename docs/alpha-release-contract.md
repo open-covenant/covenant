@@ -70,7 +70,6 @@ node agent-os/scripts/validate-autonomy-handoff.mjs
 node agent-os/scripts/validate-autonomy-review-artifacts.mjs
 node agent-os/scripts/validate-live-coverage.mjs
 node agent-os/scripts/validate-git-identity.mjs
-node agent-os/scripts/validate-readme-copy.mjs
 node agent-os/scripts/validate-source-installer.mjs
 node agent-os/scripts/validate-source-install-upgrade-plan.mjs
 node agent-os/scripts/validate-source-install-rollback.mjs
@@ -91,7 +90,7 @@ It includes unsigned review artifact validation so release preparation can prove
 Source install evidence follows `docs/source-install.md`; it is a local source-built install path, not a signed binary distribution.
 Source upgrade preflight evidence can classify fresh, clean, partial, and drifted install prefixes before an operator reinstalls over an existing prefix. Source rollback evidence is local to the selected prefix and does not claim package-manager rollback, signed release rollback, or public upgrade policy.
 SDK compatibility evidence covers workspace-alpha package metadata and export-map boundaries. It does not claim npm publication, public semver support windows, or generated protocol binding compatibility.
-Distribution graduation evidence follows `docs/distribution-readiness.md`; source-alpha readiness can pass while public package, signing, SDK, and upgrade gates remain blocked.
+Distribution graduation evidence follows the internal distribution-readiness contract; source-alpha readiness can pass while public package, signing, SDK, and upgrade gates remain blocked.
 
 ## Optional Live Gate
 
@@ -102,7 +101,7 @@ cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
-Record unavailable prerequisites explicitly. Linux gVisor evidence follows `docs/gvisor-live-runner.md`; model-backed tests require the configured local or external model provider described by the test.
+Record unavailable prerequisites explicitly. Linux gVisor evidence follows the internal runner readiness contract; model-backed tests require the configured local or external model provider described by the test.
 
 ## Human-Owned Decisions
 

@@ -53,7 +53,7 @@ const marker = {
     "duplicate-risk posture remains explicit for requeue",
   ],
   evidence: [
-    "docs/decisions/0005-a2a-delegated-repair-release-review.md",
+    "docs/internal/decisions/0005-a2a-delegated-repair-release-review.md",
     "docs/a2a-repair-authorization.md",
     "docs/a2a-repair-visibility.md",
     "agent-os/scripts/validate-a2a-repair-authorization.mjs",

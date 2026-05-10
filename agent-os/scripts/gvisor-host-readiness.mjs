@@ -91,9 +91,9 @@ const rootfsStatus = rootfsCheck(rootfs);
 const runtimeEvidenceOk =
   existsSync(join(repoRoot, "agent-os/crates/covenant-runtime/src/lib.rs")) &&
   existsSync(join(repoRoot, "agent-os/crates/covenant-runtime/tests/live_gvisor.rs")) &&
-  existsSync(join(repoRoot, "docs/gvisor-live-runner.md"));
+  existsSync(join(repoRoot, "docs/internal/gvisor-live-runner.md"));
 const runnerMetadataSchemaOk =
-  existsSync(join(repoRoot, "docs/gvisor-host-readiness.md")) &&
+  existsSync(join(repoRoot, "docs/internal/gvisor-host-readiness.md")) &&
   existsSync(join(repoRoot, "agent-os/scripts/gvisor-host-readiness.mjs")) &&
   existsSync(join(repoRoot, "agent-os/scripts/validate-gvisor-host-readiness.mjs"));
 
@@ -147,7 +147,7 @@ const gates = [
     evidence: [
       "agent-os/crates/covenant-runtime/src/lib.rs",
       "agent-os/crates/covenant-runtime/tests/live_gvisor.rs",
-      "docs/gvisor-live-runner.md",
+      "docs/internal/gvisor-live-runner.md",
     ],
     blockers: runtimeEvidenceOk ? [] : ["runtime source, live test, or runner guide is missing"],
     human_decision_required: false,
@@ -158,7 +158,7 @@ const gates = [
     status: runnerMetadataSchemaOk ? "documented" : "missing",
     ok: runnerMetadataSchemaOk,
     evidence: [
-      "docs/gvisor-host-readiness.md",
+      "docs/internal/gvisor-host-readiness.md",
       "agent-os/scripts/gvisor-host-readiness.mjs",
       "agent-os/scripts/validate-gvisor-host-readiness.mjs",
     ],

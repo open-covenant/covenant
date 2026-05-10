@@ -43,11 +43,9 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 
 The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
-See [docs/repo-map.md](./docs/repo-map.md), [docs/status.md](./docs/status.md), [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/release-validation.md](./docs/release-validation.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
+See [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/release-validation.md](./docs/release-validation.md), [docs/capabilities.md](./docs/capabilities.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
 
 ## Capabilities
-
-<!-- covenant-readme-status-sha256: ed4d8320cbaeb6a8bd6bb798897110d1fe54809f4fc40a3e47a4594a016520fe -->
 
 Covenant includes:
 
@@ -92,12 +90,6 @@ Verify committed provenance envelopes:
 node agent-os/scripts/provenance.mjs verify-all
 ```
 
-Validate README positioning and status coverage:
-
-```bash
-node agent-os/scripts/validate-readme-copy.mjs
-```
-
 Build the public documentation surface:
 
 ```bash
@@ -134,11 +126,11 @@ Covenant advances open infrastructure for:
 
 Covenant is systems infrastructure with security-sensitive boundaries. Contributions should include a validation plan, tests for changed behavior, and a clear statement of operational impact.
 
-Start with [CONTRIBUTING.md](./CONTRIBUTING.md), [docs/autonomous-development.md](./docs/autonomous-development.md), and [ROADMAP.md](./ROADMAP.md). Changes touching identity, permissions, audit, runtime isolation, settlement, provenance, release automation, or CI should receive especially close review.
+Start with [CONTRIBUTING.md](./CONTRIBUTING.md) and [ROADMAP.md](./ROADMAP.md). Changes touching identity, permissions, audit, runtime isolation, settlement, provenance, release automation, or CI should receive especially close review.
 
 ## Security
 
-Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation boundary is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md), and the opt-in Linux gVisor runner setup is tracked in [docs/gvisor-live-runner.md](./docs/gvisor-live-runner.md). Do not open public issues for vulnerabilities.
+Follow [SECURITY.md](./SECURITY.md) for responsible disclosure. The runtime isolation boundary is tracked in [docs/runtime-sandbox-security.md](./docs/runtime-sandbox-security.md). Do not open public issues for vulnerabilities.
 
 ## License
 

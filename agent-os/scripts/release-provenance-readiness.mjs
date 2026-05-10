@@ -59,7 +59,7 @@ const provenanceVerifierOk = exists("agent-os/scripts/provenance.mjs")
     "provenance envelopes",
     "verify-all",
   ]);
-const auditRootPolicyOk = containsAll("docs/decisions/0004-audit-root-signing-policy.md", [
+const auditRootPolicyOk = containsAll("docs/internal/decisions/0004-audit-root-signing-policy.md", [
   "project-controlled signing key",
   "GitHub Actions OIDC",
   "offline project key",
@@ -108,7 +108,7 @@ const gates = [
     title: "Audit-root signing policy",
     status: auditRootPolicyOk ? "documented" : "missing",
     ok: auditRootPolicyOk,
-    evidence: ["docs/decisions/0004-audit-root-signing-policy.md"],
+    evidence: ["docs/internal/decisions/0004-audit-root-signing-policy.md"],
     blockers: auditRootPolicyOk ? [] : ["audit-root signing policy does not define acceptable project signing identities"],
     human_decision_required: true,
   },
@@ -135,7 +135,7 @@ const gates = [
     title: "Project key custody",
     status: "planned",
     ok: false,
-    evidence: ["docs/decisions/0004-audit-root-signing-policy.md"],
+    evidence: ["docs/internal/decisions/0004-audit-root-signing-policy.md"],
     blockers: [
       "project release signing key is not selected",
       "public key publication location is not approved",

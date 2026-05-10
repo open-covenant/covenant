@@ -53,7 +53,7 @@ requireIncludes("docs/a2a-repair-visibility.md", [
   "covenant.a2a-delegated-repair-release-review.v1",
 ]);
 
-requireIncludes("docs/decisions/0005-a2a-delegated-repair-release-review.md", [
+requireIncludes("docs/internal/decisions/0005-a2a-delegated-repair-release-review.md", [
   "covenant.a2a-delegated-repair-release-review.v1",
   "node agent-os/scripts/a2a-repair-release-review.mjs --strict",
   "counterparty_binding",

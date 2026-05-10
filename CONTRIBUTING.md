@@ -44,7 +44,7 @@ For the landing site:
 
 ## Autonomous Workflow
 
-This repository accepts agent-assisted contributions, but the output is held to the same standard as any other change. Read [docs/autonomous-development.md](./docs/autonomous-development.md) before making broad changes.
+This repository accepts agent-assisted contributions, but the output is held to the same standard as any other change. The detailed engineering protocol is maintained internally; the public summary lives in [BUILT.md](./BUILT.md).
 
 At minimum:
 

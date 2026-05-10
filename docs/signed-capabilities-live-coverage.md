@@ -4,7 +4,7 @@ This matrix enumerates the scoped capability paths from [docs/capabilities.md](.
 
 The matrix lets the autonomy loop target delegated coverage gaps deterministically. It does not add tests, change capability enforcement, or claim that delegation is implemented for every namespace.
 
-The validator at `agent-os/scripts/validate-signed-capabilities-live-coverage.mjs` parses the cited live-test paths from this document and refuses to pass when any path is missing under `agent-os/crates/*/tests/`. Run it from the repository root:
+The validator at `agent-os/scripts/validate-signed-capabilities-live-coverage.mjs` parses the cited live-test paths from this document, refuses to pass when any path is missing under `agent-os/crates/*/tests/`, and cross-binds each `delegated-covered` or `delegated-denial-only` row to the `delegated: true` scope evidence in [`agent-os/autonomy/live-coverage.json`](../agent-os/autonomy/live-coverage.json). Run it from the repository root:
 
 ```bash
 node agent-os/scripts/validate-signed-capabilities-live-coverage.mjs

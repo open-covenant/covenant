@@ -124,6 +124,100 @@ if (!statusRow) {
   fail("status.md Signed capabilities row must reference docs/signed-capabilities-live-coverage.md");
 }
 
+const liveCoveragePath = "agent-os/autonomy/live-coverage.json";
+let liveCoverage;
+try {
+  liveCoverage = JSON.parse(read(liveCoveragePath));
+} catch (error) {
+  fail(`cannot read ${liveCoveragePath}: ${error.message}`);
+}
+
+const delegatedScopeEntries = new Map();
+if (liveCoverage && Array.isArray(liveCoverage.surfaces)) {
+  for (const surface of liveCoverage.surfaces) {
+    const blocks = Array.isArray(surface?.scopeCoverage) ? surface.scopeCoverage : [];
+    for (const block of blocks) {
+      if (block?.delegated === true && typeof block.namespace === "string") {
+        delegatedScopeEntries.set(block.namespace, {
+          surface: surface.id ?? null,
+          liveTest: typeof block.liveTest === "string" ? block.liveTest : null,
+          deniedEvidence: Array.isArray(block.deniedEvidence) ? block.deniedEvidence : [],
+          allowedEvidence: Array.isArray(block.allowedEvidence) ? block.allowedEvidence : [],
+        });
+      }
+    }
+  }
+}
+
+function actionToNamespace(action) {
+  let trimmed = action.trim();
+  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+    trimmed = trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function extractRowAction(row) {
+  const match = row.match(/^\| (`[^|]+`) \| /);
+  if (!match) {
+    return null;
+  }
+  return actionToNamespace(match[1]);
+}
+
+const coveredMarks = new Set(["delegated-covered", "delegated-denial-only"]);
+const matrixCovered = matrixRows
+  .map((row) => {
+    const action = extractRowAction(row);
+    if (!action) return null;
+    const cells = row.split("|").map((cell) => cell.trim());
+    const liveCell = cells[3] ?? "";
+    const coverageCell = cells[4] ?? "";
+    return { action, liveCell, coverageCell };
+  })
+  .filter(Boolean)
+  .filter((row) => coveredMarks.has(row.coverageCell));
+
+for (const row of matrixCovered) {
+  const namespaceCandidates = [row.action];
+  if (row.action === "a2a.repair.requeue") {
+    namespaceCandidates.push("a2a.repair.requeue");
+  }
+  let entry = null;
+  for (const candidate of namespaceCandidates) {
+    if (delegatedScopeEntries.has(candidate)) {
+      entry = delegatedScopeEntries.get(candidate);
+      break;
+    }
+  }
+  if (!entry) {
+    fail(
+      `matrix row for ${row.action} (${row.coverageCell}) has no matching delegated:true scopeCoverage entry in ${liveCoveragePath}`,
+    );
+    continue;
+  }
+  if (entry.liveTest) {
+    if (!row.liveCell.includes(entry.liveTest)) {
+      fail(
+        `matrix row for ${row.action} cites different live test than ${liveCoveragePath} (expected ${entry.liveTest})`,
+      );
+    }
+  }
+  if (row.coverageCell === "delegated-covered") {
+    if (entry.allowedEvidence.length === 0) {
+      fail(
+        `matrix marks ${row.action} delegated-covered but ${liveCoveragePath} scopeCoverage has no allowedEvidence`,
+      );
+    }
+  } else if (row.coverageCell === "delegated-denial-only") {
+    if (entry.allowedEvidence.length > 0) {
+      fail(
+        `matrix marks ${row.action} delegated-denial-only but ${liveCoveragePath} scopeCoverage records allowedEvidence`,
+      );
+    }
+  }
+}
+
 if (errors.length > 0) {
   console.error("validate-signed-capabilities-live-coverage: failed");
   for (const error of errors) {
@@ -132,4 +226,6 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log(`validate-signed-capabilities-live-coverage: ok (${matrixRows.length} action rows, ${cited.size} live test paths)`);
+console.log(
+  `validate-signed-capabilities-live-coverage: ok (${matrixRows.length} action rows, ${cited.size} live test paths, ${matrixCovered.length} delegated bindings)`,
+);

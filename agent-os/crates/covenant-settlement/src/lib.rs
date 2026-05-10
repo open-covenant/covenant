@@ -12,7 +12,7 @@
 #![deny(unsafe_code)]
 
 use async_trait::async_trait;
-use covenant_types::SettlementReceipt;
+use covenant_types::{ResourceKind, SettlementReceipt};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -94,6 +94,76 @@ pub fn build_receipt_batch(
         merkle_root,
         receipt_ids: unsettled.iter().map(|receipt| receipt.id).collect(),
         receipt_count: unsettled.len() as u32,
+    })
+}
+
+pub fn receipt_migration_plan_json(receipts: &[SettlementReceipt]) -> serde_json::Value {
+    let memory_receipts = receipts
+        .iter()
+        .filter(|receipt| receipt.resource == ResourceKind::Memory)
+        .collect::<Vec<_>>();
+    let legacy_memory_receipts = memory_receipts
+        .iter()
+        .copied()
+        .filter(|receipt| receipt.memory_record_id.is_none())
+        .collect::<Vec<_>>();
+    let correlated_memory_receipts = memory_receipts
+        .iter()
+        .copied()
+        .filter(|receipt| receipt.memory_record_id.is_some())
+        .collect::<Vec<_>>();
+    let batched_receipt_count = receipts
+        .iter()
+        .filter(|receipt| receipt.batch_id.is_some())
+        .count();
+
+    serde_json::json!({
+        "schema": "covenant.settlement.receipt_migration.plan.v1",
+        "mode": "dry_run",
+        "mutation_supported": false,
+        "summary": {
+            "receipt_count": receipts.len(),
+            "memory_receipt_count": memory_receipts.len(),
+            "correlated_memory_receipt_count": correlated_memory_receipts.len(),
+            "legacy_memory_receipt_count": legacy_memory_receipts.len(),
+            "non_memory_receipt_count": receipts.len().saturating_sub(memory_receipts.len()),
+            "batched_receipt_count": batched_receipt_count,
+            "unbatched_receipt_count": receipts.len().saturating_sub(batched_receipt_count),
+            "malformed_row_count": 0
+        },
+        "expected_correlation_inputs": [
+            "memory_record_id from the originating memory write",
+            "payer pubkey match between receipt.payer and memory.owner",
+            "before and after receipt hash evidence for any future mutation",
+            "audit event id for the future authorized mutation"
+        ],
+        "legacy_uncorrelated_receipts": legacy_memory_receipts
+            .iter()
+            .map(|receipt| serde_json::json!({
+                "receipt_id": receipt.id,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "resource": receipt.resource,
+                "credits_consumed": receipt.credits_consumed,
+                "settled_at": receipt.settled_at,
+                "batch_id": receipt.batch_id.as_deref(),
+                "onchain_settled": receipt.tx_sig.is_some() || receipt.onchain_sig.is_some(),
+                "status": "needs_memory_record_match"
+            }))
+            .collect::<Vec<_>>(),
+        "correlated_memory_receipts": correlated_memory_receipts
+            .iter()
+            .map(|receipt| serde_json::json!({
+                "receipt_id": receipt.id,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "memory_record_id": receipt.memory_record_id,
+                "batch_id": receipt.batch_id.as_deref(),
+                "status": "already_correlated"
+            }))
+            .collect::<Vec<_>>(),
+        "refusal": {
+            "apply_supported": false,
+            "reason": "settlement receipt migration is read-only; mutation requires a separate authorized command with rollback and audit evidence"
+        }
     })
 }
 
@@ -422,6 +492,57 @@ mod tests {
         let batch_a = build_receipt_batch(&[a]).unwrap();
         let batch_b = build_receipt_batch(&[b]).unwrap();
         assert_ne!(batch_a.merkle_root, batch_b.merkle_root);
+    }
+
+    #[test]
+    fn receipt_migration_plan_splits_legacy_and_correlated_memory_receipts() {
+        let mut legacy = receipt(1);
+        legacy.id = Uuid::from_u128(1);
+        legacy.payer = AgentId::new("legacy@local", [1u8; 32]);
+
+        let mut correlated = receipt(2);
+        correlated.id = Uuid::from_u128(2);
+        correlated.payer = AgentId::new("correlated@local", [2u8; 32]);
+        correlated.memory_record_id = Some(Uuid::from_u128(20));
+        correlated.batch_id = Some("batch".to_string());
+
+        let mut compute = receipt(3);
+        compute.id = Uuid::from_u128(3);
+        compute.resource = ResourceKind::Compute;
+
+        let value = receipt_migration_plan_json(&[legacy, correlated, compute]);
+
+        assert_eq!(
+            value["schema"],
+            "covenant.settlement.receipt_migration.plan.v1"
+        );
+        assert_eq!(value["mode"], "dry_run");
+        assert_eq!(value["mutation_supported"], false);
+        assert_eq!(value["summary"]["receipt_count"], 3);
+        assert_eq!(value["summary"]["memory_receipt_count"], 2);
+        assert_eq!(value["summary"]["legacy_memory_receipt_count"], 1);
+        assert_eq!(value["summary"]["correlated_memory_receipt_count"], 1);
+        assert_eq!(value["summary"]["non_memory_receipt_count"], 1);
+        assert_eq!(
+            value["legacy_uncorrelated_receipts"][0]["receipt_id"],
+            Uuid::from_u128(1).to_string()
+        );
+        assert_eq!(
+            value["correlated_memory_receipts"][0]["memory_record_id"],
+            Uuid::from_u128(20).to_string()
+        );
+        assert_eq!(value["refusal"]["apply_supported"], false);
+    }
+
+    #[test]
+    fn receipt_migration_plan_does_not_export_display_identity() {
+        let mut legacy = receipt(1);
+        legacy.payer = AgentId::new("private-display@local", [1u8; 32]);
+
+        let raw = serde_json::to_string(&receipt_migration_plan_json(&[legacy])).unwrap();
+
+        assert!(!raw.contains("private-display@local"));
+        assert!(raw.contains("payer_pubkey"));
     }
 
     #[tokio::test]

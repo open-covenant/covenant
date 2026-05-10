@@ -1,0 +1,31 @@
+{
+  "id": "status-runtime-gvisor-runner-promotion-readiness-report",
+  "title": "Add gvisor runner promotion readiness report",
+  "state": "ready",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/runtime-execution.md",
+    "docs/status.md"
+  ],
+  "summary": "After status-runtime-execution-pin-gvisor-runner-metadata-schema pinned the runner/rootfs metadata schema, the next layer is a promotion-readiness report that surfaces whether the pinned metadata satisfies the CI promotion preconditions (host provisioning state, image digest pin, rootfs digest pin) without performing the promotion itself. Production runner selection and CI access remain human-owned.",
+  "expectedFailureModes": [
+    "Promotion happens against a runner whose preconditions were never aggregated into a single readable signal.",
+    "Report exists but disagrees with the schema validator, so a future schema change silently invalidates the report shape.",
+    "docs/status.md overclaims promotion readiness before host provisioning is in place."
+  ],
+  "gates": [
+    "docs"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "node agent-os/scripts/validate.sh --scripts",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "CI host provisioning, runner credentials, and actual promotion of the gvisor runner into CI remain human-owned."
+  ],
+  "nextAction": "Implement agent-os/scripts/gvisor-runner-promotion-readiness.mjs that reads the pinned metadata, reports per-precondition pass/blocked, register the validator hook, and document the report in docs/runtime-execution.md while keeping promotion human-gated.",
+  "updated": "2026-05-10"
+}

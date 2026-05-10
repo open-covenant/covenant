@@ -113,6 +113,7 @@ Checklist for new templates:
 - Pick a unique `id` that does not exist as `agent-os/autonomy/tasks/<id>.json`.
 - Use workflow enums from `agent-os/autonomy/workflow.json` for `priority` and `ownerRole`.
 - Keep `verification` commands deterministic and machine-portable (no local-only paths or secrets).
+- Prefer templates that can progress without external credentials or key-custody decisions; if not, make the `humanEscalation` explicit and expect the task to move to `blocked`.
 - Name at least three concrete `expectedFailureModes` before promoting a task past `proposed`.
 
 ## State Rules

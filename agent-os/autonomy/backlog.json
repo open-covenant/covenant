@@ -2787,6 +2787,179 @@
       "humanEscalation": [],
       "nextAction": "Add a local autonomy summary publication command, validate its write/check behavior, and document the routine sprint-summary publication path without claiming signed review artifacts.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "autonomy-backlog-refill-2026-05-10",
+      "title": "Refill autonomy backlog templates (2026-05-10)",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/autonomy/backlog.json",
+        "agent-os/autonomy/tasks/README.md"
+      ],
+      "summary": "Autonomy sessions currently stall because every backlog template already exists under agent-os/autonomy/tasks. Add a fresh batch of alpha-critical templates grounded in docs/status gaps so autonomy-next can keep seeding new work without relying on chat history.",
+      "expectedFailureModes": [
+        "Autonomy sessions stall because backlog exhaustion prevents seeding new tasks.",
+        "New templates fail validate-autonomy due to missing fields, invalid enums, or duplicated ids.",
+        "Templates include machine-local paths or non-portable verification commands, making the record unverifiable."
+      ],
+      "gates": [
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Append a small set of new templates (>=5) derived from node agent-os/scripts/autonomy-status-gaps.mjs, with realistic scopes, gates, and deterministic verification commands.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-mcp-tools-more-live-server-compatibility-tests",
+      "title": "MCP tools: add more live server compatibility tests",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-mcp",
+        "agent-os/crates/covenant",
+        "agent-os/scripts/validate.sh"
+      ],
+      "summary": "The MCP tools surface is still experimental. Add a small, repeatable set of live compatibility fixtures/tests against common server behaviors (id encoding, stderr noise, delayed flush, large payloads) so regressions are caught before expanding protocol claims.",
+      "expectedFailureModes": [
+        "A server that emits numeric ids as strings causes requests to hang or misroute.",
+        "Non-protocol stderr output breaks parsing or blocks responses in the CLI boundary.",
+        "Large tool payloads regress framing or buffering and fail only in production."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --quick",
+        "cd agent-os && cargo test -p covenant-mcp --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add 2-3 targeted covenant-mcp live/fixture tests that exercise real-world server response edge cases (start with string/numeric ids and mixed stdout/stderr), and wire them into validate.sh.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-local-daemon-and-cli-broaden-live-cli-coverage-for-every",
+      "title": "Broaden live CLI coverage for privileged verbs",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant",
+        "agent-os/crates/covenantd",
+        "agent-os/autonomy/live-coverage.json"
+      ],
+      "summary": "The local daemon + CLI is partially covered by live tests, but several privileged verbs still lack end-to-end exercise. Add focused live CLI tests for the remaining high-risk commands so drift shows up before release evidence is generated.",
+      "expectedFailureModes": [
+        "A privileged verb regresses exit codes or JSON shape without unit tests noticing.",
+        "Dispatch wiring drifts and the CLI silently no-ops or targets the wrong daemon endpoint.",
+        "Live coverage claims drift from reality and block alpha readiness unexpectedly."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --quick",
+        "cd agent-os && cargo test -p covenant --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Identify 2-3 privileged CLI verbs without live coverage and add minimal live tests that prove dispatch + exit status + JSON output shape.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-memory-store-automatic-compaction-schedules-and-receipt",
+      "title": "Memory store: automatic compaction schedules + receipt backfill",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-memory",
+        "agent-os/crates/covenant",
+        "docs"
+      ],
+      "summary": "Memory compaction is implemented, but operators still need a deterministic way to schedule compaction and backfill receipts for legacy rows. Add a small automation surface that can run in dry-run mode and emits JSON output for audit.",
+      "expectedFailureModes": [
+        "Compaction schedules are undocumented/manual and drift into ad hoc scripts.",
+        "Receipt correlation stays incomplete for legacy rows, blocking provenance and audit narratives.",
+        "A compaction run mutates state without a corresponding receipt trail."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --quick",
+        "cd agent-os && cargo test -p covenant-memory --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add a read-only/dry-run capable CLI subcommand that computes compaction candidates + expected receipt changes, then add a separate opt-in execution path that records receipts.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-ipc-and-http-gateway-define-the-protocol-v2-bump-migration",
+      "title": "IPC/HTTP gateway: define protocol v2 bump + migration harness",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-ipc",
+        "agent-os/crates/covenant-router",
+        "docs"
+      ],
+      "summary": "Protocol JSON shapes are stabilizing, but there is no explicit migration harness for the first breaking change. Define a v2 bump policy + a small compatibility test harness so future schema changes are intentional and testable.",
+      "expectedFailureModes": [
+        "A breaking schema change lands without a version bump and silently breaks clients.",
+        "No replay harness exists, so compatibility claims rely on memory instead of fixtures.",
+        "Version negotiation drifts and produces ambiguous errors at runtime."
+      ],
+      "gates": [
+        "docs",
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --quick",
+        "cd agent-os && cargo test -p covenant-ipc --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Write a short protocol versioning/migration note and add a compatibility harness test that can replay v1 fixtures against the current parser.",
+      "updated": "2026-05-10"
+    },
+    {
+      "id": "status-budget-ledger-mid-task-pause-save-and-resume",
+      "title": "Budget ledger: mid-task pause, save, and resume",
+      "state": "proposed",
+      "priority": "medium",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenant-budget",
+        "agent-os/crates/covenant-types"
+      ],
+      "summary": "Budget ledger is implemented and hardened, but long-running tasks still assume uninterrupted execution. Add an explicit pause/save/resume path so operators can safely stop and continue without losing ledger consistency.",
+      "expectedFailureModes": [
+        "A paused task loses budget state and double-spends on resume.",
+        "Checkpoint format is non-deterministic or leaks machine-local paths, breaking auditability.",
+        "Resume path fails to validate invariants and allows inconsistent ledger rows."
+      ],
+      "gates": [
+        "test_expansion"
+      ],
+      "verification": [
+        "bash agent-os/scripts/validate.sh --quick",
+        "cd agent-os && cargo test -p covenant-budget --locked",
+        "node agent-os/scripts/validate-autonomy.mjs"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Define a small persisted checkpoint format for mid-task state and add tests proving pause+resume preserves ledger invariants.",
+      "updated": "2026-05-10"
     }
   ]
 }

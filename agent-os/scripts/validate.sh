@@ -69,6 +69,7 @@ run node ./scripts/validate-settlement-oracle-policy.mjs
 run node ./scripts/validate-settlement-deployment-readiness.mjs
 run node ./scripts/validate-settlement-receipt-migration.mjs
 run node ./scripts/validate-gvisor-host-readiness.mjs
+run node ./scripts/validate-release-artifact-subject.mjs
 run node ./scripts/validate-release-provenance-readiness.mjs
 run node ./scripts/validate-identity-provenance.mjs
 run node ./scripts/validate-mcp-live-compatibility.mjs

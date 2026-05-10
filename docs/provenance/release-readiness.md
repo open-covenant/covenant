@@ -26,10 +26,10 @@ The report uses schema `covenant.release-provenance-readiness.v1`. It does not g
 | `audit-root-release-subject-binding` | Implemented | `agent-os/scripts/provenance.mjs`, `agent-os/scripts/provenance-self-test.mjs` | No signing key approval. |
 | `review-artifact-signing-contract` | Documented | `docs/provenance/review-artifact-signing.md` | Project review key approval. |
 | `project-key-custody` | Planned | Signing policy docs | Key custody, publication, rotation, and revocation. |
-| `release-artifact-subject-verifier` | Planned | Subject schema docs | Implementation of release artifact digest verification. |
+| `release-artifact-subject-verifier` | Implemented | `agent-os/scripts/release-artifact-subject.mjs`, `agent-os/scripts/validate-release-artifact-subject.mjs` | No signing key approval. |
 | `transparency-publication` | Planned | None yet | Publication target, credentials, and release evidence policy. |
 
-`ready_for_local_release_provenance_planning` can be true while `ready_for_public_release_provenance` remains false. That is the expected state until public key custody, artifact-subject verification, and transparency publication exist.
+`ready_for_local_release_provenance_planning` can be true while `ready_for_public_release_provenance` remains false. That is the expected state until public key custody and transparency publication exist.
 
 ## Artifact Subject Metadata
 

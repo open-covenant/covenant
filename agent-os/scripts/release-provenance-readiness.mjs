@@ -76,6 +76,13 @@ const reviewSigningOk = containsAll("docs/provenance/review-artifact-signing.md"
   "covenant.autonomy-review-signature.v1",
   "human_approval_required",
 ]);
+const releaseArtifactSubjectVerifierOk =
+  exists("agent-os/scripts/release-artifact-subject.mjs") &&
+  exists("agent-os/scripts/validate-release-artifact-subject.mjs") &&
+  containsAll("docs/provenance/release-subjects.md", [
+    "release-artifact-subject.mjs",
+    "validate-release-artifact-subject.mjs",
+  ]);
 
 const gates = [
   {
@@ -139,14 +146,20 @@ const gates = [
   {
     id: "release-artifact-subject-verifier",
     title: "Release artifact subject verifier",
-    status: "planned",
-    ok: false,
-    evidence: ["docs/provenance/release-subjects.md"],
-    blockers: [
-      "release_bundle subjects are documented but not implemented in provenance.mjs",
-      "artifact digests are not checked against produced release files",
-      "validation evidence is not bound to release artifact subjects",
+    status: releaseArtifactSubjectVerifierOk ? "implemented" : "planned",
+    ok: releaseArtifactSubjectVerifierOk,
+    evidence: [
+      "docs/provenance/release-subjects.md",
+      "agent-os/scripts/release-artifact-subject.mjs",
+      "agent-os/scripts/validate-release-artifact-subject.mjs",
     ],
+    blockers: releaseArtifactSubjectVerifierOk
+      ? []
+      : [
+          "release_bundle subjects are documented but not implemented in a local verifier",
+          "artifact digests are not checked against produced release files",
+          "validation evidence is not bound to release artifact subjects",
+        ],
     human_decision_required: false,
   },
   {
@@ -170,6 +183,7 @@ const localGateIds = new Set([
   "audit-root-signing-policy",
   "audit-root-release-subject-binding",
   "review-artifact-signing-contract",
+  "release-artifact-subject-verifier",
 ]);
 const localGates = gates.filter((gate) => localGateIds.has(gate.id));
 const blockers = gates.filter((gate) => !gate.ok).map((gate) => gate.id);

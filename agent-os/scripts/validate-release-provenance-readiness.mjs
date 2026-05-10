@@ -82,6 +82,7 @@ for (const id of [
   "audit-root-signing-policy",
   "audit-root-release-subject-binding",
   "review-artifact-signing-contract",
+  "release-artifact-subject-verifier",
 ]) {
   const gate = gates.get(id);
   if (gate && gate.ok !== true) {
@@ -91,7 +92,6 @@ for (const id of [
 
 for (const id of [
   "project-key-custody",
-  "release-artifact-subject-verifier",
   "transparency-publication",
 ]) {
   const gate = gates.get(id);
@@ -101,6 +101,18 @@ for (const id of [
   }
   if (!Array.isArray(gate.blockers) || gate.blockers.length === 0) {
     fail(`${id} must list blockers`);
+  }
+}
+
+const releaseArtifactSubject = gates.get("release-artifact-subject-verifier");
+if (releaseArtifactSubject) {
+  for (const evidence of [
+    "agent-os/scripts/release-artifact-subject.mjs",
+    "agent-os/scripts/validate-release-artifact-subject.mjs",
+  ]) {
+    if (!Array.isArray(releaseArtifactSubject.evidence) || !releaseArtifactSubject.evidence.includes(evidence)) {
+      fail(`release-artifact-subject-verifier must include evidence: ${evidence}`);
+    }
   }
 }
 

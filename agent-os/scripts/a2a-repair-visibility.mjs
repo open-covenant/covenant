@@ -54,6 +54,10 @@ const cliRepairOk = contains("agent-os/crates/covenant/src/main.rs", "a2a requeu
 const liveRepairOk = exists("agent-os/crates/covenantd/tests/live_cli_a2a_repair.rs")
   && exists("agent-os/crates/covenantd/tests/live_cli_a2a_retry_stale_json.rs")
   && exists("agent-os/crates/covenantd/tests/live_restart_a2a.rs");
+const perPeerRepairReportOk = exists("agent-os/scripts/a2a-peer-repair-report.mjs")
+  && exists("agent-os/scripts/validate-a2a-peer-repair-report.mjs")
+  && contains("docs/a2a-repair-visibility.md", "a2a-peer-repair-report.mjs")
+  && contains("docs/a2a-repair-visibility.md", "covenant.a2a-peer-repair-report.v1");
 
 const gates = [
   {
@@ -99,14 +103,20 @@ const gates = [
   {
     id: "per-peer-repair-report",
     title: "Per-peer repair report",
-    status: "planned",
-    ok: false,
-    evidence: [],
-    blockers: [
-      "repair reports do not yet group stale leases by peer pubkey",
-      "retry-stale output does not yet summarize skipped unsafe tasks per peer",
-      "operator views cannot yet compare delegated repair impact across peers",
+    status: perPeerRepairReportOk ? "implemented" : "missing",
+    ok: perPeerRepairReportOk,
+    evidence: [
+      "agent-os/scripts/a2a-peer-repair-report.mjs",
+      "agent-os/scripts/validate-a2a-peer-repair-report.mjs",
+      "docs/a2a-repair-visibility.md",
     ],
+    blockers: perPeerRepairReportOk
+      ? []
+      : [
+          "repair reports do not yet group stale leases by peer pubkey",
+          "retry-stale output does not yet summarize skipped unsafe tasks per peer",
+          "operator views cannot yet compare delegated repair impact across peers",
+        ],
     human_decision_required: false,
   },
   {
@@ -140,11 +150,15 @@ const report = {
   ready_for_operator_repair_visibility: operatorGates.every((gate) => gate.ok),
   ready_for_delegated_repair: false,
   blockers,
+  per_peer_repair_report: {
+    schema: "covenant.a2a-peer-repair-report.v1",
+    command: "node agent-os/scripts/a2a-peer-repair-report.mjs --status status.json --retry retry.json --json",
+    validator: "node agent-os/scripts/validate-a2a-peer-repair-report.mjs",
+  },
   delegated_repair_requirements: [
-    "peer-scoped repair report",
-    "per-peer skipped retry summary",
     "peer-mismatched repair denial tests",
     "capability-scope denial fixtures",
+    "delegated repair authorization policy",
   ],
   gates,
 };

@@ -47,14 +47,23 @@ if (report.ready_for_delegated_repair !== false) {
 
 const requirements = new Set(report.delegated_repair_requirements ?? []);
 for (const requirement of [
-  "peer-scoped repair report",
-  "per-peer skipped retry summary",
   "peer-mismatched repair denial tests",
   "capability-scope denial fixtures",
+  "delegated repair authorization policy",
 ]) {
   if (!requirements.has(requirement)) {
     fail(`missing delegated repair requirement: ${requirement}`);
   }
+}
+
+if (report.per_peer_repair_report?.schema !== "covenant.a2a-peer-repair-report.v1") {
+  fail("per-peer repair report schema reference missing");
+}
+if (
+  report.per_peer_repair_report?.validator
+  !== "node agent-os/scripts/validate-a2a-peer-repair-report.mjs"
+) {
+  fail("per-peer repair report validator reference missing");
 }
 
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
@@ -83,14 +92,21 @@ for (const id of [
   }
 }
 
-for (const id of ["per-peer-repair-report", "delegated-repair-denial-coverage"]) {
-  const gate = gates.get(id);
-  if (!gate) continue;
-  if (gate.ok !== false) {
-    fail(`${id} must not be reported ready yet`);
+const perPeerReport = gates.get("per-peer-repair-report");
+if (perPeerReport && perPeerReport.ok !== true) {
+  fail("per-peer-repair-report must pass");
+}
+if (!perPeerReport?.evidence?.includes("agent-os/scripts/a2a-peer-repair-report.mjs")) {
+  fail("per-peer-repair-report must name report script evidence");
+}
+
+const delegatedDenial = gates.get("delegated-repair-denial-coverage");
+if (delegatedDenial) {
+  if (delegatedDenial.ok !== false) {
+    fail("delegated-repair-denial-coverage must not be reported ready yet");
   }
-  if (!Array.isArray(gate.blockers) || gate.blockers.length === 0) {
-    fail(`${id} must list blockers`);
+  if (!Array.isArray(delegatedDenial.blockers) || delegatedDenial.blockers.length === 0) {
+    fail("delegated-repair-denial-coverage must list blockers");
   }
 }
 

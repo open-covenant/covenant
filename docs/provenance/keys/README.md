@@ -46,6 +46,23 @@ Fields:
 - `authorized_signer`: role string. Currently always `open-covenant-release-operator`.
 - `purposes`: list of envelope kinds the key may sign. Subset of `autonomy-review-signature`, `audit-root-attestation`, `release-subject`.
 
+## Computing `spki_sha256`
+
+`spki_sha256` is the lowercase hex SHA-256 of the **decoded DER bytes** of the SPKI file, not of the base64 text. To reproduce it from a published file:
+
+```bash
+openssl enc -d -base64 -A -in <key_id>.spki.base64 | openssl dgst -sha256
+```
+
+On systems without OpenSSL, the same result comes from a portable decode-then-hash pipeline:
+
+```bash
+base64 -d <key_id>.spki.base64 | sha256sum   # GNU coreutils
+base64 -d <key_id>.spki.base64 | shasum -a 256   # BSD / macOS
+```
+
+The 64-character lowercase hex output is the value recorded in `spki_sha256` for that entry. An empty `keys` array is the valid pre-publication state, in which case no fingerprint exists yet.
+
 ## Operational Steps
 
 The release-operator role generates and publishes keys. Automation does not generate, sign with, or rotate the project key. The operator:

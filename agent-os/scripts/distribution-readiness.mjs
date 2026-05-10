@@ -68,6 +68,48 @@ const packageReadinessValidatorOk = exists("agent-os/scripts/validate-package-ma
 const packageReadinessEvidenceOk =
   packageReadinessDocOk && packageReadinessReportOk && packageReadinessValidatorOk;
 
+const packageManagerManifestContract = {
+  schema: "covenant.package-manager-manifest.v1",
+  status: "draft_empty_placeholders",
+  ready_for_manifest_review: false,
+  manifest_path: null,
+  required_fields: [
+    "channel",
+    "package_name",
+    "manifest_path",
+    "artifact_url",
+    "artifact_sha256",
+    "signature_verification",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+  ],
+  redaction: {
+    machine_local_paths_allowed: false,
+    generated_from_local_state: false,
+  },
+  channels: [
+    "homebrew",
+    "nix",
+    "debian",
+    "rpm",
+  ].map((channel) => ({
+    channel,
+    status: "placeholder",
+    package_name: null,
+    manifest_path: null,
+    artifact_url: null,
+    artifact_sha256: null,
+    signature_verification: null,
+    install_check: null,
+    uninstall_check: null,
+    upgrade_check: null,
+    rollback_check: null,
+    local_paths_allowed: false,
+  })),
+};
+
 const gates = [
   {
     id: "source-alpha-install",
@@ -148,9 +190,13 @@ const gates = [
       ...(packageReadinessValidatorOk
         ? ["agent-os/scripts/validate-package-manager-readiness.mjs"]
         : []),
+      "agent-os/scripts/distribution-readiness.mjs",
+      "agent-os/scripts/validate-distribution-readiness.mjs",
+      "docs/distribution-readiness.md",
     ],
     blockers: [
       "package-manager manifests are not implemented for Homebrew, Nix, Debian, or RPM",
+      "package-manager manifest contract contains draft placeholders only",
       "package install, uninstall, upgrade, and rollback paths are not covered in CI",
       "artifact hosting, signing, checksum, and publication destinations are not approved",
     ],
@@ -231,6 +277,7 @@ const report = {
   ready_for_source_alpha: sourceAlphaOk,
   ready_for_public_distribution: publicGates.every((gate) => gate.ok),
   blockers,
+  package_manager_manifest: packageManagerManifestContract,
   human_decisions: [
     "artifact upload destinations",
     "project signing key custody",

@@ -51,6 +51,93 @@ if (!Array.isArray(report.human_decisions) || report.human_decisions.length < 4)
   fail("human decisions must be explicit");
 }
 
+const manifest = report.package_manager_manifest;
+if (!manifest || manifest.schema !== "covenant.package-manager-manifest.v1") {
+  fail("package manager manifest schema must be covenant.package-manager-manifest.v1");
+}
+if (manifest?.status !== "draft_empty_placeholders") {
+  fail("package manager manifest must remain draft_empty_placeholders");
+}
+if (manifest?.ready_for_manifest_review !== false) {
+  fail("package manager manifest must not be ready for review while placeholders are empty");
+}
+if (manifest?.manifest_path !== null) {
+  fail("package manager manifest path must remain null until a manifest is checked in");
+}
+if (manifest?.redaction?.machine_local_paths_allowed !== false) {
+  fail("package manager manifest must reject machine-local paths");
+}
+if (manifest?.redaction?.generated_from_local_state !== false) {
+  fail("package manager manifest must not be generated from local state");
+}
+
+const manifestFields = new Set(manifest?.required_fields ?? []);
+for (const field of [
+  "channel",
+  "package_name",
+  "manifest_path",
+  "artifact_url",
+  "artifact_sha256",
+  "signature_verification",
+  "install_check",
+  "uninstall_check",
+  "upgrade_check",
+  "rollback_check",
+]) {
+  if (!manifestFields.has(field)) {
+    fail(`package manager manifest required field missing: ${field}`);
+  }
+}
+
+const channels = new Map((manifest?.channels ?? []).map((channel) => [channel.channel, channel]));
+for (const id of ["homebrew", "nix", "debian", "rpm"]) {
+  const channel = channels.get(id);
+  if (!channel) {
+    fail(`package manager manifest missing channel: ${id}`);
+    continue;
+  }
+  if (channel.status !== "placeholder") {
+    fail(`package manager manifest channel must remain placeholder: ${id}`);
+  }
+  for (const field of [
+    "package_name",
+    "manifest_path",
+    "artifact_url",
+    "artifact_sha256",
+    "signature_verification",
+    "install_check",
+    "uninstall_check",
+    "upgrade_check",
+    "rollback_check",
+  ]) {
+    if (channel[field] !== null) {
+      fail(`package manager manifest ${id}.${field} must remain null until implemented`);
+    }
+  }
+  if (channel.local_paths_allowed !== false) {
+    fail(`package manager manifest ${id} must reject local paths`);
+  }
+}
+
+function visit(value, path = "package_manager_manifest") {
+  if (typeof value === "string") {
+    if (value.startsWith("/") || value.includes("\\") || value.includes("$HOME")) {
+      fail(`${path} must not contain local paths`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visit(item, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, nested] of Object.entries(value)) {
+      visit(nested, `${path}.${key}`);
+    }
+  }
+}
+visit(manifest);
+
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",
@@ -114,10 +201,16 @@ if (packageManager) {
     "docs/package-manager-readiness.md",
     "agent-os/scripts/package-manager-readiness.mjs",
     "agent-os/scripts/validate-package-manager-readiness.mjs",
+    "agent-os/scripts/distribution-readiness.mjs",
+    "agent-os/scripts/validate-distribution-readiness.mjs",
+    "docs/distribution-readiness.md",
   ]) {
     if (!Array.isArray(packageManager.evidence) || !packageManager.evidence.includes(evidence)) {
       fail(`package-manager-distribution must include evidence: ${evidence}`);
     }
+  }
+  if (!packageManager.blockers.some((blocker) => /draft placeholders/i.test(blocker))) {
+    fail("package-manager-distribution must keep draft manifest placeholders blocked");
   }
 }
 

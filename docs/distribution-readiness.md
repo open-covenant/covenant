@@ -16,6 +16,23 @@ node agent-os/scripts/validate-distribution-readiness.mjs
 
 The report uses schema `covenant.distribution-readiness.v1`. It does not tag, sign, publish, upload artifacts, create package-manager manifests, or change SDK package state.
 
+The report also emits `package_manager_manifest` with schema `covenant.package-manager-manifest.v1`. This is a draft contract, not a publishable manifest. It names the required fields for Homebrew, Nix, Debian, and RPM channels while leaving every channel placeholder empty until real package manifests, immutable artifact URLs, checksums, signature verification, and install/upgrade/rollback checks exist.
+
+Required manifest fields:
+
+- `channel`
+- `package_name`
+- `manifest_path`
+- `artifact_url`
+- `artifact_sha256`
+- `signature_verification`
+- `install_check`
+- `uninstall_check`
+- `upgrade_check`
+- `rollback_check`
+
+The validator keeps `ready_for_manifest_review` false while placeholders are empty and rejects machine-local paths in the manifest contract.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |
@@ -36,6 +53,7 @@ The report uses schema `covenant.distribution-readiness.v1`. It does not tag, si
 Public distribution can move forward only after:
 
 - package-manager manifests and install/uninstall/upgrade/rollback CI coverage exist;
+- the `covenant.package-manager-manifest.v1` placeholders are replaced by repository manifests bound to immutable artifact URLs and checksums;
 - release artifact subjects bind file digests, validation evidence, and the release id;
 - project signing key custody and rotation policy are approved;
 - SDK semantic versioning and compatibility fixtures are defined;

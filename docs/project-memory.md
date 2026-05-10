@@ -13,6 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
+- IPC/HTTP protocol metadata is v1-only; v2 has a staging fixture directory and fail-closed tests requiring versioned fixtures plus migration notes before any supported bump.
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, unsigned or locally signed `audit-root-attestation.v1` payload generation/verification, and release-target audit-root binding to embedded release subject digests.
 - Local memory settlement receipts carry `memory_record_id` for daemon-created memory writes; verifier reconciliation joins exactly when the field exists and falls back to owner/resource counts for legacy receipt rows.
@@ -110,6 +111,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
 - [docs/protocol-versioning.md](./protocol-versioning.md): IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy.
+- [docs/protocol-migrations/README.md](./protocol-migrations/README.md): protocol migration note requirements.
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
 - [docs/budget-pause-checkpoints.md](./budget-pause-checkpoints.md): budget pause checkpoint format and daemon integration boundary.
 - [docs/memory-maintenance.md](./memory-maintenance.md): read-only compaction planning and receipt backfill boundary.

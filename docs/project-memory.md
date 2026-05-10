@@ -13,6 +13,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - `covenant` is the CLI client.
 - State lives under `$COVENANT_HOME`; default is `$HOME/.covenant`.
 - Identity, permissions, audit, memory, peer auth, budget, MCP, A2A, and local settlement crates exist.
+- Identity provenance has a local read-only `identity-provenance` dry-run report that records key-file metadata, public peer subjects, redacted token prefixes, and inferred token rotation history without exporting local paths, display strings, identity seeds, or full peer tokens.
 - IPC/HTTP protocol metadata is v1-only; v2 has a staging fixture directory and fail-closed tests requiring versioned fixtures plus migration notes before any supported bump.
 - Capability grants validate non-empty scopes for known action namespaces before signing; dispatch-time enforcement interprets exact `tool.call.*` argument allowlists, scoped `audit.purge` cutoffs, and memory read/write/purge/repair/compaction predicates, then otherwise falls back to action predicates.
 - Audit logs have local SHA-256 hash-chain sidecars, operator-only integrity reports, unsigned or locally signed `audit-root-attestation.v1` payload generation/verification, and release-target audit-root binding to embedded release subject digests.
@@ -80,7 +81,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No required Linux gVisor CI runner; read-only host readiness gates record runsc, rootfs, runner provisioning, and failure-policy blockers.
 - No production on-chain settlement; read-only deployment readiness gates record security-review, oracle, mint authority, and emergency-operation blockers.
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
-- No public release provenance publication; read-only release provenance gates record project key custody, artifact subject verifier, and transparency publication blockers.
+- No public release provenance or public identity attestation publication; read-only release and identity provenance gates record custody, publication, and transparency blockers.
 - No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
 - Multi-peer operation is experimental.
 - Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths; live coverage now pins scoped delegated `peers.revoke` denial and allowed mutation evidence.
@@ -122,6 +123,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.
 - [docs/provenance/audit-root-release-custody.md](./provenance/audit-root-release-custody.md): audit-root release-subject binding and custody checklist.
+- [docs/identity-provenance.md](./identity-provenance.md): local identity key and peer-token provenance dry-run boundary.
 - [docs/live-coverage.md](./live-coverage.md): opt-in live test surface matrix.
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,10 @@ function textOutput(result) {
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
 }
 
+function exists(path) {
+  return existsSync(join(repoRoot, path));
+}
+
 const args = new Set(process.argv.slice(2));
 if (args.has("--help") || args.has("-h")) {
   usage();
@@ -57,6 +62,11 @@ const sourceRollbackOk = sourceRollback.status === 0;
 const sourceAlphaOk = sourceInstallOk && sourceUpgradeOk && sourceRollbackOk;
 const sdkCompatibility = run(process.execPath, ["agent-os/scripts/validate-sdk-compatibility.mjs"]);
 const sdkCompatibilityOk = sdkCompatibility.status === 0;
+const packageReadinessDocOk = exists("docs/package-manager-readiness.md");
+const packageReadinessReportOk = exists("agent-os/scripts/package-manager-readiness.mjs");
+const packageReadinessValidatorOk = exists("agent-os/scripts/validate-package-manager-readiness.mjs");
+const packageReadinessEvidenceOk =
+  packageReadinessDocOk && packageReadinessReportOk && packageReadinessValidatorOk;
 
 const gates = [
   {
@@ -130,13 +140,19 @@ const gates = [
     id: "package-manager-distribution",
     title: "Package-manager distribution",
     scope: "public_distribution",
-    status: "planned",
+    status: packageReadinessEvidenceOk ? "documented" : "planned",
     ok: false,
-    evidence: [],
+    evidence: [
+      ...(packageReadinessDocOk ? ["docs/package-manager-readiness.md"] : []),
+      ...(packageReadinessReportOk ? ["agent-os/scripts/package-manager-readiness.mjs"] : []),
+      ...(packageReadinessValidatorOk
+        ? ["agent-os/scripts/validate-package-manager-readiness.mjs"]
+        : []),
+    ],
     blockers: [
-      "package-manager manifests are not implemented",
-      "package install and uninstall paths are not covered in CI",
-      "artifact upload destinations are not approved",
+      "package-manager manifests are not implemented for Homebrew, Nix, Debian, or RPM",
+      "package install, uninstall, upgrade, and rollback paths are not covered in CI",
+      "artifact hosting, signing, checksum, and publication destinations are not approved",
     ],
     human_decision_required: true,
   },

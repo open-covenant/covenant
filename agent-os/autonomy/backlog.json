@@ -3499,6 +3499,42 @@
       "humanEscalation": [],
       "nextAction": "Add an A2A delegated repair authorization policy, a validator for the policy/test hooks, and a daemon regression test proving a peer-visible repair still fails when delegated repair scope names the wrong counterparty.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-a2a-messaging-add-live-peer-mismatched-delegated-repair",
+      "title": "Add live peer-mismatched delegated repair denial coverage",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/crates/covenantd",
+        "agent-os/autonomy/live-coverage.json",
+        "agent-os/scripts",
+        "docs"
+      ],
+      "summary": "A2A repair authorization has daemon-level policy coverage, but delegated repair must also have live daemon and CLI evidence before the status can advance beyond a blocked expansion boundary.",
+      "expectedFailureModes": [
+        "Delegated repair policy stays unit-tested only, leaving live daemon wiring unproven.",
+        "A live peer can reach repair mutation paths using a capability scoped to the wrong counterparty.",
+        "Status docs claim delegated repair denial evidence without a live coverage entry or validator hook."
+      ],
+      "gates": [
+        "security",
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "cargo test -p covenantd a2a_repair_rejects_peer_mismatched_delegated_scope --locked",
+        "node agent-os/scripts/validate-live-coverage.mjs",
+        "node agent-os/scripts/validate-a2a-repair-visibility.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [
+        "Human review is required before delegated repair automation is enabled for cross-peer operators."
+      ],
+      "nextAction": "Add opt-in live coverage that attempts delegated A2A repair with a peer-mismatched capability scope, proves the daemon denies the mutation, records the evidence in live coverage metadata, and updates A2A repair status docs without enabling delegated repair automation.",
+      "updated": "2026-05-10"
     }
   ]
 }

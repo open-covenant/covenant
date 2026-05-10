@@ -55,6 +55,8 @@ const sourceUpgradeOk = sourceUpgrade.status === 0;
 const sourceRollback = run(process.execPath, ["agent-os/scripts/validate-source-install-rollback.mjs"]);
 const sourceRollbackOk = sourceRollback.status === 0;
 const sourceAlphaOk = sourceInstallOk && sourceUpgradeOk && sourceRollbackOk;
+const sdkCompatibility = run(process.execPath, ["agent-os/scripts/validate-sdk-compatibility.mjs"]);
+const sdkCompatibilityOk = sdkCompatibility.status === 0;
 
 const gates = [
   {
@@ -107,6 +109,24 @@ const gates = [
     output: textOutput(sourceRollback),
   },
   {
+    id: "sdk-compatibility-policy",
+    title: "SDK compatibility policy",
+    scope: "sdk_distribution",
+    status: sdkCompatibilityOk ? "implemented" : "blocked",
+    ok: sdkCompatibilityOk,
+    command: "node agent-os/scripts/validate-sdk-compatibility.mjs",
+    evidence: [
+      "docs/sdk-compatibility.md",
+      "agent-os/scripts/sdk-compatibility.mjs",
+      "agent-os/scripts/validate-sdk-compatibility.mjs",
+      "packages/sdk/README.md",
+      "packages/sdk-ui/README.md",
+    ],
+    blockers: sdkCompatibilityOk ? [] : ["SDK compatibility validation failed"],
+    human_decision_required: false,
+    output: textOutput(sdkCompatibility),
+  },
+  {
     id: "package-manager-distribution",
     title: "Package-manager distribution",
     scope: "public_distribution",
@@ -138,12 +158,18 @@ const gates = [
     id: "sdk-stability",
     title: "SDK stability boundary",
     scope: "sdk_distribution",
-    status: "planned",
+    status: sdkCompatibilityOk ? "experimental" : "blocked",
     ok: false,
-    evidence: ["packages/sdk/README.md", "packages/sdk-ui/README.md"],
+    evidence: [
+      "docs/sdk-compatibility.md",
+      "agent-os/scripts/sdk-compatibility.mjs",
+      "agent-os/scripts/validate-sdk-compatibility.mjs",
+      "packages/sdk/README.md",
+      "packages/sdk-ui/README.md",
+    ],
     blockers: [
       "SDK packages are workspace-local and not published",
-      "semantic versioning and compatibility policy are not defined",
+      "public semantic versioning support window is not approved",
       "generated protocol bindings are not covered by compatibility fixtures",
     ],
     human_decision_required: true,

@@ -1,0 +1,31 @@
+{
+  "id": "status-public-provenance-implement-key-custody-release-artifact",
+  "title": "Plan release provenance publication",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts",
+    "docs/provenance",
+    "docs"
+  ],
+  "summary": "Public provenance can verify local envelopes, but release artifacts still need key-custody policy, artifact subject binding, and transparency-publication gates before public provenance claims.",
+  "expectedFailureModes": [
+    "Release provenance claims are made without a public key custody decision.",
+    "Artifact subjects are not bound to file digests and validation evidence.",
+    "Transparency publication is implied before a verifiable publication target exists."
+  ],
+  "gates": [
+    "docs",
+    "test_expansion"
+  ],
+  "verification": [
+    "node agent-os/scripts/validate-autonomy.mjs",
+    "git diff --check"
+  ],
+  "humanEscalation": [
+    "Human approval is required before publishing public keys, release signatures, or transparency-log entries."
+  ],
+  "nextAction": "Add release-provenance readiness output that checks artifact subject metadata and key-custody placeholders without publishing transparency entries.",
+  "updated": "2026-05-10"
+}

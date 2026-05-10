@@ -20,6 +20,7 @@ Covenant is a monorepo. The agent-native operating layer lives primarily in `age
 | `docs/gvisor-host-readiness.md` | Linux gVisor host readiness and CI promotion gates. |
 | `docs/releases/` | Release evidence bundle records for alpha candidates, scaffolded by `agent-os/scripts/alpha-release-bundle.mjs`. |
 | `docs/provenance/` | Provenance contract and committed attestation envelopes. |
+| `docs/provenance/release-readiness.md` | Release provenance artifact-subject, key-custody, and transparency-publication gates. |
 | `circuits/` | Circom proof circuits and catalog metadata. |
 | `packages/` | Shared TypeScript SDK, UI, and configuration packages. |
 | `services/` | Supporting services: MCP bridges, proof generation, indexer, compute broker, and bots. |

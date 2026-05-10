@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -13,7 +14,8 @@ function usage() {
 
 Run the read-only autonomy review artifact toolchain validation.
 
-Checks artifact generation, artifact verification, and expected digest tamper rejection without writing files or Git metadata.`);
+Checks artifact generation, unsigned verification, signed fixture verification,
+and expected tamper rejection without writing files or Git metadata.`);
 }
 
 function run(args, input = null) {
@@ -44,6 +46,20 @@ function parseJson(label, text, errors) {
     errors.push(`${label}: invalid JSON: ${error.message}`);
     return null;
   }
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function signingPayload(artifact) {
+  return Buffer.from(JSON.stringify({
+    ...artifact,
+    signing: {
+      ...artifact.signing,
+      signature: "",
+    },
+  }));
 }
 
 function findDefaultTask() {
@@ -88,7 +104,7 @@ if (artifact?.task?.id !== taskId) {
   errors.push("review artifact task id mismatch");
 }
 if (artifact?.signing?.status !== "unsigned") {
-  errors.push("review artifact must be unsigned until signing support exists");
+  errors.push("review artifact generator must emit unsigned artifacts by default");
 }
 
 const verifyResult = run(
@@ -124,6 +140,91 @@ if (artifact) {
     );
     if (!tamperDetected) {
       errors.push("review artifact verifier did not report task_sha256 tampering");
+    }
+  }
+
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeySpki = publicKey.export({ type: "spki", format: "der" });
+  const publicKeySpkiBase64 = publicKeySpki.toString("base64");
+  const signed = {
+    ...artifact,
+    signing: {
+      status: "signed",
+      schema: "covenant.autonomy-review-signature.v1",
+      algorithm: "ed25519",
+      key_id: "fixture-review-key",
+      public_key_spki_sha256: sha256(publicKeySpki),
+      signed_at: "2026-01-01T00:00:00.000Z",
+      custody: {
+        policy: "docs/provenance/review-artifact-signing.md",
+        public_key_source: "ephemeral-validator-fixture",
+        human_approval_required: true,
+      },
+      signature: "",
+    },
+  };
+  signed.signing.signature = sign(null, signingPayload(signed), privateKey).toString("base64");
+
+  const missingKeyResult = run(
+    ["agent-os/scripts/autonomy-verify-review-artifact.mjs", "--stdin", "--json"],
+    JSON.stringify(signed),
+  );
+  if (missingKeyResult.status === 0) {
+    errors.push("signed review artifact verifier accepted a signed artifact without a trusted public key");
+  } else {
+    const missingKeyReport = parseJson("missing-key signed verification", missingKeyResult.stdout, errors);
+    const missingKeyDetected = missingKeyReport?.errors?.some((error) =>
+      error.includes("trusted-public-key-spki-base64"),
+    );
+    if (!missingKeyDetected) {
+      errors.push("signed review artifact verifier did not require a trusted public key");
+    }
+  }
+
+  const signedResult = run(
+    [
+      "agent-os/scripts/autonomy-verify-review-artifact.mjs",
+      "--stdin",
+      "--json",
+      "--trusted-public-key-spki-base64",
+      publicKeySpkiBase64,
+    ],
+    JSON.stringify(signed),
+  );
+  if (signedResult.status !== 0) {
+    errors.push(`signed review artifact verifier rejected fixture: ${signedResult.stderr || signedResult.stdout}`);
+  }
+  const signedReport = parseJson("signed verification", signedResult.stdout, errors);
+  if (signedReport?.valid !== true) {
+    errors.push("signed review artifact verification should be valid");
+  }
+
+  const tamperedSigned = {
+    ...signed,
+    task: {
+      ...signed.task,
+      title: `${signed.task.title} tampered`,
+    },
+  };
+  const tamperedSignedResult = run(
+    [
+      "agent-os/scripts/autonomy-verify-review-artifact.mjs",
+      "--stdin",
+      "--json",
+      "--trusted-public-key-spki-base64",
+      publicKeySpkiBase64,
+    ],
+    JSON.stringify(tamperedSigned),
+  );
+  if (tamperedSignedResult.status === 0) {
+    errors.push("signed review artifact verifier accepted a tampered signed artifact");
+  } else {
+    const tamperedSignedReport = parseJson("tampered signed verification", tamperedSignedResult.stdout, errors);
+    const signatureTamperDetected = tamperedSignedReport?.errors?.some((error) =>
+      error.includes("signature") || error.includes("metadata"),
+    );
+    if (!signatureTamperDetected) {
+      errors.push("signed review artifact verifier did not report signed artifact tampering");
     }
   }
 }

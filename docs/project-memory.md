@@ -51,9 +51,10 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Alpha readiness includes `agent-os/scripts/validate-autonomy-handoff.mjs`; release work must not proceed from a commit-blocked checkout unless the handoff bundle path can prove the dirty state is recoverable.
 - When the autonomy backlog is exhausted, run `agent-os/scripts/autonomy-status-gaps.mjs --json` before inventing templates. It extracts candidate hardening work from `docs/status.md` without writing files.
 - `agent-os/scripts/autonomy-review-artifact.mjs <task-id> --json` emits unsigned task review evidence. Do not describe review artifacts as signed until signing policy and key custody are implemented.
-- Verify unsigned review artifacts with `agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`; it recomputes source task and event digests from local repository state.
+- Verify review artifacts with `agent-os/scripts/autonomy-verify-review-artifact.mjs --stdin`; it recomputes source task and event digests from local repository state. Signed artifacts require `--trusted-public-key-spki-base64`.
 - Review artifact command changes should pass `agent-os/scripts/validate-autonomy-review-artifacts.mjs` so generation, verification, and tamper rejection stay consistent.
 - Alpha readiness includes `agent-os/scripts/validate-autonomy-review-artifacts.mjs`; release preparation must not treat review evidence as signing evidence until signing policy and key custody exist.
+- Review artifact verification supports `covenant.autonomy-review-signature.v1` only when an explicit trusted ed25519 SPKI public key is supplied; generated review artifacts remain unsigned by default until project key custody is approved.
 - Alpha release evidence embeds sanitized `agent-os/scripts/alpha-release-readiness.mjs --json` state. Accepted bundles should reject blocked readiness unless they are explicitly being validated as draft blocker-review artifacts.
 - Alpha release evidence uses schema `covenant.alpha-release-evidence.v1`; bundle validation should fail closed on unversioned or incompatible evidence.
 - Alpha release bundles include `manifest.json` using schema `covenant.alpha-release-manifest.v1`; the manifest locally binds every regular bundle file except itself by relative path, byte count, and SHA-256 digest without claiming signing or transparency publication.
@@ -118,13 +119,14 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/runtime-sandbox-security.md](./runtime-sandbox-security.md): runtime isolation security contract.
 - [docs/gvisor-host-readiness.md](./gvisor-host-readiness.md): Linux gVisor host readiness and CI promotion gates.
 - [docs/provenance/README.md](./provenance/README.md): alpha provenance envelope contract.
+- [docs/provenance/review-artifact-signing.md](./provenance/review-artifact-signing.md): signed review artifact envelope and custody boundary.
 - [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/scripts/autonomy-status-gaps.mjs](../agent-os/scripts/autonomy-status-gaps.mjs): read-only backlog-refill candidates from the capability status matrix.
 - [agent-os/scripts/autonomy-review-artifact.mjs](../agent-os/scripts/autonomy-review-artifact.mjs): unsigned task review artifact scaffold.
-- [agent-os/scripts/autonomy-verify-review-artifact.mjs](../agent-os/scripts/autonomy-verify-review-artifact.mjs): verifier for unsigned task review artifacts.
+- [agent-os/scripts/autonomy-verify-review-artifact.mjs](../agent-os/scripts/autonomy-verify-review-artifact.mjs): verifier for unsigned review artifacts and signed artifacts with an explicit trusted public key.
 - [agent-os/scripts/validate-autonomy-review-artifacts.mjs](../agent-os/scripts/validate-autonomy-review-artifacts.mjs): review artifact toolchain validator.
 - [agent-os/scripts/autonomy-summary.mjs](../agent-os/scripts/autonomy-summary.mjs): deterministic sprint and handoff summary generator.
 - [agent-os/scripts/autonomy-publish-summary.mjs](../agent-os/scripts/autonomy-publish-summary.mjs): repository-scoped Markdown publication/check wrapper for sprint summaries.

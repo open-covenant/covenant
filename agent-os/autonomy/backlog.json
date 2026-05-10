@@ -3727,6 +3727,38 @@
       "humanEscalation": [],
       "nextAction": "Add committed export fixtures for workspace SDK packages, compare them in the SDK compatibility report, and update docs/status without claiming public SDK stability.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-distribution-sdk-instruction-descriptor-fixtures",
+      "title": "Add SDK instruction descriptor fixtures",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs",
+        "packages/sdk",
+        "agent-os/autonomy"
+      ],
+      "summary": "Workspace SDK export fixtures exist, but the current Solana instruction descriptor contract also needs committed fixtures for instruction names, account order, and data keys until generated protocol bindings exist.",
+      "expectedFailureModes": [
+        "Instruction descriptor names or account ordering change silently without fixture evidence.",
+        "Fixture comparison gives false confidence by ignoring data keys or account order.",
+        "Docs confuse handwritten descriptor fixtures with generated protocol bindings or public semver guarantees."
+      ],
+      "gates": [
+        "test_expansion",
+        "docs"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-sdk-compatibility.mjs",
+        "node agent-os/scripts/validate-distribution-readiness.mjs",
+        "node agent-os/scripts/validate-autonomy.mjs",
+        "git diff --check"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add SDK instruction descriptor fixtures, compare them in the SDK compatibility report, and update docs/status without claiming generated binding or public npm stability.",
+      "updated": "2026-05-10"
     }
   ]
 }

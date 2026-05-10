@@ -1,0 +1,55 @@
+{
+  "schema": "covenant.sdk-instructions.v1",
+  "package": "@covenant/sdk",
+  "stability": "workspace_alpha",
+  "instructions": [
+    {
+      "name": "register_agent",
+      "accounts": ["config", "agent", "operator", "system_program"],
+      "data_keys": ["agent_key", "capability_hash", "metadata_hash"]
+    },
+    {
+      "name": "stake",
+      "accounts": [
+        "config",
+        "agent",
+        "position",
+        "owner",
+        "owner_covnt",
+        "stake_vault",
+        "token_program",
+        "system_program"
+      ],
+      "data_keys": ["amount_covnt", "lock_until", "token_symbol"]
+    },
+    {
+      "name": "buy_credits",
+      "accounts": ["config", "credits", "owner", "owner_covnt", "treasury", "token_program"],
+      "data_keys": ["amount_covnt"]
+    },
+    {
+      "name": "create_task",
+      "accounts": [
+        "config",
+        "agent",
+        "task",
+        "client",
+        "client_covnt",
+        "escrow_vault",
+        "token_program",
+        "system_program"
+      ],
+      "data_keys": ["amount_covnt", "criteria_hash", "deadline", "provider", "task_hash", "task_id"]
+    },
+    {
+      "name": "release_task",
+      "accounts": ["config", "task", "client", "escrow_vault", "provider_covnt", "token_program"],
+      "data_keys": ["receipt_hash", "result_hash"]
+    },
+    {
+      "name": "anchor_receipt_batch",
+      "accounts": ["config", "batch", "authority", "system_program"],
+      "data_keys": ["batch_id", "merkle_root", "receipt_count"]
+    }
+  ]
+}

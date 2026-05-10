@@ -28,11 +28,18 @@ Current wire contract:
 
 Versioned fixtures live under `agent-os/crates/covenant-ipc/tests/fixtures`.
 
-The current harness replays every `*.v1.json` response fixture through the current `Response` parser. `protocol-info.v1.json` is also compared against the current generated value and reused by HTTP gateway tests, so IPC and HTTP metadata cannot drift independently.
+The current harness replays every root `*.v1.json` response fixture through the current `Response` parser. `protocol-info.v1.json` is also compared against the current generated value and reused by HTTP gateway tests, so IPC and HTTP metadata cannot drift independently.
+
+Future major fixtures must live in a version directory such as `tests/fixtures/v2/`. The v2 directory is present as a staging boundary but intentionally contains no JSON while the crate still advertises protocol v1. The IPC tests fail closed if:
+
+- `*.v2.json` fixtures appear before `PROTOCOL_VERSION` moves to v2;
+- a future supported protocol version lacks matching `*.vN.json` fixtures;
+- a future supported protocol version lacks `docs/protocol-migrations/vN.md`.
 
 Before the first breaking change lands:
 
-1. Add `*.v2.json` fixtures for every stable response envelope affected by the change.
+1. Add `tests/fixtures/v2/*.v2.json` fixtures for every stable response envelope affected by the change.
 2. Keep v1 fixtures committed until the code intentionally drops v1 support.
 3. Add parser tests for every supported compatibility window.
-4. Update `docs/status.md`, this document, and release notes with the migration boundary.
+4. Add `docs/protocol-migrations/v2.md`.
+5. Update `docs/status.md`, this document, and release notes with the migration boundary.

@@ -599,10 +599,7 @@ mod tests {
             info: protocol_info(),
         };
         let json = serde_json::to_value(response).unwrap();
-        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("protocol-info.v1.json");
+        let fixture_path = fixtures_dir().join("protocol-info.v1.json");
         let fixture: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&fixture_path).unwrap()).unwrap();
         assert_eq!(json, fixture);
@@ -610,19 +607,12 @@ mod tests {
 
     #[test]
     fn v1_response_fixtures_replay_against_current_parser() {
-        let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures");
         let mut fixture_count = 0;
 
-        for entry in std::fs::read_dir(&fixtures_dir).unwrap() {
-            let path = entry.unwrap().path();
+        for path in fixture_json_files(1) {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if !name.ends_with(".v1.json") {
-                continue;
-            }
 
             fixture_count += 1;
             let text = std::fs::read_to_string(&path).unwrap();
@@ -640,6 +630,88 @@ mod tests {
         }
 
         assert!(fixture_count > 0, "expected at least one v1 IPC fixture");
+    }
+
+    #[test]
+    fn v2_fixture_skeleton_fails_closed_until_protocol_bump() {
+        let v2_dir = fixtures_dir().join("v2");
+        assert!(v2_dir.is_dir(), "missing v2 fixture staging directory");
+        assert!(
+            v2_dir.join("README.md").is_file(),
+            "v2 fixture staging directory must document the migration contract"
+        );
+
+        let v2_fixtures = fixture_json_files(2);
+        if PROTOCOL_VERSION < 2 {
+            assert!(
+                v2_fixtures.is_empty(),
+                "v2 fixtures must not be committed while PROTOCOL_VERSION is still {PROTOCOL_VERSION}"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_protocol_versions_have_fixture_and_migration_evidence() {
+        for version in MIN_PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION {
+            if version == 1 {
+                continue;
+            }
+
+            let fixtures = fixture_json_files(version);
+            assert!(
+                !fixtures.is_empty(),
+                "protocol v{version} support requires committed *.v{version}.json fixtures"
+            );
+
+            let migration_note = repo_root()
+                .join("docs")
+                .join("protocol-migrations")
+                .join(format!("v{version}.md"));
+            assert!(
+                migration_note.is_file(),
+                "protocol v{version} support requires docs/protocol-migrations/v{version}.md"
+            );
+        }
+    }
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+    }
+
+    fn fixture_json_files(version: u32) -> Vec<std::path::PathBuf> {
+        let dir = if version == 1 {
+            fixtures_dir()
+        } else {
+            fixtures_dir().join(format!("v{version}"))
+        };
+        let suffix = format!(".v{version}.json");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+
+        let mut paths = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(&suffix))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("crate should live under agent-os/crates")
+            .to_path_buf()
     }
 
     #[tokio::test]

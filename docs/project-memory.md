@@ -19,6 +19,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Public provenance envelopes verify committed task evidence from Git object data, without yet claiming release signing or transparency-log publication.
 - Alpha release language must follow `docs/alpha-release-contract.md`: source-built local infrastructure, explicit non-claims, sanitized readiness evidence, and human approval before any tag or artifact publication.
 - Source installs use `agent-os/scripts/install-source.mjs`; it builds `covenantd` and `covenant` into an operator-selected local prefix and records a relative-path manifest without claiming signed packages or SDK stability.
+- Distribution graduation uses `agent-os/scripts/distribution-readiness.mjs`; source-alpha install readiness is separate from package-manager distribution, signed artifacts, SDK stability, and upgrade safety.
 - Release validation language must follow `docs/release-validation.md`: public claims stay aligned with implementation evidence and validation coverage.
 - Solana settlement code is scaffolded, not production.
 - Runtime isolation has trusted-local subprocess timeout enforcement, manifest-level sandbox requirements, daemon-selectable Linux gVisor configuration, an initial `runsc` runner, opt-in live Linux gVisor coverage, and a repeatable Linux runner guide.
@@ -72,7 +73,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - No production sandbox for untrusted agents.
 - No production on-chain settlement.
 - No completed public key custody policy, release publication path, or transparency-log publication for agent-produced artifacts or audit roots.
-- No package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem.
+- No public package-manager distribution, signed release artifacts, automatic upgrades, or stable SDK ecosystem; read-only distribution gates record those blockers.
 - Multi-peer operation is experimental.
 - Dispatch-time capability scope predicates exist for exact `tool.call.*` argument allowlists, `audit.purge` cutoffs, memory read/write/purge/repair/compaction paths, A2A send/recv/respond/repair paths, peer delegated list/revoke plus purge-retention paths, and chain receipt read/batch/flush paths.
 - Project memory has read-only drift reports, explicit dry-run/apply repair commands, and bounded compaction commands that delete expired working/episodic records while marking long-term stale context instead of deleting it.
@@ -105,6 +106,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/budget-pause-checkpoints.md](./budget-pause-checkpoints.md): budget pause checkpoint format and daemon integration boundary.
 - [docs/memory-maintenance.md](./memory-maintenance.md): read-only compaction planning and receipt backfill boundary.
 - [docs/source-install.md](./source-install.md): source-built local installer and manifest contract.
+- [docs/distribution-readiness.md](./distribution-readiness.md): public distribution, signing, SDK stability, and upgrade gate contract.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
 - [docs/decisions/0004-audit-root-signing-policy.md](./decisions/0004-audit-root-signing-policy.md): planned public audit-root signing policy.

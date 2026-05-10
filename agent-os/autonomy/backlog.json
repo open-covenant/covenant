@@ -4063,6 +4063,36 @@
       "humanEscalation": [],
       "nextAction": "Extend distribution-readiness to emit a draft package-manager manifest section (schema + empty placeholders), add a validator hook, and document the contract in docs/distribution-readiness.md.",
       "updated": "2026-05-10"
+    },
+    {
+      "id": "status-autonomous-workflow-add-review-signing-readiness-contract",
+      "title": "Add review signing readiness contract",
+      "state": "proposed",
+      "priority": "high",
+      "ownerRole": "implementer",
+      "scope": [
+        "agent-os/scripts",
+        "docs/provenance/review-artifact-signing.md",
+        "docs/autonomous-development.md",
+        "docs/status.md"
+      ],
+      "summary": "Autonomous workflow status calls out project review signing key custody, public key publication, rotation, and release evidence policy as the next hardening step. Add a read-only readiness report and validator so signed review artifacts stay blocked until a human-approved project key policy exists.",
+      "expectedFailureModes": [
+        "Signed review artifacts are treated as release-grade evidence without project key custody or public key publication.",
+        "Docs mention review signing readiness but no validator enforces the blocked state or required human decisions.",
+        "Readiness output includes local key material, local paths, or personal identities."
+      ],
+      "gates": [
+        "docs",
+        "security"
+      ],
+      "verification": [
+        "node agent-os/scripts/validate-review-signing-readiness.mjs",
+        "bash agent-os/scripts/validate.sh --scripts"
+      ],
+      "humanEscalation": [],
+      "nextAction": "Add review-signing-readiness report/validator, document the custody gate, wire the validator into script validation, and keep signed review artifacts blocked without a project key.",
+      "updated": "2026-05-10"
     }
   ]
 }

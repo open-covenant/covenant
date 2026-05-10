@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
+const repoRoot = resolve(root, "..");
 const tasksDir = join(root, "autonomy", "tasks");
 
 function usage() {
@@ -20,6 +21,7 @@ and expected tamper rejection without writing files or Git metadata.`);
 
 function run(args, input = null) {
   const result = spawnSync(process.execPath, args, {
+    cwd: repoRoot,
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],

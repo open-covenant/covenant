@@ -24,6 +24,15 @@ node agent-os/scripts/autonomy-verify-review-artifact.mjs \
 
 The trusted key value is the base64-encoded DER SPKI public key. The verifier checks the artifact's `signing.public_key_spki_sha256` against that trusted key before verifying the ed25519 signature.
 
+Check signing readiness:
+
+```bash
+node agent-os/scripts/review-signing-readiness.mjs --json
+node agent-os/scripts/validate-review-signing-readiness.mjs
+```
+
+The readiness report uses schema `covenant.review-signing-readiness.v1`. It keeps `ready_for_signed_review_artifacts` false until project key custody, public key publication, rotation/revocation policy, authorized signers, and release evidence policy are approved.
+
 ## Signed Envelope
 
 Signed artifacts use the existing `autonomy_review_artifact` payload with:

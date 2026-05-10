@@ -54,6 +54,8 @@ fi
 run node ./scripts/validate-autonomy.mjs
 run node ./scripts/validate-autonomy-next-cli.mjs
 run node ./scripts/validate-autonomy-summary.mjs
+run node ./scripts/validate-autonomy-review-artifacts.mjs
+run node ./scripts/validate-review-signing-readiness.mjs
 run node ./scripts/validate-commit-rotation.mjs
 run node ./scripts/validate-git-identity.mjs --ref HEAD --ref origin/main..HEAD
 run node ./scripts/validate-github-cli-account.mjs

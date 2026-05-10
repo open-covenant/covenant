@@ -73,6 +73,7 @@ node agent-os/scripts/validate-git-identity.mjs
 node agent-os/scripts/validate-readme-copy.mjs
 node agent-os/scripts/validate-source-installer.mjs
 node agent-os/scripts/validate-source-install-upgrade-plan.mjs
+node agent-os/scripts/validate-source-install-rollback.mjs
 node agent-os/scripts/validate-distribution-readiness.mjs
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
@@ -87,7 +88,7 @@ The readiness report includes Git metadata write access because autonomy can val
 It also includes the autonomy handoff toolchain so commit-blocked sessions can prove their tracked patch, untracked file contents, restore plan, and tamper checks are internally consistent before another environment resumes the release work.
 It includes unsigned review artifact validation so release preparation can prove task review evidence can be generated, verified, and rejected when tampered before any future signing layer is introduced.
 Source install evidence follows `docs/source-install.md`; it is a local source-built install path, not a signed binary distribution.
-Source upgrade preflight evidence can classify fresh, clean, partial, and drifted install prefixes before an operator reinstalls over an existing prefix. It is read-only and does not claim automatic rollback.
+Source upgrade preflight evidence can classify fresh, clean, partial, and drifted install prefixes before an operator reinstalls over an existing prefix. Source rollback evidence is local to the selected prefix and does not claim package-manager rollback, signed release rollback, or public upgrade policy.
 Distribution graduation evidence follows `docs/distribution-readiness.md`; source-alpha readiness can pass while public package, signing, SDK, and upgrade gates remain blocked.
 
 ## Optional Live Gate

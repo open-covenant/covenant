@@ -121,6 +121,7 @@ function readExistingManifest() {
         bytes: Number.isInteger(binary.bytes) ? binary.bytes : null,
       }))
     : [];
+  const rollbackCheckpoint = manifest.rollback_checkpoint;
 
   return {
     present: true,
@@ -130,6 +131,18 @@ function readExistingManifest() {
     source_commit: manifest.source_commit ?? null,
     profile: manifest.profile ?? null,
     generated_at: manifest.generated_at ?? null,
+    rollback_checkpoint: rollbackCheckpoint
+      ? {
+          present: true,
+          valid: rollbackCheckpoint.schema === "covenant.source-install.rollback-checkpoint.v1",
+          id: rollbackCheckpoint.id ?? null,
+          backup_dir: rollbackCheckpoint.backup_dir ?? null,
+          file_count: Array.isArray(rollbackCheckpoint.files) ? rollbackCheckpoint.files.length : 0,
+        }
+      : {
+          present: false,
+          valid: false,
+        },
     errors,
     binaries,
   };
@@ -202,6 +215,8 @@ function buildReport() {
   const manifest = readExistingManifest();
   const destinations = (plan.writes ?? []).map((write) => destinationInfo(write, manifest));
   const upgradeState = classify(destinations, manifest);
+  const rollbackAvailable =
+    upgradeState === "clean_existing_install" && manifest.rollback_checkpoint.present && manifest.rollback_checkpoint.valid;
   const blockers = [];
 
   if (manifest.present && !manifest.valid) {
@@ -226,17 +241,19 @@ function buildReport() {
     upgrade_state: upgradeState,
     ready_for_fresh_install: upgradeState === "fresh_install",
     ready_for_reviewed_source_upgrade: upgradeState === "clean_existing_install",
-    ready_for_automatic_rollback: false,
+    ready_for_automatic_rollback: rollbackAvailable,
     existing_manifest: manifest,
     planned_writes: destinations,
     rollback: {
-      supported: false,
-      reason:
-        "source install rollback remains manual until the installer records restorable backups and a verified restore command",
+      supported: true,
+      available_for_current_install: rollbackAvailable,
+      reason: rollbackAvailable
+        ? "current source install manifest records a rollback checkpoint"
+        : "current source install manifest does not record a restorable rollback checkpoint",
       required_before_automatic_upgrade: [
-        "backup every replaced file before mutation",
-        "verify restored binary digests against the previous manifest",
-        "write rollback audit evidence",
+        "package-manager rollback coverage",
+        "cross-release installer migration checks",
+        "public rollback policy approval",
       ],
     },
     blockers,

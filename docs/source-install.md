@@ -51,7 +51,29 @@ The report uses schema `covenant.source-install-upgrade-plan.v1`. It reuses the 
 - `partial_existing_install`
 - `drifted_existing_install`
 
-`clean_existing_install` means the prefix is ready for an operator-reviewed source reinstall. It is not automatic upgrade safety. The preflight is read-only and deliberately reports `ready_for_automatic_rollback: false` until the installer records restorable backups, verifies restored binary digests against the previous manifest, and emits rollback audit evidence.
+`clean_existing_install` means the prefix is ready for an operator-reviewed source reinstall. It is not package-manager upgrade safety. The preflight reports whether the current source install already has a restorable rollback checkpoint, but it does not mutate the prefix.
+
+## Rollback
+
+When `install-source.mjs` replaces an existing source install, it preserves the previous binaries and manifest under:
+
+```text
+share/covenant/backups/<checkpoint-id>/
+```
+
+The new install manifest records a `rollback_checkpoint` with prefix-relative backup paths, byte counts, SHA-256 digests, and file modes. Restore the checkpoint with a dry run first:
+
+```bash
+node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant-alpha --json
+```
+
+Apply the rollback only after the dry run reports `ready: true`:
+
+```bash
+node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant-alpha --apply --json
+```
+
+Rollback verifies every backup digest before copying files back into place. Applied rollback writes local evidence under `share/covenant/rollback-reports/`. This is local source-install rollback, not package-manager rollback, signed release rollback, or public upgrade policy.
 
 ## Validation
 
@@ -65,6 +87,12 @@ Validate the upgrade preflight contract:
 
 ```bash
 node agent-os/scripts/validate-source-install-upgrade-plan.mjs
+```
+
+Validate rollback checkpoints:
+
+```bash
+node agent-os/scripts/validate-source-install-rollback.mjs
 ```
 
 The scripts-only gate runs the same check:

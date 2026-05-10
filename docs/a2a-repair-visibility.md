@@ -34,6 +34,8 @@ Validate the peer report fixture:
 node agent-os/scripts/validate-a2a-peer-repair-report.mjs
 ```
 
+Delegated repair authorization is specified separately in [A2A Repair Authorization](./a2a-repair-authorization.md). The delegated authorization policy binds repair authority to the task id, lease id, duplicate-risk posture, and peer counterparty pubkey.
+
 ## Gates
 
 | Gate | Current state | Evidence |
@@ -43,9 +45,9 @@ node agent-os/scripts/validate-a2a-peer-repair-report.mjs
 | `cli-repair-surfaces` | Implemented | `agent-os/crates/covenant/src/main.rs` |
 | `live-operator-repair-coverage` | Implemented | live A2A repair, retry-stale, and restart tests |
 | `per-peer-repair-report` | Implemented | `agent-os/scripts/a2a-peer-repair-report.mjs` and validator fixture |
-| `delegated-repair-denial-coverage` | Planned | Required before delegated repair expansion |
+| `delegated-repair-denial-coverage` | Partially implemented | unit peer-mismatched scope denial; live coverage still required |
 
-`ready_for_operator_repair_visibility` can be true while `ready_for_delegated_repair` remains false. That is the expected state until tests prove a peer cannot repair another peer's leased task and the delegated authorization policy is explicit.
+`ready_for_operator_repair_visibility` can be true while `ready_for_delegated_repair` remains false. That is the expected state until live tests prove a peer cannot repair another peer's leased task across the authenticated daemon boundary.
 
 ## Delegated Repair Requirements
 
@@ -53,6 +55,6 @@ Remaining delegated repair needs:
 
 - peer-mismatched repair denial tests;
 - capability-scope denial fixtures;
-- a delegated repair authorization policy.
+- live delegated repair denial coverage.
 
 Until those exist, repair authority should remain operator-owned.

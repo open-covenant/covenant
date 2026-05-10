@@ -6825,6 +6825,122 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_repair_rejects_peer_mismatched_delegated_scope() {
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let delegate = AgentId::new("delegate@local", [7u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: operator.clone(),
+            recipient: delegate.clone(),
+            intent_text: "delegated repair visibility".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+
+        grant_action(&s, &format!("a2a.send.{}", delegate.display)).await;
+        grant_scoped_action_to(
+            &s,
+            &delegate,
+            &format!("a2a.recv.{}", operator.display),
+            serde_json::json!({}),
+        )
+        .await;
+
+        match s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await
+        {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("send failed: {other:?}"),
+        }
+        match s.respond(Request::TryRecvA2ATask, &delegate).await {
+            Response::A2ATaskOpt { task: Some(got) } => assert_eq!(got.id, task.id),
+            other => panic!("delegate lease failed: {other:?}"),
+        }
+        let lease_id = match s
+            .respond(
+                Request::A2AQueue {
+                    limit: 10,
+                    min_lease_age_ms: None,
+                },
+                &delegate,
+            )
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => tasks[0].lease_id,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let action = "a2a.repair.requeue";
+        grant_scoped_action_to(
+            &s,
+            &delegate,
+            action,
+            serde_json::json!({
+                "version": 1,
+                "peer_pubkey_b58": delegate.pubkey_base58(),
+                "task_id": task.id.to_string(),
+                "lease_id": lease_id.expect("leased task").to_string(),
+                "duplicate_risk": "idempotent"
+            }),
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::RepairA2ATask {
+                    request: covenant_a2a::A2ARepairRequest {
+                        task_id: task.id,
+                        command: covenant_a2a::A2ARepairCommand::Requeue {
+                            lease_id,
+                            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                        },
+                        reason: "delegate retry probe".into(),
+                    },
+                },
+                &delegate,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        match s
+            .respond(
+                Request::A2AQueue {
+                    limit: 10,
+                    min_lease_age_ms: None,
+                },
+                &delegate,
+            )
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks[0].task.id, task.id);
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match s
+            .respond(Request::RecentAudit { limit: 30 }, &delegate)
+            .await
+        {
+            Response::AuditEvents { events } => assert!(events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    AuditKind::CapabilityScopeRejected { action: got, .. } if got == action
+                )
+            })),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_repair_requeues_in_flight_task_and_audits() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = Server::new(

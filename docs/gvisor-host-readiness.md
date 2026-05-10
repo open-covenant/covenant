@@ -16,6 +16,23 @@ node agent-os/scripts/validate-gvisor-host-readiness.mjs
 
 The report uses schema `covenant.gvisor-host-readiness.v1`. It does not install `runsc`, build a rootfs, run live tests, change CI, or make gVisor mandatory.
 
+The report also carries a pinned-runner metadata contract under `runner_metadata` with schema `covenant.gvisor-runner-metadata.v1`. The current repository state is intentionally `unpinned`: it records observed host facts without writing local filesystem paths, and it leaves release-critical fields null until a CI runner and rootfs are accepted.
+
+Required CI promotion metadata:
+
+- `runsc.version`
+- `runsc.source`
+- `runsc.digest_sha256`
+- `rootfs.source`
+- `rootfs.digest_sha256`
+- `rootfs.architecture`
+- `host.platform`
+- `host.arch`
+- `host.kernel`
+- `policy.failure_mode`
+
+The validator rejects runner metadata that records local paths or reports pinned CI readiness before a runner/rootfs record is accepted.
+
 ## Gates
 
 | Gate | Current state | Evidence | Human boundary |
@@ -24,6 +41,7 @@ The report uses schema `covenant.gvisor-host-readiness.v1`. It does not install 
 | `runsc-runtime` | Host-dependent | `runsc --version` when available | No policy decision. |
 | `rootfs-shell` | Host-dependent | `COVENANT_LIVE_GVISOR_ROOTFS` with `bin/sh` | No policy decision. |
 | `runtime-policy-evidence` | Implemented | `covenant-runtime`, `live_gvisor.rs`, `docs/gvisor-live-runner.md` | No policy decision. |
+| `runner-metadata-schema` | Implemented | `covenant.gvisor-runner-metadata.v1` report fields and validator | No policy decision. |
 | `ci-runner-provisioning` | Planned | None yet | Runner image or setup-step approval. |
 | `rootfs-provenance` | Planned | None yet | Pinned rootfs artifact approval. |
 | `mandatory-ci-policy` | Planned | None yet | Required-job scope and unsupported-host failure policy. |
@@ -35,6 +53,7 @@ The report uses schema `covenant.gvisor-host-readiness.v1`. It does not install 
 Before Linux gVisor dispatch becomes required CI evidence, the project needs:
 
 - a pinned Linux runner image or setup step with `runsc`;
+- an accepted `covenant.gvisor-runner-metadata.v1` record for the runner and rootfs;
 - captured `runsc --version` and kernel/runtime baseline in CI logs;
 - a pinned rootfs artifact that includes `/bin/sh` and records architecture compatibility;
 - a failure policy that only blocks appropriate sandbox-runtime changes while the host is being stabilized;

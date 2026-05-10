@@ -84,11 +84,32 @@ const rootfs = process.env.COVENANT_LIVE_GVISOR_ROOTFS || "";
 const isLinux = process.platform === "linux";
 const runscAvailable = commandExists(runsc);
 const runscVersion = runscAvailable ? run(runsc, ["--version"]) : null;
+const runscVersionLine = runscVersion?.status === 0
+  ? runscVersion.stdout.split("\n")[0].trim()
+  : null;
 const rootfsStatus = rootfsCheck(rootfs);
 const runtimeEvidenceOk =
   existsSync(join(repoRoot, "agent-os/crates/covenant-runtime/src/lib.rs")) &&
   existsSync(join(repoRoot, "agent-os/crates/covenant-runtime/tests/live_gvisor.rs")) &&
   existsSync(join(repoRoot, "docs/gvisor-live-runner.md"));
+const runnerMetadataSchemaOk =
+  existsSync(join(repoRoot, "docs/gvisor-host-readiness.md")) &&
+  existsSync(join(repoRoot, "agent-os/scripts/gvisor-host-readiness.mjs")) &&
+  existsSync(join(repoRoot, "agent-os/scripts/validate-gvisor-host-readiness.mjs"));
+
+const requiredRunnerMetadataFields = [
+  "schema",
+  "runsc.version",
+  "runsc.source",
+  "runsc.digest_sha256",
+  "rootfs.source",
+  "rootfs.digest_sha256",
+  "rootfs.architecture",
+  "host.platform",
+  "host.arch",
+  "host.kernel",
+  "policy.failure_mode",
+];
 
 const gates = [
   {
@@ -132,6 +153,19 @@ const gates = [
     human_decision_required: false,
   },
   {
+    id: "runner-metadata-schema",
+    title: "Pinned runner metadata schema",
+    status: runnerMetadataSchemaOk ? "documented" : "missing",
+    ok: runnerMetadataSchemaOk,
+    evidence: [
+      "docs/gvisor-host-readiness.md",
+      "agent-os/scripts/gvisor-host-readiness.mjs",
+      "agent-os/scripts/validate-gvisor-host-readiness.mjs",
+    ],
+    blockers: runnerMetadataSchemaOk ? [] : ["gVisor runner metadata schema is missing"],
+    human_decision_required: false,
+  },
+  {
     id: "ci-runner-provisioning",
     title: "Pinned Linux CI runner provisioning",
     status: "planned",
@@ -140,6 +174,7 @@ const gates = [
     blockers: [
       "CI runner image or setup step is not pinned",
       "runsc installation provenance is not captured in CI logs",
+      "accepted covenant.gvisor-runner-metadata.v1 runner record is missing",
     ],
     human_decision_required: true,
   },
@@ -152,6 +187,7 @@ const gates = [
     blockers: [
       "rootfs artifact source is not pinned by digest",
       "rootfs architecture compatibility is not recorded by CI",
+      "accepted covenant.gvisor-runner-metadata.v1 rootfs record is missing",
     ],
     human_decision_required: true,
   },
@@ -187,6 +223,40 @@ const report = {
   ready_for_local_live_gvisor: localLiveGates.every((gate) => gate.ok),
   ready_for_required_ci: false,
   blockers,
+  runner_metadata: {
+    schema: "covenant.gvisor-runner-metadata.v1",
+    status: "unpinned",
+    ready_for_required_ci: false,
+    required_fields: requiredRunnerMetadataFields,
+    redaction: {
+      local_paths_recorded: false,
+      rootfs_path_recorded: false,
+      runsc_path_recorded: false,
+    },
+    runsc: {
+      observed_version: runscVersionLine,
+      command_source: runsc === "runsc" ? "PATH" : "COVENANT_LIVE_RUNSC",
+      source: null,
+      digest_sha256: null,
+    },
+    rootfs: {
+      configured: Boolean(rootfs),
+      has_bin_sh: rootfsStatus.ok,
+      source: null,
+      digest_sha256: null,
+      architecture: null,
+    },
+    host: {
+      platform: process.platform,
+      arch: process.arch,
+      kernel: null,
+      linux_required: true,
+    },
+    policy: {
+      failure_mode: null,
+      unsupported_host_policy: null,
+    },
+  },
   host: {
     platform: process.platform,
     arch: process.arch,

@@ -120,10 +120,13 @@ node agent-os/scripts/validate-gvisor-host-readiness.mjs
 
 The readiness report is non-mutating. It reports the current host prerequisites separately from the project decisions needed for required CI.
 
+The readiness report also emits `runner_metadata` with schema `covenant.gvisor-runner-metadata.v1`. Required CI promotion must provide a pinned runner/rootfs record for that schema; local smoke tests must not rely on operator-local paths as release evidence.
+
 Before this becomes a required CI job, the runner needs:
 
 - a dedicated Linux runner image or setup step with `runsc` preinstalled;
 - a pinned rootfs artifact that includes `/bin/sh`;
+- an accepted `covenant.gvisor-runner-metadata.v1` record binding runner version, rootfs digest, host baseline, and failure policy;
 - a documented kernel/runtime compatibility baseline;
 - captured `runsc --version` and rootfs provenance in CI logs;
 - no dependence on operator home directories, SSH keys, shell profiles, or credential stores;

@@ -1,0 +1,30 @@
+{
+  "id": "status-runtime-execution-pin-gvisor-runner-metadata-schema",
+  "title": "Pin gVisor runner metadata schema",
+  "state": "integrated",
+  "priority": "high",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/scripts/gvisor-host-readiness.mjs",
+    "agent-os/scripts/validate-gvisor-host-readiness.mjs",
+    "docs/gvisor-host-readiness.md",
+    "docs/status.md"
+  ],
+  "summary": "Runtime execution hardening needs a pinned, inspectable record of the Linux gVisor runner inputs (runsc version, rootfs digest/source, and host prerequisites) before CI promotion. Define a small schema and validation hook so future CI enablement is auditable and repeatable.",
+  "expectedFailureModes": [
+    "CI promotion proceeds without a pinned runsc/rootfs record, making failures non-reproducible.",
+    "Docs claim the runner is pinned but the output schema is missing or inconsistent across hosts.",
+    "Validator allows machine-local paths or unpinned binaries, undermining auditability."
+  ],
+  "gates": [
+    "docs",
+    "plan"
+  ],
+  "verification": [
+    "node agent-os/scripts/gvisor-host-readiness.mjs --json",
+    "node agent-os/scripts/validate-gvisor-host-readiness.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Extend gvisor host readiness outputs/docs with pinned runner metadata fields and add a validator that enforces the schema when CI promotion work begins.",
+  "updated": "2026-05-10"
+}

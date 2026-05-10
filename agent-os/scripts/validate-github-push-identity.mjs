@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   approvedGithubCliAccountSummary,
   githubPushAccountViolation,
-} from "./git-identity-policy.mjs";
+} from "./identity-policy.mjs";
 
 const remoteName = process.argv[2] || "origin";
 const suppliedUrl = process.argv[3] || "";

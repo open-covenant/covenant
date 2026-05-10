@@ -35,9 +35,9 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Recent local and upstream commit authors/committers should pass `agent-os/scripts/validate-git-identity.mjs`; pre-push should pass the exact pushed ref range to the same validator.
 - The active local Git author and committer should be configured with `agent-os/scripts/configure-git-identity.mjs` and pass `agent-os/scripts/validate-current-git-identity.mjs` before any autonomous commit is created.
 - The local Git metadata directory should pass `agent-os/scripts/validate-git-write-access.mjs` before a task is treated as committable; a read-only `.git` directory is a real commit blocker, not a code blocker.
-- Commit and push attribution policy is sourced from `agent-os/autonomy/commit-rotation.json`; changes should pass `agent-os/scripts/validate-commit-rotation.mjs`.
+- Commit and push attribution policy should pass `agent-os/scripts/validate-commit-rotation.mjs`; per-clone overrides must stay untracked.
 - Local GitHub CLI state should pass `agent-os/scripts/validate-github-cli-account.mjs` before remote write operations; Git metadata can be neutral while web attribution still follows the authenticated account.
-- GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, approved bot account, or a write-enabled GitHub account that is already a contributor on the configured remote.
+- GitHub PushEvent attribution follows the credential that updates the ref; pre-push must pass `agent-os/scripts/validate-github-push-identity.mjs`, and remote writes require a repository-owned deploy key, GitHub App, or approved bot account.
 - Autonomous sessions should run `agent-os/scripts/autonomy-preflight.mjs` before starting a fresh slice so commit blockers and push blockers are visible separately.
 - If a session cannot commit, `agent-os/scripts/autonomy-dirty-report.mjs --json` should be used as the handoff artifact for dirty paths, active task state, diff stats, and environment blockers.
 - If untracked files exist in a commit-blocked session, `agent-os/scripts/autonomy-handoff-bundle.mjs --json` should be used to export the tracked patch plus bounded UTF-8 untracked file contents for reconstruction in a writable checkout.
@@ -59,7 +59,7 @@ Covenant is an agent-native operating layer for autonomous software systems. It 
 - Alpha release gate outcome lines only count under `## Required Gates`; copied command lines elsewhere in validation notes must not satisfy evidence validation.
 - Alpha release readiness blocker ids only count under `## Alpha Readiness`; copied blocker ids elsewhere in validation notes must not satisfy blocker review.
 - `agent-os/scripts/validate-alpha-release-evidence.mjs` should prove both rejection paths and a synthetic clean/ready accepted bundle path without depending on the current checkout state.
-- If `origin/main` contains a commit that still fails `validate-git-identity.mjs` after remote-contributor expansion, do not merge it locally; replace the remote ref only through an approved neutral write credential.
+- If `origin/main` contains a commit that fails `validate-git-identity.mjs`, do not merge it locally; replace the remote ref only through an approved neutral write credential.
 - Public docs must distinguish implemented, experimental, and planned behavior.
 - The root README must pass `node agent-os/scripts/validate-readme-copy.mjs` after public copy or status changes.
 - Autonomous work is not done until it is reviewed, validated, and resumable.
@@ -97,6 +97,7 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [docs/alpha-release-contract.md](./alpha-release-contract.md): source alpha boundary, blockers, non-claims, and post-alpha research split.
 - [docs/autonomous-development.md](./autonomous-development.md): autonomous workflow protocol.
 - [docs/repo-map.md](./repo-map.md): repository structure.
+- [docs/protocol-versioning.md](./protocol-versioning.md): IPC/HTTP protocol versioning, compatibility windows, and fixture replay policy.
 - [docs/capabilities.md](./capabilities.md): signed capability scope contract and enforcement boundary.
 - [docs/memory-drift.md](./memory-drift.md): read-only memory drift report contract.
 - [docs/audit-integrity.md](./audit-integrity.md): local audit hash-chain and verification boundary.
@@ -107,7 +108,6 @@ Agents may inspect, implement, test, document, and propose repairs. Humans retai
 - [agent-os/scripts/validate-alpha-release-evidence.mjs](../agent-os/scripts/validate-alpha-release-evidence.mjs): alpha evidence and readiness gate regression check.
 - [agent-os/autonomy/workflow.json](../agent-os/autonomy/workflow.json): lifecycle states, roles, gates, transitions, and definition of done.
 - [agent-os/autonomy/backlog.json](../agent-os/autonomy/backlog.json): durable seed queue used when no active task is ready.
-- [agent-os/autonomy/commit-rotation.json](../agent-os/autonomy/commit-rotation.json): commit and push attribution policy for autonomous work.
 - [agent-os/autonomy/tasks](../agent-os/autonomy/tasks): active and completed autonomous maintenance tasks.
 - [agent-os/scripts/autonomy-status-gaps.mjs](../agent-os/scripts/autonomy-status-gaps.mjs): read-only backlog-refill candidates from the capability status matrix.
 - [agent-os/scripts/autonomy-review-artifact.mjs](../agent-os/scripts/autonomy-review-artifact.mjs): unsigned task review artifact scaffold.

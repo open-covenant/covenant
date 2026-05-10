@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { activeProjectGitIdentity } from "./git-identity-policy.mjs";
+import { activeProjectGitIdentity } from "./identity-policy.mjs";
 
 const git = (args) =>
   spawnSync("git", args, {

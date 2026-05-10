@@ -4,7 +4,7 @@ import {
   approvedCurrentIdentitySummary,
   currentIdentityViolation,
   parseGitIdent,
-} from "./git-identity-policy.mjs";
+} from "./identity-policy.mjs";
 
 const git = (args) =>
   spawnSync("git", args, {

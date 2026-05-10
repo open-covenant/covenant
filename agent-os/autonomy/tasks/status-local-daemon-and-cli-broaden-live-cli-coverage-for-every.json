@@ -1,0 +1,29 @@
+{
+  "id": "status-local-daemon-and-cli-broaden-live-cli-coverage-for-every",
+  "title": "Broaden live CLI coverage for privileged verbs",
+  "state": "integrated",
+  "priority": "medium",
+  "ownerRole": "implementer",
+  "scope": [
+    "agent-os/crates/covenant",
+    "agent-os/crates/covenantd",
+    "agent-os/autonomy/live-coverage.json"
+  ],
+  "summary": "The local daemon + CLI is partially covered by live tests, but several privileged verbs still lack end-to-end exercise. Add focused live CLI tests for the remaining high-risk commands so drift shows up before release evidence is generated.",
+  "expectedFailureModes": [
+    "A privileged verb regresses exit codes or JSON shape without unit tests noticing.",
+    "Dispatch wiring drifts and the CLI silently no-ops or targets the wrong daemon endpoint.",
+    "Live coverage claims drift from reality and block alpha readiness unexpectedly."
+  ],
+  "gates": [
+    "test_expansion"
+  ],
+  "verification": [
+    "bash agent-os/scripts/validate.sh --quick",
+    "cd agent-os && cargo test -p covenant --locked",
+    "node agent-os/scripts/validate-autonomy.mjs"
+  ],
+  "humanEscalation": [],
+  "nextAction": "Identify 2-3 privileged CLI verbs without live coverage and add minimal live tests that prove dispatch + exit status + JSON output shape.",
+  "updated": "2026-05-10"
+}

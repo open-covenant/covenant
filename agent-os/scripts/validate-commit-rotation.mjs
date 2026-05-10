@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { commitRotationPath, loadCommitRotation } from "./commit-rotation.mjs";
+import { commitRotationPath, loadCommitRotation } from "./identity-rotation.mjs";
 
 function identityKey(identity) {
   return `${identity.name}\0${identity.email}`;

@@ -43,6 +43,7 @@ agent-os/BLOCKERS.md
 agent-os/PRODUCTION_READINESS.md
 agent-os/WORKFLOW.md
 agent-os/autonomy/commit-rotation.json
+agent-os/scripts/commit-rotation.mjs
 agent-os/scripts/git-identity-policy.mjs
 
 playwright-report/

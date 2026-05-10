@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { loadCommitRotation } from "./commit-rotation.mjs";
+import { loadCommitRotation } from "./identity-rotation.mjs";
 
 const commitRotation = loadCommitRotation();
 const activeProjectIdentity = commitRotation.currentGitIdentity;

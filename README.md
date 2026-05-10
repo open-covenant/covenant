@@ -43,7 +43,7 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 
 The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
-See [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/release-validation.md](./docs/release-validation.md), [docs/capabilities.md](./docs/capabilities.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
+See [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/capabilities.md](./docs/capabilities.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
 
 ## Capabilities
 

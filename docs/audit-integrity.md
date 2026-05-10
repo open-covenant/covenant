@@ -87,7 +87,7 @@ The current implementation can generate and verify `audit-root-attestation.v1` p
 
 ## Public Root Signing Direction
 
-The accepted planning direction is [ADR 0004](./decisions/0004-audit-root-signing-policy.md): publish detached `audit-root-attestation.v1` payloads for release candidates, sign them with a project-controlled identity, and later submit the same payloads to a transparency log.
+The accepted planning direction is to publish detached `audit-root-attestation.v1` payloads for release candidates, sign them with a project-controlled identity, and later submit the same payloads to a transparency log. Project signing key custody, publication, rotation, authorized signer, and release-evidence policy are defined in [docs/provenance/keys/](./provenance/keys/).
 
 The generator and verifier now exist in `agent-os/scripts/provenance.mjs`:
 
@@ -105,4 +105,4 @@ node agent-os/scripts/provenance.mjs audit-root verify \
 
 Signed payloads are local cryptographic integrity evidence for the embedded key. Public non-repudiation still depends on a reviewed project key custody and publication process.
 
-Release-target audit roots can also bind an embedded `covenant.provenance.release.v1` release subject digest. See [audit root release custody](./provenance/audit-root-release-custody.md) for the local verifier contract and the human custody checklist.
+Release-target audit roots can also bind an embedded `covenant.provenance.release.v1` release subject digest. The verifier checks repository, release id, commit, artifact metadata, validation evidence, and the embedded `releaseSubjectSha256`; the human custody steps for accepting a release-target root are kept in the project's release operator handbook.

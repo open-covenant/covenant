@@ -2,8 +2,6 @@
 
 Off-chain Groth16 prover for Covenant research and staging circuits. Agents POST a witness and receive a `(proof, public_signals)` blob that can be used for circuit development, artifact validation, and non-mainnet testing.
 
-See [`docs/specs/service-model.md`](../../docs/specs/service-model.md) for service conventions and public payload shapes.
-
 ## Run
 
 ```

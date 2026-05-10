@@ -54,6 +54,7 @@ if (!Array.isArray(report.human_decisions) || report.human_decisions.length < 4)
 const gates = new Map((report.gates ?? []).map((gate) => [gate.id, gate]));
 for (const id of [
   "source-alpha-install",
+  "source-upgrade-preflight",
   "package-manager-distribution",
   "signed-release-artifacts",
   "sdk-stability",
@@ -67,6 +68,17 @@ for (const id of [
 const source = gates.get("source-alpha-install");
 if (source && source.ok !== true) {
   fail("source alpha install gate must pass");
+}
+
+const sourceUpgrade = gates.get("source-upgrade-preflight");
+if (sourceUpgrade && sourceUpgrade.ok !== true) {
+  fail("source upgrade preflight gate must pass");
+}
+if (
+  sourceUpgrade &&
+  !sourceUpgrade.evidence.some((item) => item.endsWith("source-install-upgrade-plan.mjs"))
+) {
+  fail("source upgrade preflight must list its report script as evidence");
 }
 
 for (const id of [
@@ -94,6 +106,14 @@ if (
   !signed.blockers.some((blocker) => /project signing key custody/i.test(blocker))
 ) {
   fail("signed-release-artifacts must call out project signing key custody");
+}
+
+const upgrade = gates.get("upgrade-policy");
+if (
+  upgrade &&
+  !upgrade.blockers.some((blocker) => /automatic rollback/i.test(blocker))
+) {
+  fail("upgrade-policy must keep automatic rollback blocked");
 }
 
 if (errors.length > 0) {

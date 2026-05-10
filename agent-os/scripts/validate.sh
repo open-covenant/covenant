@@ -60,6 +60,7 @@ run node ./scripts/validate-readme-copy.mjs
 run node ./scripts/validate-live-coverage.mjs
 run node ./scripts/validate-privileged-cli-live-matrix.mjs
 run node ./scripts/validate-source-installer.mjs
+run node ./scripts/validate-source-install-upgrade-plan.mjs
 run node ./scripts/validate-distribution-readiness.mjs
 run node ./scripts/validate-settlement-deployment-readiness.mjs
 run node ./scripts/validate-settlement-receipt-migration.mjs

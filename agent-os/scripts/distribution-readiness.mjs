@@ -50,6 +50,9 @@ for (const arg of args) {
 
 const sourceInstall = run(process.execPath, ["agent-os/scripts/validate-source-installer.mjs"]);
 const sourceInstallOk = sourceInstall.status === 0;
+const sourceUpgrade = run(process.execPath, ["agent-os/scripts/validate-source-install-upgrade-plan.mjs"]);
+const sourceUpgradeOk = sourceUpgrade.status === 0;
+const sourceAlphaOk = sourceInstallOk && sourceUpgradeOk;
 
 const gates = [
   {
@@ -67,6 +70,22 @@ const gates = [
     blockers: sourceInstallOk ? [] : ["source installer dry-run validation failed"],
     human_decision_required: false,
     output: textOutput(sourceInstall),
+  },
+  {
+    id: "source-upgrade-preflight",
+    title: "Source install upgrade preflight",
+    scope: "source_alpha",
+    status: sourceUpgradeOk ? "implemented" : "blocked",
+    ok: sourceUpgradeOk,
+    command: "node agent-os/scripts/validate-source-install-upgrade-plan.mjs",
+    evidence: [
+      "agent-os/scripts/source-install-upgrade-plan.mjs",
+      "agent-os/scripts/validate-source-install-upgrade-plan.mjs",
+      "docs/source-install.md",
+    ],
+    blockers: sourceUpgradeOk ? [] : ["source install upgrade preflight validation failed"],
+    human_decision_required: false,
+    output: textOutput(sourceUpgrade),
   },
   {
     id: "package-manager-distribution",
@@ -114,12 +133,17 @@ const gates = [
     id: "upgrade-policy",
     title: "Upgrade and rollback policy",
     scope: "public_distribution",
-    status: "planned",
+    status: sourceUpgradeOk ? "experimental" : "blocked",
     ok: false,
-    evidence: [],
+    evidence: [
+      "agent-os/scripts/source-install-upgrade-plan.mjs",
+      "agent-os/scripts/validate-source-install-upgrade-plan.mjs",
+      "docs/source-install.md",
+    ],
     blockers: [
-      "automatic upgrade safety is not implemented",
-      "rollback behavior is not documented or tested",
+      "source install upgrade preflight is read-only and requires operator review",
+      "automatic rollback mutation is not implemented",
+      "rollback audit evidence is not emitted",
       "installer migration checks are not covered across releases",
     ],
     human_decision_required: true,
@@ -142,7 +166,7 @@ const report = {
   kind: "covenant_distribution_readiness",
   schema: "covenant.distribution-readiness.v1",
   generated_at: new Date().toISOString(),
-  ready_for_source_alpha: sourceInstallOk,
+  ready_for_source_alpha: sourceAlphaOk,
   ready_for_public_distribution: publicGates.every((gate) => gate.ok),
   blockers,
   human_decisions: [

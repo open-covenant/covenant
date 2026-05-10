@@ -126,7 +126,16 @@ async fn live_http_tools_call_round_trip() {
 
     let grant: Value = client
         .post(format!("{base}/capabilities/grant"))
-        .json(&json!({ "action": "tool.call.echo" }))
+        .json(&json!({
+            "action": "tool.call.echo",
+            "scope": {
+                "version": 1,
+                "tool": "echo",
+                "arguments": {
+                    "allow": { "text": "live http echo" }
+                }
+            }
+        }))
         .send()
         .await
         .expect("grant request")
@@ -134,6 +143,24 @@ async fn live_http_tools_call_round_trip() {
         .await
         .expect("grant json");
     assert_eq!(grant["kind"], "capability_granted");
+
+    let scoped_denied: Value = client
+        .post(format!("{base}/tools/call"))
+        .json(&json!({ "name": "echo", "arguments": { "text": "blocked http echo" } }))
+        .send()
+        .await
+        .expect("scoped denied tool-call request")
+        .json()
+        .await
+        .expect("scoped denied tool-call json");
+    assert_eq!(scoped_denied["kind"], "error");
+    assert!(
+        scoped_denied["message"]
+            .as_str()
+            .expect("scoped error message")
+            .contains("capability scope"),
+        "mismatched arguments should be rejected by capability scope: {scoped_denied:?}"
+    );
 
     let call: Value = client
         .post(format!("{base}/tools/call"))

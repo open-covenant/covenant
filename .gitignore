@@ -122,6 +122,7 @@ agent-os/scripts/validate-mcp-fixture-selection-policy.mjs
 agent-os/scripts/validate-mcp-live-compatibility.mjs
 agent-os/scripts/validate-package-manager-readiness.mjs
 agent-os/scripts/validate-privileged-cli-live-matrix.mjs
+agent-os/scripts/validate-project-keys.mjs
 agent-os/scripts/validate-release-artifact-subject.mjs
 agent-os/scripts/validate-release-provenance-readiness.mjs
 agent-os/scripts/validate-review-signing-readiness.mjs

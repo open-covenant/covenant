@@ -526,10 +526,15 @@ impl SqliteStore {
         let pubkey_vec = bs58::decode(&owner_pubkey_s).into_vec().map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
         })?;
-        let mut pubkey = [0u8; 32];
-        if pubkey_vec.len() == 32 {
-            pubkey.copy_from_slice(&pubkey_vec);
+        if pubkey_vec.len() != 32 {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                format!("owner_pubkey decoded to {} bytes, expected 32", pubkey_vec.len()).into(),
+            ));
         }
+        let mut pubkey = [0u8; 32];
+        pubkey.copy_from_slice(&pubkey_vec);
         let metadata: serde_json::Value = serde_json::from_str(&metadata_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
         })?;

@@ -154,6 +154,9 @@ pub fn load_agents_from_dir(dir: &Path) -> Result<Vec<AgentCard>, RouterError> {
         })?;
         cards.push(AgentCard::from_manifest_and_dir(m, pkg_dir));
     }
+    // Sort by manifest id so routing ties resolve deterministically across
+    // hosts; `read_dir` returns entries in filesystem order, which varies.
+    cards.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(cards)
 }
 

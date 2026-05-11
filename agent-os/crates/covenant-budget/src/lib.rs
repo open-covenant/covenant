@@ -297,7 +297,9 @@ impl BudgetLedger for InMemoryLedger {
         if entry.tokens_remaining > credits_per_hour {
             entry.tokens_remaining = credits_per_hour;
         }
-        entry.last_refill_ms = now;
+        // Strictly monotonic — refuse to walk the clock backward on NTP
+        // skew or a re-stamp from a stale `now` argument.
+        entry.last_refill_ms = now.max(entry.last_refill_ms);
         Ok(())
     }
 
@@ -750,7 +752,9 @@ impl BudgetLedger for JsonlLedger {
         if entry.tokens_remaining > credits_per_hour {
             entry.tokens_remaining = credits_per_hour;
         }
-        entry.last_refill_ms = now;
+        // Strictly monotonic — refuse to walk the clock backward on NTP
+        // skew or a re-stamp from a stale `now` argument.
+        entry.last_refill_ms = now.max(entry.last_refill_ms);
         Ok(())
     }
 

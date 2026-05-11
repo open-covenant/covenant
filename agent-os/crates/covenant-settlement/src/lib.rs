@@ -308,7 +308,16 @@ impl Settlement for JsonlReceiptStore {
             body.push_str(&serde_json::to_string(&receipt)?);
             body.push('\n');
         }
-        fs::write(&self.path, body).await?;
+        // Atomic rewrite: tempfile + rename. A mid-write crash with the
+        // raw `fs::write` shape would have truncated the receipts file
+        // and lost every pre-batch row.
+        let tmp = self.path.with_extension("jsonl.tmp");
+        let mut out = fs::File::create(&tmp).await?;
+        use tokio::io::AsyncWriteExt;
+        out.write_all(body.as_bytes()).await?;
+        out.sync_all().await?;
+        drop(out);
+        fs::rename(&tmp, &self.path).await?;
         Ok(updated)
     }
 }

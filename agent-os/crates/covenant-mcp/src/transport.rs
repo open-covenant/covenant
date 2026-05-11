@@ -178,10 +178,13 @@ pub trait McpClient: Send + Sync {
 
 type Pending = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, JsonRpcError>>>>>;
 
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct StdioMcpClient {
     stdin: Mutex<ChildStdin>,
     pending: Pending,
     next_id: AtomicU64,
+    request_timeout: Duration,
     // Holding `Child` keeps the process alive. `kill_on_drop(true)` on the
     // builder means dropping this struct also reaps the subprocess.
     _child: Mutex<Option<Child>>,
@@ -254,6 +257,7 @@ impl StdioMcpClient {
             stdin: Mutex::new(stdin),
             pending,
             next_id: AtomicU64::new(1),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
             _child: Mutex::new(Some(child)),
             _reader: reader,
         }))
@@ -281,7 +285,11 @@ fn deliver_response(pending: &Pending, resp: JsonRpcResponse) {
         let outcome = match (resp.result, resp.error) {
             (Some(v), _) => Ok(v),
             (None, Some(e)) => Err(e),
-            (None, None) => Ok(Value::Null),
+            (None, None) => Err(JsonRpcError {
+                code: -32603,
+                message: "response missing both result and error".into(),
+                data: None,
+            }),
         };
         let _ = tx.send(outcome);
     } else {
@@ -305,21 +313,34 @@ impl McpClient for StdioMcpClient {
     async fn request(&self, method: &str, params: Value) -> Result<Value, McpClientError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        {
-            let mut map = self.pending.lock().expect("pending lock");
-            map.insert(id, tx);
-        }
         let msg = serde_json::to_vec(&JsonRpcRequest {
             jsonrpc: "2.0",
             id,
             method: method.to_string(),
             params,
         })?;
-        self.write_line(&msg).await?;
-        match rx.await {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) => Err(e.into()),
-            Err(_) => Err(McpClientError::Closed),
+        {
+            let mut map = self.pending.lock().expect("pending lock");
+            map.insert(id, tx);
+        }
+        if let Err(e) = self.write_line(&msg).await {
+            // Roll back the pending entry so it doesn't sit until reader
+            // EOF. Without this the slot leaks for the lifetime of the
+            // transport on every write failure.
+            let mut map = self.pending.lock().expect("pending lock");
+            map.remove(&id);
+            return Err(e);
+        }
+        let timeout = self.request_timeout;
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(v))) => Ok(v),
+            Ok(Ok(Err(e))) => Err(e.into()),
+            Ok(Err(_)) => Err(McpClientError::Closed),
+            Err(_) => {
+                let mut map = self.pending.lock().expect("pending lock");
+                map.remove(&id);
+                Err(McpClientError::Timeout(timeout))
+            }
         }
     }
 

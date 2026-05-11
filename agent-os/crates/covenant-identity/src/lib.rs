@@ -24,6 +24,10 @@ pub enum IdentityError {
     Io(#[from] std::io::Error),
     #[error("identity file at {path} has wrong size: expected 32 bytes, got {got}")]
     BadSize { path: PathBuf, got: usize },
+    #[error("identity file at {path} has insecure permissions {mode:#o}; require 0o600")]
+    InsecureMode { path: PathBuf, mode: u32 },
+    #[error("identity file at {path} is a symlink; refusing to follow")]
+    Symlink { path: PathBuf },
     #[error("ed25519: {0}")]
     Crypto(#[from] ed25519_dalek::SignatureError),
 }
@@ -76,8 +80,10 @@ impl LocalIdentity {
     pub fn load_or_create(path: &Path, default_display: &str) -> Result<Self, IdentityError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            set_dir_mode_0700(parent)?;
         }
         if path.exists() {
+            require_identity_key_secure(path)?;
             let bytes = std::fs::read(path)?;
             if bytes.len() != 32 {
                 return Err(IdentityError::BadSize {
@@ -103,15 +109,57 @@ impl LocalIdentity {
 }
 
 #[cfg(unix)]
+fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(IdentityError::Symlink {
+            path: path.to_path_buf(),
+        });
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode != 0o600 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        let after = std::fs::symlink_metadata(path)?.permissions().mode() & 0o777;
+        if after != 0o600 {
+            return Err(IdentityError::InsecureMode {
+                path: path.to_path_buf(),
+                mode,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_identity_key_secure(_path: &Path) -> Result<(), IdentityError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_dir_mode_0700(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn set_dir_mode_0700(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
     let mut f = std::fs::OpenOptions::new()
-        .create(true)
+        .create_new(true)
         .write(true)
-        .truncate(true)
         .mode(0o600)
         .open(path)?;
-    std::io::Write::write_all(&mut f, bytes)
+    std::io::Write::write_all(&mut f, bytes)?;
+    f.sync_all()
 }
 
 #[cfg(not(unix))]

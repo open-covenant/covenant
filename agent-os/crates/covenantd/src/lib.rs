@@ -33,10 +33,12 @@ use covenant_permissions::{
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
     memory_write_scope_allows as permission_memory_write_scope_allows,
     peer_scope_allows as permission_peer_scope_allows, sign as sign_capability,
-    tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope, verify_with_clock,
-    A2aScopeRequest, CapabilityStore, ChainScopeRequest, MemoryCompactionScopeRequest,
-    PeerScopeRequest,
+    tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope,
+    verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore, ChainScopeRequest,
+    MemoryCompactionScopeRequest, PeerScopeRequest,
 };
+#[cfg(test)]
+use covenant_permissions::verify_with_clock;
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
 use covenant_settlement::{
@@ -2203,6 +2205,7 @@ impl Server {
         peer: &AgentId,
     ) -> Result<bool, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -2210,7 +2213,8 @@ impl Server {
             .map_err(|e| e.to_string())?;
         let mut invalid_scope = None;
         for cap in user_caps.iter().filter(|cap| {
-            cap.capability.action == "audit.purge" && verify_with_clock(cap, now).is_ok()
+            cap.capability.action == "audit.purge"
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
         }) {
             match permission_audit_purge_scope_allows(
                 &cap.capability.action,
@@ -2236,6 +2240,7 @@ impl Server {
         peer: &AgentId,
     ) -> Result<bool, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -2243,7 +2248,8 @@ impl Server {
             .map_err(|e| e.to_string())?;
         let mut invalid_scope = None;
         for cap in user_caps.iter().filter(|cap| {
-            cap.capability.action == "capabilities.purge" && verify_with_clock(cap, now).is_ok()
+            cap.capability.action == "capabilities.purge"
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
         }) {
             match permission_capabilities_purge_scope_allows(
                 &cap.capability.action,
@@ -2419,16 +2425,17 @@ impl Server {
         peer: &AgentId,
     ) -> Result<bool, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
             .await
             .map_err(|e| e.to_string())?;
         let mut invalid_scope = None;
-        for cap in user_caps
-            .iter()
-            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
-        {
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
             match permission_tool_call_scope_allows(
                 &cap.capability.action,
                 &cap.capability.scope,
@@ -2900,6 +2907,7 @@ impl Server {
                 missing: Vec::new(),
             };
         }
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -2907,7 +2915,7 @@ impl Server {
             .unwrap_or_default();
         let valid_actions: Vec<String> = user_caps
             .iter()
-            .filter(|c| verify_with_clock(c, now).is_ok())
+            .filter(|c| verify_with_clock_and_trust_root(c, now, trust_root).is_ok())
             .map(|c| c.capability.action.clone())
             .collect();
         let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
@@ -2970,6 +2978,7 @@ impl Server {
         request: A2aScopeRequest<'_>,
     ) -> Result<A2aScopeCheck, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(subject_pubkey)
@@ -2982,7 +2991,7 @@ impl Server {
             alternatives
                 .iter()
                 .any(|action| action == &cap.capability.action)
-                && verify_with_clock(cap, now).is_ok()
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
         }) {
             has_matching_action = true;
             match permission_a2a_scope_allows(
@@ -3030,6 +3039,7 @@ impl Server {
         request: PeerScopeRequest<'_>,
     ) -> Result<PeerScopeCheck, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -3038,10 +3048,10 @@ impl Server {
         let mut invalid_scope = None;
         let mut has_matching_action = false;
 
-        for cap in user_caps
-            .iter()
-            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
-        {
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
             has_matching_action = true;
             match permission_peer_scope_allows(
                 &cap.capability.action,
@@ -3078,6 +3088,7 @@ impl Server {
         request: ChainScopeRequest<'_>,
     ) -> Result<Vec<(String, serde_json::Value)>, String> {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -3086,10 +3097,10 @@ impl Server {
         let mut scopes = Vec::new();
         let mut invalid_scope = None;
 
-        for cap in user_caps
-            .iter()
-            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
-        {
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
             match permission_chain_scope_allows(
                 &cap.capability.action,
                 &cap.capability.scope,
@@ -3999,16 +4010,17 @@ impl Server {
         F: FnMut(&serde_json::Value) -> Result<bool, covenant_permissions::PermissionError>,
     {
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
             .await
             .map_err(|e| e.to_string())?;
         let mut invalid_scope = None;
-        for cap in user_caps
-            .iter()
-            .filter(|cap| cap.capability.action == action && verify_with_clock(cap, now).is_ok())
-        {
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
             match allows(&cap.capability.scope) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
@@ -4043,6 +4055,7 @@ impl Server {
     ) -> Result<Vec<(String, serde_json::Value)>, String> {
         let actions = memory_read_actions(tier);
         let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
             .capabilities
             .list_for_subject(peer.pubkey)
@@ -4056,7 +4069,7 @@ impl Server {
             actions
                 .iter()
                 .any(|action| action == &cap.capability.action)
-                && verify_with_clock(cap, now).is_ok()
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
         }) {
             match permission_memory_read_scope_allows(
                 &cap.capability.action,
@@ -4416,11 +4429,14 @@ impl Server {
         // is the trust root and signs every cap, but the cap is *for*
         // the subject — a different peer must not be able to revoke it
         // by replaying a signature visible on `/capabilities/recent`.
-        let owned = self
-            .capabilities
-            .list_for_subject(peer.pubkey)
-            .await
-            .unwrap_or_default();
+        let owned = match self.capabilities.list_for_subject(peer.pubkey).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("permissions: {e}"),
+                };
+            }
+        };
         if !owned.iter().any(|c| c.signature == bytes) {
             match self.capabilities.is_revoked(bytes).await {
                 Ok(true) => {
@@ -4437,16 +4453,20 @@ impl Server {
                 }
             }
 
+            // Audit row is issued by the daemon identity so it surfaces on
+            // the operator's `/audit/recent` feed rather than the rejected
+            // peer's. Matches the audience model already used by
+            // OperatorPeerRevokeRejected and OperatorTokenRotationRejected.
             let event = AuditEvent {
                 id: Uuid::new_v4(),
                 timestamp_ms: epoch_ms(),
-                issuer: peer.clone(),
+                issuer: self.identity.agent_id(),
                 kind: AuditKind::CapabilityRevokeRejected {
                     signature_b58: signature_b58.clone(),
                     reason: "peer is not the subject of this capability".into(),
                 },
             };
-            self.record_peer_event(peer, event).await;
+            self.record_daemon_event(event).await;
             return Response::Error {
                 message: "revoke rejected: capability subject does not match authenticated peer"
                     .into(),
@@ -4609,7 +4629,16 @@ pub fn write_operator_token_0600(path: &std::path::Path, token_b58: &str) -> std
 /// leak the prior token to whoever could read the permissive file.
 pub fn require_operator_token_mode_0600(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(path)?;
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is a symlink; refusing to follow (operator-token path must be a real file)",
+                path.display()
+            ),
+        ));
+    }
     let mode = meta.permissions().mode() & 0o777;
     if mode & 0o077 != 0 {
         return Err(std::io::Error::new(
@@ -7655,17 +7684,16 @@ required = {caps:?}
         // Inject the recv cap directly with subject = recipient.pubkey.
         // v0 has no IPC verb to grant on a foreign subject; tests bypass
         // via the store API to exercise the gate's pass path. Sign with
-        // an alien identity — verification keys on subject pubkey, not
-        // signature provenance.
-        let alien_grantor = LocalIdentity::generate("granter@local");
+        // the daemon's identity so the cap passes the trust-root check
+        // every dispatch-time verify now performs.
         let recv_cap = covenant_types::Capability {
             subject: foreign_recipient.clone(),
             action: format!("a2a.recv.{}", peer.display),
             scope: serde_json::json!({}),
-            granted_by: alien_grantor.agent_id(),
+            granted_by: peer.clone(),
             expires_at: None,
         };
-        let signed = sign_capability(recv_cap, alien_grantor.signing_key());
+        let signed = sign_capability(recv_cap, s.identity.signing_key());
         s.capabilities.record(signed).await.unwrap();
 
         let task = covenant_a2a::A2ATask {
@@ -8020,17 +8048,17 @@ required = {caps:?}
         })
         .await;
         // Recipient grants `a2a.recv.<sender_pubkey_b58>` instead of the
-        // display form. The gate must accept it.
+        // display form. The gate must accept it. Sign with the daemon
+        // identity so the cap passes the trust-root check.
         let recv_alternatives = peer.scoped_action_alternatives("a2a.recv");
-        let alien_grantor = LocalIdentity::generate("granter@local");
         let recv_cap = covenant_types::Capability {
             subject: foreign_recipient.clone(),
             action: recv_alternatives[1].clone(),
             scope: serde_json::json!({}),
-            granted_by: alien_grantor.agent_id(),
+            granted_by: peer.clone(),
             expires_at: None,
         };
-        let signed = sign_capability(recv_cap, alien_grantor.signing_key());
+        let signed = sign_capability(recv_cap, s.identity.signing_key());
         s.capabilities.record(signed).await.unwrap();
 
         let task = covenant_a2a::A2ATask {

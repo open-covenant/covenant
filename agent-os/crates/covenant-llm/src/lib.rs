@@ -235,11 +235,16 @@ impl Provider for AnthropicProvider {
         if self.api_key.is_empty() {
             return Err(ProviderError::MissingKey("anthropic"));
         }
-        let mut system: Option<&str> = None;
+        let mut system_buf = String::new();
         let mut chat = Vec::with_capacity(messages.len());
         for m in messages {
             match m.role {
-                Role::System => system = Some(&m.content),
+                Role::System => {
+                    if !system_buf.is_empty() {
+                        system_buf.push_str("\n\n");
+                    }
+                    system_buf.push_str(&m.content);
+                }
                 Role::User => chat.push(AnthropicMessage {
                     role: "user",
                     content: &m.content,
@@ -250,6 +255,7 @@ impl Provider for AnthropicProvider {
                 }),
             }
         }
+        let system = (!system_buf.is_empty()).then_some(system_buf.as_str());
         let body = AnthropicRequest {
             model: &self.model,
             max_tokens: 1024,

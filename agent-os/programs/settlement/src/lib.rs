@@ -242,6 +242,10 @@ pub mod settlement {
         receipt_hash: [u8; 32],
     ) -> Result<()> {
         require!(
+            !ctx.accounts.config.paused,
+            CovenantError::ProtocolPaused
+        );
+        require!(
             ctx.accounts.task.status == TASK_FUNDED,
             CovenantError::WrongTaskStatus
         );

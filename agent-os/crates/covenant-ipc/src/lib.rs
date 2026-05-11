@@ -519,7 +519,7 @@ pub enum IpcError {
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
     #[error("frame too large: {got} bytes (max {MAX_FRAME})")]
-    FrameTooLarge { got: u32 },
+    FrameTooLarge { got: u64 },
 }
 
 pub async fn read_frame<R, T>(reader: &mut R) -> Result<T, IpcError>
@@ -531,7 +531,7 @@ where
     reader.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf);
     if len > MAX_FRAME {
-        return Err(IpcError::FrameTooLarge { got: len });
+        return Err(IpcError::FrameTooLarge { got: len as u64 });
     }
     let mut buf = vec![0u8; len as usize];
     reader.read_exact(&mut buf).await?;
@@ -544,10 +544,11 @@ where
     T: serde::Serialize,
 {
     let payload = serde_json::to_vec(value)?;
-    let len =
-        u32::try_from(payload.len()).map_err(|_| IpcError::FrameTooLarge { got: u32::MAX })?;
+    let len = u32::try_from(payload.len()).map_err(|_| IpcError::FrameTooLarge {
+        got: payload.len() as u64,
+    })?;
     if len > MAX_FRAME {
-        return Err(IpcError::FrameTooLarge { got: len });
+        return Err(IpcError::FrameTooLarge { got: len as u64 });
     }
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&payload).await?;

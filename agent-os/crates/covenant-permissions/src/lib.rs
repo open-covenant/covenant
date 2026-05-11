@@ -37,6 +37,8 @@ pub enum PermissionError {
     Expired(u64),
     #[error("signature does not verify against granted_by pubkey")]
     BadSignature,
+    #[error("granted_by pubkey does not match the daemon trust root")]
+    UntrustedGrantor,
     #[error("invalid capability scope: {0}")]
     InvalidScope(String),
 }
@@ -1029,6 +1031,22 @@ pub fn verify_with_clock(signed: &SignedCapability, now_ms: u64) -> Result<(), P
         }
     }
     Ok(())
+}
+
+/// Verify expiry, signature, and that `granted_by.pubkey` matches the
+/// configured trust root. The trust root is the daemon identity that
+/// owns the capability store; rejecting any other grantor closes the
+/// out-of-band-write threat where an attacker with file access to
+/// `granted.jsonl` self-signs a capability with their own pubkey.
+pub fn verify_with_clock_and_trust_root(
+    signed: &SignedCapability,
+    now_ms: u64,
+    trust_root: [u8; 32],
+) -> Result<(), PermissionError> {
+    if signed.capability.granted_by.pubkey != trust_root {
+        return Err(PermissionError::UntrustedGrantor);
+    }
+    verify_with_clock(signed, now_ms)
 }
 
 #[async_trait]

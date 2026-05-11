@@ -174,9 +174,7 @@ async fn live_covenantd_a2a_send_rejects_non_operator_without_grant() {
         let mut stream = authenticated_stream(&sock, &operator_token).await;
         match req(&mut stream, Request::TryRecvA2ATask).await {
             Response::A2ATaskOpt { task: None } => {}
-            other => panic!(
-                "rejected a2a send must not enqueue; operator try_recv got {other:?}"
-            ),
+            other => panic!("rejected a2a send must not enqueue; operator try_recv got {other:?}"),
         }
     }
 

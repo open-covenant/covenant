@@ -132,9 +132,7 @@ async fn live_covenantd_chain_verbs_reject_non_operator_without_grant() {
                 message.contains("chain.receipts"),
                 "missing-grant chain.receipts must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not read receipts, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not read receipts, got {other:?}"),
         }
     }
 
@@ -147,9 +145,7 @@ async fn live_covenantd_chain_verbs_reject_non_operator_without_grant() {
                 message.contains("chain.batches"),
                 "missing-grant chain.batches must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not read receipt batches, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not read receipt batches, got {other:?}"),
         }
     }
 
@@ -169,9 +165,7 @@ async fn live_covenantd_chain_verbs_reject_non_operator_without_grant() {
                 "missing-grant chain.flush must reject by operator-identity or capability gate, \
                  got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not flush receipts, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not flush receipts, got {other:?}"),
         }
     }
 

@@ -11,8 +11,9 @@ use std::io::{self, Stdout};
 
 use anyhow::{Context, Result};
 use covenant_tui::ipc::{
-    covenant_home, grant_capability, recent_audit, recent_capabilities, recent_memory,
-    submit_intent, AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
+    covenant_home, grant_capability, recent_a2a_tasks, recent_audit, recent_capabilities,
+    recent_memory, submit_intent, A2aFetchOutcome, AuditFetchOutcome, CapabilitiesFetchOutcome,
+    GrantOutcome, MemoryFetchOutcome,
 };
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
@@ -99,6 +100,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let (memory_tx, mut memory_rx) = mpsc::unbounded_channel::<MemoryFetchOutcome>();
     let (audit_tx, mut audit_rx) = mpsc::unbounded_channel::<AuditFetchOutcome>();
     let (caps_tx, mut caps_rx) = mpsc::unbounded_channel::<CapabilitiesFetchOutcome>();
+    let (a2a_tx, mut a2a_rx) = mpsc::unbounded_channel::<A2aFetchOutcome>();
     let (grant_tx, mut grant_rx) = mpsc::unbounded_channel::<GrantOutcome>();
     let home = covenant_home()?;
 
@@ -129,11 +131,11 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             let tx = memory_tx.clone();
             let home = home.clone();
             tokio::spawn(async move {
-                let outcome = recent_memory(&home, None, 20)
-                    .await
-                    .unwrap_or_else(|e| MemoryFetchOutcome::Failed {
+                let outcome = recent_memory(&home, None, 20).await.unwrap_or_else(|e| {
+                    MemoryFetchOutcome::Failed {
                         message: format!("{e:#}"),
-                    });
+                    }
+                });
                 let _ = tx.send(outcome);
             });
         }
@@ -142,11 +144,12 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             let tx = audit_tx.clone();
             let home = home.clone();
             tokio::spawn(async move {
-                let outcome = recent_audit(&home, 30).await.unwrap_or_else(|e| {
-                    AuditFetchOutcome::Failed {
-                        message: format!("{e:#}"),
-                    }
-                });
+                let outcome =
+                    recent_audit(&home, 30)
+                        .await
+                        .unwrap_or_else(|e| AuditFetchOutcome::Failed {
+                            message: format!("{e:#}"),
+                        });
                 let _ = tx.send(outcome);
             });
         }
@@ -155,11 +158,25 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             let tx = caps_tx.clone();
             let home = home.clone();
             tokio::spawn(async move {
-                let outcome = recent_capabilities(&home, 20)
-                    .await
-                    .unwrap_or_else(|e| CapabilitiesFetchOutcome::Failed {
+                let outcome = recent_capabilities(&home, 20).await.unwrap_or_else(|e| {
+                    CapabilitiesFetchOutcome::Failed {
                         message: format!("{e:#}"),
-                    });
+                    }
+                });
+                let _ = tx.send(outcome);
+            });
+        }
+
+        if app.take_pending_a2a_fetch() {
+            let tx = a2a_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome =
+                    recent_a2a_tasks(&home, 20)
+                        .await
+                        .unwrap_or_else(|e| A2aFetchOutcome::Failed {
+                            message: format!("{e:#}"),
+                        });
                 let _ = tx.send(outcome);
             });
         }
@@ -195,6 +212,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             Some(outcome) = caps_rx.recv() => {
                 app.apply_capabilities_fetch_outcome(outcome);
             }
+            Some(outcome) = a2a_rx.recv() => {
+                app.apply_a2a_fetch_outcome(outcome);
+            }
             Some(outcome) = grant_rx.recv() => {
                 app.apply_grant_outcome(outcome);
             }
@@ -215,7 +235,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     match app.mode() {
         Mode::Browsing => {
             let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · q: quit",
+                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · A: a2a · q: quit",
             )
             .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
@@ -232,8 +252,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                     .enumerate()
                     .map(|(i, d)| Line::from(format!("{:>3}. {d}", i + 1)))
                     .collect();
-                Paragraph::new(lines)
-                    .block(Block::default().borders(Borders::ALL).title("drafts"))
+                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("drafts"))
             };
             frame.render_widget(body, layout[1]);
         }
@@ -247,13 +266,14 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                 Span::raw(buffer.as_str()),
                 Span::styled("|", Style::default().add_modifier(Modifier::SLOW_BLINK)),
             ]);
-            let body = Paragraph::new(line)
-                .block(Block::default().borders(Borders::ALL).title("intent"));
+            let body =
+                Paragraph::new(line).block(Block::default().borders(Borders::ALL).title("intent"));
             frame.render_widget(body, layout[1]);
         }
         Mode::Submitting { text } => {
-            let header = Paragraph::new("submitting — Esc to dismiss view (in-flight RPC continues)")
-                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            let header =
+                Paragraph::new("submitting — Esc to dismiss view (in-flight RPC continues)")
+                    .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
 
             let body = Paragraph::new(text.as_str())
@@ -321,8 +341,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                         ))
                     })
                     .collect();
-                Paragraph::new(lines)
-                    .block(Block::default().borders(Borders::ALL).title("audit"))
+                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("audit"))
             };
             frame.render_widget(body, layout[1]);
         }
@@ -337,8 +356,8 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                 Span::raw(buffer.as_str()),
                 Span::styled("|", Style::default().add_modifier(Modifier::SLOW_BLINK)),
             ]);
-            let body = Paragraph::new(line)
-                .block(Block::default().borders(Borders::ALL).title("action"));
+            let body =
+                Paragraph::new(line).block(Block::default().borders(Borders::ALL).title("action"));
             frame.render_widget(body, layout[1]);
         }
         Mode::GrantSubmitting { action } => {
@@ -349,7 +368,11 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             let body = Paragraph::new(action.as_str())
                 .style(Style::default().add_modifier(Modifier::DIM))
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("submitting grant"));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("submitting grant"),
+                );
             frame.render_widget(body, layout[1]);
         }
         Mode::GrantResult {
@@ -433,6 +456,47 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             };
             frame.render_widget(body, layout[1]);
         }
+        Mode::A2aTail {
+            loading,
+            tasks,
+            error,
+        } => {
+            let header = Paragraph::new("a2a inbox — q / Esc to dismiss")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(Block::default().borders(Borders::ALL).title("a2a error"))
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("a2a"))
+            } else if tasks.is_empty() {
+                Paragraph::new("no a2a tasks")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("a2a"))
+            } else {
+                let lines: Vec<Line<'_>> = tasks
+                    .iter()
+                    .map(|t| {
+                        let id_prefix: String = t.id.to_string().chars().take(8).collect();
+                        let kind = t.task_kind.as_deref().unwrap_or("(none)");
+                        Line::from(format!(
+                            "{id_prefix}  {kind:<20}  {sender} -> {recipient}",
+                            kind = kind,
+                            sender = t.sender.display,
+                            recipient = t.recipient.display,
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("a2a"))
+            };
+            frame.render_widget(body, layout[1]);
+        }
         Mode::MemoryTail {
             loading,
             records,
@@ -470,8 +534,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                         ))
                     })
                     .collect();
-                Paragraph::new(lines)
-                    .block(Block::default().borders(Borders::ALL).title("memory"))
+                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("memory"))
             };
             frame.render_widget(body, layout[1]);
         }

@@ -133,9 +133,7 @@ async fn live_covenantd_audit_purge_rejects_non_operator_without_grant() {
                 message.contains("audit.purge"),
                 "missing-grant audit.purge must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not purge audit rows, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not purge audit rows, got {other:?}"),
         }
     }
 

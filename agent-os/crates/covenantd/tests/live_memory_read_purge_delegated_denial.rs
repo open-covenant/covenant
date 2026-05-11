@@ -140,9 +140,7 @@ async fn live_covenantd_memory_read_and_purge_reject_non_operator_without_grant(
                 message.contains("memory.read"),
                 "missing-grant memory.read must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not read memory recents, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not read memory recents, got {other:?}"),
         }
     }
 
@@ -192,9 +190,7 @@ async fn live_covenantd_memory_read_and_purge_reject_non_operator_without_grant(
                 message.contains("memory.purge"),
                 "missing-grant memory.purge must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not purge memory, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not purge memory, got {other:?}"),
         }
     }
 

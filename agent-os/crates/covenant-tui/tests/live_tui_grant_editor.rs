@@ -1,10 +1,12 @@
 //! Live integration test for the TUI's grant editor end-to-end at
-//! the App level. Drives the App's key handler as if a user typed
-//! `g memory.read <Enter>`, then runs the IPC kickoff that the
-//! binary's event loop would run (via `take_pending_grant_submission`
-//! + `grant_capability`), feeds the outcome back through
-//! `apply_grant_outcome`, and asserts the final mode is
-//! `Mode::GrantResult` with the granted action echoed.
+//! the App level.
+//!
+//! Drives the App's key handler as if a user typed `g memory.read
+//! <Enter>`, then runs the IPC kickoff that the binary's event loop
+//! would run (`take_pending_grant_submission` + `grant_capability`),
+//! feeds the outcome back through `apply_grant_outcome`, and asserts
+//! the final mode is `Mode::GrantResult` with the granted action
+//! echoed.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenant-tui --test live_tui_grant_editor -- --ignored live_`.
@@ -117,9 +119,7 @@ async fn live_tui_grant_editor_round_trip_grants_capability() {
             assert!(!subject_display.is_empty());
             assert!(!signature_b58.is_empty());
         }
-        other => panic!(
-            "expected GrantResult after a successful daemon grant, got {other:?}"
-        ),
+        other => panic!("expected GrantResult after a successful daemon grant, got {other:?}"),
     }
 
     let _ = child.kill().await;

@@ -150,9 +150,7 @@ async fn live_covenantd_peers_list_and_purge_reject_non_operator_without_grant()
                 message.contains("operator identity") || message.contains("peers.list"),
                 "missing-grant peers.list must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not enumerate the registry, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not enumerate the registry, got {other:?}"),
         }
     }
 
@@ -168,9 +166,7 @@ async fn live_covenantd_peers_list_and_purge_reject_non_operator_without_grant()
                 message.contains("peers.purge"),
                 "missing-grant peers.purge must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not purge the registry, got {other:?}"
-            ),
+            other => panic!("non-operator delegate must not purge the registry, got {other:?}"),
         }
     }
 

@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 bs58 = { workspace = true }
+covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }
 covenant-ipc = { path = "../covenant-ipc" }
 covenant-permissions = { path = "../covenant-permissions" }
@@ -30,4 +31,5 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+covenant-identity = { path = "../covenant-identity" }
 tempfile = { workspace = true }

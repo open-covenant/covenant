@@ -21,6 +21,8 @@ use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
+#[cfg(test)]
+use covenant_permissions::verify_with_clock;
 use covenant_permissions::{
     a2a_scope_allows as permission_a2a_scope_allows,
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
@@ -37,8 +39,6 @@ use covenant_permissions::{
     verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore, ChainScopeRequest,
     MemoryCompactionScopeRequest, PeerScopeRequest,
 };
-#[cfg(test)]
-use covenant_permissions::verify_with_clock;
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::Runner;
 use covenant_settlement::{
@@ -668,7 +668,11 @@ impl Server {
         }
     }
 
-    pub async fn record_auth_failure(&self, transport: &str, reason: &str) -> Result<(), AuditError> {
+    pub async fn record_auth_failure(
+        &self,
+        transport: &str,
+        reason: &str,
+    ) -> Result<(), AuditError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: epoch_ms(),

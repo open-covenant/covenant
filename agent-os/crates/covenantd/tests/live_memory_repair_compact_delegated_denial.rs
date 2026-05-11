@@ -139,9 +139,7 @@ async fn live_covenantd_memory_repair_and_compact_reject_non_operator_without_gr
             Request::RepairMemory {
                 request: MemoryRepairRequest {
                     mode: MemoryRepairMode::DryRun,
-                    command: MemoryRepairCommand::DeleteRecord {
-                        id: Uuid::new_v4(),
-                    },
+                    command: MemoryRepairCommand::DeleteRecord { id: Uuid::new_v4() },
                     reason: "delegated memory.repair denial probe".into(),
                 },
             },

@@ -140,9 +140,9 @@ async fn live_covenantd_tool_call_rejects_non_operator_without_grant() {
                 message.contains("tool.call.echo"),
                 "missing-grant tool.call.echo must reject by capability gate, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not call tools without a grant, got {other:?}"
-            ),
+            other => {
+                panic!("non-operator delegate must not call tools without a grant, got {other:?}")
+            }
         }
     }
 
@@ -167,9 +167,9 @@ async fn live_covenantd_tool_call_rejects_non_operator_without_grant() {
                 message.contains("tool.call.tool-that-does-not-exist"),
                 "capability gate must fire before the registry lookup, got {message:?}"
             ),
-            other => panic!(
-                "non-operator delegate must not enumerate the tool registry, got {other:?}"
-            ),
+            other => {
+                panic!("non-operator delegate must not enumerate the tool registry, got {other:?}")
+            }
         }
     }
 

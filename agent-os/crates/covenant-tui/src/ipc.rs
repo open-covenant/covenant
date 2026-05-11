@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_permissions::SignedCapability;
@@ -30,6 +31,12 @@ pub const RECENT_AUDIT_LIMIT_CAP: usize = 100;
 /// Hard cap on `Request::RecentCapabilities::limit`. Capabilities
 /// grow slowly (one per grant) so the cap matches recent_memory.
 pub const RECENT_CAPABILITIES_LIMIT_CAP: usize = 50;
+
+/// Hard cap on `Request::RecentA2ATasks::limit`. The mailbox is
+/// server-side filtered to tasks the operator sent or received, so
+/// it grows linearly with A2A traffic; the cap is set higher than
+/// memory but below audit.
+pub const RECENT_A2A_LIMIT_CAP: usize = 50;
 
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
@@ -76,6 +83,15 @@ pub enum CapabilitiesFetchOutcome {
     Failed { message: String },
 }
 
+/// Outcome of a [`recent_a2a_tasks`] call. Daemon filters tasks
+/// server-side to ones where the operator is sender or recipient,
+/// so a `Failed` here is always a wire or auth issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum A2aFetchOutcome {
+    Fetched { tasks: Vec<A2ATask> },
+    Failed { message: String },
+}
+
 /// Resolves `$COVENANT_HOME` with the same fallback shape as the
 /// existing `covenant` CLI: explicit env var first, then
 /// `$HOME/.covenant`.
@@ -99,10 +115,7 @@ pub async fn read_operator_token(home: &Path) -> Result<String> {
     })?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!(
-            "operator token at {} is empty",
-            path.display()
-        ));
+        return Err(anyhow!("operator token at {} is empty", path.display()));
     }
     Ok(trimmed.to_string())
 }
@@ -317,10 +330,7 @@ pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome
 /// response into a [`CapabilitiesFetchOutcome`].
 ///
 /// `limit` is clamped to [`RECENT_CAPABILITIES_LIMIT_CAP`].
-pub async fn recent_capabilities(
-    home: &Path,
-    limit: usize,
-) -> Result<CapabilitiesFetchOutcome> {
+pub async fn recent_capabilities(home: &Path, limit: usize) -> Result<CapabilitiesFetchOutcome> {
     let sock = home.join("sock");
     let mut stream = UnixStream::connect(&sock).await.with_context(|| {
         format!(
@@ -351,6 +361,46 @@ pub async fn recent_capabilities(
         }
         Response::Error { message } => Ok(CapabilitiesFetchOutcome::Failed { message }),
         other => Ok(CapabilitiesFetchOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::RecentA2ATasks`, and maps the daemon
+/// response into an [`A2aFetchOutcome`]. The daemon filters tasks to
+/// rows where the operator is sender or recipient.
+///
+/// `limit` is clamped to [`RECENT_A2A_LIMIT_CAP`].
+pub async fn recent_a2a_tasks(home: &Path, limit: usize) -> Result<A2aFetchOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(A2aFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(A2aFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_A2A_LIMIT_CAP);
+    write_frame(&mut stream, &Request::RecentA2ATasks { limit }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::A2ATasks { tasks } => Ok(A2aFetchOutcome::Fetched { tasks }),
+        Response::Error { message } => Ok(A2aFetchOutcome::Failed { message }),
+        other => Ok(A2aFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

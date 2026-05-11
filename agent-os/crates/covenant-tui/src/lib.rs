@@ -7,6 +7,7 @@
 //! capabilities, etc.); each screen adds state here and a match arm
 //! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
 
+use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_permissions::SignedCapability;
 use covenant_types::MemoryRecord;
@@ -15,7 +16,9 @@ use uuid::Uuid;
 
 pub mod ipc;
 
-pub use ipc::{AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome};
+pub use ipc::{
+    A2aFetchOutcome, AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
+};
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,10 +30,11 @@ pub enum ExitReason {
 }
 
 /// Active screen / interaction mode.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum Mode {
     /// Base view. `i` enters the intent editor; `s` submits the most
     /// recent draft to the daemon; `q` / `Esc` quit.
+    #[default]
     Browsing,
     /// Intent editor: typing fills the buffer; Backspace removes the
     /// last char; `Enter` accepts the buffer into [`App::drafts`] and
@@ -81,6 +85,15 @@ pub enum Mode {
         capabilities: Vec<SignedCapability>,
         error: Option<String>,
     },
+    /// A2A inbox view. Press `A` from Browsing to enter. Lists
+    /// recent A2A tasks where the operator is either sender or
+    /// recipient; server-side filtered, no read-side gate. Press
+    /// `q` / `Esc` to dismiss.
+    A2aTail {
+        loading: bool,
+        tasks: Vec<A2ATask>,
+        error: Option<String>,
+    },
     /// Grant editor. Press `g` from Browsing to enter. Chars
     /// accumulate as the capability action name (e.g. `memory.read`);
     /// Enter on a non-empty trimmed buffer transitions to
@@ -99,12 +112,6 @@ pub enum Mode {
     /// Grant failed (daemon-side or wire-level). Any key returns to
     /// Browsing; `q` quits.
     GrantError { message: String },
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Browsing
-    }
 }
 
 /// Drafted intents are capped so a stress-test (or an unattended
@@ -133,6 +140,8 @@ pub struct App {
     pending_audit_fetch: bool,
     /// One-shot for the capabilities-view fetch.
     pending_capabilities_fetch: bool,
+    /// One-shot for the A2A inbox fetch.
+    pending_a2a_fetch: bool,
     /// One-shot for an in-flight grant submission. Set on the
     /// transition into `GrantSubmitting`.
     pending_grant_submission: bool,
@@ -229,14 +238,24 @@ impl App {
                     error,
                 },
             },
+            Mode::A2aTail {
+                loading,
+                tasks,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::A2aTail {
+                    loading,
+                    tasks,
+                    error,
+                },
+            },
             Mode::GrantEditor { buffer } => self.handle_grant_editor(buffer, event),
             Mode::GrantSubmitting { action } => match event.code {
                 KeyCode::Esc => Mode::Browsing,
                 _ => Mode::GrantSubmitting { action },
             },
-            Mode::GrantResult { .. } | Mode::GrantError { .. } => {
-                self.handle_terminal_view(event)
-            }
+            Mode::GrantResult { .. } | Mode::GrantError { .. } => self.handle_terminal_view(event),
         };
     }
 
@@ -379,6 +398,35 @@ impl App {
         };
     }
 
+    /// One-shot flag for the A2A inbox fetch.
+    pub fn take_pending_a2a_fetch(&mut self) -> bool {
+        if !self.pending_a2a_fetch {
+            return false;
+        }
+        self.pending_a2a_fetch = false;
+        true
+    }
+
+    /// Apply an A2A inbox fetch result. No-op if the user has
+    /// already navigated away from `Mode::A2aTail`.
+    pub fn apply_a2a_fetch_outcome(&mut self, outcome: A2aFetchOutcome) {
+        let Mode::A2aTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            A2aFetchOutcome::Fetched { tasks } => Mode::A2aTail {
+                loading: false,
+                tasks,
+                error: None,
+            },
+            A2aFetchOutcome::Failed { message } => Mode::A2aTail {
+                loading: false,
+                tasks: Vec::new(),
+                error: Some(message),
+            },
+        };
+    }
+
     /// Returns the action of a freshly-entered grant exactly once,
     /// same kickoff semantics as [`App::take_pending_submission`].
     pub fn take_pending_grant_submission(&mut self) -> Option<String> {
@@ -473,6 +521,14 @@ impl App {
                 Mode::CapabilitiesTail {
                     loading: true,
                     capabilities: Vec::new(),
+                    error: None,
+                }
+            }
+            KeyCode::Char('A') => {
+                self.pending_a2a_fetch = true;
+                Mode::A2aTail {
+                    loading: true,
+                    tasks: Vec::new(),
                     error: None,
                 }
             }
@@ -622,7 +678,12 @@ mod tests {
     fn pressing_i_enters_editing_mode_with_empty_buffer() {
         let mut app = App::new();
         app.on_key(press(KeyCode::Char('i')));
-        assert_eq!(app.mode(), &Mode::Editing { buffer: String::new() });
+        assert_eq!(
+            app.mode(),
+            &Mode::Editing {
+                buffer: String::new()
+            }
+        );
         assert!(!app.should_quit());
     }
 
@@ -646,11 +707,21 @@ mod tests {
         app.on_key(press(KeyCode::Char('i')));
         type_chars(&mut app, "abc");
         app.on_key(press(KeyCode::Backspace));
-        assert_eq!(app.mode(), &Mode::Editing { buffer: "ab".into() });
+        assert_eq!(
+            app.mode(),
+            &Mode::Editing {
+                buffer: "ab".into()
+            }
+        );
         app.on_key(press(KeyCode::Backspace));
         app.on_key(press(KeyCode::Backspace));
         app.on_key(press(KeyCode::Backspace));
-        assert_eq!(app.mode(), &Mode::Editing { buffer: String::new() });
+        assert_eq!(
+            app.mode(),
+            &Mode::Editing {
+                buffer: String::new()
+            }
+        );
     }
 
     #[test]
@@ -664,7 +735,9 @@ mod tests {
         app.on_key(press(KeyCode::Char('i')));
         assert_eq!(
             app.mode(),
-            &Mode::Editing { buffer: String::new() },
+            &Mode::Editing {
+                buffer: String::new()
+            },
             "next editor session must start empty"
         );
     }
@@ -1210,6 +1283,125 @@ mod tests {
             &Mode::Browsing,
             "late grant response must not clobber the user's view"
         );
+    }
+
+    fn sample_a2a_task() -> A2ATask {
+        use covenant_types::AgentId;
+        A2ATask {
+            id: Uuid::new_v4(),
+            sender: AgentId::new("user@local", [1u8; 32]),
+            recipient: AgentId::new("user@local", [1u8; 32]),
+            intent_text: "ping".into(),
+            task_kind: Some("ping".into()),
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        }
+    }
+
+    #[test]
+    fn pressing_shift_a_enters_a2a_tail_loading_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::A2aTail {
+                    loading: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(app.take_pending_a2a_fetch());
+        assert!(!app.take_pending_a2a_fetch());
+    }
+
+    #[test]
+    fn lowercase_a_still_enters_audit_tail_not_a2a_tail() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('a')));
+        assert!(
+            matches!(app.mode(), Mode::AuditTail { .. }),
+            "lowercase 'a' must keep its existing AuditTail binding; mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn a2a_tail_fetched_transitions_to_loaded() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        let _ = app.take_pending_a2a_fetch();
+        let task = sample_a2a_task();
+        app.apply_a2a_fetch_outcome(A2aFetchOutcome::Fetched {
+            tasks: vec![task.clone()],
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::A2aTail {
+                    loading: false,
+                    error: None,
+                    tasks,
+                } if tasks.len() == 1 && tasks[0].id == task.id
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn a2a_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        let _ = app.take_pending_a2a_fetch();
+        app.apply_a2a_fetch_outcome(A2aFetchOutcome::Failed {
+            message: "wire boom".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::A2aTail {
+                    loading: false,
+                    error: Some(_),
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn a2a_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        let _ = app.take_pending_a2a_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn a2a_tail_esc_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        let _ = app.take_pending_a2a_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn a2a_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('A')));
+        let _ = app.take_pending_a2a_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_a2a_fetch_outcome(A2aFetchOutcome::Fetched { tasks: Vec::new() });
+        assert_eq!(app.mode(), &Mode::Browsing);
     }
 
     #[test]

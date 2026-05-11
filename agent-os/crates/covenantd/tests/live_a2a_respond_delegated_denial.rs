@@ -15,6 +15,7 @@
 //! - delegate: a2a.recv.<operator_display>  (scoped to operator
 //!   pubkey b58 and the task_id) — required for the send to
 //!   succeed
+//!
 //! The delegate intentionally does NOT grant itself
 //! a2a.respond.<operator_display>; that is the gate the test pins.
 //!

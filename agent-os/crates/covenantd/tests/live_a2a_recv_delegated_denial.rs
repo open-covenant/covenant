@@ -196,9 +196,7 @@ async fn live_covenantd_a2a_recv_rejects_send_when_recipient_lacks_grant() {
         let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
         match req(&mut stream, Request::TryRecvA2ATask).await {
             Response::A2ATaskOpt { task: None } => {}
-            other => panic!(
-                "rejected a2a send must not enqueue; delegate try_recv got {other:?}"
-            ),
+            other => panic!("rejected a2a send must not enqueue; delegate try_recv got {other:?}"),
         }
     }
 

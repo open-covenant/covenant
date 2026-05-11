@@ -925,7 +925,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bs58",
+ "covenant-a2a",
  "covenant-audit",
+ "covenant-identity",
  "covenant-ipc",
  "covenant-permissions",
  "covenant-types",

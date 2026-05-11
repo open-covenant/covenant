@@ -27,6 +27,8 @@ pub enum AuditError {
     Io(#[from] std::io::Error),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild")]
+    ChainCorruption { events: usize, chain: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -476,7 +478,19 @@ impl AuditLog for JsonlAuditLog {
         let existing_events = read_events(&self.path).await?;
         let chain_path = self.chain_path();
         let existing_chain = read_chain_entries(&chain_path).await?;
-        let rebuild_chain = existing_chain.len() != existing_events.len();
+        // If the chain length doesn't match the events length, the chain file
+        // has been truncated, deleted, or rewritten out-of-band. The previous
+        // behaviour silently rebuilt over whatever the events file held,
+        // which is precisely what an attacker who tampered with both files
+        // wants: rebuild produces a chain that matches the tampered events,
+        // and verify_integrity passes afterwards. Refuse instead — the
+        // operator must run an external recovery to acknowledge the gap.
+        if existing_chain.len() != existing_events.len() {
+            return Err(AuditError::ChainCorruption {
+                events: existing_events.len(),
+                chain: existing_chain.len(),
+            });
+        }
         let line = serde_json::to_string(&event)?;
         let mut f = OpenOptions::new()
             .create(true)
@@ -488,27 +502,20 @@ impl AuditLog for JsonlAuditLog {
         f.flush().await?;
         drop(f);
 
-        if rebuild_chain {
-            let mut events = existing_events;
-            events.push(event);
-            let entries = build_chain_entries(&events)?;
-            write_chain_entries(&chain_path, &entries).await?;
-        } else {
-            let previous_hash = existing_chain
-                .last()
-                .map(|entry| entry.chain_hash_hex.as_str())
-                .unwrap_or(ZERO_CHAIN_HASH);
-            let entry = chain_entry_for_line(existing_chain.len(), &event, &line, previous_hash);
-            let mut chain_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&chain_path)
-                .await?;
-            let chain_line = serde_json::to_string(&entry)?;
-            chain_file.write_all(chain_line.as_bytes()).await?;
-            chain_file.write_all(b"\n").await?;
-            chain_file.flush().await?;
-        }
+        let previous_hash = existing_chain
+            .last()
+            .map(|entry| entry.chain_hash_hex.as_str())
+            .unwrap_or(ZERO_CHAIN_HASH);
+        let entry = chain_entry_for_line(existing_chain.len(), &event, &line, previous_hash);
+        let mut chain_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&chain_path)
+            .await?;
+        let chain_line = serde_json::to_string(&entry)?;
+        chain_file.write_all(chain_line.as_bytes()).await?;
+        chain_file.write_all(b"\n").await?;
+        chain_file.flush().await?;
         Ok(())
     }
 

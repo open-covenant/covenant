@@ -40,12 +40,21 @@ pub enum PeerError {
     BadTokenB58(String),
 }
 
-/// 32-byte opaque peer token. Equality and hashing are constant-time
-/// in spirit (the token is a secret), but `PartialEq` here is the
-/// stdlib byte-slice compare; callers handling untrusted tokens
-/// should not branch on intermediate state.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// 32-byte opaque peer token. Equality is constant-time via
+/// [`subtle::ConstantTimeEq`] so a linear scan over the peer registry
+/// does not leak token bytes through response-time correlation. Hash is
+/// not derived because the registry does not use `HashMap<PeerToken,_>`
+/// for lookups — the `find` over `Vec<PeerEntry>` is the only path, and
+/// it now compares each entry in constant time.
+#[derive(Clone, Copy, Eq)]
 pub struct PeerToken([u8; 32]);
+
+impl PartialEq for PeerToken {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.0.ct_eq(&other.0).into()
+    }
+}
 
 impl PeerToken {
     pub fn generate() -> Self {

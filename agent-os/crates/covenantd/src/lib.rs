@@ -652,7 +652,20 @@ impl Server {
 
     async fn authenticate(&self, token_b58: &str) -> Option<AgentId> {
         let token = PeerToken::from_b58(token_b58).ok()?;
-        self.peers.resolve(&token).await.ok().flatten()
+        match self.peers.resolve(&token).await {
+            Ok(found) => found,
+            Err(e) => {
+                // Distinguish storage failure from unknown token. The
+                // caller still emits its standard wire-level auth-failed
+                // rejection above this; the operator-side log gives them
+                // the actual cause (a peer-registry file outage) so an
+                // auth-failure spike doesn't get misread as a credential
+                // probe. error! goes loud; the wire response stays
+                // generic so attackers can't distinguish.
+                error!(error = %e, "peer registry resolve failed during authenticate");
+                None
+            }
+        }
     }
 
     pub async fn record_auth_failure(&self, transport: &str, reason: &str) -> Result<(), AuditError> {

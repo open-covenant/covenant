@@ -3,6 +3,7 @@ name = "covenant-indexer"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Fixture HTTP shell for Covenant Solana program events. Real Solana RPC ingestion is deferred until the on-chain shape stabilizes; see README for the wiring path."
 
 [lib]
 name = "covenant_indexer"

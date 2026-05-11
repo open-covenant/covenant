@@ -30,7 +30,12 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid bind addr: {}", config.bind_addr))?;
     let listener = TcpListener::bind(address).await?;
-    info!(address = %config.bind_addr, cluster = %config.cluster, "covenant indexer up");
+    info!(
+        address = %config.bind_addr,
+        cluster = %config.cluster,
+        mode = "fixture",
+        "covenant indexer up; serving seeded events (no Solana RPC subscriber wired yet)"
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

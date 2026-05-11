@@ -30,6 +30,8 @@ pub struct IndexerSnapshot {
     pub cluster: String,
     pub latest_slot: u64,
     pub indexed_events: usize,
+    /// `"fixture"` while seeded; `"live"` once the real subscriber lands.
+    pub mode: String,
 }
 
 fn normalize_base58(value: &str, min_len: usize, max_len: usize, label: &str) -> Result<String> {
@@ -65,6 +67,11 @@ pub fn normalize_event(input: LogEnvelope) -> Result<SolanaEventRecord> {
     })
 }
 
+/// Hardcoded sample events surfaced while the service is in fixture mode.
+/// These are NOT observed from Solana — they exist so downstream consumers
+/// (web console, SDK demos, integration fixtures) can exercise the wire
+/// shape before a real `programSubscribe` consumer is wired. See
+/// README.md "Path to live indexing" for the migration plan.
 pub fn seed_events(cluster: &str, program_id: &str) -> Vec<SolanaEventRecord> {
     let samples = vec![
         LogEnvelope {

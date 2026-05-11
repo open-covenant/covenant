@@ -1,32 +1,9 @@
-const BASE = process.env.NEXT_PUBLIC_COVENANT_HTTP || "http://127.0.0.1:8421";
-const BUILD_TOKEN = process.env.NEXT_PUBLIC_COVENANT_TOKEN || "";
-
-// The bootstrap token is build-time-baked, but `RotateOperatorToken` can mint
-// a fresh one at runtime. Persist the rotated token in localStorage so the
-// live tab keeps working without a dev-server restart; fall back to the
-// build-time value when localStorage is empty (or unavailable, e.g. SSR).
-const TOKEN_KEY = "covnt_token";
-
-function readToken(): string {
-  if (typeof window !== "undefined") {
-    try {
-      const v = window.localStorage.getItem(TOKEN_KEY);
-      if (v) return v;
-    } catch {
-      /* localStorage may be disabled (private mode, etc.) — fall through */
-    }
-  }
-  return BUILD_TOKEN;
-}
-
-export function setRuntimeToken(token: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    /* swallow — the rotation still succeeded server-side */
-  }
-}
+// All daemon traffic flows through the same-origin proxy at /api/covenant.
+// The proxy holds the operator token server-side (read from a file the
+// daemon writes; falls back to COVENANT_OPERATOR_TOKEN env) so the bearer
+// credential never enters the browser bundle, localStorage, or any
+// XSS-reachable surface.
+const BASE = "/api/covenant";
 
 export type Memory = {
   id: string;
@@ -258,10 +235,6 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     "Content-Type": "application/json",
     ...((init?.headers as Record<string, string>) || {}),
   };
-  const token = readToken();
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
   const r = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!r.ok) {
     const body = await r.text().catch(() => "");

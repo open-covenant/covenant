@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   api,
-  setRuntimeToken,
   type A2ATask,
   type A2ATaskResult,
   type AuditEvent,
@@ -428,7 +427,9 @@ export default function Home() {
     try {
       const r = await api.rotateOperatorToken();
       if (r.kind === "operator_token_rotated") {
-        setRuntimeToken(r.token_b58);
+        // Token stays server-side; the proxy reads peers/operator.token
+        // on the next request. We surface the new prefix so the operator
+        // can sanity-check against their daemon-side audit row.
         setRotatedToken(r.token_b58);
         refresh();
       } else {

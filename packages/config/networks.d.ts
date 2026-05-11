@@ -18,6 +18,7 @@ export interface ResolvedCovenantSolanaNetwork extends CovenantSolanaNetwork {
 
 export declare const SOLANA_ADDRESS_REGEX: RegExp;
 export declare const DEFAULT_PROTOCOL_PROGRAM_ID: string;
+export declare const COVENANT_CLUSTER_HEADER: 'x-covenant-cluster';
 export declare const covenantSolanaNetworks: Record<string, Readonly<CovenantSolanaNetwork>>;
 export function resolveCovenantNetwork(
   env?: Record<string, string | undefined>,
@@ -28,6 +29,10 @@ export function resolveCovenantNetwork(
     programId?: string;
     covntMint?: string;
   },
+): ResolvedCovenantSolanaNetwork;
+export function resolveNetworkFromRequestHeaders(
+  headers: Headers | Record<string, string | undefined> | null | undefined,
+  env?: Record<string, string | undefined>,
 ): ResolvedCovenantSolanaNetwork;
 export function explorerHref(
   kind: 'address' | 'tx',

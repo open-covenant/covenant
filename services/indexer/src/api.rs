@@ -6,6 +6,8 @@ use tower_http::cors::CorsLayer;
 
 use crate::model::{IndexerSnapshot, SolanaEventRecord};
 
+pub const FIXTURE_MODE: &str = "fixture";
+
 #[derive(Clone)]
 pub struct AppState {
     pub cluster: String,
@@ -32,6 +34,7 @@ struct HealthzResponse {
     confirmations: u64,
     latest_slot: u64,
     indexed_events: usize,
+    mode: &'static str,
 }
 
 async fn healthz(State(state): State<AppState>) -> Json<HealthzResponse> {
@@ -50,6 +53,7 @@ async fn healthz(State(state): State<AppState>) -> Json<HealthzResponse> {
         confirmations: state.confirmations,
         latest_slot,
         indexed_events: state.events.len(),
+        mode: FIXTURE_MODE,
     })
 }
 
@@ -65,6 +69,7 @@ async fn summary(State(state): State<AppState>) -> Json<IndexerSnapshot> {
         cluster: state.cluster,
         latest_slot,
         indexed_events: state.events.len(),
+        mode: FIXTURE_MODE.to_string(),
     })
 }
 

@@ -1,9 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { callDaemonTool, daemonTools } from './daemon.js';
+
+function randomHash32(): string {
+  return randomBytes(32).toString('hex');
+}
 import {
   MOCK_AGENT_DETAILS,
   MOCK_TASKS,
@@ -85,6 +90,7 @@ const createTaskSchema = z.object({
   description: z.string().min(3),
   amountCovnt: z.string().min(1),
   deadline: z.string().min(1),
+  taskId: hash32Schema.optional(),
 });
 
 const receiptBatchSchema = z.object({
@@ -319,10 +325,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return asText(prepareStakeInstruction(stakeSchema.parse(args)));
       case 'prepare_create_task': {
         const parsed = createTaskSchema.parse(args);
+        const taskId = parsed.taskId ?? randomHash32();
         return asText(
           prepareCreateTaskInstruction({
             ...parsed,
-            taskId: hash32FromText(parsed.description),
+            taskId,
             taskHash: hash32FromText(parsed.description),
             criteriaHash: hash32FromText(`criteria:${parsed.description}`),
           }),
@@ -355,6 +362,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  process.on('unhandledRejection', (reason) => {
+    process.stderr.write(`mcp-bridge: unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}\n`);
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    process.stderr.write(`mcp-bridge: uncaught exception: ${err.message}\n`);
+    process.exit(1);
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

@@ -44,18 +44,32 @@ if [ -n "${COVENANT_SESSION_ID:-}" ]; then
     echo "  this session: ${COVENANT_SESSION_ID}" >&2
     echo "  active session: $ACTUAL" >&2
     echo "  Exit and let the active session continue (one-session-per-checkout rule)." >&2
+    echo "  Operator escape: unset COVENANT_SESSION_ID, or remove $LOCK_PATH if no session is active." >&2
     exit 1
   fi
 fi
 
 # --- Staged local-leak scan ---
+#
+# Discovers identifying tokens (USER, HOME, hostname variants, global git
+# identity) from the environment and refuses commits that contain them in
+# staged file paths or added diff lines. Tokens shorter than 4 chars are
+# dropped to avoid false positives against generic words like "ci" or
+# "node".
 
 tokens=()
 [ -n "${USER:-}" ] && tokens+=("$USER")
 [ -n "${HOME:-}" ] && tokens+=("$HOME")
 
-for h_cmd in "hostname" "hostname -s" "scutil --get LocalHostName" "scutil --get ComputerName"; do
-  h=$(eval "$h_cmd" 2>/dev/null || true)
+hostname_cmds=(
+  "hostname"
+  "hostname -s"
+  "scutil --get LocalHostName"
+  "scutil --get ComputerName"
+)
+for cmd in "${hostname_cmds[@]}"; do
+  read -r -a parts <<<"$cmd"
+  h=$("${parts[@]}" 2>/dev/null || true)
   [ -n "$h" ] && [ "$h" != "localhost" ] && tokens+=("$h")
 done
 
@@ -67,6 +81,10 @@ gemail=$(git config --global --get user.email 2>/dev/null || true)
 unique=()
 for t in "${tokens[@]:-}"; do
   [ -z "$t" ] && continue
+  [ "${#t}" -lt 4 ] && continue
+  case "$t" in
+    root|node|user|home|admin|guest|local) continue ;;
+  esac
   skip=0
   for u in "${unique[@]:-}"; do
     [ "$t" = "$u" ] && skip=1 && break

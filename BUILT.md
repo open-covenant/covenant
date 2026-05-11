@@ -8,15 +8,18 @@ This file records how the public project relates to that loop. The detailed engi
 
 The repository already contains concrete substrate for agentic operation:
 
-| Product primitive | Repository implementation | Workflow use |
-|---|---|---|
-| Identity | `agent-os/crates/covenant-identity` and peer auth | Local sessions and commits can be tied to scoped identities. |
-| Permissions | `agent-os/crates/covenant-permissions` | Security-sensitive operations are expected to pass capability and review gates. |
-| Audit | `agent-os/crates/covenant-audit` | Engineering cycles record validation, review, and handoff artifacts. |
-| Runtime | `agent-os/crates/covenant-runtime` | Agents run as bounded trusted-local subprocesses by default; an opt-in Linux gVisor runner is selectable and has ignored live coverage gated on `runsc` and an explicit rootfs. |
-| Memory | `agent-os/crates/covenant-memory` | Project state is persisted through tracked docs and local handoff files. |
-| Comms | IPC, HTTP, MCP, and A2A crates | Tool and peer boundaries are explicit, not implicit process sharing. |
-| Settlement | Local receipts plus Solana scaffold | Resource accounting exists locally; on-chain settlement is not production. |
+| # | Primitive | Repository implementation | Workflow use |
+|---|---|---|---|
+| 1 | Intent | Daemon dispatch + router, shaped in `covenant-types` and `covenant-router` | Natural-language requests route to agents, tools, and workflows over typed shapes. |
+| 2 | Runtime | `covenant-runtime` | Agents run as bounded trusted-local subprocesses; an opt-in Linux gVisor runner is selectable with ignored live coverage gated on `runsc` and an explicit rootfs. |
+| 3 | Memory | `covenant-memory` | Project state is persisted across working, episodic, and long-term tiers. |
+| 4 | Identity | `covenant-identity` and peer auth | Local sessions and commits can be tied to scoped identities. |
+| 5 | Permissions | `covenant-permissions` | Security-sensitive operations are expected to pass capability and review gates. |
+| 6 | Comms | `covenant-ipc`, `covenantd` HTTP gateway, `covenant-mcp`, `covenant-a2a` | Tool and peer boundaries are explicit, not implicit process sharing. |
+| 7 | Compositor | `agent-os/covenant-web` Next.js console | Operator-facing surface for agent state, decisions, and audit; richer TUI deferred. |
+| 8 | Settlement | `covenant-settlement` plus `programs/settlement` Solana scaffold | Resource accounting exists locally; on-chain settlement is not production. |
+
+Audit (`covenant-audit`) is a cross-cutting accountability layer underlying Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations.
 
 The loop also has practical enforcement:
 

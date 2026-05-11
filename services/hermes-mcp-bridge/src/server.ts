@@ -263,6 +263,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  process.on('unhandledRejection', (reason) => {
+    process.stderr.write(`hermes-mcp-bridge: unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}\n`);
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    process.stderr.write(`hermes-mcp-bridge: uncaught exception: ${err.message}\n`);
+    process.exit(1);
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

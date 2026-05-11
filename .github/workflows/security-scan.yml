@@ -15,8 +15,11 @@ permissions:
 jobs:
   cargo-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: install rust
         run: |
@@ -31,7 +34,8 @@ jobs:
 
       - name: install cargo-audit
         run: |
-          if ! command -v cargo-audit >/dev/null; then
+          if ! cargo-audit --version 2>/dev/null | grep -q '0\.22\.1'; then
+            rm -f ~/.cargo/bin/cargo-audit
             cargo install cargo-audit --locked --version 0.22.1
           fi
 
@@ -39,11 +43,14 @@ jobs:
 
   pnpm-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: landing
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@8912a9102ac27614460f54aedde9e1e7f9aec20d # v6.0.5
         with:

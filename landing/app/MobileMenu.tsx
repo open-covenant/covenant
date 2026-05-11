@@ -15,16 +15,16 @@ export function MobileMenu({ items }: { items: NavItem[] }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-    const onPointer = (e: MouseEvent) => {
+    const onPointer = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("pointerdown", onPointer);
     return () => {
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("pointerdown", onPointer);
     };
   }, [open]);
 

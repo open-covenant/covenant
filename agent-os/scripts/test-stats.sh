@@ -19,6 +19,10 @@ printf '\n'
 # State-machine over Rust source: when we see `#[test]` or `#[tokio::test]`
 # on a line, the next `fn <name>(...)` we see is a test. Works under BSD awk
 # (no gawk-only `match($0, re, arr)` array capture).
+for d in crates agents programs; do
+  [ -d "$d" ] || { echo "test-stats.sh: expected $ROOT/$d to exist" >&2; exit 1; }
+done
+
 ALL_TESTS=$(
   find crates agents programs -name '*.rs' -not -path '*/target/*' \
     -print0 2>/dev/null \

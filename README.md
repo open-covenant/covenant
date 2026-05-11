@@ -31,17 +31,18 @@ Conventional developer environments assume a human operator is present at every 
 
 The system center is `covenantd`, a Rust daemon that owns local state and mediates privileged operations through IPC, an HTTP gateway, signed capabilities, audit logs, memory stores, and runtime dispatch.
 
-| Primitive | Role |
-|---|---|
-| Intent | Normalized request shapes for CLI, IPC, HTTP, routing, and daemon dispatch. |
-| Runtime | Agent execution with timeout enforcement, manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
-| Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
-| Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |
-| Memory | SQLite-backed working, episodic, and long-term records with embedding hooks, ignore rules, drift reports, repair, and bounded compaction. |
-| Audit | Append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. |
-| Settlement | Local resource receipts and protocol scaffolding for agent coordination economics. |
+| # | Primitive | Role |
+|---|---|---|
+| 1 | Intent | Normalized request shapes for CLI, IPC, HTTP, routing, and daemon dispatch. |
+| 2 | Runtime | Agent execution with timeout enforcement, manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
+| 3 | Memory | SQLite-backed working, episodic, and long-term records with embedding hooks, ignore rules, drift reports, repair, and bounded compaction. |
+| 4 | Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
+| 5 | Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |
+| 6 | Comms | IPC frames, local HTTP gateway, MCP adapter, and A2A mailbox primitives. |
+| 7 | Compositor | Next.js web console (`agent-os/covenant-web`) and public landing/docs surface; richer TUI deferred to Phase 4. |
+| 8 | Settlement | Local resource receipts and protocol scaffolding for agent coordination economics. |
 
-The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
+Audit underlies Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
 See [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/capabilities.md](./docs/capabilities.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
 

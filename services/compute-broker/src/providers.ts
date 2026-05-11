@@ -26,16 +26,26 @@ type IonetConfig = {
 };
 
 async function ionetFetch(cfg: IonetConfig, path: string, init?: RequestInit): Promise<Response> {
-  const url = `${cfg.apiUrl}${path}?api_key=${cfg.apiKey}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`io.net ${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${cfg.apiUrl}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${cfg.apiKey}`,
+        ...init?.headers,
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`io.net ${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+    }
+    return res;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res;
 }
 
 class IonetProvider implements ComputeProvider {
@@ -97,16 +107,22 @@ type AkashConfig = {
 };
 
 async function akashFetch(cfg: AkashConfig, path: string, init?: RequestInit): Promise<Response> {
-  const url = `${cfg.rpcUrl}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`akash ${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${cfg.rpcUrl}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', ...init?.headers },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`akash ${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+    }
+    return res;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res;
 }
 
 class AkashProvider implements ComputeProvider {

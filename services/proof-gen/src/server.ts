@@ -261,6 +261,14 @@ async function main() {
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ err: reason }, 'proof-gen api: unhandled rejection');
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error({ err }, 'proof-gen api: uncaught exception');
+    process.exit(1);
+  });
   main().catch((err) => {
     logger.error({ err }, 'proof-gen api failed to start');
     process.exit(1);

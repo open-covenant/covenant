@@ -42,7 +42,7 @@ fi
 
 echo
 echo ">> installing dependencies..."
-pnpm install
+pnpm install --frozen-lockfile
 
 echo
 echo ">> typechecking the workspace..."

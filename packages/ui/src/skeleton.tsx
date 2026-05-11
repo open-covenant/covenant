@@ -10,7 +10,7 @@ export function Skeleton({ width, height = '1em', className, style, ...rest }: P
     <div
       aria-hidden="true"
       {...rest}
-      className={['animate-pulse bg-[var(--ink)]/8 rounded-sm', className].filter(Boolean).join(' ')}
+      className={['animate-pulse bg-[var(--ink)]/[0.08] rounded-sm', className].filter(Boolean).join(' ')}
       style={{ width, height, ...style }}
     />
   );

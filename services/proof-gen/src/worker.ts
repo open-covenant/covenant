@@ -156,7 +156,11 @@ export function startWorker() {
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
       jobsTotal.inc({ circuit: job.data.circuit_id, status: 'dlq' });
       try {
-        await dlq.add('dead', { ...job.data, error: err.message }, { jobId: job.id });
+        await dlq.add(
+          'dead',
+          { ...job.data, error: err.message },
+          { jobId: `${job.id}-${Date.now()}` },
+        );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         logger.error({ err: message }, 'dlq:enqueue_failed');
@@ -178,6 +182,14 @@ export function startWorker() {
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ err: reason }, 'proof-gen worker: unhandled rejection');
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error({ err }, 'proof-gen worker: uncaught exception');
+    process.exit(1);
+  });
   startWorker();
   logger.info({ artifacts_dir: ARTIFACTS_DIR, concurrency: CONCURRENCY }, 'proof-gen worker up');
 }

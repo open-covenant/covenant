@@ -339,8 +339,16 @@ export async function main(): Promise<void> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  process.on('unhandledRejection', (reason) => {
+    process.stderr.write(`unhandled rejection: ${asMessage(reason)}\n`);
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    process.stderr.write(`uncaught exception: ${asMessage(err)}\n`);
+    process.exit(1);
+  });
   main().catch((err) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`fatal: ${asMessage(err)}\n`);
     process.exit(1);
   });
 }

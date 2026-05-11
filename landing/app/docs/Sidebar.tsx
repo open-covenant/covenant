@@ -8,6 +8,10 @@ import { DOCS_NAV } from "./_nav";
 export function Sidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  // On the apex host the route is /docs/<slug>; on docs.* the middleware
+  // rewrites the path to /docs/<slug> as well. `DOCS_NAV` declares hrefs
+  // without the /docs prefix, so strip it before matching.
+  const slug = pathname.replace(/^\/docs/, "") || "/";
 
   return (
     <>
@@ -40,7 +44,7 @@ export function Sidebar() {
               </h3>
               <ul className="space-y-1.5">
                 {section.items.map((item) => {
-                  const active = pathname === item.href;
+                  const active = slug === item.href;
                   return (
                     <li key={item.href}>
                       <Link

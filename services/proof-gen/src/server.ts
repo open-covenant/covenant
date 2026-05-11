@@ -113,9 +113,21 @@ function encryptWitness(priv: PrivateInputs): {
   };
 }
 
-function hashPublicInputs(circuit_id: string, pub: PublicInputs): string {
+function hashPublicInputs(
+  circuit_id: string,
+  pub: PublicInputs,
+  agent_did: string,
+): string {
+  // agent_did is part of the cache key so two agents with identical
+  // public inputs cannot share a cache slot. Without it, agent A's
+  // earlier /prove poisons agent B's later /prove with the same inputs
+  // (proof correctness is unaffected — the public signals are
+  // identical — but the policy boundary leaks: agent B gets a result
+  // they did not pay for / are not authorised for under any future
+  // per-agent billing or capability gate).
   const canonical = JSON.stringify([
     circuit_id,
+    agent_did,
     pub.task_hash,
     pub.result_hash,
     pub.deadline,
@@ -190,7 +202,7 @@ export async function buildServer() {
     }
     const { circuit_id, public_inputs, private_inputs } = parsed.data;
 
-    const pubHash = hashPublicInputs(circuit_id, public_inputs);
+    const pubHash = hashPublicInputs(circuit_id, public_inputs, agent.agent_did);
 
     const cached = await connection.get(cacheKey(pubHash));
     if (cached) {

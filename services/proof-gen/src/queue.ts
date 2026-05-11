@@ -22,6 +22,10 @@ export type ProveJobData = {
   witness_ciphertext: string;
   witness_iv: string;
   witness_tag: string;
+  // Envelope-wrapped witness AES key. Unwrapped by the worker using the
+  // PROOFGEN_WITNESS_WRAP_KEY env held outside Redis. See
+  // witness-envelope.ts for the format and threat model.
+  witness_key_wrapped: string;
   agent_did: string;
   public_inputs_hash: string;
 };
@@ -54,10 +58,6 @@ export function buildQueue(connection: ConnectionOptions): Queue<ProveJobData, P
 
 export function resultKey(jobId: string): string {
   return `proof-gen:result:${jobId}`;
-}
-
-export function keyKey(jobId: string): string {
-  return `proof-gen:key:${jobId}`;
 }
 
 export function cacheKey(hash: string): string {

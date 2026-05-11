@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import RedisMock from 'ioredis-mock';
-import { cacheKey, keyKey, resultKey } from '../queue.js';
+import { cacheKey, resultKey } from '../queue.js';
 
 describe('cache key shape', () => {
-  it('cacheKey is distinct from keyKey and resultKey', () => {
+  it('cacheKey is distinct from resultKey', () => {
     expect(cacheKey('abc')).toBe('proof-gen:cache:abc');
-    expect(keyKey('xyz')).toBe('proof-gen:key:xyz');
     expect(resultKey('xyz')).toBe('proof-gen:result:xyz');
-    expect(cacheKey('x') === keyKey('x')).toBe(false);
+    expect(cacheKey('x') === resultKey('x')).toBe(false);
   });
 });
 

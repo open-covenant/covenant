@@ -14,11 +14,16 @@ import {
 import {
   buildQueue,
   redisConnection,
-  keyKey,
   resultKey,
   cacheKey,
   type ProveJobData,
 } from './queue.js';
+import {
+  ensureWitnessEnvelopeReady,
+  generateWitnessKey,
+  wrapWitnessKey,
+} from './witness-envelope.js';
+import { checkRateLimit, RateLimitBackendError } from './rate-limit.js';
 import { registry, cacheHits } from './metrics.js';
 
 const logger = pino({
@@ -39,7 +44,8 @@ const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 const PORT = Number(process.env.PROOFGEN_PORT ?? 8787);
 const DEFAULT_ARTIFACTS_DIR = resolve(import.meta.dirname, '..', 'artifacts', 'task_completion', 'build');
 const ARTIFACTS_DIR = resolve(process.env.CIRCUIT_ARTIFACTS_DIR ?? DEFAULT_ARTIFACTS_DIR);
-const KEY_TTL = Number(process.env.PROOFGEN_KEY_TTL_SEC ?? 600);
+const RATE_LIMIT_BURST = Number(process.env.PROOFGEN_RATE_LIMIT_BURST ?? 10);
+const RATE_LIMIT_WINDOW_MS = Number(process.env.PROOFGEN_RATE_LIMIT_WINDOW_MS ?? 60_000);
 
 const WASM_PATH = resolve(ARTIFACTS_DIR, 'task_completion_js', 'task_completion.wasm');
 const ZKEY_PATH = resolve(ARTIFACTS_DIR, 'task_completion.zkey');
@@ -81,50 +87,29 @@ async function resolveAgent(authHeader: string | undefined): Promise<{ agent_did
   }
 }
 
-const BURST_LIMIT = 10;
-const WINDOW_MS = 60_000;
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, bucket] of rateBuckets) {
-    if (now >= bucket.resetAt) rateBuckets.delete(key);
-  }
-}, WINDOW_MS);
-
-function checkRateLimit(agentDid: string): { ok: true } | { ok: false; retry_after: number } {
-  const now = Date.now();
-  let bucket = rateBuckets.get(agentDid);
-  if (!bucket || now >= bucket.resetAt) {
-    bucket = { count: 0, resetAt: now + WINDOW_MS };
-    rateBuckets.set(agentDid, bucket);
-  }
-  bucket.count++;
-  if (bucket.count > BURST_LIMIT) {
-    return { ok: false, retry_after: Math.ceil((bucket.resetAt - now) / 1000) };
-  }
-  return { ok: true };
-}
-
 function encryptWitness(priv: PrivateInputs): {
   ciphertext: string;
   iv: string;
   tag: string;
-  key: Buffer;
+  wrappedKey: string;
 } {
-  // AES-256-GCM with ephemeral per-job key. Key stored in Redis with short TTL
-  // (see keyKey()) and deleted by the worker after decrypt.
-  const key = randomBytes(32);
+  // AES-256-GCM with ephemeral per-job key. The key is wrapped under the
+  // long-lived PROOFGEN_WITNESS_WRAP_KEY env secret (held outside Redis)
+  // before being shipped as part of the job payload. Redis compromise
+  // alone does not yield plaintext.
+  const key = generateWitnessKey();
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const plaintext = Buffer.from(JSON.stringify(priv), 'utf8');
   const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   plaintext.fill(0);
+  const wrappedKey = wrapWitnessKey(key);
+  key.fill(0);
   return {
     ciphertext: ct.toString('base64'),
     iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
-    key,
+    wrappedKey,
   };
 }
 
@@ -183,7 +168,20 @@ export async function buildServer() {
     const agent = await resolveAgent(req.headers.authorization);
     if (!agent) return reply.code(401).send({ error: 'unauthorized' });
 
-    const rl = checkRateLimit(agent.agent_did);
+    let rl;
+    try {
+      rl = await checkRateLimit(agent.agent_did, {
+        connection,
+        limit: RATE_LIMIT_BURST,
+        windowMs: RATE_LIMIT_WINDOW_MS,
+      });
+    } catch (e) {
+      if (e instanceof RateLimitBackendError) {
+        logger.error({ err: e.message }, 'rate-limit backend error');
+        return reply.code(503).send({ error: 'rate_limit_backend_unavailable' });
+      }
+      throw e;
+    }
     if (!rl.ok) return reply.code(429).send({ error: 'rate_limited', retry_after: rl.retry_after });
 
     const parsed = ProveRequestSchema.safeParse(req.body);
@@ -202,8 +200,6 @@ export async function buildServer() {
 
     const enc = encryptWitness(private_inputs);
     const jobId = randomUUID();
-    await connection.set(keyKey(jobId), enc.key.toString('base64'), 'EX', KEY_TTL);
-    enc.key.fill(0);
 
     const data: ProveJobData = {
       circuit_id,
@@ -211,6 +207,7 @@ export async function buildServer() {
       witness_ciphertext: enc.ciphertext,
       witness_iv: enc.iv,
       witness_tag: enc.tag,
+      witness_key_wrapped: enc.wrappedKey,
       agent_did: agent.agent_did,
       public_inputs_hash: pubHash,
     };
@@ -254,6 +251,7 @@ export async function buildServer() {
 }
 
 async function main() {
+  ensureWitnessEnvelopeReady();
   const { app } = await buildServer();
   await app.listen({ port: PORT, host: '0.0.0.0' });
   logger.info({ port: PORT, artifacts_dir: ARTIFACTS_DIR }, 'proof-gen api up');

@@ -7,13 +7,13 @@ import * as snarkjs from 'snarkjs';
 import {
   QUEUE_NAME,
   redisConnection,
-  keyKey,
   resultKey,
   cacheKey,
   buildDlq,
   type ProveJobData,
   type ProveJobResult,
 } from './queue.js';
+import { ensureWitnessEnvelopeReady, unwrapWitnessKey } from './witness-envelope.js';
 import { jobsTotal, proveDuration } from './metrics.js';
 import { encodeGroth16ProofHex, encodePublicInputWords } from './proof-format.js';
 
@@ -114,10 +114,7 @@ export function startWorker() {
 
       const artifacts = loadArtifacts(circuit_id);
 
-      const keyB64 = await connection.get(keyKey(job.id!));
-      if (!keyB64) throw new Error('witness_key_expired');
-      const key = Buffer.from(keyB64, 'base64');
-      await connection.del(keyKey(job.id!));
+      const key = unwrapWitnessKey(job.data.witness_key_wrapped);
 
       let witness: CircuitInput;
       try {
@@ -190,6 +187,7 @@ if (isEntry) {
     logger.error({ err }, 'proof-gen worker: uncaught exception');
     process.exit(1);
   });
+  ensureWitnessEnvelopeReady();
   startWorker();
   logger.info({ artifacts_dir: ARTIFACTS_DIR, concurrency: CONCURRENCY }, 'proof-gen worker up');
 }

@@ -11,7 +11,22 @@ pnpm --filter @covenant/proof-gen start           # fastify api
 pnpm --filter @covenant/proof-gen start:worker    # bullmq worker
 ```
 
-API and worker are separate processes so they scale independently. Both need the same `REDIS_URL` and `CIRCUIT_ARTIFACTS_DIR`.
+API and worker are separate processes so they scale independently. Both need the same `REDIS_URL`, `CIRCUIT_ARTIFACTS_DIR`, and **`PROOFGEN_WITNESS_WRAP_KEY`** (32-byte base64 secret held outside Redis; both processes refuse to start without it).
+
+## Env
+
+| Var | Required | Default | Notes |
+|---|---|---|---|
+| `REDIS_URL` | yes | `redis://127.0.0.1:6379` | API and worker share queue + cache state |
+| `PROOFGEN_WITNESS_WRAP_KEY` | yes | — | 32-byte base64. Long-lived secret that wraps each job's witness AES key (envelope encryption). Redis-only compromise no longer yields plaintext. |
+| `SESSION_SECRET` | yes | — | HS256 JWT verify secret (>=32 chars). Required by `/prove`. |
+| `PROOFGEN_RATE_LIMIT_BURST` | no | `10` | Per-agent requests permitted within the window |
+| `PROOFGEN_RATE_LIMIT_WINDOW_MS` | no | `60000` | Window length in ms |
+| `CIRCUIT_ARTIFACTS_DIR` | no | `./artifacts/task_completion/build` | Where wasm + zkey live |
+| `PROOFGEN_PORT` | no | `8787` | API listen port |
+| `PROOFGEN_WORKER_CONCURRENCY` | no | `1` | BullMQ worker concurrency |
+| `PROOFGEN_RESULT_TTL_SEC` | no | `3600` | Job result + cache TTL |
+| `LOG_LEVEL` | no | `info` | Pino log level |
 
 ## Endpoints
 
@@ -22,9 +37,10 @@ API and worker are separate processes so they scale independently. Both need the
 ## Known pre-mainnet limitations
 
 - Circuit artifacts must be generated before `POST /prove` can accept jobs.
-- The API and worker share Redis-backed queue state; deploy them with the same `REDIS_URL`.
+- The API and worker share Redis-backed queue state; deploy them with the same `REDIS_URL` and `PROOFGEN_WITNESS_WRAP_KEY`.
 - The current `task_completion` circuit is not the canonical mainnet settlement proof. Its public-signal shape is research-only and should not be wired directly to protocol settlement.
 - Mainnet zk readiness depends on a settlement-specific circuit, a real ceremony, pinned artifact provenance, and an explicit verifier cutover.
+- The Redis rate limit and witness envelope are both v0 single-tier: rotation of `PROOFGEN_WITNESS_WRAP_KEY` invalidates in-flight jobs encrypted under the old key. A future iteration should support a key-id field in the wrapped blob for graceful rotation.
 
 ## Artifacts
 

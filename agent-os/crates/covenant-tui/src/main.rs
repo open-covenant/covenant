@@ -10,15 +10,16 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use covenant_tui::{App, ExitReason};
+use covenant_tui::{App, ExitReason, Mode};
 use crossterm::event::{self, Event};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Alignment;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
 
@@ -72,13 +73,48 @@ fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     }
 }
 
-fn render(frame: &mut ratatui::Frame<'_>, _app: &App) {
-    let block = Block::default()
-        .title("covenant — press q or Esc to quit")
-        .borders(Borders::ALL);
-    let body = Paragraph::new("connect to daemon: not yet wired in this slice")
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .alignment(Alignment::Center)
-        .block(block);
-    frame.render_widget(body, frame.area());
+fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(frame.area());
+
+    match app.mode() {
+        Mode::Browsing => {
+            let header = Paragraph::new("covenant tui — press i to draft an intent · q / Esc to quit")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let drafts = app.drafts();
+            let body = if drafts.is_empty() {
+                Paragraph::new("no drafted intents yet")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("drafts"))
+            } else {
+                let lines: Vec<Line<'_>> = drafts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| Line::from(format!("{:>3}. {d}", i + 1)))
+                    .collect();
+                Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title("drafts"))
+            };
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::Editing { buffer } => {
+            let header =
+                Paragraph::new("editing intent — Enter to draft · Esc to cancel · Ctrl-C to quit")
+                    .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let line = Line::from(vec![
+                Span::raw(buffer.as_str()),
+                Span::styled("|", Style::default().add_modifier(Modifier::SLOW_BLINK)),
+            ]);
+            let body = Paragraph::new(line)
+                .block(Block::default().borders(Borders::ALL).title("intent"));
+            frame.render_widget(body, layout[1]);
+        }
+    }
 }

@@ -409,12 +409,19 @@ async fn main() -> Result<()> {
                 eprintln!("covenant intent: missing intent text");
                 std::process::exit(2);
             }
+            // Strip `--json` only from leading positions. Stop scanning
+            // for flags after the first non-flag token so `covenant
+            // intent search --json command help` keeps the literal text
+            // `search --json command help` instead of silently dropping
+            // the `--json` in the middle.
             let mut as_json = false;
             let mut text_parts: Vec<String> = Vec::new();
+            let mut consuming_flags = true;
             for arg in args.iter().skip(1) {
-                if arg == "--json" {
+                if consuming_flags && arg == "--json" {
                     as_json = true;
                 } else {
+                    consuming_flags = false;
                     text_parts.push(arg.clone());
                 }
             }

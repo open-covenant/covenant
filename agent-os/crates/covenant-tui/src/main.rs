@@ -10,7 +10,7 @@
 use std::io::{self, Stdout};
 
 use anyhow::{Context, Result};
-use covenant_tui::ipc::{covenant_home, submit_intent};
+use covenant_tui::ipc::{covenant_home, recent_memory, submit_intent, MemoryFetchOutcome};
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
 use crossterm::execute;
@@ -63,7 +63,8 @@ async fn main() -> Result<()> {
 
 async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let mut events = EventStream::new();
-    let (tx, mut rx) = mpsc::unbounded_channel::<SubmissionOutcome>();
+    let (submit_tx, mut submit_rx) = mpsc::unbounded_channel::<SubmissionOutcome>();
+    let (memory_tx, mut memory_rx) = mpsc::unbounded_channel::<MemoryFetchOutcome>();
     let home = covenant_home()?;
 
     loop {
@@ -77,7 +78,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
         // for the same RPC, so a slow daemon does not cause the loop
         // to re-spawn the same task each frame.
         if let Some(text) = app.take_pending_submission() {
-            let tx = tx.clone();
+            let tx = submit_tx.clone();
             let home = home.clone();
             tokio::spawn(async move {
                 let outcome = submit_intent(&home, &text).await.unwrap_or_else(|e| {
@@ -89,14 +90,30 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if app.take_pending_memory_fetch() {
+            let tx = memory_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome = recent_memory(&home, None, 20)
+                    .await
+                    .unwrap_or_else(|e| MemoryFetchOutcome::Failed {
+                        message: format!("{e:#}"),
+                    });
+                let _ = tx.send(outcome);
+            });
+        }
+
         tokio::select! {
             Some(Ok(event)) = events.next() => {
                 if let Event::Key(key) = event {
                     app.on_key(key);
                 }
             }
-            Some(outcome) = rx.recv() => {
+            Some(outcome) = submit_rx.recv() => {
                 app.apply_submission_outcome(outcome);
+            }
+            Some(outcome) = memory_rx.recv() => {
+                app.apply_memory_fetch_outcome(outcome);
             }
         }
 
@@ -114,9 +131,10 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     match app.mode() {
         Mode::Browsing => {
-            let header =
-                Paragraph::new("covenant tui — i: draft · s: submit most-recent · q / Esc: quit")
-                    .block(Block::default().borders(Borders::ALL).title("covenant"));
+            let header = Paragraph::new(
+                "covenant tui — i: draft · s: submit most-recent · m: memory · q / Esc: quit",
+            )
+            .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
 
             let drafts = app.drafts();
@@ -182,6 +200,48 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             let body = Paragraph::new(message.as_str())
                 .style(Style::default().add_modifier(Modifier::REVERSED))
                 .block(Block::default().borders(Borders::ALL).title("error"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::MemoryTail {
+            loading,
+            records,
+            error,
+        } => {
+            let header = Paragraph::new("memory tail — q / Esc to dismiss")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(Block::default().borders(Borders::ALL).title("memory error"))
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("memory"))
+            } else if records.is_empty() {
+                Paragraph::new("no records in memory")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("memory"))
+            } else {
+                let lines: Vec<Line<'_>> = records
+                    .iter()
+                    .map(|r| {
+                        let id_prefix: String = r.id.to_string().chars().take(8).collect();
+                        let text_preview: String = r.text.chars().take(80).collect();
+                        Line::from(format!(
+                            "{id_prefix}  {tier:?}  {owner}  {text}",
+                            tier = r.tier,
+                            owner = r.owner.display,
+                            text = text_preview
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title("memory"))
+            };
             frame.render_widget(body, layout[1]);
         }
     }

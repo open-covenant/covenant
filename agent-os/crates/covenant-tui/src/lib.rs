@@ -7,10 +7,13 @@
 //! capabilities, etc.); each screen adds state here and a match arm
 //! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
 
+use covenant_types::MemoryRecord;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use uuid::Uuid;
 
 pub mod ipc;
+
+pub use ipc::MemoryFetchOutcome;
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +25,7 @@ pub enum ExitReason {
 }
 
 /// Active screen / interaction mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     /// Base view. `i` enters the intent editor; `s` submits the most
     /// recent draft to the daemon; `q` / `Esc` quit.
@@ -48,6 +51,15 @@ pub enum Mode {
     /// returns to Browsing. Message is rendered as-is so a CLI
     /// caller's reasoning carries through.
     Error { message: String },
+    /// Memory tail view. Press `m` from Browsing to enter; the
+    /// renderer shows a "fetching…" hint while `loading` is true,
+    /// then the records or the embedded error once the fetch
+    /// resolves. Press `q` / `Esc` to dismiss.
+    MemoryTail {
+        loading: bool,
+        records: Vec<MemoryRecord>,
+        error: Option<String>,
+    },
 }
 
 impl Default for Mode {
@@ -73,6 +85,10 @@ pub struct App {
     /// submission, even though the App may remain in `Submitting`
     /// for the lifetime of the in-flight RPC.
     pending_submission: bool,
+    /// Set when transitioning to [`Mode::MemoryTail`] and cleared by
+    /// the first call to [`App::take_pending_memory_fetch`]. Same
+    /// one-shot-flag pattern as `pending_submission`.
+    pending_memory_fetch: bool,
 }
 
 impl App {
@@ -130,6 +146,18 @@ impl App {
                 _ => Mode::Submitting { text },
             },
             Mode::Result { .. } | Mode::Error { .. } => self.handle_terminal_view(event),
+            Mode::MemoryTail {
+                loading,
+                records,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::MemoryTail {
+                    loading,
+                    records,
+                    error,
+                },
+            },
         };
     }
 
@@ -182,6 +210,36 @@ impl App {
         self.pending_submission = false;
         Some(text)
     }
+
+    /// One-shot flag for the memory-tail fetch. Same kickoff
+    /// semantics as [`App::take_pending_submission`].
+    pub fn take_pending_memory_fetch(&mut self) -> bool {
+        if !self.pending_memory_fetch {
+            return false;
+        }
+        self.pending_memory_fetch = false;
+        true
+    }
+
+    /// Apply a memory-tail fetch result. No-op if the user has
+    /// already navigated away from `Mode::MemoryTail`.
+    pub fn apply_memory_fetch_outcome(&mut self, outcome: MemoryFetchOutcome) {
+        let Mode::MemoryTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            MemoryFetchOutcome::Fetched { records } => Mode::MemoryTail {
+                loading: false,
+                records,
+                error: None,
+            },
+            MemoryFetchOutcome::Failed { message } => Mode::MemoryTail {
+                loading: false,
+                records: Vec::new(),
+                error: Some(message),
+            },
+        };
+    }
 }
 
 /// The two outcomes a submission can have. The daemon's
@@ -220,6 +278,14 @@ impl App {
                     Mode::Submitting { text }
                 } else {
                     Mode::Browsing
+                }
+            }
+            KeyCode::Char('m') => {
+                self.pending_memory_fetch = true;
+                Mode::MemoryTail {
+                    loading: true,
+                    records: Vec::new(),
+                    error: None,
                 }
             }
             _ => Mode::Browsing,
@@ -560,6 +626,111 @@ mod tests {
         });
         app.on_key(press(KeyCode::Char('q')));
         assert_eq!(app.exit_reason(), Some(ExitReason::UserQuit));
+    }
+
+    #[test]
+    fn pressing_m_enters_memory_tail_loading_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::MemoryTail {
+                    loading: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(
+            app.take_pending_memory_fetch(),
+            "first take returns true to trigger the kickoff"
+        );
+        assert!(
+            !app.take_pending_memory_fetch(),
+            "subsequent takes return false until next 'm' press"
+        );
+    }
+
+    #[test]
+    fn memory_tail_records_fetched_transitions_to_loaded() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        let _ = app.take_pending_memory_fetch();
+        app.apply_memory_fetch_outcome(MemoryFetchOutcome::Fetched {
+            records: Vec::new(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::MemoryTail {
+                    loading: false,
+                    records,
+                    error: None,
+                } if records.is_empty()
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn memory_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        let _ = app.take_pending_memory_fetch();
+        app.apply_memory_fetch_outcome(MemoryFetchOutcome::Failed {
+            message: "memory read requires capability \"memory.read\"".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::MemoryTail {
+                    loading: false,
+                    error: Some(_),
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn memory_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        let _ = app.take_pending_memory_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn memory_tail_esc_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        let _ = app.take_pending_memory_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn memory_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('m')));
+        let _ = app.take_pending_memory_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_memory_fetch_outcome(MemoryFetchOutcome::Fetched {
+            records: Vec::new(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::Browsing,
+            "late memory response must not clobber the user's view"
+        );
     }
 
     #[test]

@@ -11,9 +11,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_types::{MemoryRecord, MemoryTier};
 use tokio::net::UnixStream;
 
 use crate::SubmissionOutcome;
+
+/// Hard cap on `Request::RecentMemory::limit` to prevent a runaway
+/// request from asking the daemon to enumerate the entire memory
+/// table into a single IPC frame.
+pub const RECENT_MEMORY_LIMIT_CAP: usize = 50;
 
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
@@ -29,6 +35,16 @@ pub enum GrantOutcome {
     Failed {
         message: String,
     },
+}
+
+/// Outcome of a [`recent_memory`] call. Wire-level errors bubble up
+/// as `Err`; daemon-side rejections (e.g. missing `memory.read`)
+/// collapse into `Failed { message }` so the TUI can render the
+/// reason inside the memory tail screen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryFetchOutcome {
+    Fetched { records: Vec<MemoryRecord> },
+    Failed { message: String },
 }
 
 /// Resolves `$COVENANT_HOME` with the same fallback shape as the
@@ -176,6 +192,51 @@ pub async fn grant_capability(
         }),
         Response::Error { message } => Ok(GrantOutcome::Failed { message }),
         other => Ok(GrantOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::RecentMemory`, and maps the daemon
+/// response into a [`MemoryFetchOutcome`].
+///
+/// `tier = None` fetches across every tier the operator can read.
+/// `limit` is clamped to [`RECENT_MEMORY_LIMIT_CAP`] so a runaway
+/// request cannot ask the daemon for an unbounded scan.
+pub async fn recent_memory(
+    home: &Path,
+    tier: Option<MemoryTier>,
+    limit: usize,
+) -> Result<MemoryFetchOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(MemoryFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(MemoryFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_MEMORY_LIMIT_CAP);
+    write_frame(&mut stream, &Request::RecentMemory { tier, limit }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Memories { records } => Ok(MemoryFetchOutcome::Fetched { records }),
+        Response::Error { message } => Ok(MemoryFetchOutcome::Failed { message }),
+        other => Ok(MemoryFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

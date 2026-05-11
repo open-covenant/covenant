@@ -32,6 +32,33 @@ use tokio::sync::mpsc;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// Renders the bottom status bar. Shows the current mode discriminant
+/// (via `Mode::name()`, never `{:?}`) and the resolved COVENANT_HOME
+/// truncated from the left with a `…` prefix so the trailing path
+/// segment stays visible on narrow terminals.
+fn render_status_bar(
+    frame: &mut ratatui::Frame<'_>,
+    app: &App,
+    home: &std::path::Path,
+    rect: ratatui::layout::Rect,
+) {
+    let mode = app.mode().name();
+    let home_str = home.display().to_string();
+    let suffix = "  ? for help";
+    let width = rect.width as usize;
+    let fixed_overhead = mode.len() + 2 + suffix.len() + 2; // "<mode>  <home><suffix>"
+    let home_display = if width > fixed_overhead && home_str.len() > width - fixed_overhead {
+        let keep = width.saturating_sub(fixed_overhead + 1);
+        let start = home_str.len().saturating_sub(keep);
+        format!("…{}", &home_str[start..])
+    } else {
+        home_str
+    };
+    let text = format!("{mode}  {home_display}{suffix}");
+    let bar = Paragraph::new(text).style(Style::default().add_modifier(Modifier::DIM));
+    frame.render_widget(bar, rect);
+}
+
 /// Stable, render-safe label for a `ResourceKind`. Same reason as
 /// `audit_kind_label`: avoid `{:?}` so a future variant reorder does
 /// not silently change column widths in the rendered table.
@@ -121,7 +148,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
 
     loop {
         terminal
-            .draw(|frame| render(frame, app))
+            .draw(|frame| render(frame, app, &home))
             .context("draw frame")?;
 
         // Kick off an IPC worker exactly once per Submitting
@@ -257,11 +284,20 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     }
 }
 
-fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
+fn render(frame: &mut ratatui::Frame<'_>, app: &App, home: &std::path::Path) {
+    // Three-row layout: bordered header (3), content (min 0), status
+    // bar (1). The bottom row is reserved so each mode arm only needs
+    // to draw into layout[0]/layout[1] like before.
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
+
+    render_status_bar(frame, app, home, layout[2]);
 
     match app.mode() {
         Mode::Browsing => {

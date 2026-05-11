@@ -127,6 +127,32 @@ pub enum Mode {
     Help,
 }
 
+impl Mode {
+    /// Stable, render-safe discriminant string. The status bar reads
+    /// this so a `{:?}` Debug refactor can't silently leak internal
+    /// fields (buffer contents, error messages) into the bar. The
+    /// match is exhaustive so any new variant must add an arm.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Mode::Browsing => "browsing",
+            Mode::Editing { .. } => "editing",
+            Mode::Submitting { .. } => "submitting",
+            Mode::Result { .. } => "result",
+            Mode::Error { .. } => "error",
+            Mode::MemoryTail { .. } => "memory-tail",
+            Mode::AuditTail { .. } => "audit-tail",
+            Mode::CapabilitiesTail { .. } => "capabilities-tail",
+            Mode::A2aTail { .. } => "a2a-tail",
+            Mode::ReceiptsTail { .. } => "receipts-tail",
+            Mode::GrantEditor { .. } => "grant-editor",
+            Mode::GrantSubmitting { .. } => "grant-submitting",
+            Mode::GrantResult { .. } => "grant-result",
+            Mode::GrantError { .. } => "grant-error",
+            Mode::Help => "help",
+        }
+    }
+}
+
 /// Drafted intents are capped so a stress-test (or an unattended
 /// keyboard) cannot grow the buffer without bound. The oldest entry
 /// drops when the cap is exceeded.
@@ -1724,6 +1750,83 @@ mod tests {
             message.contains("covenantd start"),
             "message must hint at the fix: {message}"
         );
+    }
+
+    #[test]
+    fn mode_name_is_kebab_case_and_nonempty_for_every_variant() {
+        use covenant_types::AgentId;
+        // Constructing every variant locally guarantees a compile error
+        // if a new variant lands without a Mode::name() arm — the
+        // exhaustive match inside Mode::name itself fails first, and
+        // this test fails second if someone returns an empty string.
+        let variants: Vec<Mode> = vec![
+            Mode::Browsing,
+            Mode::Editing {
+                buffer: String::new(),
+            },
+            Mode::Submitting { text: "x".into() },
+            Mode::Result {
+                intent_id: Uuid::nil(),
+                status: "ok".into(),
+                text: "x".into(),
+            },
+            Mode::Error {
+                message: "x".into(),
+            },
+            Mode::MemoryTail {
+                loading: false,
+                records: Vec::new(),
+                error: None,
+            },
+            Mode::AuditTail {
+                loading: false,
+                events: Vec::new(),
+                error: None,
+            },
+            Mode::CapabilitiesTail {
+                loading: false,
+                capabilities: Vec::new(),
+                error: None,
+            },
+            Mode::A2aTail {
+                loading: false,
+                tasks: Vec::new(),
+                error: None,
+            },
+            Mode::ReceiptsTail {
+                loading: false,
+                receipts: Vec::new(),
+                error: None,
+            },
+            Mode::GrantEditor {
+                buffer: String::new(),
+            },
+            Mode::GrantSubmitting { action: "x".into() },
+            Mode::GrantResult {
+                action: "x".into(),
+                subject_display: AgentId::new("user@local", [0u8; 32]).display,
+                signature_b58: "x".into(),
+            },
+            Mode::GrantError {
+                message: "x".into(),
+            },
+            Mode::Help,
+        ];
+
+        let mut seen = std::collections::HashSet::new();
+        for m in &variants {
+            let name = m.name();
+            assert!(!name.is_empty(), "mode {m:?} has empty name");
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "mode name must be kebab-case [a-z0-9-]: {name}"
+            );
+            assert!(
+                seen.insert(name),
+                "duplicate mode name: {name} (two variants share it)"
+            );
+        }
     }
 
     #[test]

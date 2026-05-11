@@ -18,7 +18,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
+// parking_lot::Mutex for the sync-side `pending` map. The std::sync
+// version's PoisonError path was never reached (the only locker is the
+// reader task or the request handler), but the .expect("pending lock")
+// calls were a panic surface that gained nothing. parking_lot's lock()
+// returns the guard directly.
+use parking_lot::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -243,7 +248,7 @@ impl StdioMcpClient {
                 }
             }
             // EOF or read error: surface to anything still waiting.
-            let mut map = reader_pending.lock().expect("pending lock");
+            let mut map = reader_pending.lock();
             for (_, tx) in map.drain() {
                 let _ = tx.send(Err(JsonRpcError {
                     code: -32099,
@@ -278,7 +283,7 @@ fn deliver_response(pending: &Pending, resp: JsonRpcResponse) {
         None => return, // Response without id can't be matched; drop.
     };
     let tx = {
-        let mut map = pending.lock().expect("pending lock");
+        let mut map = pending.lock();
         map.remove(&id)
     };
     if let Some(tx) = tx {
@@ -320,14 +325,14 @@ impl McpClient for StdioMcpClient {
             params,
         })?;
         {
-            let mut map = self.pending.lock().expect("pending lock");
+            let mut map = self.pending.lock();
             map.insert(id, tx);
         }
         if let Err(e) = self.write_line(&msg).await {
             // Roll back the pending entry so it doesn't sit until reader
             // EOF. Without this the slot leaks for the lifetime of the
             // transport on every write failure.
-            let mut map = self.pending.lock().expect("pending lock");
+            let mut map = self.pending.lock();
             map.remove(&id);
             return Err(e);
         }
@@ -337,7 +342,7 @@ impl McpClient for StdioMcpClient {
             Ok(Ok(Err(e))) => Err(e.into()),
             Ok(Err(_)) => Err(McpClientError::Closed),
             Err(_) => {
-                let mut map = self.pending.lock().expect("pending lock");
+                let mut map = self.pending.lock();
                 map.remove(&id);
                 Err(McpClientError::Timeout(timeout))
             }
@@ -378,7 +383,7 @@ impl MockMcpClient {
     }
 
     pub fn notifications(&self) -> Vec<(String, Value)> {
-        self.notifications.lock().unwrap().clone()
+        self.notifications.lock().clone()
     }
 }
 
@@ -390,7 +395,6 @@ impl McpClient for MockMcpClient {
     async fn notify(&self, method: &str, params: Value) -> Result<(), McpClientError> {
         self.notifications
             .lock()
-            .unwrap()
             .push((method.to_string(), params));
         Ok(())
     }

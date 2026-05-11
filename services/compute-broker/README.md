@@ -18,9 +18,20 @@ are live. Production provider partnerships and on-chain compute-bond enforcement
 
 ## HTTP surface
 
-- `POST /bonds/request` — reserve provider capacity and sign a broker attestation
-- `POST /bonds/cancel` — cancel a reservation with an agent-signed request
-- `POST /leases/activate` — mark a reserved lease active after task lock-in
-- `POST /leases/reclaim` — reclaim a lease after slash/release handling
-- `POST /leases/expire-sweep` — sweep expired leases whose slashable window elapsed
-- `GET /leases/:id` — inspect provider lease status
+| Endpoint | Auth | Notes |
+|---|---|---|
+| `POST /bonds/request` | none | Reserves provider capacity and signs a broker attestation |
+| `POST /bonds/cancel` | agent-signed payload | Body: `{ lease_id, agent_did, signed_request, nonce, expires_at }`. Server rejects expired or over-long `expires_at` (cap `BOND_CANCEL_MAX_EXPIRY_SECS`, default 300s) and replayed `nonce` values. The signed message is `JSON.stringify({ action: 'cancel', lease_id, agent_did, nonce, expires_at })`. |
+| `POST /leases/activate` | `Authorization: Bearer ${OPERATOR_BEARER_TOKEN}` | Operator-only side-effect. 401 missing, 403 wrong, 503 if `OPERATOR_BEARER_TOKEN` is unset. |
+| `POST /leases/reclaim` | operator bearer | same |
+| `POST /leases/expire-sweep` | operator bearer | same |
+| `GET /leases/:id` | none | Provider status query |
+| `GET /healthz` | none | Includes `broker_key_loaded` + `operator_bearer_loaded` flags |
+| `GET /metrics` | none | Prometheus |
+
+## Replay-protection scope
+
+The `/bonds/cancel` nonce cache is in-process. Horizontal scaling across multiple
+broker instances needs a shared store (Redis is the natural fit; the same
+constraint applies to the proof-gen in-memory rate limit). For v0 single-instance
+deploys this is sufficient — pre-mainnet posture.

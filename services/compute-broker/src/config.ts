@@ -11,6 +11,14 @@ const EnvSchema = z.object({
   AKASH_WALLET: z.string().optional(),
   MIN_BOND_USD_MICRO: z.coerce.number().int().positive().default(10_000_000),
   MAX_BOND_DURATION_SECS: z.coerce.number().int().positive().default(14 * 24 * 3600),
+  // Operator bearer for /leases/{activate,reclaim,expire-sweep}. Optional
+  // in dev (endpoints return 503 with a clear message when unset) so the
+  // service stays bootable for testing; required for any deploy that
+  // exposes these endpoints to the network.
+  OPERATOR_BEARER_TOKEN: z.string().min(16).optional(),
+  // Window (seconds) within which a /bonds/cancel signed_request must
+  // expire after the server's wall clock. 300s = 5 min default.
+  BOND_CANCEL_MAX_EXPIRY_SECS: z.coerce.number().int().positive().default(300),
 });
 
 export type Config = {
@@ -24,6 +32,8 @@ export type Config = {
   akashWallet: string | undefined;
   minBondMicro: number;
   maxBondDurationSecs: number;
+  operatorBearerToken: string | undefined;
+  bondCancelMaxExpirySecs: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -39,5 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     akashWallet: parsed.AKASH_WALLET,
     minBondMicro: parsed.MIN_BOND_USD_MICRO,
     maxBondDurationSecs: parsed.MAX_BOND_DURATION_SECS,
+    operatorBearerToken: parsed.OPERATOR_BEARER_TOKEN,
+    bondCancelMaxExpirySecs: parsed.BOND_CANCEL_MAX_EXPIRY_SECS,
   };
 }

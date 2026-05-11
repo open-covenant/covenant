@@ -46,7 +46,12 @@ class FakeProvider implements ComputeProvider {
 
 describe('compute-broker server', () => {
   const key = 'ab'.repeat(32);
-  const cfg = loadConfig({ BROKER_SIGNING_KEY_HEX: key });
+  const operatorBearer = 'test-operator-bearer-token';
+  const operatorAuth = { authorization: `Bearer ${operatorBearer}` };
+  const cfg = loadConfig({
+    BROKER_SIGNING_KEY_HEX: key,
+    OPERATOR_BEARER_TOKEN: operatorBearer,
+  });
   let app: FastifyInstance;
   let ionet: FakeProvider;
   let akash: FakeProvider;
@@ -150,49 +155,145 @@ describe('compute-broker server', () => {
     await nokey.close();
   });
 
+  const freshCancelPayload = async (leaseId: string, opts: { expirySecs?: number } = {}) => {
+    const agentKey = hexToKey('cd'.repeat(32));
+    const agentPk = await deriveAgentKey(agentKey);
+    const agentDid = bs58.encode(agentPk);
+    const nonce = bs58.encode(Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(16))));
+    const expires_at = Math.floor(Date.now() / 1000) + (opts.expirySecs ?? 60);
+    const cancelMsg = new TextEncoder().encode(
+      JSON.stringify({ action: 'cancel', lease_id: leaseId, agent_did: agentDid, nonce, expires_at }),
+    );
+    const sig = await ed25519.signAsync(cancelMsg, agentKey);
+    return { agentDid, nonce, expires_at, signed_request: bs58.encode(sig) };
+  };
+
   it('bonds/cancel rejects invalid signature', async () => {
+    const { agentDid, nonce, expires_at } = await freshCancelPayload('lease-1');
     const res = await app.inject({
       method: 'POST',
       url: '/bonds/cancel',
       payload: {
         lease_id: 'lease-1',
-        agent_did: '11111111111111111111111111111111',
-        signed_request: 'badsig',
+        agent_did: agentDid,
+        signed_request: bs58.encode(new Uint8Array(64)),
+        nonce,
+        expires_at,
       },
     });
     expect(res.statusCode).toBe(403);
   });
 
-  it('bonds/cancel succeeds with valid agent signature', async () => {
-    const agentKey = hexToKey('cd'.repeat(32));
-    const agentPk = await deriveAgentKey(agentKey);
-    const agentDid = bs58.encode(agentPk);
-    const leaseId = 'ionet-lease-4';
-    const cancelMsg = new TextEncoder().encode(
-      JSON.stringify({ action: 'cancel', lease_id: leaseId, agent_did: agentDid }),
-    );
-    const sig = await ed25519.signAsync(cancelMsg, agentKey);
+  it('bonds/cancel rejects expired signed_request', async () => {
+    const leaseId = 'ionet-lease-stale';
+    const { agentDid, nonce, signed_request } = await freshCancelPayload(leaseId, {
+      expirySecs: -10,
+    });
     const res = await app.inject({
       method: 'POST',
       url: '/bonds/cancel',
       payload: {
         lease_id: leaseId,
         agent_did: agentDid,
-        signed_request: bs58.encode(sig),
+        signed_request,
+        nonce,
+        expires_at: Math.floor(Date.now() / 1000) - 10,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'signed_request expired' });
+  });
+
+  it('bonds/cancel rejects an expiry window beyond the configured cap', async () => {
+    const leaseId = 'ionet-lease-too-long';
+    const { agentDid, nonce, signed_request } = await freshCancelPayload(leaseId, {
+      expirySecs: 9999,
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at: Math.floor(Date.now() / 1000) + 9999,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: /expires_at exceeds/ });
+  });
+
+  it('bonds/cancel succeeds with valid agent signature', async () => {
+    const leaseId = 'ionet-lease-4';
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at,
       },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ lease_id: leaseId, status: 'cancelled' });
   });
 
+  it('bonds/cancel rejects a replayed nonce', async () => {
+    const leaseId = 'ionet-lease-replay';
+    const payload = await freshCancelPayload(leaseId);
+    const first = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: payload.agentDid,
+        signed_request: payload.signed_request,
+        nonce: payload.nonce,
+        expires_at: payload.expires_at,
+      },
+    });
+    expect(first.statusCode).toBe(200);
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: payload.agentDid,
+        signed_request: payload.signed_request,
+        nonce: payload.nonce,
+        expires_at: payload.expires_at,
+      },
+    });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toMatchObject({ error: 'nonce already used' });
+  });
+
+  it('leases/activate requires operator bearer', async () => {
+    const noAuth = await app.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      payload: { lease_id: 'ionet-lease-noauth', provider: 'ionet' },
+    });
+    expect(noAuth.statusCode).toBe(401);
+    const badAuth = await app.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: { authorization: 'Bearer wrong-token-value-1234567890' },
+      payload: { lease_id: 'ionet-lease-badauth', provider: 'ionet' },
+    });
+    expect(badAuth.statusCode).toBe(403);
+  });
+
   it('leases/activate activates the selected provider lease', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/leases/activate',
-      payload: {
-        lease_id: 'ionet-lease-9',
-        provider: 'ionet',
-      },
+      headers: operatorAuth,
+      payload: { lease_id: 'ionet-lease-9', provider: 'ionet' },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ lease_id: 'ionet-lease-9', status: 'active' });
@@ -203,10 +304,8 @@ describe('compute-broker server', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/leases/reclaim',
-      payload: {
-        lease_id: 'akash-lease-5',
-        provider: 'akash',
-      },
+      headers: operatorAuth,
+      payload: { lease_id: 'akash-lease-5', provider: 'akash' },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ lease_id: 'akash-lease-5', status: 'reclaimed' });
@@ -217,19 +316,12 @@ describe('compute-broker server', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/leases/expire-sweep',
+      headers: operatorAuth,
       payload: {
         now_unix: 1_700_000_100,
         leases: [
-          {
-            lease_id: 'ionet-expired',
-            provider: 'ionet',
-            slashable_until: 1_700_000_000,
-          },
-          {
-            lease_id: 'akash-still-live',
-            provider: 'akash',
-            slashable_until: 1_700_000_500,
-          },
+          { lease_id: 'ionet-expired', provider: 'ionet', slashable_until: 1_700_000_000 },
+          { lease_id: 'akash-still-live', provider: 'akash', slashable_until: 1_700_000_500 },
         ],
       },
     });

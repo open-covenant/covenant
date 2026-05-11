@@ -1,4 +1,5 @@
-import Fastify from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { loadConfig, type Config } from './config.js';
 import { verifyAsync } from '@noble/ed25519';
@@ -32,7 +33,14 @@ const BondRequestBody = z.object({
 const BondCancelBody = z.object({
   lease_id: z.string().min(1),
   agent_did: z.string().min(32).max(44),
-  signed_request: z.string().min(1),
+  signed_request: z.string().min(1).max(128),
+  // Nonce is 16+ random bytes, base58-encoded. Replayed nonces (within
+  // BOND_CANCEL_MAX_EXPIRY_SECS) are rejected so a captured signed_request
+  // cannot cancel the same lease twice.
+  nonce: z.string().min(16).max(64),
+  // Unix seconds. Server rejects if expires_at < now (stale) or
+  // > now + BOND_CANCEL_MAX_EXPIRY_SECS (over-long window).
+  expires_at: z.number().int().positive(),
 });
 
 const LeaseActionBody = z.object({
@@ -63,9 +71,40 @@ export function build(opts: BuildOpts) {
   const providers = opts.providers ?? createProviders(cfg);
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 
+  // Replay-protection store for /bonds/cancel. Maps nonce -> expires_at
+  // (unix seconds). Entries past expiry are pruned on each insert. Single
+  // process scope; horizontal scaling needs Redis (same constraint as
+  // proof-gen's in-memory rate limit).
+  const seenCancelNonces = new Map<string, number>();
+  const pruneExpiredNonces = (nowUnix: number): void => {
+    for (const [nonce, exp] of seenCancelNonces) {
+      if (exp <= nowUnix) seenCancelNonces.delete(nonce);
+    }
+  };
+
+  const requireOperator = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!cfg.operatorBearerToken) {
+      reply
+        .code(503)
+        .send({ error: 'operator bearer not configured; set OPERATOR_BEARER_TOKEN' });
+      return;
+    }
+    const header = req.headers.authorization;
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
+      reply.code(401).send({ error: 'missing Bearer authorization' });
+      return;
+    }
+    const supplied = Buffer.from(header.slice('Bearer '.length).trim(), 'utf8');
+    const expected = Buffer.from(cfg.operatorBearerToken, 'utf8');
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      reply.code(403).send({ error: 'invalid bearer' });
+    }
+  };
+
   app.get('/healthz', async () => ({
     status: 'ok',
     broker_key_loaded: cfg.signingKeyHex !== undefined,
+    operator_bearer_loaded: cfg.operatorBearerToken !== undefined,
     providers: ['ionet', 'akash'],
   }));
 
@@ -84,7 +123,7 @@ export function build(opts: BuildOpts) {
     }
   });
 
-  app.post('/leases/activate', async (req, reply) => {
+  app.post('/leases/activate', { preHandler: requireOperator }, async (req, reply) => {
     const parsed = LeaseActionBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.message });
@@ -102,7 +141,7 @@ export function build(opts: BuildOpts) {
     }
   });
 
-  app.post('/leases/reclaim', async (req, reply) => {
+  app.post('/leases/reclaim', { preHandler: requireOperator }, async (req, reply) => {
     const parsed = LeaseActionBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.message });
@@ -187,14 +226,31 @@ export function build(opts: BuildOpts) {
   app.post('/bonds/cancel', async (req, reply) => {
     const parsed = BondCancelBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
-    const { lease_id, agent_did, signed_request } = parsed.data;
+    const { lease_id, agent_did, signed_request, nonce, expires_at } = parsed.data;
 
     if (cfg.signingKeyHex === undefined) {
       return reply.code(503).send({ error: 'broker key not loaded' });
     }
 
+    const nowUnix = Math.floor(Date.now() / 1000);
+    pruneExpiredNonces(nowUnix);
+    if (expires_at <= nowUnix) {
+      bondRequests.inc({ provider: 'unknown', status: 'expired_request' });
+      return reply.code(400).send({ error: 'signed_request expired' });
+    }
+    if (expires_at > nowUnix + cfg.bondCancelMaxExpirySecs) {
+      bondRequests.inc({ provider: 'unknown', status: 'expiry_window_too_long' });
+      return reply
+        .code(400)
+        .send({ error: `expires_at exceeds ${cfg.bondCancelMaxExpirySecs}s window` });
+    }
+    if (seenCancelNonces.has(nonce)) {
+      bondRequests.inc({ provider: 'unknown', status: 'replayed_nonce' });
+      return reply.code(409).send({ error: 'nonce already used' });
+    }
+
     const cancelMsg = new TextEncoder().encode(
-      JSON.stringify({ action: 'cancel', lease_id, agent_did }),
+      JSON.stringify({ action: 'cancel', lease_id, agent_did, nonce, expires_at }),
     );
 
     let sigBytes: Uint8Array;
@@ -223,6 +279,11 @@ export function build(opts: BuildOpts) {
       bondRequests.inc({ provider: 'unknown', status: 'bad_signature' });
       return reply.code(403).send({ error: 'signed_request verification failed' });
     }
+
+    // Record the nonce only after the signature verifies — an unsigned
+    // payload should not be able to poison the cache against a later
+    // legitimate use of the same nonce by the real signer.
+    seenCancelNonces.set(nonce, expires_at);
 
     let leaseStatus: string;
     try {
@@ -258,7 +319,7 @@ export function build(opts: BuildOpts) {
     });
   });
 
-  app.post('/leases/expire-sweep', async (req, reply) => {
+  app.post('/leases/expire-sweep', { preHandler: requireOperator }, async (req, reply) => {
     const parsed = ExpireSweepBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.message });

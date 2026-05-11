@@ -19,6 +19,7 @@ members = [
     "crates/covenant-budget",
     "crates/covenantd",
     "crates/covenant",
+    "crates/covenant-tui",
     "agents/research",
     "programs/settlement",
 ]

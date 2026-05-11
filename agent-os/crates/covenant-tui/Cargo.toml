@@ -1,0 +1,21 @@
+[package]
+name = "covenant-tui"
+version = "0.1.0"
+description = "Covenant terminal UI. Reads daemon state over the local IPC socket and renders intents, memory, audit, and capability views."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant-tui"
+path = "src/main.rs"
+
+[lib]
+name = "covenant_tui"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+crossterm = "0.28"
+ratatui = "0.28"

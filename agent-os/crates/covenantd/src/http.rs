@@ -201,7 +201,20 @@ async fn require_bearer(
 }
 
 async fn reject(s: &HttpState, message: &'static str) -> AxumResponse {
-    s.server.record_auth_failure("http", message).await;
+    // Audit-write success is a precondition for the auth-failed response.
+    // If the row can't land, return a generic 503 so an attacker who can
+    // fill the audit disk does not get a clean rejection while the
+    // operator's audit feed silently falls behind reality.
+    if s.server.record_auth_failure("http", message).await.is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "kind": "error",
+                "message": "audit write failed; refusing to proceed",
+            })),
+        )
+            .into_response();
+    }
     (
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({ "kind": "error", "message": message })),

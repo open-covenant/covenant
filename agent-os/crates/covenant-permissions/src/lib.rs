@@ -976,7 +976,13 @@ fn invalid_scope(action: &str, detail: impl Into<String>) -> PermissionError {
 ///
 /// Layout:
 /// `subject_pubkey[32] || action_len_be[4] || action || scope_len_be[4] ||
-///  scope_json_bytes || granted_by_pubkey[32] || expires_tag[1] || expires_at_be[8]`
+///  scope_jcs_bytes || granted_by_pubkey[32] || expires_tag[1] || expires_at_be[8]`
+///
+/// `scope_jcs_bytes` is RFC 8785 (JSON Canonicalization Scheme) — keys are
+/// sorted lexicographically, whitespace is removed, numbers are normalised.
+/// Two scopes that are JSON-equal under any input ordering produce identical
+/// signed messages, so a re-serialised cap (through any compliant parser)
+/// still verifies under the same `granted_by` key.
 pub fn canonical_message(cap: &Capability) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&cap.subject.pubkey);
@@ -985,10 +991,7 @@ pub fn canonical_message(cap: &Capability) -> Vec<u8> {
     out.extend_from_slice(&(action_bytes.len() as u32).to_be_bytes());
     out.extend_from_slice(action_bytes);
 
-    // scope is a serde_json::Value; the byte encoding is whatever serde_json
-    // emits. serde_json::Map preserves insertion order, so the encoding is
-    // stable for a given construction. RFC 8785 (JCS) is the proper hardening.
-    let scope_bytes = serde_json::to_vec(&cap.scope).expect("scope serialise");
+    let scope_bytes = serde_jcs::to_vec(&cap.scope).expect("scope serialise");
     out.extend_from_slice(&(scope_bytes.len() as u32).to_be_bytes());
     out.extend_from_slice(&scope_bytes);
 
@@ -2121,6 +2124,44 @@ mod tests {
             issuer.signing_key(),
         );
         assert!(verify(&signed).is_ok());
+    }
+
+    #[test]
+    fn canonical_message_is_jcs_stable_across_scope_key_orderings() {
+        // RFC 8785 (JCS) sorts keys lexicographically. A cap signed with one
+        // scope ordering must verify after the scope has been round-tripped
+        // through any compliant parser, even one that re-orders keys.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let mut cap_a = cap(subject.clone(), "tool.web_search", issuer.agent_id(), None);
+        cap_a.scope = serde_json::json!({
+            "alpha": 1,
+            "beta": 2,
+            "gamma": { "nested_b": false, "nested_a": true },
+        });
+        let signed = sign(cap_a, issuer.signing_key());
+
+        let mut reordered = signed.clone();
+        reordered.capability.scope = serde_json::json!({
+            "gamma": { "nested_a": true, "nested_b": false },
+            "beta": 2,
+            "alpha": 1,
+        });
+        assert!(
+            verify(&reordered).is_ok(),
+            "JCS canonicalisation must accept key-reordered scope"
+        );
+
+        let mut tampered = signed.clone();
+        tampered.capability.scope = serde_json::json!({
+            "alpha": 1,
+            "beta": 999,
+            "gamma": { "nested_b": false, "nested_a": true },
+        });
+        assert!(
+            matches!(verify(&tampered), Err(PermissionError::BadSignature)),
+            "JCS canonicalisation must reject value tampering"
+        );
     }
 
     #[test]

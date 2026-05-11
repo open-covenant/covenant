@@ -37,6 +37,7 @@ overflow-checks = true
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_jcs = "0.2"
 toml = "0.8"
 thiserror = "1"
 anyhow = "1"

@@ -9,7 +9,7 @@ pub mod http;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
-use covenant_audit::{hash_hex, AuditEvent, AuditKind, AuditLog};
+use covenant_audit::{hash_hex, AuditError, AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{
     BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
 };
@@ -56,7 +56,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub fn covenant_home() -> Result<PathBuf> {
@@ -609,27 +609,29 @@ impl Server {
                     }
                     None => {
                         let reason = "unknown or revoked token";
-                        self.record_auth_failure("ipc", reason).await;
-                        write_frame(
-                            &mut stream,
-                            &Response::AuthenticationFailed {
+                        let response = match self.record_auth_failure("ipc", reason).await {
+                            Ok(()) => Response::AuthenticationFailed {
                                 reason: reason.into(),
                             },
-                        )
-                        .await?;
+                            Err(_) => Response::Error {
+                                message: "audit write failed; refusing to proceed".into(),
+                            },
+                        };
+                        write_frame(&mut stream, &response).await?;
                         return Ok(());
                     }
                 },
                 _ => {
                     let reason = "first frame must be Authenticate";
-                    self.record_auth_failure("ipc", reason).await;
-                    write_frame(
-                        &mut stream,
-                        &Response::AuthenticationFailed {
+                    let response = match self.record_auth_failure("ipc", reason).await {
+                        Ok(()) => Response::AuthenticationFailed {
                             reason: reason.into(),
                         },
-                    )
-                    .await?;
+                        Err(_) => Response::Error {
+                            message: "audit write failed; refusing to proceed".into(),
+                        },
+                    };
+                    write_frame(&mut stream, &response).await?;
                     return Ok(());
                 }
             }
@@ -653,7 +655,7 @@ impl Server {
         self.peers.resolve(&token).await.ok().flatten()
     }
 
-    pub async fn record_auth_failure(&self, transport: &str, reason: &str) {
+    pub async fn record_auth_failure(&self, transport: &str, reason: &str) -> Result<(), AuditError> {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: epoch_ms(),
@@ -663,7 +665,7 @@ impl Server {
                 reason: reason.to_string(),
             },
         };
-        self.record_daemon_event(event).await;
+        self.record_daemon_event_required(event).await
     }
 
     /// Record an audit event that represents an action by the
@@ -672,6 +674,13 @@ impl Server {
     /// either way (dropping it would hide the very regression the
     /// invariant is here to surface). Compare on the 32-byte pubkey, not
     /// the wire-supplied `display`.
+    ///
+    /// Fire-and-forget warn-and-continue posture. Use
+    /// [`Self::record_peer_event_required`] for rejection-event kinds
+    /// where the operator's view of the rejection depends on the row
+    /// landing — those callers must propagate the `AuditError` to a
+    /// `Response::Error` instead of returning the standard rejection.
+    /// Debug builds assert that the kind is not in the must-record set.
     async fn record_peer_event(&self, peer: &AgentId, event: AuditEvent) {
         debug_assert_eq!(
             event.issuer.pubkey, peer.pubkey,
@@ -684,9 +693,46 @@ impl Server {
                 "audit invariant violated: peer-action event.issuer != peer"
             );
         }
+        debug_assert!(
+            !audit_kind_requires_persistence(&event.kind),
+            "must-record audit kind routed through record_peer_event; use record_peer_event_required"
+        );
         if let Err(e) = self.audit.record(event).await {
             warn!(error = %e, "audit record failed");
         }
+    }
+
+    /// Like [`Self::record_peer_event`] but surfaces the audit error to
+    /// the caller. Used by rejection paths where the response itself is
+    /// a security-relevant rejection (AuthenticationFailed,
+    /// *RevokeRejected, *RotationRejected, *PeersListRejected,
+    /// A2ASenderMismatch, A2aRecipientRejected, BudgetExhausted) — if
+    /// the row can't be persisted, the caller returns
+    /// `Response::Error { message: "audit write failed; refusing to
+    /// proceed" }` instead of the standard rejection, so an attacker
+    /// who can fill the audit disk cannot suppress the probe rows the
+    /// operator's `/audit/recent` view depends on.
+    async fn record_peer_event_required(
+        &self,
+        peer: &AgentId,
+        event: AuditEvent,
+    ) -> Result<(), AuditError> {
+        debug_assert_eq!(
+            event.issuer.pubkey, peer.pubkey,
+            "audit invariant: peer-action event.issuer.pubkey must equal authenticated peer.pubkey"
+        );
+        if event.issuer.pubkey != peer.pubkey {
+            warn!(
+                expected = %peer.display,
+                got = %event.issuer.display,
+                "audit invariant violated: peer-action event.issuer != peer"
+            );
+        }
+        if let Err(e) = self.audit.record(event).await {
+            error!(error = %e, "audit record failed on required kind; refusing to proceed");
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Record an audit event the daemon emits on its own behalf — i.e.
@@ -707,9 +753,32 @@ impl Server {
                 "audit invariant violated: daemon event.issuer != daemon identity"
             );
         }
+        debug_assert!(
+            !audit_kind_requires_persistence(&event.kind),
+            "must-record audit kind routed through record_daemon_event; use record_daemon_event_required"
+        );
         if let Err(e) = self.audit.record(event).await {
             warn!(error = %e, "audit record failed");
         }
+    }
+
+    async fn record_daemon_event_required(&self, event: AuditEvent) -> Result<(), AuditError> {
+        let identity_pubkey = self.identity.agent_id().pubkey;
+        debug_assert_eq!(
+            event.issuer.pubkey, identity_pubkey,
+            "audit invariant: daemon-internal event.issuer.pubkey must equal self.identity.pubkey"
+        );
+        if event.issuer.pubkey != identity_pubkey {
+            warn!(
+                got = %event.issuer.display,
+                "audit invariant violated: daemon event.issuer != daemon identity"
+            );
+        }
+        if let Err(e) = self.audit.record(event).await {
+            error!(error = %e, "audit record failed on required kind; refusing to proceed");
+            return Err(e);
+        }
+        Ok(())
     }
 
     async fn save_budget_pause_checkpoint(&self, checkpoint: BudgetPauseCheckpoint) {
@@ -904,7 +973,9 @@ impl Server {
                     claimed_sender_display: task.sender.display.clone(),
                 },
             };
-            self.record_peer_event(peer, event).await;
+            if let Err(e) = self.record_peer_event_required(peer, event).await {
+                return audit_failure_response(e);
+            }
             return Response::Error {
                 message: format!(
                     "a2a send rejected: task.sender {:?} does not match \
@@ -1035,7 +1106,9 @@ impl Server {
                             action: recv_display_action.clone(),
                         },
                     };
-                    self.record_peer_event(peer, event).await;
+                    if let Err(e) = self.record_peer_event_required(peer, event).await {
+                        return audit_failure_response(e);
+                    }
                     return Response::Error {
                         message: format!(
                             "a2a send to {} rejected: recipient has not granted \
@@ -1684,7 +1757,9 @@ impl Server {
                     peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
                 },
             };
-            self.record_daemon_event(event).await;
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
             return Response::Error {
                 message: "operator token rotation requires the operator identity".into(),
             };
@@ -1847,7 +1922,9 @@ impl Server {
                         peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
                     },
                 };
-                self.record_daemon_event(event).await;
+                if let Err(e) = self.record_daemon_event_required(event).await {
+                    return audit_failure_response(e);
+                }
                 return Response::Error {
                     message:
                         "peers list requires the operator identity or capability \"peers.list\""
@@ -1989,7 +2066,9 @@ impl Server {
                         peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
                     },
                 };
-                self.record_daemon_event(event).await;
+                if let Err(e) = self.record_daemon_event_required(event).await {
+                    return audit_failure_response(e);
+                }
                 return Response::Error {
                     message:
                         "peer revoke requires the operator identity or capability \"peers.revoke\""
@@ -2657,7 +2736,9 @@ impl Server {
                                 refill_eta_ms,
                             },
                         };
-                        self.record_peer_event(peer, event).await;
+                        if let Err(e) = self.record_peer_event_required(peer, event).await {
+                            return audit_failure_response(e);
+                        }
                         // Wire response rounds tokens_remaining to a coarse
                         // bucket; the audit row above keeps the precise u64.
                         // Coarsening the wire response avoids leaking precise
@@ -4466,7 +4547,9 @@ impl Server {
                     reason: "peer is not the subject of this capability".into(),
                 },
             };
-            self.record_daemon_event(event).await;
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
             return Response::Error {
                 message: "revoke rejected: capability subject does not match authenticated peer"
                     .into(),
@@ -4545,6 +4628,36 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// True for audit kinds where audit-write success is a precondition for
+/// returning the standard response. An attacker who can suppress these
+/// rows (filled disk, exhausted inodes, file-perm flip) would otherwise
+/// be invisible to the operator's `/audit/recent` view while gates still
+/// produce a rejection response indistinguishable from a normal rejection.
+/// Callers of these kinds must use `record_*_event_required` and fall back
+/// to `audit_failure_response` on error.
+fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
+    matches!(
+        kind,
+        AuditKind::AuthenticationFailed { .. }
+            | AuditKind::OperatorTokenRotationRejected { .. }
+            | AuditKind::OperatorPeersListRejected { .. }
+            | AuditKind::OperatorPeerRevokeRejected { .. }
+            | AuditKind::A2ASenderMismatch { .. }
+            | AuditKind::A2ARecipientRejected { .. }
+            | AuditKind::CapabilityRevokeRejected { .. }
+            | AuditKind::BudgetExhausted { .. }
+    )
+}
+
+/// Standard response when an audit write fails on a must-record kind.
+/// The wire message is intentionally generic so callers can't distinguish
+/// "audit broken" from "request rejected" — both end the interaction.
+fn audit_failure_response(_e: AuditError) -> Response {
+    Response::Error {
+        message: "audit write failed; refusing to proceed".into(),
+    }
 }
 
 fn chain_status_from_env() -> ChainStatus {
@@ -8561,9 +8674,11 @@ required = {caps:?}
             Arc::new(covenant_budget::InMemoryLedger::new()),
         );
         s.record_auth_failure("ipc", "first frame must be Authenticate")
-            .await;
+            .await
+            .unwrap();
         s.record_auth_failure("http", "missing Authorization header")
-            .await;
+            .await
+            .unwrap();
         let events = audit.recent(10).await.unwrap();
         let mut transports: Vec<&str> = events
             .iter()
@@ -10083,10 +10198,11 @@ budget_credits_per_hour = {credits}
 
     #[tokio::test]
     async fn record_daemon_event_records_when_issuer_is_self_identity() {
-        // Sanity-pin the existing `record_auth_failure` path through the
-        // helper. The test exercises the helper directly so the assertion
-        // covers any future daemon-internal call site that doesn't go
-        // through `record_auth_failure`.
+        // AuthenticationFailed is a must-record kind: it routes through
+        // `record_daemon_event_required` and surfaces the audit error to
+        // the caller. The test exercises the helper directly so the
+        // assertion covers any future daemon-internal call site that
+        // doesn't go through `record_auth_failure`.
         let s = server_with(vec![], "");
         let event = AuditEvent {
             id: Uuid::new_v4(),
@@ -10098,7 +10214,9 @@ budget_credits_per_hour = {credits}
             },
         };
         let event_id = event.id;
-        s.record_daemon_event(event).await;
+        s.record_daemon_event_required(event)
+            .await
+            .expect("must-record audit row must persist");
         let recent = s.audit.recent(16).await.expect("audit.recent");
         assert!(
             recent.iter().any(|e| e.id == event_id),

@@ -166,6 +166,51 @@ pub mod settlement {
         Ok(())
     }
 
+    /// Owner-signed withdrawal of a staked position once `lock_until`
+    /// has passed. Transfers the full position balance back to the
+    /// owner's COVNT account; decrements `agent.stake`; closes the
+    /// position by zeroing `amount` and flipping `active = false`.
+    /// Re-staking against the same agent allocates a fresh position
+    /// PDA via the canonical `[b"stake", agent_key, owner]` seeds.
+    pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        require!(ctx.accounts.position.amount > 0, CovenantError::ZeroAmount);
+        let now = Clock::get()?.unix_timestamp.max(0) as u64;
+        require!(
+            now >= ctx.accounts.position.lock_until,
+            CovenantError::StakeLocked
+        );
+
+        let amount = ctx.accounts.position.amount;
+        let agent_key = ctx.accounts.position.agent_key;
+        let owner = ctx.accounts.position.owner;
+        let signer_seeds: &[&[u8]] = &[
+            b"stake",
+            agent_key.as_ref(),
+            owner.as_ref(),
+            &[ctx.accounts.position.bump],
+        ];
+        token::transfer(
+            ctx.accounts
+                .unstake_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            amount,
+        )?;
+
+        ctx.accounts.position.amount = 0;
+        ctx.accounts.position.active = false;
+        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+
+        emit!(StakeWithdrawn {
+            agent_key,
+            owner,
+            amount,
+            withdrawn_at: now,
+        });
+        Ok(())
+    }
+
     pub fn slash_stake(ctx: Context<SlashStake>, amount: u64, reason_hash: [u8; 32]) -> Result<()> {
         require!(amount > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.position.active, CovenantError::StakeInactive);
@@ -249,6 +294,8 @@ pub mod settlement {
             ctx.accounts.task.status == TASK_FUNDED,
             CovenantError::WrongTaskStatus
         );
+        let now = Clock::get()?.unix_timestamp;
+        require!(now <= ctx.accounts.task.deadline, CovenantError::TaskExpired);
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
@@ -266,6 +313,43 @@ pub mod settlement {
             amount_covnt: ctx.accounts.task.amount_covnt,
             result_hash,
             receipt_hash,
+        });
+        Ok(())
+    }
+
+    /// Refund the escrowed COVNT back to the client after the task
+    /// deadline has passed. Only the client signs; the provider has no
+    /// recourse here. Mirrors the escrow-agent norm where the funder
+    /// recovers their funds when the counterparty failed to deliver in
+    /// time. Pause check matches `release_task` so a paused protocol
+    /// halts all escrow movement uniformly.
+    pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantError::ProtocolPaused
+        );
+        require!(
+            ctx.accounts.task.status == TASK_FUNDED,
+            CovenantError::WrongTaskStatus
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(now > ctx.accounts.task.deadline, CovenantError::TaskNotExpired);
+
+        let task_id = ctx.accounts.task.task_id;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        token::transfer(
+            ctx.accounts.task_refund_ctx().with_signer(&[signer_seeds]),
+            ctx.accounts.task.amount_covnt,
+        )?;
+
+        ctx.accounts.task.status = TASK_REFUNDED;
+
+        emit!(TaskRefunded {
+            task_id,
+            client: ctx.accounts.task.client,
+            amount_covnt: ctx.accounts.task.amount_covnt,
+            deadline: ctx.accounts.task.deadline,
+            refunded_at: now,
         });
         Ok(())
     }
@@ -372,7 +456,11 @@ pub struct SetAgentActive<'info> {
     )]
     pub config: Account<'info, Config>,
     pub authority: Signer<'info>,
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+    )]
     pub agent: Account<'info, Agent>,
 }
 
@@ -446,7 +534,11 @@ pub struct Stake<'info> {
         bump = config.bump,
     )]
     pub config: Account<'info, Config>,
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+    )]
     pub agent: Account<'info, Agent>,
     #[account(
         init,
@@ -488,6 +580,56 @@ impl<'info> Stake<'info> {
 }
 
 #[derive(Accounts)]
+pub struct Unstake<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"agent", position.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
+    pub agent: Account<'info, Agent>,
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+        constraint = position.owner == owner.key() @ CovenantError::Unauthorized,
+    )]
+    pub position: Account<'info, StakePosition>,
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
+        constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub owner_covnt: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> Unstake<'info> {
+    fn unstake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.stake_vault.to_account_info(),
+                to: self.owner_covnt.to_account_info(),
+                authority: self.position.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 pub struct SlashStake<'info> {
     #[account(
         seeds = [b"config"],
@@ -496,9 +638,18 @@ pub struct SlashStake<'info> {
     )]
     pub config: Account<'info, Config>,
     pub slash_authority: Signer<'info>,
-    #[account(mut, constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch)]
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
     pub agent: Account<'info, Agent>,
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+    )]
     pub position: Account<'info, StakePosition>,
     #[account(
         mut,
@@ -532,6 +683,10 @@ pub struct CreateTask<'info> {
         bump = config.bump,
     )]
     pub config: Account<'info, Config>,
+    #[account(
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+    )]
     pub agent: Account<'info, Agent>,
     #[account(
         init,
@@ -609,6 +764,49 @@ impl<'info> ReleaseTask<'info> {
             Transfer {
                 from: self.escrow_vault.to_account_info(),
                 to: self.provider_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct RefundTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        has_one = client @ CovenantError::Unauthorized,
+    )]
+    pub task: Account<'info, Task>,
+    pub client: Signer<'info>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
+        constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub client_covnt: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> RefundTask<'info> {
+    fn task_refund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            Transfer {
+                from: self.escrow_vault.to_account_info(),
+                to: self.client_covnt.to_account_info(),
                 authority: self.task.to_account_info(),
             },
         )
@@ -702,6 +900,7 @@ pub struct AnchorReceiptBatchArgs {
 
 pub const TASK_FUNDED: u8 = 1;
 pub const TASK_RELEASED: u8 = 2;
+pub const TASK_REFUNDED: u8 = 3;
 
 #[account]
 #[derive(InitSpace)]
@@ -823,6 +1022,14 @@ pub struct CreditsConsumed {
 }
 
 #[event]
+pub struct StakeWithdrawn {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub withdrawn_at: u64,
+}
+
+#[event]
 pub struct StakeOpened {
     pub agent_key: [u8; 32],
     pub owner: Pubkey,
@@ -858,6 +1065,15 @@ pub struct TaskReleased {
     pub amount_covnt: u64,
     pub result_hash: [u8; 32],
     pub receipt_hash: [u8; 32],
+}
+
+#[event]
+pub struct TaskRefunded {
+    pub task_id: [u8; 32],
+    pub client: Pubkey,
+    pub amount_covnt: u64,
+    pub deadline: i64,
+    pub refunded_at: i64,
 }
 
 #[event]
@@ -900,4 +1116,10 @@ pub enum CovenantError {
     StakeInactive,
     #[msg("wrong task status")]
     WrongTaskStatus,
+    #[msg("task deadline has passed; release no longer allowed (use refund_task)")]
+    TaskExpired,
+    #[msg("task deadline has not passed; refund not yet available")]
+    TaskNotExpired,
+    #[msg("stake position is still locked")]
+    StakeLocked,
 }

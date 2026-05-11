@@ -15,6 +15,22 @@ use tokio::net::UnixStream;
 
 use crate::SubmissionOutcome;
 
+/// Outcome of a [`grant_capability`] call. Same shape as
+/// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
+/// daemon-side rejections collapse into `Failed { message }` so a
+/// caller can render the daemon's reason verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantOutcome {
+    Granted {
+        signature_b58: String,
+        subject_display: String,
+        action: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 /// Resolves `$COVENANT_HOME` with the same fallback shape as the
 /// existing `covenant` CLI: explicit env var first, then
 /// `$HOME/.covenant`.
@@ -100,6 +116,66 @@ pub async fn submit_intent(home: &Path, text: &str) -> Result<SubmissionOutcome>
         }),
         Response::Error { message } => Ok(SubmissionOutcome::Failed { message }),
         other => Ok(SubmissionOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::GrantCapability`, and maps the daemon
+/// response into a [`GrantOutcome`].
+///
+/// `scope = None` produces an unscoped grant. `expires_at` is a
+/// best-effort epoch-ms hint; the daemon enforces.
+pub async fn grant_capability(
+    home: &Path,
+    action: &str,
+    scope: Option<serde_json::Value>,
+    expires_at: Option<u64>,
+) -> Result<GrantOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(GrantOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(GrantOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    write_frame(
+        &mut stream,
+        &Request::GrantCapability {
+            action: action.to_string(),
+            scope,
+            expires_at,
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::CapabilityGranted {
+            signature_b58,
+            subject_display,
+            action,
+        } => Ok(GrantOutcome::Granted {
+            signature_b58,
+            subject_display,
+            action,
+        }),
+        Response::Error { message } => Ok(GrantOutcome::Failed { message }),
+        other => Ok(GrantOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

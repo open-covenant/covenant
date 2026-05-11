@@ -333,29 +333,34 @@ export function build(opts: BuildOpts) {
     }
 
     const nowUnix = parsed.data.now_unix ?? Math.floor(Date.now() / 1000);
-    const results: Array<{
+    type SweepResult = {
       lease_id: string;
       provider: 'ionet' | 'akash';
       status: 'reclaimed' | 'skipped' | 'error';
       reason?: string;
-    }> = [];
+    };
 
-    for (const lease of parsed.data.leases) {
+    // Bounded-concurrency parallel sweep. Serial await meant N leases
+    // took N * P95 latency; a slow provider could exceed Fastify's
+    // request timeout under load. 8 concurrent reclaims keeps the wall
+    // time bounded without flooding the upstream providers.
+    const SWEEP_CONCURRENCY = 8;
+    const queue = [...parsed.data.leases];
+    const results: SweepResult[] = [];
+    const reclaim = async (lease: typeof queue[number]): Promise<SweepResult> => {
       if (lease.slashable_until > nowUnix) {
         leaseLifecycleOps.inc({
           provider: lease.provider,
           operation: 'expire_sweep',
           status: 'skipped',
         });
-        results.push({
+        return {
           lease_id: lease.lease_id,
           provider: lease.provider,
           status: 'skipped',
           reason: 'slashable window still active',
-        });
-        continue;
+        };
       }
-
       const provider = selectProvider(lease.provider, providers);
       try {
         await provider.reclaim(lease.lease_id);
@@ -364,25 +369,33 @@ export function build(opts: BuildOpts) {
           operation: 'expire_sweep',
           status: 'ok',
         });
-        results.push({
+        return {
           lease_id: lease.lease_id,
           provider: lease.provider,
           status: 'reclaimed',
-        });
+        };
       } catch (err) {
         leaseLifecycleOps.inc({
           provider: lease.provider,
           operation: 'expire_sweep',
           status: 'error',
         });
-        results.push({
+        return {
           lease_id: lease.lease_id,
           provider: lease.provider,
           status: 'error',
           reason: asMessage(err),
-        });
+        };
       }
-    }
+    };
+    const workers = Array.from({ length: Math.min(SWEEP_CONCURRENCY, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const lease = queue.shift();
+        if (!lease) break;
+        results.push(await reclaim(lease));
+      }
+    });
+    await Promise.all(workers);
 
     return reply.send({
       now_unix: nowUnix,

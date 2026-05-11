@@ -8,13 +8,14 @@
 //! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
 
 use covenant_audit::AuditEvent;
+use covenant_permissions::SignedCapability;
 use covenant_types::MemoryRecord;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use uuid::Uuid;
 
 pub mod ipc;
 
-pub use ipc::{AuditFetchOutcome, MemoryFetchOutcome};
+pub use ipc::{AuditFetchOutcome, CapabilitiesFetchOutcome, MemoryFetchOutcome};
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,15 @@ pub enum Mode {
         events: Vec<AuditEvent>,
         error: Option<String>,
     },
+    /// Capabilities view. Press `c` from Browsing to enter. Lists
+    /// active signed capabilities where the operator is either the
+    /// subject or the granter; server-side filtered, no read-side
+    /// gate. Press `q` / `Esc` to dismiss.
+    CapabilitiesTail {
+        loading: bool,
+        capabilities: Vec<SignedCapability>,
+        error: Option<String>,
+    },
 }
 
 impl Default for Mode {
@@ -103,6 +113,8 @@ pub struct App {
     /// Set when transitioning to [`Mode::AuditTail`] and cleared by
     /// the first call to [`App::take_pending_audit_fetch`].
     pending_audit_fetch: bool,
+    /// One-shot for the capabilities-view fetch.
+    pending_capabilities_fetch: bool,
 }
 
 impl App {
@@ -181,6 +193,18 @@ impl App {
                 _ => Mode::AuditTail {
                     loading,
                     events,
+                    error,
+                },
+            },
+            Mode::CapabilitiesTail {
+                loading,
+                capabilities,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::CapabilitiesTail {
+                    loading,
+                    capabilities,
                     error,
                 },
             },
@@ -296,6 +320,35 @@ impl App {
             },
         };
     }
+
+    /// One-shot flag for the capabilities-view fetch.
+    pub fn take_pending_capabilities_fetch(&mut self) -> bool {
+        if !self.pending_capabilities_fetch {
+            return false;
+        }
+        self.pending_capabilities_fetch = false;
+        true
+    }
+
+    /// Apply a capabilities-view fetch result. No-op if the user
+    /// has already navigated away from `Mode::CapabilitiesTail`.
+    pub fn apply_capabilities_fetch_outcome(&mut self, outcome: CapabilitiesFetchOutcome) {
+        let Mode::CapabilitiesTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            CapabilitiesFetchOutcome::Fetched { capabilities } => Mode::CapabilitiesTail {
+                loading: false,
+                capabilities,
+                error: None,
+            },
+            CapabilitiesFetchOutcome::Failed { message } => Mode::CapabilitiesTail {
+                loading: false,
+                capabilities: Vec::new(),
+                error: Some(message),
+            },
+        };
+    }
 }
 
 /// The two outcomes a submission can have. The daemon's
@@ -349,6 +402,14 @@ impl App {
                 Mode::AuditTail {
                     loading: true,
                     events: Vec::new(),
+                    error: None,
+                }
+            }
+            KeyCode::Char('c') => {
+                self.pending_capabilities_fetch = true;
+                Mode::CapabilitiesTail {
+                    loading: true,
+                    capabilities: Vec::new(),
                     error: None,
                 }
             }
@@ -856,6 +917,70 @@ mod tests {
         app.on_key(press(KeyCode::Esc));
         assert_eq!(app.mode(), &Mode::Browsing);
         app.apply_audit_fetch_outcome(AuditFetchOutcome::Fetched { events: Vec::new() });
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn pressing_c_enters_capabilities_tail_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('c')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::CapabilitiesTail {
+                    loading: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(app.take_pending_capabilities_fetch());
+        assert!(!app.take_pending_capabilities_fetch());
+    }
+
+    #[test]
+    fn capabilities_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('c')));
+        let _ = app.take_pending_capabilities_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn capabilities_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('c')));
+        let _ = app.take_pending_capabilities_fetch();
+        app.apply_capabilities_fetch_outcome(CapabilitiesFetchOutcome::Failed {
+            message: "wire boom".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::CapabilitiesTail {
+                    loading: false,
+                    error: Some(_),
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn capabilities_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('c')));
+        let _ = app.take_pending_capabilities_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_capabilities_fetch_outcome(CapabilitiesFetchOutcome::Fetched {
+            capabilities: Vec::new(),
+        });
         assert_eq!(app.mode(), &Mode::Browsing);
     }
 

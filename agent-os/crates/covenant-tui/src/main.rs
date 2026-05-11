@@ -11,8 +11,8 @@ use std::io::{self, Stdout};
 
 use anyhow::{Context, Result};
 use covenant_tui::ipc::{
-    covenant_home, recent_audit, recent_memory, submit_intent, AuditFetchOutcome,
-    MemoryFetchOutcome,
+    covenant_home, recent_audit, recent_capabilities, recent_memory, submit_intent,
+    AuditFetchOutcome, CapabilitiesFetchOutcome, MemoryFetchOutcome,
 };
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
@@ -98,6 +98,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let (submit_tx, mut submit_rx) = mpsc::unbounded_channel::<SubmissionOutcome>();
     let (memory_tx, mut memory_rx) = mpsc::unbounded_channel::<MemoryFetchOutcome>();
     let (audit_tx, mut audit_rx) = mpsc::unbounded_channel::<AuditFetchOutcome>();
+    let (caps_tx, mut caps_rx) = mpsc::unbounded_channel::<CapabilitiesFetchOutcome>();
     let home = covenant_home()?;
 
     loop {
@@ -149,6 +150,19 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if app.take_pending_capabilities_fetch() {
+            let tx = caps_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome = recent_capabilities(&home, 20)
+                    .await
+                    .unwrap_or_else(|e| CapabilitiesFetchOutcome::Failed {
+                        message: format!("{e:#}"),
+                    });
+                let _ = tx.send(outcome);
+            });
+        }
+
         tokio::select! {
             Some(Ok(event)) = events.next() => {
                 if let Event::Key(key) = event {
@@ -163,6 +177,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             }
             Some(outcome) = audit_rx.recv() => {
                 app.apply_audit_fetch_outcome(outcome);
+            }
+            Some(outcome) = caps_rx.recv() => {
+                app.apply_capabilities_fetch_outcome(outcome);
             }
         }
 
@@ -181,7 +198,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     match app.mode() {
         Mode::Browsing => {
             let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit · m: memory · a: audit · q / Esc: quit",
+                "covenant tui — i: draft · s: submit · m: memory · a: audit · c: caps · q / Esc: quit",
             )
             .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
@@ -289,6 +306,61 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                     .collect();
                 Paragraph::new(lines)
                     .block(Block::default().borders(Borders::ALL).title("audit"))
+            };
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::CapabilitiesTail {
+            loading,
+            capabilities,
+            error,
+        } => {
+            let header = Paragraph::new("capabilities — q / Esc to dismiss")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("capabilities error"),
+                    )
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("capabilities"))
+            } else if capabilities.is_empty() {
+                Paragraph::new("no active capabilities")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("capabilities"))
+            } else {
+                let lines: Vec<Line<'_>> = capabilities
+                    .iter()
+                    .map(|c| {
+                        let cap = &c.capability;
+                        let expires = cap
+                            .expires_at
+                            .map(|m| format!("{m}"))
+                            .unwrap_or_else(|| "never".to_string());
+                        let sig_prefix: String = bs58::encode(&c.signature[..])
+                            .into_string()
+                            .chars()
+                            .take(8)
+                            .collect();
+                        Line::from(format!(
+                            "{action:<32}  {subject:<24}  expires: {expires:<14}  sig: {sig_prefix}",
+                            action = cap.action,
+                            subject = cap.subject.display,
+                            expires = expires,
+                            sig_prefix = sig_prefix,
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title("capabilities"))
             };
             frame.render_widget(body, layout[1]);
         }

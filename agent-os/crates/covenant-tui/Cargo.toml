@@ -17,8 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+bs58 = { workspace = true }
 covenant-audit = { path = "../covenant-audit" }
 covenant-ipc = { path = "../covenant-ipc" }
+covenant-permissions = { path = "../covenant-permissions" }
 covenant-types = { path = "../covenant-types" }
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3"

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier};
 use tokio::net::UnixStream;
 
@@ -25,6 +26,10 @@ pub const RECENT_MEMORY_LIMIT_CAP: usize = 50;
 /// Hard cap on `Request::RecentAudit::limit`. Audit volume can grow
 /// faster than memory, so the cap is set higher.
 pub const RECENT_AUDIT_LIMIT_CAP: usize = 100;
+
+/// Hard cap on `Request::RecentCapabilities::limit`. Capabilities
+/// grow slowly (one per grant) so the cap matches recent_memory.
+pub const RECENT_CAPABILITIES_LIMIT_CAP: usize = 50;
 
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
@@ -59,6 +64,15 @@ pub enum MemoryFetchOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuditFetchOutcome {
     Fetched { events: Vec<AuditEvent> },
+    Failed { message: String },
+}
+
+/// Outcome of a [`recent_capabilities`] call. Same shape as the
+/// other fetch outcomes; daemon filters server-side to caps where
+/// `subject` or `granted_by` matches the calling peer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CapabilitiesFetchOutcome {
+    Fetched { capabilities: Vec<SignedCapability> },
     Failed { message: String },
 }
 
@@ -293,6 +307,50 @@ pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome
         Response::AuditEvents { events } => Ok(AuditFetchOutcome::Fetched { events }),
         Response::Error { message } => Ok(AuditFetchOutcome::Failed { message }),
         other => Ok(AuditFetchOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::RecentCapabilities`, and maps the daemon
+/// response into a [`CapabilitiesFetchOutcome`].
+///
+/// `limit` is clamped to [`RECENT_CAPABILITIES_LIMIT_CAP`].
+pub async fn recent_capabilities(
+    home: &Path,
+    limit: usize,
+) -> Result<CapabilitiesFetchOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(CapabilitiesFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(CapabilitiesFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_CAPABILITIES_LIMIT_CAP);
+    write_frame(&mut stream, &Request::RecentCapabilities { limit }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Capabilities { capabilities } => {
+            Ok(CapabilitiesFetchOutcome::Fetched { capabilities })
+        }
+        Response::Error { message } => Ok(CapabilitiesFetchOutcome::Failed { message }),
+        other => Ok(CapabilitiesFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

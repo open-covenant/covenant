@@ -10,7 +10,7 @@
 use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_permissions::SignedCapability;
-use covenant_types::MemoryRecord;
+use covenant_types::{MemoryRecord, SettlementReceipt};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use uuid::Uuid;
 
@@ -18,6 +18,7 @@ pub mod ipc;
 
 pub use ipc::{
     A2aFetchOutcome, AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
+    ReceiptsFetchOutcome,
 };
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
@@ -94,6 +95,15 @@ pub enum Mode {
         tasks: Vec<A2ATask>,
         error: Option<String>,
     },
+    /// Chain receipts view. Press `r` from Browsing to enter. Lists
+    /// recent settlement receipts where the operator is the payer;
+    /// gated by the `chain.receipts` capability and server-side
+    /// filtered. Press `q` / `Esc` to dismiss.
+    ReceiptsTail {
+        loading: bool,
+        receipts: Vec<SettlementReceipt>,
+        error: Option<String>,
+    },
     /// Grant editor. Press `g` from Browsing to enter. Chars
     /// accumulate as the capability action name (e.g. `memory.read`);
     /// Enter on a non-empty trimmed buffer transitions to
@@ -142,6 +152,8 @@ pub struct App {
     pending_capabilities_fetch: bool,
     /// One-shot for the A2A inbox fetch.
     pending_a2a_fetch: bool,
+    /// One-shot for the chain receipts fetch.
+    pending_receipts_fetch: bool,
     /// One-shot for an in-flight grant submission. Set on the
     /// transition into `GrantSubmitting`.
     pending_grant_submission: bool,
@@ -247,6 +259,18 @@ impl App {
                 _ => Mode::A2aTail {
                     loading,
                     tasks,
+                    error,
+                },
+            },
+            Mode::ReceiptsTail {
+                loading,
+                receipts,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::ReceiptsTail {
+                    loading,
+                    receipts,
                     error,
                 },
             },
@@ -427,6 +451,35 @@ impl App {
         };
     }
 
+    /// One-shot flag for the chain receipts fetch.
+    pub fn take_pending_receipts_fetch(&mut self) -> bool {
+        if !self.pending_receipts_fetch {
+            return false;
+        }
+        self.pending_receipts_fetch = false;
+        true
+    }
+
+    /// Apply a chain receipts fetch result. No-op if the user has
+    /// already navigated away from `Mode::ReceiptsTail`.
+    pub fn apply_receipts_fetch_outcome(&mut self, outcome: ReceiptsFetchOutcome) {
+        let Mode::ReceiptsTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            ReceiptsFetchOutcome::Fetched { receipts } => Mode::ReceiptsTail {
+                loading: false,
+                receipts,
+                error: None,
+            },
+            ReceiptsFetchOutcome::Failed { message } => Mode::ReceiptsTail {
+                loading: false,
+                receipts: Vec::new(),
+                error: Some(message),
+            },
+        };
+    }
+
     /// Returns the action of a freshly-entered grant exactly once,
     /// same kickoff semantics as [`App::take_pending_submission`].
     pub fn take_pending_grant_submission(&mut self) -> Option<String> {
@@ -529,6 +582,14 @@ impl App {
                 Mode::A2aTail {
                     loading: true,
                     tasks: Vec::new(),
+                    error: None,
+                }
+            }
+            KeyCode::Char('r') => {
+                self.pending_receipts_fetch = true;
+                Mode::ReceiptsTail {
+                    loading: true,
+                    receipts: Vec::new(),
                     error: None,
                 }
             }
@@ -1401,6 +1462,122 @@ mod tests {
         app.on_key(press(KeyCode::Esc));
         assert_eq!(app.mode(), &Mode::Browsing);
         app.apply_a2a_fetch_outcome(A2aFetchOutcome::Fetched { tasks: Vec::new() });
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    fn sample_receipt() -> SettlementReceipt {
+        use covenant_types::{AgentId, ResourceKind};
+        SettlementReceipt {
+            id: Uuid::new_v4(),
+            payer: AgentId::new("user@local", [2u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: Some(Uuid::new_v4()),
+            credits_consumed: 1,
+            settled_at: 1_700_000_000,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        }
+    }
+
+    #[test]
+    fn pressing_r_enters_receipts_tail_loading_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::ReceiptsTail {
+                    loading: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(app.take_pending_receipts_fetch());
+        assert!(!app.take_pending_receipts_fetch());
+    }
+
+    #[test]
+    fn receipts_tail_fetched_transitions_to_loaded() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        let _ = app.take_pending_receipts_fetch();
+        let receipt = sample_receipt();
+        app.apply_receipts_fetch_outcome(ReceiptsFetchOutcome::Fetched {
+            receipts: vec![receipt.clone()],
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::ReceiptsTail {
+                    loading: false,
+                    error: None,
+                    receipts,
+                } if receipts.len() == 1 && receipts[0].id == receipt.id
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn receipts_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        let _ = app.take_pending_receipts_fetch();
+        app.apply_receipts_fetch_outcome(ReceiptsFetchOutcome::Failed {
+            message: "receipt reads require capability \"chain.receipts\"".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::ReceiptsTail {
+                    loading: false,
+                    error: Some(_),
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn receipts_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        let _ = app.take_pending_receipts_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn receipts_tail_esc_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        let _ = app.take_pending_receipts_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn receipts_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('r')));
+        let _ = app.take_pending_receipts_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_receipts_fetch_outcome(ReceiptsFetchOutcome::Fetched {
+            receipts: Vec::new(),
+        });
         assert_eq!(app.mode(), &Mode::Browsing);
     }
 

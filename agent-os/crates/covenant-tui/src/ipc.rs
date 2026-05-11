@@ -14,7 +14,7 @@ use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_permissions::SignedCapability;
-use covenant_types::{MemoryRecord, MemoryTier};
+use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
 use tokio::net::UnixStream;
 
 use crate::SubmissionOutcome;
@@ -37,6 +37,11 @@ pub const RECENT_CAPABILITIES_LIMIT_CAP: usize = 50;
 /// it grows linearly with A2A traffic; the cap is set higher than
 /// memory but below audit.
 pub const RECENT_A2A_LIMIT_CAP: usize = 50;
+
+/// Hard cap on `Request::RecentReceipts::limit`. Receipts are
+/// server-side filtered to rows where the payer matches the calling
+/// peer; one row per resource consumption event.
+pub const RECENT_RECEIPTS_LIMIT_CAP: usize = 50;
 
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
@@ -89,6 +94,17 @@ pub enum CapabilitiesFetchOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A2aFetchOutcome {
     Fetched { tasks: Vec<A2ATask> },
+    Failed { message: String },
+}
+
+/// Outcome of a [`recent_receipts`] call. Daemon gates the read
+/// behind the `chain.receipts` capability and filters server-side to
+/// rows where the payer matches the calling peer; a missing grant
+/// surfaces as `Failed { message }` so the TUI can render the
+/// daemon's reason inside the receipts view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptsFetchOutcome {
+    Fetched { receipts: Vec<SettlementReceipt> },
     Failed { message: String },
 }
 
@@ -401,6 +417,47 @@ pub async fn recent_a2a_tasks(home: &Path, limit: usize) -> Result<A2aFetchOutco
         Response::A2ATasks { tasks } => Ok(A2aFetchOutcome::Fetched { tasks }),
         Response::Error { message } => Ok(A2aFetchOutcome::Failed { message }),
         other => Ok(A2aFetchOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::RecentReceipts`, and maps the daemon
+/// response into a [`ReceiptsFetchOutcome`]. The daemon gates this on
+/// the `chain.receipts` capability and filters server-side to rows
+/// where the payer matches the calling peer.
+///
+/// `limit` is clamped to [`RECENT_RECEIPTS_LIMIT_CAP`].
+pub async fn recent_receipts(home: &Path, limit: usize) -> Result<ReceiptsFetchOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(ReceiptsFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(ReceiptsFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_RECEIPTS_LIMIT_CAP);
+    write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Receipts { receipts } => Ok(ReceiptsFetchOutcome::Fetched { receipts }),
+        Response::Error { message } => Ok(ReceiptsFetchOutcome::Failed { message }),
+        other => Ok(ReceiptsFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

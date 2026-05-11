@@ -12,8 +12,8 @@ use std::io::{self, Stdout};
 use anyhow::{Context, Result};
 use covenant_tui::ipc::{
     covenant_home, grant_capability, recent_a2a_tasks, recent_audit, recent_capabilities,
-    recent_memory, submit_intent, A2aFetchOutcome, AuditFetchOutcome, CapabilitiesFetchOutcome,
-    GrantOutcome, MemoryFetchOutcome,
+    recent_memory, recent_receipts, submit_intent, A2aFetchOutcome, AuditFetchOutcome,
+    CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome, ReceiptsFetchOutcome,
 };
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
@@ -31,6 +31,20 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+/// Stable, render-safe label for a `ResourceKind`. Same reason as
+/// `audit_kind_label`: avoid `{:?}` so a future variant reorder does
+/// not silently change column widths in the rendered table.
+fn receipt_resource_label(kind: &covenant_types::ResourceKind) -> &'static str {
+    use covenant_types::ResourceKind::*;
+    match kind {
+        Compute => "compute",
+        Memory => "memory",
+        Tool => "tool",
+        Message => "message",
+        Registration => "register",
+    }
+}
 
 /// Stable, render-safe discriminant label for an `AuditKind`. The
 /// renderer must NOT use `{:?}` because that would leak internal
@@ -101,6 +115,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let (audit_tx, mut audit_rx) = mpsc::unbounded_channel::<AuditFetchOutcome>();
     let (caps_tx, mut caps_rx) = mpsc::unbounded_channel::<CapabilitiesFetchOutcome>();
     let (a2a_tx, mut a2a_rx) = mpsc::unbounded_channel::<A2aFetchOutcome>();
+    let (receipts_tx, mut receipts_rx) = mpsc::unbounded_channel::<ReceiptsFetchOutcome>();
     let (grant_tx, mut grant_rx) = mpsc::unbounded_channel::<GrantOutcome>();
     let home = covenant_home()?;
 
@@ -181,6 +196,19 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if app.take_pending_receipts_fetch() {
+            let tx = receipts_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome = recent_receipts(&home, 20).await.unwrap_or_else(|e| {
+                    ReceiptsFetchOutcome::Failed {
+                        message: format!("{e:#}"),
+                    }
+                });
+                let _ = tx.send(outcome);
+            });
+        }
+
         if let Some(action) = app.take_pending_grant_submission() {
             let tx = grant_tx.clone();
             let home = home.clone();
@@ -215,6 +243,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             Some(outcome) = a2a_rx.recv() => {
                 app.apply_a2a_fetch_outcome(outcome);
             }
+            Some(outcome) = receipts_rx.recv() => {
+                app.apply_receipts_fetch_outcome(outcome);
+            }
             Some(outcome) = grant_rx.recv() => {
                 app.apply_grant_outcome(outcome);
             }
@@ -235,7 +266,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     match app.mode() {
         Mode::Browsing => {
             let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · A: a2a · q: quit",
+                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · A: a2a · r: receipts · q: quit",
             )
             .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
@@ -494,6 +525,52 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                     })
                     .collect();
                 Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("a2a"))
+            };
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::ReceiptsTail {
+            loading,
+            receipts,
+            error,
+        } => {
+            let header = Paragraph::new("chain receipts — q / Esc to dismiss")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("receipts error"),
+                    )
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("receipts"))
+            } else if receipts.is_empty() {
+                Paragraph::new("no chain receipts")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("receipts"))
+            } else {
+                let lines: Vec<Line<'_>> = receipts
+                    .iter()
+                    .map(|r| {
+                        let id_prefix: String = r.id.to_string().chars().take(8).collect();
+                        let payer_prefix: String =
+                            r.payer.pubkey_base58().chars().take(8).collect();
+                        let resource = receipt_resource_label(&r.resource);
+                        Line::from(format!(
+                            "{id_prefix}  {resource:<10}  {credits:>6} credits  payer: {payer_prefix}",
+                            credits = r.credits_consumed,
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title("receipts"))
             };
             frame.render_widget(body, layout[1]);
         }

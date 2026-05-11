@@ -924,11 +924,16 @@ name = "covenant-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bs58",
+ "covenant-audit",
  "covenant-ipc",
+ "covenant-permissions",
  "covenant-types",
  "crossterm",
  "futures",
  "ratatui",
+ "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

@@ -1668,6 +1668,65 @@ mod tests {
     }
 
     #[test]
+    fn map_socket_error_classifies_not_found_as_daemon_not_running() {
+        use crate::ipc::{map_socket_error, IpcError};
+        use std::io;
+        use std::path::PathBuf;
+        let err = io::Error::new(io::ErrorKind::NotFound, "no such file");
+        let path = PathBuf::from("/tmp/sock");
+        match map_socket_error(err, &path) {
+            IpcError::DaemonNotRunning { sock_path } => assert_eq!(sock_path, path),
+            other => panic!("expected DaemonNotRunning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_socket_error_classifies_connection_refused_as_daemon_not_running() {
+        use crate::ipc::{map_socket_error, IpcError};
+        use std::io;
+        use std::path::PathBuf;
+        let err = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        let path = PathBuf::from("/tmp/sock");
+        match map_socket_error(err, &path) {
+            IpcError::DaemonNotRunning { sock_path } => assert_eq!(sock_path, path),
+            other => panic!("expected DaemonNotRunning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_socket_error_passes_other_io_kinds_through() {
+        use crate::ipc::{map_socket_error, IpcError};
+        use std::io;
+        use std::path::PathBuf;
+        let err = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let path = PathBuf::from("/tmp/sock");
+        match map_socket_error(err, &path) {
+            IpcError::Wire(inner) => {
+                assert_eq!(inner.kind(), io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("expected Wire, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ipc_error_daemon_not_running_message_includes_path_and_hint() {
+        use crate::ipc::IpcError;
+        use std::path::PathBuf;
+        let err = IpcError::DaemonNotRunning {
+            sock_path: PathBuf::from("/tmp/covenant/sock"),
+        };
+        let message = format!("{err}");
+        assert!(
+            message.contains("/tmp/covenant/sock"),
+            "message must surface the sock path: {message}"
+        );
+        assert!(
+            message.contains("covenantd start"),
+            "message must hint at the fix: {message}"
+        );
+    }
+
+    #[test]
     fn drafts_are_capped_at_max_drafts_oldest_drops_first() {
         let mut app = App::new();
         for n in 0..MAX_DRAFTS + 5 {

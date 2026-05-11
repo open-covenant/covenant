@@ -7,17 +7,69 @@
 //! stays terminal-and-socket free for unit tests, and the IPC path
 //! is in turn reachable from `tests/` for live coverage.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
 use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
+use thiserror::Error;
 use tokio::net::UnixStream;
 
 use crate::SubmissionOutcome;
+
+/// Errors produced by the TUI IPC client.
+///
+/// `DaemonNotRunning` is split out so the renderer can show a
+/// targeted hint (`run covenantd start`) instead of a raw "no such
+/// file" or "connection refused" message. The classifier matches on
+/// [`std::io::ErrorKind`] rather than the platform-specific message
+/// text so a translated locale doesn't bypass it.
+#[derive(Debug, Error)]
+pub enum IpcError {
+    #[error("covenantd is not running at {}; run `covenantd start`", sock_path.display())]
+    DaemonNotRunning { sock_path: PathBuf },
+    #[error("HOME is not set; set $COVENANT_HOME or $HOME")]
+    HomeNotSet,
+    #[error("operator token at {} is empty; rotate or rebootstrap the daemon", path.display())]
+    OperatorTokenEmpty { path: PathBuf },
+    #[error("read operator token at {path}: {source}", path = path.display())]
+    OperatorTokenRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("IPC wire error: {0}")]
+    Wire(#[from] io::Error),
+    #[error("IPC framing error: {0}")]
+    Frame(#[from] covenant_ipc::IpcError),
+    #[error("{0}")]
+    Other(String),
+}
+
+/// Maps a [`UnixStream::connect`] error to the right [`IpcError`]
+/// variant. `NotFound` (socket file absent) and `ConnectionRefused`
+/// (socket exists but no one is listening — e.g. daemon crashed mid-
+/// run) are both surfaced as `DaemonNotRunning`. Other I/O errors
+/// pass through unchanged so genuine wire failures aren't masked.
+pub fn map_socket_error(err: io::Error, sock_path: &Path) -> IpcError {
+    match err.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => IpcError::DaemonNotRunning {
+            sock_path: sock_path.to_path_buf(),
+        },
+        _ => IpcError::Wire(err),
+    }
+}
+
+async fn connect_socket(home: &Path) -> Result<(UnixStream, PathBuf), IpcError> {
+    let sock = home.join("sock");
+    match UnixStream::connect(&sock).await {
+        Ok(stream) => Ok((stream, sock)),
+        Err(err) => Err(map_socket_error(err, &sock)),
+    }
+}
 
 /// Hard cap on `Request::RecentMemory::limit` to prevent a runaway
 /// request from asking the daemon to enumerate the entire memory
@@ -111,27 +163,28 @@ pub enum ReceiptsFetchOutcome {
 /// Resolves `$COVENANT_HOME` with the same fallback shape as the
 /// existing `covenant` CLI: explicit env var first, then
 /// `$HOME/.covenant`.
-pub fn covenant_home() -> Result<PathBuf> {
+pub fn covenant_home() -> Result<PathBuf, IpcError> {
     if let Ok(p) = std::env::var("COVENANT_HOME") {
         return Ok(PathBuf::from(p));
     }
-    let home = std::env::var("HOME").context("HOME not set")?;
+    let home = std::env::var("HOME").map_err(|_| IpcError::HomeNotSet)?;
     Ok(PathBuf::from(home).join(".covenant"))
 }
 
 /// Reads the operator bootstrap token from `$COVENANT_HOME/peers/operator.token`.
 /// The daemon mints the token on first boot at mode 0600.
-pub async fn read_operator_token(home: &Path) -> Result<String> {
+pub async fn read_operator_token(home: &Path) -> Result<String, IpcError> {
     let path = home.join("peers").join("operator.token");
-    let raw = tokio::fs::read_to_string(&path).await.with_context(|| {
-        format!(
-            "read operator token at {} (is covenantd running?)",
-            path.display()
-        )
-    })?;
+    let raw =
+        tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|source| IpcError::OperatorTokenRead {
+                path: path.clone(),
+                source,
+            })?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("operator token at {} is empty", path.display()));
+        return Err(IpcError::OperatorTokenEmpty { path });
     }
     Ok(trimmed.to_string())
 }
@@ -147,14 +200,8 @@ pub async fn read_operator_token(home: &Path) -> Result<String> {
 /// the message without distinguishing "the connection broke" from
 /// "the daemon refused" — both are user-visible failures from the
 /// TUI's perspective.
-pub async fn submit_intent(home: &Path, text: &str) -> Result<SubmissionOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+pub async fn submit_intent(home: &Path, text: &str) -> Result<SubmissionOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -206,14 +253,8 @@ pub async fn grant_capability(
     action: &str,
     scope: Option<serde_json::Value>,
     expires_at: Option<u64>,
-) -> Result<GrantOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+) -> Result<GrantOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -266,14 +307,8 @@ pub async fn recent_memory(
     home: &Path,
     tier: Option<MemoryTier>,
     limit: usize,
-) -> Result<MemoryFetchOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+) -> Result<MemoryFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -307,14 +342,8 @@ pub async fn recent_memory(
 /// own activity.
 ///
 /// `limit` is clamped to [`RECENT_AUDIT_LIMIT_CAP`].
-pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -346,14 +375,11 @@ pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome
 /// response into a [`CapabilitiesFetchOutcome`].
 ///
 /// `limit` is clamped to [`RECENT_CAPABILITIES_LIMIT_CAP`].
-pub async fn recent_capabilities(home: &Path, limit: usize) -> Result<CapabilitiesFetchOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+pub async fn recent_capabilities(
+    home: &Path,
+    limit: usize,
+) -> Result<CapabilitiesFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -388,14 +414,8 @@ pub async fn recent_capabilities(home: &Path, limit: usize) -> Result<Capabiliti
 /// rows where the operator is sender or recipient.
 ///
 /// `limit` is clamped to [`RECENT_A2A_LIMIT_CAP`].
-pub async fn recent_a2a_tasks(home: &Path, limit: usize) -> Result<A2aFetchOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+pub async fn recent_a2a_tasks(home: &Path, limit: usize) -> Result<A2aFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {
@@ -429,14 +449,8 @@ pub async fn recent_a2a_tasks(home: &Path, limit: usize) -> Result<A2aFetchOutco
 /// where the payer matches the calling peer.
 ///
 /// `limit` is clamped to [`RECENT_RECEIPTS_LIMIT_CAP`].
-pub async fn recent_receipts(home: &Path, limit: usize) -> Result<ReceiptsFetchOutcome> {
-    let sock = home.join("sock");
-    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!(
-            "connect to daemon at {} (is covenantd running?)",
-            sock.display()
-        )
-    })?;
+pub async fn recent_receipts(home: &Path, limit: usize) -> Result<ReceiptsFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
     let token_b58 = read_operator_token(home).await?;
     write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
     match read_frame::<_, Response>(&mut stream).await? {

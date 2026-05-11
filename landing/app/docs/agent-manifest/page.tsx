@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Agent manifest",
-  description:
-    "Schema and validation rules for agent.toml — the file every Covenant agent ships.",
-};
+export const metadata = buildDocsMetadata("agent-manifest", "Agent manifest", 'Schema and validation rules for agent.toml — the file every Covenant agent ships.');
 
 export default function AgentManifestPage() {
   return (

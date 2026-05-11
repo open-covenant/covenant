@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Memory tiers",
-  description:
-    "Three-tier memory store, embeddings, semantic search, and the .covenantignore allow/deny list.",
-};
+export const metadata = buildDocsMetadata("memory", "Memory tiers", 'Three-tier memory store, embeddings, semantic search, and the .covenantignore allow/deny list.');
 
 export default function MemoryPage() {
   return (

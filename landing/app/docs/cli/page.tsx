@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Command-line interface",
-  description:
-    "Every covenant subcommand, with arguments and exit codes.",
-};
+export const metadata = buildDocsMetadata("cli", "Command-line interface", 'Every covenant subcommand, with arguments and exit codes.');
 
 export default function CliPage() {
   return (

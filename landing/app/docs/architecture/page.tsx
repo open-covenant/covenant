@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "System architecture",
-  description:
-    "How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.",
-};
+export const metadata = buildDocsMetadata("architecture", "System architecture", 'How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.');
 
 export default function ArchitecturePage() {
   return (

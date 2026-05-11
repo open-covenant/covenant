@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Settlement",
-  description:
-    "Local receipts, credit accounting, and the planned on-chain settlement path.",
-};
+export const metadata = buildDocsMetadata("settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.');
 
 export default function SettlementPage() {
   return (

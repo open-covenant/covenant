@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Autonomous workflow",
-  description:
-    "Task lifecycle, validation gates, continuation, and handoff summaries for Covenant's autonomous development loop.",
-};
+export const metadata = buildDocsMetadata("autonomy", "Autonomous workflow", "Task lifecycle, validation gates, continuation, and handoff summaries for Covenant's autonomous development loop.");
 
 export default function AutonomyPage() {
   return (

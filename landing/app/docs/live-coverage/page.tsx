@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Live coverage",
-  description:
-    "Opt-in live test coverage across daemon, CLI, A2A, MCP, runtime, and model boundaries.",
-};
+export const metadata = buildDocsMetadata("live-coverage", "Live coverage", 'Opt-in live test coverage across daemon, CLI, A2A, MCP, runtime, and model boundaries.');
 
 const SURFACES = [
   ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/resume/version"],

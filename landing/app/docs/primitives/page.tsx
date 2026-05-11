@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "The eight primitives",
-  description:
-    "Intent, runtime, memory, identity, permissions, comms, audit, settlement — the OS-level vocabulary Covenant exposes.",
-};
+export const metadata = buildDocsMetadata("primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, audit, settlement — the OS-level vocabulary Covenant exposes.');
 
 export default function PrimitivesPage() {
   return (

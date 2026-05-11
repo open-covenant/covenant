@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Getting started",
-  description:
-    "Install Covenant from source, run the daemon, and submit your first intent.",
-};
+export const metadata = buildDocsMetadata("getting-started", "Getting started", 'Install Covenant from source, run the daemon, and submit your first intent.');
 
 export default function GettingStartedPage() {
   return (

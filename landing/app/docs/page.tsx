@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "./_meta";
 
-export const metadata = {
-  title: "Overview",
-  description:
-    "Covenant is an open, agent-native operating layer. The documentation covers concepts, architecture, reference, protocols, and operations.",
-};
+export const metadata = buildDocsMetadata("", "Overview", 'Covenant is an open, agent-native operating layer. The documentation covers concepts, architecture, reference, protocols, and operations.');
 
 const TILES = [
   {

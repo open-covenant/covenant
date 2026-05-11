@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Identity and keys",
-  description:
-    "ed25519 identity, on-disk persistence, signing helpers, and rotation.",
-};
+export const metadata = buildDocsMetadata("identity", "Identity and keys", 'ed25519 identity, on-disk persistence, signing helpers, and rotation.');
 
 export default function IdentityPage() {
   return (

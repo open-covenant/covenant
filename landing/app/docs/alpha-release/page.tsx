@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Alpha release contract",
-  description:
-    "Source-alpha release boundary, evidence bundle requirements, and human-owned release decisions.",
-};
+export const metadata = buildDocsMetadata("alpha-release", "Alpha release contract", 'Source-alpha release boundary, evidence bundle requirements, and human-owned release decisions.');
 
 export default function AlphaReleasePage() {
   return (

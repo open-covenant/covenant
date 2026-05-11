@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Agent-to-agent",
-  description:
-    "Task and result envelopes, the Mailbox trait, and how orchestrator agents fan tasks across child agents.",
-};
+export const metadata = buildDocsMetadata("a2a", "Agent-to-agent", 'Task and result envelopes, the Mailbox trait, and how orchestrator agents fan tasks across child agents.');
 
 export default function A2APage() {
   return (

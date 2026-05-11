@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Validation profile",
-  description:
-    "The Covenant validation profile: operating surfaces, evidence requirements, and live boundary checks.",
-};
+export const metadata = buildDocsMetadata("validation", "Validation profile", 'The Covenant validation profile: operating surfaces, evidence requirements, and live boundary checks.');
 
 const SURFACES = [
   "Rust workspace with daemon, CLI, IPC, HTTP, runtime, memory, permissions, audit, identity, peer-auth, MCP, A2A, budget, and local settlement crates.",

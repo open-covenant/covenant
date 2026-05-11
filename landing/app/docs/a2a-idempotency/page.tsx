@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "A2A idempotency policy",
-  description:
-    "The idempotency metadata, retry gate, and receiver obligations for A2A task redelivery.",
-};
+export const metadata = buildDocsMetadata("a2a-idempotency", "A2A idempotency policy", 'The idempotency metadata, retry gate, and receiver obligations for A2A task redelivery.');
 
 export default function A2AIdempotencyPolicyPage() {
   return (

@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Security model",
-  description:
-    "Trust boundaries, threat model, defaults, and operator responsibilities.",
-};
+export const metadata = buildDocsMetadata("security", "Security model", 'Trust boundaries, threat model, defaults, and operator responsibilities.');
 
 export default function SecurityPage() {
   return (

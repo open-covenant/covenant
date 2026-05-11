@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Concepts",
-  description:
-    "The Covenant data model: intents, agents, capabilities, memory, audit, and settlement.",
-};
+export const metadata = buildDocsMetadata("concepts", "Concepts", 'The Covenant data model: intents, agents, capabilities, memory, audit, and settlement.');
 
 export default function ConceptsPage() {
   return (

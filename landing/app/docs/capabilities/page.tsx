@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Capability tokens",
-  description:
-    "Shape, canonical encoding, signing, verification, and revocation of Covenant capability tokens.",
-};
+export const metadata = buildDocsMetadata("capabilities", "Capability tokens", 'Shape, canonical encoding, signing, verification, and revocation of Covenant capability tokens.');
 
 export default function CapabilitiesPage() {
   return (

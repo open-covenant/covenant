@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Provenance",
-  description:
-    "Provenance envelopes for autonomy tasks, Git commits, changed file evidence, and validation records.",
-};
+export const metadata = buildDocsMetadata("provenance", "Provenance", 'Provenance envelopes for autonomy tasks, Git commits, changed file evidence, and validation records.');
 
 export default function ProvenancePage() {
   return (

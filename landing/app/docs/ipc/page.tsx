@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Local IPC",
-  description:
-    "Length-prefixed JSON IPC protocol on the daemon's Unix socket.",
-};
+export const metadata = buildDocsMetadata("ipc", "Local IPC", "Length-prefixed JSON IPC protocol on the daemon's Unix socket.");
 
 export default function IpcPage() {
   return (

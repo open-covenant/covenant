@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Audit integrity",
-  description:
-    "Local hash-chain verification for Covenant audit JSONL logs.",
-};
+export const metadata = buildDocsMetadata("audit-integrity", "Audit integrity", 'Local hash-chain verification for Covenant audit JSONL logs.');
 
 export default function AuditIntegrityPage() {
   return (

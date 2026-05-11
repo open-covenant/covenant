@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "HTTP API",
-  description:
-    "Local HTTP gateway routes, request bodies, and responses.",
-};
+export const metadata = buildDocsMetadata("http-api", "HTTP API", 'Local HTTP gateway routes, request bodies, and responses.');
 
 export default function HttpApiPage() {
   return (

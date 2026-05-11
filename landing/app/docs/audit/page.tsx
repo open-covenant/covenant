@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "Audit log",
-  description:
-    "JSONL audit log: event variants, integrity sidecar, schema, and how to read it.",
-};
+export const metadata = buildDocsMetadata("audit", "Audit log", 'JSONL audit log: event variants, integrity sidecar, schema, and how to read it.');
 
 export default function AuditPage() {
   return (

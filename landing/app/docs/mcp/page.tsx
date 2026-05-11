@@ -1,10 +1,7 @@
 import Link from "next/link";
+import { buildDocsMetadata } from "../_meta";
 
-export const metadata = {
-  title: "MCP integration",
-  description:
-    "Tool trait, native tools, registry, and the stdio JSON-RPC transport for external MCP servers.",
-};
+export const metadata = buildDocsMetadata("mcp", "MCP integration", 'Tool trait, native tools, registry, and the stdio JSON-RPC transport for external MCP servers.');
 
 export default function McpPage() {
   return (

@@ -11,8 +11,8 @@ use std::io::{self, Stdout};
 
 use anyhow::{Context, Result};
 use covenant_tui::ipc::{
-    covenant_home, recent_audit, recent_capabilities, recent_memory, submit_intent,
-    AuditFetchOutcome, CapabilitiesFetchOutcome, MemoryFetchOutcome,
+    covenant_home, grant_capability, recent_audit, recent_capabilities, recent_memory,
+    submit_intent, AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
 };
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
@@ -99,6 +99,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let (memory_tx, mut memory_rx) = mpsc::unbounded_channel::<MemoryFetchOutcome>();
     let (audit_tx, mut audit_rx) = mpsc::unbounded_channel::<AuditFetchOutcome>();
     let (caps_tx, mut caps_rx) = mpsc::unbounded_channel::<CapabilitiesFetchOutcome>();
+    let (grant_tx, mut grant_rx) = mpsc::unbounded_channel::<GrantOutcome>();
     let home = covenant_home()?;
 
     loop {
@@ -163,6 +164,19 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if let Some(action) = app.take_pending_grant_submission() {
+            let tx = grant_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome = grant_capability(&home, &action, None, None)
+                    .await
+                    .unwrap_or_else(|e| GrantOutcome::Failed {
+                        message: format!("{e:#}"),
+                    });
+                let _ = tx.send(outcome);
+            });
+        }
+
         tokio::select! {
             Some(Ok(event)) = events.next() => {
                 if let Event::Key(key) = event {
@@ -181,6 +195,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             Some(outcome) = caps_rx.recv() => {
                 app.apply_capabilities_fetch_outcome(outcome);
             }
+            Some(outcome) = grant_rx.recv() => {
+                app.apply_grant_outcome(outcome);
+            }
         }
 
         if let Some(reason) = app.exit_reason() {
@@ -198,7 +215,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     match app.mode() {
         Mode::Browsing => {
             let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit · m: memory · a: audit · c: caps · q / Esc: quit",
+                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · q: quit",
             )
             .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
@@ -307,6 +324,58 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                 Paragraph::new(lines)
                     .block(Block::default().borders(Borders::ALL).title("audit"))
             };
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::GrantEditor { buffer } => {
+            let header = Paragraph::new(
+                "granting capability — Enter to submit · Esc to cancel · Ctrl-C to quit",
+            )
+            .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let line = Line::from(vec![
+                Span::raw(buffer.as_str()),
+                Span::styled("|", Style::default().add_modifier(Modifier::SLOW_BLINK)),
+            ]);
+            let body = Paragraph::new(line)
+                .block(Block::default().borders(Borders::ALL).title("action"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::GrantSubmitting { action } => {
+            let header = Paragraph::new("granting — Esc to dismiss (RPC continues)")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = Paragraph::new(action.as_str())
+                .style(Style::default().add_modifier(Modifier::DIM))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("submitting grant"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::GrantResult {
+            action,
+            subject_display,
+            signature_b58,
+        } => {
+            let header = Paragraph::new(format!(
+                "granted {action} to {subject_display} — any key returns"
+            ))
+            .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let sig_prefix: String = signature_b58.chars().take(16).collect();
+            let body = Paragraph::new(format!("signature: {sig_prefix}…"))
+                .block(Block::default().borders(Borders::ALL).title("grant"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::GrantError { message } => {
+            let header = Paragraph::new("grant failed — any key returns")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = Paragraph::new(message.as_str())
+                .style(Style::default().add_modifier(Modifier::REVERSED))
+                .block(Block::default().borders(Borders::ALL).title("grant error"));
             frame.render_widget(body, layout[1]);
         }
         Mode::CapabilitiesTail {

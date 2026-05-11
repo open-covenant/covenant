@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 pub mod ipc;
 
-pub use ipc::{AuditFetchOutcome, CapabilitiesFetchOutcome, MemoryFetchOutcome};
+pub use ipc::{AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome};
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +81,24 @@ pub enum Mode {
         capabilities: Vec<SignedCapability>,
         error: Option<String>,
     },
+    /// Grant editor. Press `g` from Browsing to enter. Chars
+    /// accumulate as the capability action name (e.g. `memory.read`);
+    /// Enter on a non-empty trimmed buffer transitions to
+    /// `GrantSubmitting`; Esc returns to Browsing.
+    GrantEditor { buffer: String },
+    /// In-flight unscoped capability grant. Distinct from
+    /// [`Mode::Submitting`] so the renderer can show the right
+    /// label and the dispatch path stays clear of intent submission.
+    GrantSubmitting { action: String },
+    /// Grant succeeded. Any key returns to Browsing; `q` quits.
+    GrantResult {
+        action: String,
+        subject_display: String,
+        signature_b58: String,
+    },
+    /// Grant failed (daemon-side or wire-level). Any key returns to
+    /// Browsing; `q` quits.
+    GrantError { message: String },
 }
 
 impl Default for Mode {
@@ -115,6 +133,9 @@ pub struct App {
     pending_audit_fetch: bool,
     /// One-shot for the capabilities-view fetch.
     pending_capabilities_fetch: bool,
+    /// One-shot for an in-flight grant submission. Set on the
+    /// transition into `GrantSubmitting`.
+    pending_grant_submission: bool,
 }
 
 impl App {
@@ -208,6 +229,14 @@ impl App {
                     error,
                 },
             },
+            Mode::GrantEditor { buffer } => self.handle_grant_editor(buffer, event),
+            Mode::GrantSubmitting { action } => match event.code {
+                KeyCode::Esc => Mode::Browsing,
+                _ => Mode::GrantSubmitting { action },
+            },
+            Mode::GrantResult { .. } | Mode::GrantError { .. } => {
+                self.handle_terminal_view(event)
+            }
         };
     }
 
@@ -349,6 +378,40 @@ impl App {
             },
         };
     }
+
+    /// Returns the action of a freshly-entered grant exactly once,
+    /// same kickoff semantics as [`App::take_pending_submission`].
+    pub fn take_pending_grant_submission(&mut self) -> Option<String> {
+        if !self.pending_grant_submission {
+            return None;
+        }
+        let Mode::GrantSubmitting { action } = &self.mode else {
+            return None;
+        };
+        let action = action.clone();
+        self.pending_grant_submission = false;
+        Some(action)
+    }
+
+    /// Apply a grant outcome. No-op if the user has dismissed the
+    /// Submitting view.
+    pub fn apply_grant_outcome(&mut self, outcome: GrantOutcome) {
+        let Mode::GrantSubmitting { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            GrantOutcome::Granted {
+                signature_b58,
+                subject_display,
+                action,
+            } => Mode::GrantResult {
+                action,
+                subject_display,
+                signature_b58,
+            },
+            GrantOutcome::Failed { message } => Mode::GrantError { message },
+        };
+    }
 }
 
 /// The two outcomes a submission can have. The daemon's
@@ -413,7 +476,36 @@ impl App {
                     error: None,
                 }
             }
+            KeyCode::Char('g') => Mode::GrantEditor {
+                buffer: String::new(),
+            },
             _ => Mode::Browsing,
+        }
+    }
+
+    fn handle_grant_editor(&mut self, mut buffer: String, event: KeyEvent) -> Mode {
+        match event.code {
+            KeyCode::Esc => Mode::Browsing,
+            KeyCode::Enter => {
+                let trimmed = buffer.trim().to_string();
+                if trimmed.is_empty() {
+                    Mode::GrantEditor {
+                        buffer: String::new(),
+                    }
+                } else {
+                    self.pending_grant_submission = true;
+                    Mode::GrantSubmitting { action: trimmed }
+                }
+            }
+            KeyCode::Backspace => {
+                buffer.pop();
+                Mode::GrantEditor { buffer }
+            }
+            KeyCode::Char(c) => {
+                buffer.push(c);
+                Mode::GrantEditor { buffer }
+            }
+            _ => Mode::GrantEditor { buffer },
         }
     }
 
@@ -982,6 +1074,142 @@ mod tests {
             capabilities: Vec::new(),
         });
         assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn pressing_g_in_browsing_enters_grant_editor_with_empty_buffer() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        assert_eq!(
+            app.mode(),
+            &Mode::GrantEditor {
+                buffer: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn grant_editor_accumulates_chars() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "memory.read");
+        assert_eq!(
+            app.mode(),
+            &Mode::GrantEditor {
+                buffer: "memory.read".into()
+            }
+        );
+    }
+
+    #[test]
+    fn grant_editor_esc_returns_to_browsing_without_submitting() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "memory.read");
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        assert!(app.take_pending_grant_submission().is_none());
+    }
+
+    #[test]
+    fn grant_editor_enter_on_non_empty_buffer_transitions_to_submitting() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "memory.read");
+        app.on_key(press(KeyCode::Enter));
+        assert_eq!(
+            app.mode(),
+            &Mode::GrantSubmitting {
+                action: "memory.read".into()
+            }
+        );
+        assert_eq!(
+            app.take_pending_grant_submission(),
+            Some("memory.read".into())
+        );
+        assert_eq!(app.take_pending_grant_submission(), None);
+    }
+
+    #[test]
+    fn grant_editor_enter_on_empty_or_whitespace_stays_in_editor() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        app.on_key(press(KeyCode::Enter));
+        assert!(
+            matches!(app.mode(), Mode::GrantEditor { buffer } if buffer.is_empty()),
+            "Enter on empty buffer must not submit; mode is {:?}",
+            app.mode()
+        );
+
+        type_chars(&mut app, "   ");
+        app.on_key(press(KeyCode::Enter));
+        assert!(
+            matches!(app.mode(), Mode::GrantEditor { buffer } if buffer.is_empty()),
+            "Enter on whitespace-only buffer must reset and stay in editor; mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn grant_outcome_granted_transitions_to_grant_result() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "memory.read");
+        app.on_key(press(KeyCode::Enter));
+        let _ = app.take_pending_grant_submission();
+        app.apply_grant_outcome(GrantOutcome::Granted {
+            signature_b58: "sig123".into(),
+            subject_display: "user@local".into(),
+            action: "memory.read".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::GrantResult {
+                action: "memory.read".into(),
+                subject_display: "user@local".into(),
+                signature_b58: "sig123".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn grant_outcome_failed_transitions_to_grant_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "bogus.action"); // Invalid namespace
+        app.on_key(press(KeyCode::Enter));
+        let _ = app.take_pending_grant_submission();
+        app.apply_grant_outcome(GrantOutcome::Failed {
+            message: "unknown action namespace".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::GrantError {
+                message: "unknown action namespace".into()
+            }
+        );
+    }
+
+    #[test]
+    fn grant_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        type_chars(&mut app, "memory.read");
+        app.on_key(press(KeyCode::Enter));
+        let _ = app.take_pending_grant_submission();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+
+        app.apply_grant_outcome(GrantOutcome::Granted {
+            signature_b58: "late".into(),
+            subject_display: "user@local".into(),
+            action: "memory.read".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::Browsing,
+            "late grant response must not clobber the user's view"
+        );
     }
 
     #[test]

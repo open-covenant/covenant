@@ -24,9 +24,20 @@ API and worker are separate processes so they scale independently. Both need the
 | `PROOFGEN_RATE_LIMIT_WINDOW_MS` | no | `60000` | Window length in ms |
 | `CIRCUIT_ARTIFACTS_DIR` | no | `./artifacts/task_completion/build` | Where wasm + zkey live |
 | `PROOFGEN_PORT` | no | `8787` | API listen port |
+| `PROOFGEN_WORKER_HEALTH_PORT` | no | `8786` | Worker process `/healthz` + `/metrics` port |
 | `PROOFGEN_WORKER_CONCURRENCY` | no | `1` | BullMQ worker concurrency |
 | `PROOFGEN_RESULT_TTL_SEC` | no | `3600` | Job result + cache TTL |
 | `LOG_LEVEL` | no | `info` | Pino log level |
+
+## Worker health surface
+
+The worker process exposes its own HTTP listener on `PROOFGEN_WORKER_HEALTH_PORT`
+(default `8786`) — distinct from the API on `PROOFGEN_PORT`:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /healthz` | `{ ok, running, last_processed_at, last_processed_age_ms, concurrency, artifacts_dir }`. 200 when the BullMQ worker is running, 503 otherwise. `last_processed_at` lets a probe detect a wedged consumer that the BullMQ liveness alone wouldn't catch. |
+| `GET /metrics` | Same Prometheus registry the API exposes — jobs, durations, cache hits. Scrape both endpoints if running in separate pods. |
 
 ## Endpoints
 

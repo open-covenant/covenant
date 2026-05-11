@@ -256,17 +256,32 @@ export async function buildServer() {
     await queue.close();
     connection.disconnect();
   };
-  process.on('SIGTERM', close);
-  process.on('SIGINT', close);
+  // SIGTERM/SIGINT listeners are NOT registered here. buildServer() may
+  // be called repeatedly under test (each call would stack another
+  // listener; Node warns at >10 with MaxListenersExceededWarning, and
+  // none of them would deregister). The entrypoint below registers the
+  // listeners once for the process lifetime.
 
-  return { app, queue, connection };
+  return { app, queue, connection, close };
 }
 
 async function main() {
   ensureWitnessEnvelopeReady();
-  const { app } = await buildServer();
-  await app.listen({ port: PORT, host: '0.0.0.0' });
+  const handles = await buildServer();
+  await handles.app.listen({ port: PORT, host: '0.0.0.0' });
   logger.info({ port: PORT, artifacts_dir: ARTIFACTS_DIR }, 'proof-gen api up');
+  const shutdown = (signal: string) => {
+    logger.info({ signal }, 'proof-gen api: shutting down');
+    handles
+      .close()
+      .then(() => process.exit(0))
+      .catch((err) => {
+        logger.error({ err }, 'proof-gen api: shutdown failed');
+        process.exit(1);
+      });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;

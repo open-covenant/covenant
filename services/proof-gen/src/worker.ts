@@ -1,6 +1,7 @@
 import { createDecipheriv } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import http from 'node:http';
 import { Worker } from 'bullmq';
 import pino from 'pino';
 import * as snarkjs from 'snarkjs';
@@ -14,7 +15,7 @@ import {
   type ProveJobResult,
 } from './queue.js';
 import { ensureWitnessEnvelopeReady, unwrapWitnessKey } from './witness-envelope.js';
-import { jobsTotal, proveDuration } from './metrics.js';
+import { jobsTotal, proveDuration, registry } from './metrics.js';
 import { encodeGroth16ProofHex, encodePublicInputWords } from './proof-format.js';
 
 const logger = pino({
@@ -30,6 +31,7 @@ const DEFAULT_ARTIFACTS_DIR = resolve(import.meta.dirname, '..', 'artifacts', 't
 const ARTIFACTS_DIR = resolve(process.env.CIRCUIT_ARTIFACTS_DIR ?? DEFAULT_ARTIFACTS_DIR);
 const CONCURRENCY = Number(process.env.PROOFGEN_WORKER_CONCURRENCY ?? 1);
 const RESULT_TTL = Number(process.env.PROOFGEN_RESULT_TTL_SEC ?? 3600);
+const WORKER_HEALTH_PORT = Number(process.env.PROOFGEN_WORKER_HEALTH_PORT ?? 8786);
 
 type CircuitArtifacts = { wasm: string; zkey: string };
 const artifactCache = new Map<string, CircuitArtifacts>();
@@ -100,9 +102,24 @@ function decryptWitness(data: ProveJobData, key: Buffer): CircuitInput {
   }
 }
 
-export function startWorker() {
+export type WorkerHandles = {
+  worker: Worker<ProveJobData, ProveJobResult>;
+  healthServer: http.Server;
+  close: () => Promise<void>;
+};
+
+export function startWorker(): WorkerHandles {
   const connection = redisConnection(REDIS_URL);
   const dlq = buildDlq(connection);
+
+  // Health/metrics surface so k8s (or the operator's monitor of choice)
+  // can distinguish "process running" from "BullMQ consumer wedged". The
+  // /healthz body reports worker.isRunning() and the last-processed-at
+  // timestamp; a stalled queue stays visible without scraping bullmq.
+  let lastProcessedAt: number | null = null;
+  const updateLastProcessedAt = () => {
+    lastProcessedAt = Date.now();
+  };
 
   const worker = new Worker<ProveJobData, ProveJobResult>(
     QUEUE_NAME,
@@ -142,6 +159,7 @@ export function startWorker() {
       await connection.set(cacheKey(public_inputs_hash), payload, 'EX', RESULT_TTL);
       stopTimer();
       jobsTotal.inc({ circuit: circuit_id, status: 'completed' });
+      updateLastProcessedAt();
       log.info({ public_inputs_hash }, 'prove:done');
       return result;
     },
@@ -150,6 +168,7 @@ export function startWorker() {
 
   worker.on('failed', async (job, err) => {
     logger.warn({ job_id: job?.id, err: err.message, attempts: job?.attemptsMade }, 'prove:failed');
+    updateLastProcessedAt();
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
       jobsTotal.inc({ circuit: job.data.circuit_id, status: 'dlq' });
       try {
@@ -167,14 +186,49 @@ export function startWorker() {
     }
   });
 
-  const close = async () => {
+  const healthServer = http.createServer((req, res) => {
+    if (req.method !== 'GET') {
+      res.writeHead(405).end();
+      return;
+    }
+    if (req.url === '/healthz') {
+      const body = JSON.stringify({
+        ok: worker.isRunning(),
+        running: worker.isRunning(),
+        last_processed_at: lastProcessedAt,
+        last_processed_age_ms: lastProcessedAt ? Date.now() - lastProcessedAt : null,
+        concurrency: CONCURRENCY,
+        artifacts_dir: ARTIFACTS_DIR,
+      });
+      res.writeHead(worker.isRunning() ? 200 : 503, { 'content-type': 'application/json' });
+      res.end(body);
+      return;
+    }
+    if (req.url === '/metrics') {
+      registry
+        .metrics()
+        .then((m) => {
+          res.writeHead(200, { 'content-type': registry.contentType });
+          res.end(m);
+        })
+        .catch((err) => {
+          res.writeHead(500).end(err instanceof Error ? err.message : String(err));
+        });
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  healthServer.listen(WORKER_HEALTH_PORT, '0.0.0.0', () => {
+    logger.info({ port: WORKER_HEALTH_PORT }, 'proof-gen worker health surface up');
+  });
+
+  const close = async (): Promise<void> => {
+    await new Promise<void>((resolve) => healthServer.close(() => resolve()));
     await worker.close();
     connection.disconnect();
   };
-  process.on('SIGTERM', close);
-  process.on('SIGINT', close);
 
-  return worker;
+  return { worker, healthServer, close };
 }
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
@@ -188,6 +242,21 @@ if (isEntry) {
     process.exit(1);
   });
   ensureWitnessEnvelopeReady();
-  startWorker();
+  const handles = startWorker();
+  // SIGTERM/SIGINT listeners registered once at the entrypoint, not inside
+  // startWorker(). Tests that call startWorker() repeatedly no longer
+  // accumulate handlers up to Node's MaxListenersExceededWarning.
+  const shutdown = (signal: string) => {
+    logger.info({ signal }, 'proof-gen worker: shutting down');
+    handles
+      .close()
+      .then(() => process.exit(0))
+      .catch((err) => {
+        logger.error({ err }, 'proof-gen worker: shutdown failed');
+        process.exit(1);
+      });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
   logger.info({ artifacts_dir: ARTIFACTS_DIR, concurrency: CONCURRENCY }, 'proof-gen worker up');
 }

@@ -37,7 +37,13 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        <link rel="preload" as="image" href="/hero-bg.png" fetchPriority="high" />
+        <link
+          rel="preload"
+          as="image"
+          href="/hero-bg.avif"
+          type="image/avif"
+          fetchPriority="high"
+        />
       </head>
       <body className="min-h-screen bg-[#030303] text-neutral-100 antialiased">
         {children}

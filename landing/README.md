@@ -17,8 +17,11 @@ release date.
 
 Drop the real artwork over the placeholders in `public/`:
 
-- `public/hero.png` — full-bleed hero (currently a 1x1 black placeholder).
-- `public/logo.svg` — top-centered wordmark (currently a typographic fallback).
+- `public/hero.avif` + `public/hero-bg.avif` — full-bleed hero artwork.
+  AVIF for size (was 2.4 MB PNG → 200 KB AVIF). `public/*.webp` siblings
+  ship as a safety fallback. Regenerate with sharp's `.avif({ quality: 50,
+  effort: 6 })` and `.webp({ quality: 72, effort: 6 })`.
+- `public/logo.svg` — top-centered wordmark.
 
 The page reads them by these exact paths; no rewiring needed.
 

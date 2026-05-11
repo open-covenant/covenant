@@ -105,7 +105,14 @@ export function build(opts: BuildOpts) {
     status: 'ok',
     broker_key_loaded: cfg.signingKeyHex !== undefined,
     operator_bearer_loaded: cfg.operatorBearerToken !== undefined,
-    providers: ['ionet', 'akash'],
+    // Report only providers whose credentials are actually configured so
+    // k8s readiness can spot a half-wired deploy. The hardcoded list lied
+    // when IONET_API_KEY / AKASH_WALLET were unset — every call to the
+    // unconfigured provider would throw on first hit.
+    providers: [
+      cfg.ionetApiKey ? 'ionet' : null,
+      cfg.akashWallet ? 'akash' : null,
+    ].filter(Boolean),
   }));
 
   app.get('/metrics', async (_req, reply) => {

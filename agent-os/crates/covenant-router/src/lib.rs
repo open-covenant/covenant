@@ -9,7 +9,7 @@
 
 use covenant_manifest::Manifest;
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// A registered agent. Holds the routing-relevant projection (id, name,
 /// capabilities) plus the runtime-relevant data (full manifest, package_dir)
@@ -81,7 +81,21 @@ impl Router {
         for agent in &self.agents {
             let mut score = 0.0_f32;
             for cap in &agent.capabilities {
-                for kw in capability_keywords(cap) {
+                let kws = capability_keywords(cap);
+                if kws.is_empty() {
+                    // Capability has no entry in the keyword table — the
+                    // agent declared it but routing can't match anything
+                    // to it. Surface as warn! so the operator sees the
+                    // silent drop instead of wondering why their agent
+                    // never receives intents.
+                    warn!(
+                        agent = %agent.id,
+                        capability = %cap,
+                        "router: capability has no keyword bridge; intents will not match this agent on it"
+                    );
+                    continue;
+                }
+                for kw in kws {
                     if lowered.contains(kw) {
                         score += 1.0;
                     }

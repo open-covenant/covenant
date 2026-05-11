@@ -95,14 +95,28 @@ function tokenPathLabel(env: NodeJS.ProcessEnv): string {
   return '$HOME/.covenant/peers/operator.token';
 }
 
+// Per-path token cache so we don't hammer the filesystem on every daemon
+// call. 60s TTL picks up operator-driven rotations (which write a fresh
+// token to the file) without making the bridge read on every request.
+type TokenCacheEntry = { value: string; expiresAt: number };
+const tokenCache = new Map<string, TokenCacheEntry>();
+const TOKEN_CACHE_TTL_MS = 60_000;
+
 function authToken(env: NodeJS.ProcessEnv): string {
   const explicit = env.COVENANT_AUTH_TOKEN?.trim();
   if (explicit) return explicit;
 
   const file = tokenPath(env);
+  const now = Date.now();
+  const cached = tokenCache.get(file);
+  if (cached && cached.expiresAt > now) return cached.value;
+
   if (existsSync(file)) {
     const token = readFileSync(file, 'utf8').trim();
-    if (token) return token;
+    if (token) {
+      tokenCache.set(file, { value: token, expiresAt: now + TOKEN_CACHE_TTL_MS });
+      return token;
+    }
   }
 
   throw new Error(

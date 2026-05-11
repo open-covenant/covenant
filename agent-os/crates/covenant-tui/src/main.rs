@@ -10,7 +10,10 @@
 use std::io::{self, Stdout};
 
 use anyhow::{Context, Result};
-use covenant_tui::ipc::{covenant_home, recent_memory, submit_intent, MemoryFetchOutcome};
+use covenant_tui::ipc::{
+    covenant_home, recent_audit, recent_memory, submit_intent, AuditFetchOutcome,
+    MemoryFetchOutcome,
+};
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
 use crossterm::event::{Event, EventStream};
 use crossterm::execute;
@@ -27,6 +30,35 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+/// Stable, render-safe discriminant label for an `AuditKind`. The
+/// renderer must NOT use `{:?}` because that would leak internal
+/// variant ordering and break on a refactor; the explicit match
+/// pins the names that show up in the TUI.
+fn audit_kind_label(kind: &covenant_audit::AuditKind) -> &'static str {
+    use covenant_audit::AuditKind::*;
+    match kind {
+        IntentDispatched { .. } => "intent.dispatched",
+        IntentIgnored { .. } => "intent.ignored",
+        AuthenticationFailed { .. } => "authentication.failed",
+        CapabilityCheck { .. } => "capability.check",
+        CapabilityGranted { .. } => "capability.granted",
+        CapabilityGrantRejected { .. } => "capability.grant_rejected",
+        CapabilityScopeRejected { .. } => "capability.scope_rejected",
+        CapabilityRevokeRejected { .. } => "capability.revoke_rejected",
+        MemoryRepairApplied { .. } => "memory.repair_applied",
+        MemoryCompactionApplied { .. } => "memory.compaction_applied",
+        BudgetExhausted { .. } => "budget.exhausted",
+        BudgetUnseeded { .. } => "budget.unseeded",
+        OperatorTokenRotated { .. } => "operator.token_rotated",
+        OperatorTokenRotationRejected { .. } => "operator.token_rotation_rejected",
+        OperatorPeersListRejected { .. } => "operator.peers_list_rejected",
+        PeerRevoked { .. } => "peer.revoked",
+        OperatorPeerRevokeRejected { .. } => "operator.peer_revoke_rejected",
+        PeerSelfRevokeBlocked { .. } => "peer.self_revoke_blocked",
+        _ => "(other)",
+    }
+}
 
 struct TerminalGuard;
 
@@ -65,6 +97,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let mut events = EventStream::new();
     let (submit_tx, mut submit_rx) = mpsc::unbounded_channel::<SubmissionOutcome>();
     let (memory_tx, mut memory_rx) = mpsc::unbounded_channel::<MemoryFetchOutcome>();
+    let (audit_tx, mut audit_rx) = mpsc::unbounded_channel::<AuditFetchOutcome>();
     let home = covenant_home()?;
 
     loop {
@@ -103,6 +136,19 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if app.take_pending_audit_fetch() {
+            let tx = audit_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome = recent_audit(&home, 30).await.unwrap_or_else(|e| {
+                    AuditFetchOutcome::Failed {
+                        message: format!("{e:#}"),
+                    }
+                });
+                let _ = tx.send(outcome);
+            });
+        }
+
         tokio::select! {
             Some(Ok(event)) = events.next() => {
                 if let Event::Key(key) = event {
@@ -114,6 +160,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             }
             Some(outcome) = memory_rx.recv() => {
                 app.apply_memory_fetch_outcome(outcome);
+            }
+            Some(outcome) = audit_rx.recv() => {
+                app.apply_audit_fetch_outcome(outcome);
             }
         }
 
@@ -132,7 +181,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     match app.mode() {
         Mode::Browsing => {
             let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit most-recent · m: memory · q / Esc: quit",
+                "covenant tui — i: draft · s: submit · m: memory · a: audit · q / Esc: quit",
             )
             .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
@@ -200,6 +249,47 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             let body = Paragraph::new(message.as_str())
                 .style(Style::default().add_modifier(Modifier::REVERSED))
                 .block(Block::default().borders(Borders::ALL).title("error"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::AuditTail {
+            loading,
+            events,
+            error,
+        } => {
+            let header = Paragraph::new("audit tail — q / Esc to dismiss")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(Block::default().borders(Borders::ALL).title("audit error"))
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("audit"))
+            } else if events.is_empty() {
+                Paragraph::new("no audit events")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("audit"))
+            } else {
+                let lines: Vec<Line<'_>> = events
+                    .iter()
+                    .map(|e| {
+                        let kind = audit_kind_label(&e.kind);
+                        Line::from(format!(
+                            "{ts:>14}  {kind:<28}  {issuer}",
+                            ts = e.timestamp_ms,
+                            kind = kind,
+                            issuer = e.issuer.display,
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines)
+                    .block(Block::default().borders(Borders::ALL).title("audit"))
+            };
             frame.render_widget(body, layout[1]);
         }
         Mode::MemoryTail {

@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use covenant_types::{MemoryRecord, MemoryTier};
 use tokio::net::UnixStream;
@@ -20,6 +21,10 @@ use crate::SubmissionOutcome;
 /// request from asking the daemon to enumerate the entire memory
 /// table into a single IPC frame.
 pub const RECENT_MEMORY_LIMIT_CAP: usize = 50;
+
+/// Hard cap on `Request::RecentAudit::limit`. Audit volume can grow
+/// faster than memory, so the cap is set higher.
+pub const RECENT_AUDIT_LIMIT_CAP: usize = 100;
 
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
@@ -44,6 +49,16 @@ pub enum GrantOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryFetchOutcome {
     Fetched { records: Vec<MemoryRecord> },
+    Failed { message: String },
+}
+
+/// Outcome of a [`recent_audit`] call. Same shape as
+/// [`MemoryFetchOutcome`]. `recent_audit` is filtered server-side to
+/// the calling peer's own audit rows, so a `Failed` here always
+/// reflects a wire or auth issue, never a capability gate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuditFetchOutcome {
+    Fetched { events: Vec<AuditEvent> },
     Failed { message: String },
 }
 
@@ -237,6 +252,47 @@ pub async fn recent_memory(
         Response::Memories { records } => Ok(MemoryFetchOutcome::Fetched { records }),
         Response::Error { message } => Ok(MemoryFetchOutcome::Failed { message }),
         other => Ok(MemoryFetchOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::RecentAudit`, and maps the daemon response
+/// into an [`AuditFetchOutcome`]. The daemon filters audit rows to
+/// `issuer.pubkey == peer.pubkey` so the operator only sees their
+/// own activity.
+///
+/// `limit` is clamped to [`RECENT_AUDIT_LIMIT_CAP`].
+pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome> {
+    let sock = home.join("sock");
+    let mut stream = UnixStream::connect(&sock).await.with_context(|| {
+        format!(
+            "connect to daemon at {} (is covenantd running?)",
+            sock.display()
+        )
+    })?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(AuditFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(AuditFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_AUDIT_LIMIT_CAP);
+    write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::AuditEvents { events } => Ok(AuditFetchOutcome::Fetched { events }),
+        Response::Error { message } => Ok(AuditFetchOutcome::Failed { message }),
+        other => Ok(AuditFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

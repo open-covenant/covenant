@@ -7,13 +7,14 @@
 //! capabilities, etc.); each screen adds state here and a match arm
 //! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
 
+use covenant_audit::AuditEvent;
 use covenant_types::MemoryRecord;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use uuid::Uuid;
 
 pub mod ipc;
 
-pub use ipc::MemoryFetchOutcome;
+pub use ipc::{AuditFetchOutcome, MemoryFetchOutcome};
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,16 @@ pub enum Mode {
         records: Vec<MemoryRecord>,
         error: Option<String>,
     },
+    /// Audit tail view. Press `a` from Browsing to enter. The audit
+    /// log has no read-side capability gate (rows are server-side
+    /// filtered to the calling peer's own activity), so the fetch
+    /// only fails on wire-level or auth issues. Press `q` / `Esc`
+    /// to dismiss.
+    AuditTail {
+        loading: bool,
+        events: Vec<AuditEvent>,
+        error: Option<String>,
+    },
 }
 
 impl Default for Mode {
@@ -89,6 +100,9 @@ pub struct App {
     /// the first call to [`App::take_pending_memory_fetch`]. Same
     /// one-shot-flag pattern as `pending_submission`.
     pending_memory_fetch: bool,
+    /// Set when transitioning to [`Mode::AuditTail`] and cleared by
+    /// the first call to [`App::take_pending_audit_fetch`].
+    pending_audit_fetch: bool,
 }
 
 impl App {
@@ -155,6 +169,18 @@ impl App {
                 _ => Mode::MemoryTail {
                     loading,
                     records,
+                    error,
+                },
+            },
+            Mode::AuditTail {
+                loading,
+                events,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::AuditTail {
+                    loading,
+                    events,
                     error,
                 },
             },
@@ -240,6 +266,36 @@ impl App {
             },
         };
     }
+
+    /// One-shot flag for the audit-tail fetch. Same kickoff
+    /// semantics as [`App::take_pending_memory_fetch`].
+    pub fn take_pending_audit_fetch(&mut self) -> bool {
+        if !self.pending_audit_fetch {
+            return false;
+        }
+        self.pending_audit_fetch = false;
+        true
+    }
+
+    /// Apply an audit-tail fetch result. No-op if the user has
+    /// already navigated away from `Mode::AuditTail`.
+    pub fn apply_audit_fetch_outcome(&mut self, outcome: AuditFetchOutcome) {
+        let Mode::AuditTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            AuditFetchOutcome::Fetched { events } => Mode::AuditTail {
+                loading: false,
+                events,
+                error: None,
+            },
+            AuditFetchOutcome::Failed { message } => Mode::AuditTail {
+                loading: false,
+                events: Vec::new(),
+                error: Some(message),
+            },
+        };
+    }
 }
 
 /// The two outcomes a submission can have. The daemon's
@@ -285,6 +341,14 @@ impl App {
                 Mode::MemoryTail {
                     loading: true,
                     records: Vec::new(),
+                    error: None,
+                }
+            }
+            KeyCode::Char('a') => {
+                self.pending_audit_fetch = true;
+                Mode::AuditTail {
+                    loading: true,
+                    events: Vec::new(),
                     error: None,
                 }
             }
@@ -731,6 +795,68 @@ mod tests {
             &Mode::Browsing,
             "late memory response must not clobber the user's view"
         );
+    }
+
+    #[test]
+    fn pressing_a_enters_audit_tail_loading_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('a')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::AuditTail {
+                    loading: true,
+                    error: None,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(app.take_pending_audit_fetch());
+        assert!(!app.take_pending_audit_fetch());
+    }
+
+    #[test]
+    fn audit_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('a')));
+        let _ = app.take_pending_audit_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn audit_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('a')));
+        let _ = app.take_pending_audit_fetch();
+        app.apply_audit_fetch_outcome(AuditFetchOutcome::Failed {
+            message: "wire error".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::AuditTail {
+                    loading: false,
+                    error: Some(_),
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn audit_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('a')));
+        let _ = app.take_pending_audit_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_audit_fetch_outcome(AuditFetchOutcome::Fetched { events: Vec::new() });
+        assert_eq!(app.mode(), &Mode::Browsing);
     }
 
     #[test]

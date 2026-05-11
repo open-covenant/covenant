@@ -63,7 +63,6 @@ agent-os/scripts/alpha-release-readiness.mjs
 agent-os/scripts/alpha-release-validate-bundle.mjs
 agent-os/scripts/autonomy-continue.mjs
 agent-os/scripts/autonomy-dirty-report.mjs
-agent-os/scripts/autonomy-end-of-session.mjs
 agent-os/scripts/autonomy-handoff-bundle.mjs
 agent-os/scripts/autonomy-next.mjs
 agent-os/scripts/autonomy-plan-handoff-restore.mjs

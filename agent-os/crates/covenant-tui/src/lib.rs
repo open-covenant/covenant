@@ -8,6 +8,7 @@
 //! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use uuid::Uuid;
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +22,8 @@ pub enum ExitReason {
 /// Active screen / interaction mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
-    /// Base view. `i` enters the intent editor; `q` / `Esc` quit.
+    /// Base view. `i` enters the intent editor; `s` submits the most
+    /// recent draft to the daemon; `q` / `Esc` quit.
     Browsing,
     /// Intent editor: typing fills the buffer; Backspace removes the
     /// last char; `Enter` accepts the buffer into [`App::drafts`] and
@@ -29,6 +31,21 @@ pub enum Mode {
     /// returns to [`Mode::Browsing`]. `q` is a literal character here,
     /// not a quit.
     Editing { buffer: String },
+    /// In-flight submission. Renderer shows a spinner-style hint.
+    /// `Esc` here does NOT cancel the in-flight RPC; it just hides
+    /// this view and returns to Browsing (the response, when it
+    /// lands, is dropped).
+    Submitting { text: String },
+    /// Daemon returned an intent result. Any key returns to Browsing.
+    Result {
+        intent_id: Uuid,
+        status: String,
+        text: String,
+    },
+    /// Submission failed (IPC, auth, or daemon-side error). Any key
+    /// returns to Browsing. Message is rendered as-is so a CLI
+    /// caller's reasoning carries through.
+    Error { message: String },
 }
 
 impl Default for Mode {
@@ -48,6 +65,12 @@ pub struct App {
     mode: Mode,
     drafts: Vec<String>,
     exit: Option<ExitReason>,
+    /// Set when transitioning to [`Mode::Submitting`] and cleared by
+    /// the first call to [`App::take_pending_submission`]. The flag
+    /// ensures the binary's event loop only spawns one IPC task per
+    /// submission, even though the App may remain in `Submitting`
+    /// for the lifetime of the in-flight RPC.
+    pending_submission: bool,
 }
 
 impl App {
@@ -98,9 +121,84 @@ impl App {
         self.mode = match prev {
             Mode::Browsing => self.handle_browsing(event),
             Mode::Editing { buffer } => self.handle_editing(buffer, event),
+            // Esc / any key dismisses Submitting (without cancelling
+            // the in-flight RPC) or a terminal result/error view.
+            Mode::Submitting { text } => match event.code {
+                KeyCode::Esc => Mode::Browsing,
+                _ => Mode::Submitting { text },
+            },
+            Mode::Result { .. } | Mode::Error { .. } => self.handle_terminal_view(event),
         };
     }
 
+    /// Apply the daemon's response (or a wire-level error) to the App
+    /// state. No-op if the user has already navigated away from
+    /// Submitting (e.g. they pressed Esc before the response landed).
+    pub fn apply_submission_outcome(&mut self, outcome: SubmissionOutcome) {
+        if !matches!(self.mode, Mode::Submitting { .. }) {
+            return;
+        }
+        self.mode = match outcome {
+            SubmissionOutcome::Accepted {
+                intent_id,
+                status,
+                text,
+            } => Mode::Result {
+                intent_id,
+                status,
+                text,
+            },
+            SubmissionOutcome::Failed { message } => Mode::Error { message },
+        };
+    }
+
+    /// In-flight submission text, exposed so the renderer can show
+    /// what is being submitted. Always returns `Some` while in
+    /// [`Mode::Submitting`]; see [`App::take_pending_submission`] for
+    /// the kickoff variant.
+    pub fn in_flight(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Submitting { text } => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns the text of a freshly-entered submission exactly once,
+    /// consuming the `pending_submission` flag set on the transition
+    /// into [`Mode::Submitting`]. The binary's event loop calls this
+    /// each iteration: a `Some` value means "spawn an IPC task for
+    /// this text"; a `None` value means "the in-flight RPC has
+    /// already been spawned, do nothing this tick".
+    pub fn take_pending_submission(&mut self) -> Option<String> {
+        if !self.pending_submission {
+            return None;
+        }
+        let Mode::Submitting { text } = &self.mode else {
+            return None;
+        };
+        let text = text.clone();
+        self.pending_submission = false;
+        Some(text)
+    }
+}
+
+/// The two outcomes a submission can have. The daemon's
+/// `Response::IntentResult` and any wire-level / auth / capability
+/// failure both collapse into this enum so the App's state machine
+/// stays simple.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionOutcome {
+    Accepted {
+        intent_id: Uuid,
+        status: String,
+        text: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl App {
     fn handle_browsing(&mut self, event: KeyEvent) -> Mode {
         match event.code {
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -110,6 +208,30 @@ impl App {
             KeyCode::Char('i') => Mode::Editing {
                 buffer: String::new(),
             },
+            KeyCode::Char('s') => {
+                // Pop the most recent draft (LIFO). Slice 3 ships
+                // newest-first because the user just typed it and
+                // expects it to be the one that submits; a queue
+                // FIFO can land in a later slice.
+                if let Some(text) = self.drafts.pop() {
+                    self.pending_submission = true;
+                    Mode::Submitting { text }
+                } else {
+                    Mode::Browsing
+                }
+            }
+            _ => Mode::Browsing,
+        }
+    }
+
+    /// Result/Error modes share the same dismissal shape: any key
+    /// returns to Browsing.
+    fn handle_terminal_view(&mut self, event: KeyEvent) -> Mode {
+        match event.code {
+            KeyCode::Char('q') => {
+                self.exit = Some(ExitReason::UserQuit);
+                Mode::Browsing
+            }
             _ => Mode::Browsing,
         }
     }
@@ -292,6 +414,150 @@ mod tests {
         type_chars(&mut app, "in flight");
         app.on_key(ctrl(KeyCode::Char('c')));
         assert_eq!(app.exit_reason(), Some(ExitReason::Interrupt));
+    }
+
+    #[test]
+    fn pressing_s_in_browsing_with_empty_drafts_is_a_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('s')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        assert!(app.take_pending_submission().is_none());
+    }
+
+    #[test]
+    fn pressing_s_pops_most_recent_draft_and_enters_submitting() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "first");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "most recent");
+        app.on_key(press(KeyCode::Enter));
+        assert_eq!(app.drafts().len(), 2);
+
+        app.on_key(press(KeyCode::Char('s')));
+        assert_eq!(
+            app.mode(),
+            &Mode::Submitting {
+                text: "most recent".into()
+            }
+        );
+        assert_eq!(app.drafts(), &["first".to_string()]);
+        assert_eq!(app.in_flight(), Some("most recent"));
+    }
+
+    #[test]
+    fn take_pending_submission_returns_text_once_then_none() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "submit me");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+
+        assert_eq!(app.take_pending_submission(), Some("submit me".into()));
+        assert_eq!(app.take_pending_submission(), None);
+        // App is still in Submitting so the renderer can show the
+        // in-flight text; only the kickoff flag was consumed.
+        assert_eq!(app.in_flight(), Some("submit me"));
+    }
+
+    #[test]
+    fn apply_submission_outcome_accepted_transitions_to_result() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "intent text");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+        let _ = app.take_pending_submission();
+
+        let intent_id = Uuid::new_v4();
+        app.apply_submission_outcome(SubmissionOutcome::Accepted {
+            intent_id,
+            status: "ok".into(),
+            text: "daemon reply".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::Result {
+                intent_id,
+                status: "ok".into(),
+                text: "daemon reply".into()
+            }
+        );
+    }
+
+    #[test]
+    fn apply_submission_outcome_failed_transitions_to_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "intent text");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+        let _ = app.take_pending_submission();
+
+        app.apply_submission_outcome(SubmissionOutcome::Failed {
+            message: "capability missing".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::Error {
+                message: "capability missing".into()
+            }
+        );
+    }
+
+    #[test]
+    fn apply_submission_outcome_after_user_dismissed_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "intent text");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+        let _ = app.take_pending_submission();
+        // User pressed Esc before the response landed.
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+
+        app.apply_submission_outcome(SubmissionOutcome::Accepted {
+            intent_id: Uuid::new_v4(),
+            status: "ok".into(),
+            text: "late reply".into(),
+        });
+        assert_eq!(
+            app.mode(),
+            &Mode::Browsing,
+            "late response must not clobber the user's view"
+        );
+    }
+
+    #[test]
+    fn result_view_any_key_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "x");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+        app.apply_submission_outcome(SubmissionOutcome::Accepted {
+            intent_id: Uuid::new_v4(),
+            status: "ok".into(),
+            text: "reply".into(),
+        });
+        app.on_key(press(KeyCode::Enter));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn error_view_q_returns_to_browsing_and_quits() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        type_chars(&mut app, "x");
+        app.on_key(press(KeyCode::Enter));
+        app.on_key(press(KeyCode::Char('s')));
+        app.apply_submission_outcome(SubmissionOutcome::Failed {
+            message: "boom".into(),
+        });
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.exit_reason(), Some(ExitReason::UserQuit));
     }
 
     #[test]

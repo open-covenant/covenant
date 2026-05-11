@@ -17,5 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-crossterm = "0.28"
+covenant-ipc = { path = "../covenant-ipc" }
+covenant-types = { path = "../covenant-types" }
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
 ratatui = "0.28"
+tokio = { workspace = true }
+uuid = { workspace = true }

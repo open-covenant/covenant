@@ -666,6 +666,7 @@ dependencies = [
  "async-trait",
  "covenant-mcp",
  "covenant-types",
+ "parking_lot",
  "serde",
  "serde_json",
  "tempfile",

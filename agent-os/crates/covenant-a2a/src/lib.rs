@@ -18,7 +18,12 @@ use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Mutex;
+// parking_lot::Mutex over std::sync::Mutex: no poison concept means a
+// panic inside one Mailbox call cannot lock every subsequent caller out
+// via PoisonError. The .lock() pattern that used to ride on
+// each access is no longer needed — parking_lot's lock() returns the
+// guard directly. Also a measurable perf win on contended paths.
+use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -635,7 +640,7 @@ impl InMemoryMailbox {
 
     fn lease_task(&self, task: A2ATask, leased_to: AgentId) -> A2ATask {
         let attempt = {
-            let mut attempts = self.attempts.lock().unwrap();
+            let mut attempts = self.attempts.lock();
             let attempt = attempts
                 .get(&task.id)
                 .copied()
@@ -651,7 +656,7 @@ impl InMemoryMailbox {
             leased_at_ms: epoch_ms(),
             attempt,
         };
-        self.in_flight.lock().unwrap().insert(task.id, lease);
+        self.in_flight.lock().insert(task.id, lease);
         task
     }
 
@@ -659,7 +664,6 @@ impl InMemoryMailbox {
         let attempt = self
             .attempts
             .lock()
-            .unwrap()
             .get(&task.id)
             .copied()
             .unwrap_or(0);
@@ -675,31 +679,29 @@ impl Mailbox for InMemoryMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
         validate_task(&task)?;
         if let Some(cached) = idempotency_cache_key(&task)
-            .and_then(|key| self.result_cache.lock().unwrap().get(&key).cloned())
+            .and_then(|key| self.result_cache.lock().get(&key).cloned())
         {
             let result = cached.to_result(task.id);
             self.senders
                 .lock()
-                .unwrap()
                 .insert(task.id, task.sender.clone());
-            self.attempts.lock().unwrap().entry(task.id).or_insert(0);
-            self.results.lock().unwrap().push_back(result);
+            self.attempts.lock().entry(task.id).or_insert(0);
+            self.results.lock().push_back(result);
             self.result_notify.notify_one();
             return Ok(());
         }
         self.senders
             .lock()
-            .unwrap()
             .insert(task.id, task.sender.clone());
-        self.attempts.lock().unwrap().entry(task.id).or_insert(0);
-        self.tasks.lock().unwrap().push_back(task);
+        self.attempts.lock().entry(task.id).or_insert(0);
+        self.tasks.lock().push_back(task);
         self.task_notify.notify_one();
         Ok(())
     }
 
     async fn recv_task(&self) -> Result<A2ATask, A2AError> {
         loop {
-            if let Some(t) = self.tasks.lock().unwrap().pop_front() {
+            if let Some(t) = self.tasks.lock().pop_front() {
                 return Ok(self.lease_task(t.clone(), t.recipient.clone()));
             }
             self.task_notify.notified().await;
@@ -707,7 +709,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn try_recv_task_for(&self, recipient: &AgentId) -> Result<Option<A2ATask>, A2AError> {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.lock();
         let Some(pos) = tasks.iter().position(|t| t.recipient == *recipient) else {
             return Ok(None);
         };
@@ -717,23 +719,22 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
-        let completed = self.in_flight.lock().unwrap().remove(&result.task_id);
+        let completed = self.in_flight.lock().remove(&result.task_id);
         if let Some(lease) = completed {
             if let Some(key) = idempotency_cache_key(&lease.task) {
                 self.result_cache
                     .lock()
-                    .unwrap()
                     .insert(key, A2AIdempotencyCachedResult::from_result(&result));
             }
         }
-        self.results.lock().unwrap().push_back(result);
+        self.results.lock().push_back(result);
         self.result_notify.notify_one();
         Ok(())
     }
 
     async fn recv_result(&self) -> Result<A2ATaskResult, A2AError> {
         loop {
-            if let Some(r) = self.results.lock().unwrap().pop_front() {
+            if let Some(r) = self.results.lock().pop_front() {
                 return Ok(r);
             }
             self.result_notify.notified().await;
@@ -741,8 +742,8 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn try_recv_result_for(&self, peer: &AgentId) -> Result<Option<A2ATaskResult>, A2AError> {
-        let senders = self.senders.lock().unwrap();
-        let mut results = self.results.lock().unwrap();
+        let senders = self.senders.lock();
+        let mut results = self.results.lock();
         let pos = results
             .iter()
             .position(|r| senders.get(&r.task_id).map(|s| s == peer).unwrap_or(false));
@@ -753,7 +754,6 @@ impl Mailbox for InMemoryMailbox {
         Ok(self
             .tasks
             .lock()
-            .unwrap()
             .iter()
             .take(limit)
             .cloned()
@@ -764,7 +764,6 @@ impl Mailbox for InMemoryMailbox {
         let mut entries: Vec<A2ATaskQueueEntry> = self
             .tasks
             .lock()
-            .unwrap()
             .iter()
             .cloned()
             .map(|task| self.queued_entry(task))
@@ -772,7 +771,6 @@ impl Mailbox for InMemoryMailbox {
         let mut leased: Vec<A2ATaskQueueEntry> = self
             .in_flight
             .lock()
-            .unwrap()
             .values()
             .cloned()
             .map(A2ATaskQueueEntry::in_flight)
@@ -793,7 +791,7 @@ impl Mailbox for InMemoryMailbox {
         match request.command {
             A2ARepairCommand::Requeue { lease_id, .. } => {
                 let lease = {
-                    let mut in_flight = self.in_flight.lock().unwrap();
+                    let mut in_flight = self.in_flight.lock();
                     let lease = in_flight
                         .get(&request.task_id)
                         .cloned()
@@ -802,7 +800,7 @@ impl Mailbox for InMemoryMailbox {
                     in_flight.remove(&request.task_id);
                     lease
                 };
-                self.tasks.lock().unwrap().push_back(lease.task);
+                self.tasks.lock().push_back(lease.task);
                 self.task_notify.notify_one();
                 Ok(A2ARepairOutcome {
                     task_id: request.task_id,
@@ -814,7 +812,7 @@ impl Mailbox for InMemoryMailbox {
             }
             A2ARepairCommand::ForceError { lease_id, message } => {
                 let lease = {
-                    let mut in_flight = self.in_flight.lock().unwrap();
+                    let mut in_flight = self.in_flight.lock();
                     let lease = in_flight
                         .get(&request.task_id)
                         .cloned()
@@ -824,7 +822,7 @@ impl Mailbox for InMemoryMailbox {
                     lease
                 };
                 let result = A2ATaskResult::error(request.task_id, message);
-                self.results.lock().unwrap().push_back(result.clone());
+                self.results.lock().push_back(result.clone());
                 self.result_notify.notify_one();
                 Ok(A2ARepairOutcome {
                     task_id: request.task_id,
@@ -841,7 +839,6 @@ impl Mailbox for InMemoryMailbox {
         Ok(self
             .results
             .lock()
-            .unwrap()
             .iter()
             .take(limit)
             .cloned()
@@ -849,7 +846,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
-        Ok(self.senders.lock().unwrap().get(&task_id).cloned())
+        Ok(self.senders.lock().get(&task_id).cloned())
     }
 
     async fn compact(&self) -> Result<u64, A2AError> {
@@ -1128,7 +1125,7 @@ impl Mailbox for JsonlMailbox {
         validate_task(&task)?;
         let _g = self.file_lock.lock().await;
         let replay = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock();
             idempotency_cache_key(&task)
                 .and_then(|key| s.result_cache.get(&key).cloned())
                 .map(|cached| cached.to_result(task.id))
@@ -1139,14 +1136,14 @@ impl Mailbox for JsonlMailbox {
                 result,
             };
             self.append(&event).await?;
-            self.state.lock().unwrap().apply(event);
+            self.state.lock().apply(event);
             self.result_notify.notify_one();
             return Ok(());
         }
         self.append(&MailboxEvent::TaskSent { task: task.clone() })
             .await?;
         {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock();
             s.senders.insert(task.id, task.sender.clone());
             s.attempts.entry(task.id).or_insert(0);
             s.tasks.push_back(task);
@@ -1162,14 +1159,13 @@ impl Mailbox for JsonlMailbox {
                 let front = self
                     .state
                     .lock()
-                    .unwrap()
                     .tasks
                     .front()
                     .map(|t| (t.id, t.recipient.clone()));
                 if let Some((id, recipient)) = front {
                     let lease_id = Uuid::new_v4();
                     let leased_at_ms = epoch_ms();
-                    let attempt = self.state.lock().unwrap().next_attempt(id);
+                    let attempt = self.state.lock().next_attempt(id);
                     self.append(&MailboxEvent::TaskLeased {
                         task_id: id,
                         lease_id,
@@ -1178,7 +1174,7 @@ impl Mailbox for JsonlMailbox {
                         attempt,
                     })
                     .await?;
-                    if let Some(t) = self.state.lock().unwrap().lease_task(
+                    if let Some(t) = self.state.lock().lease_task(
                         id,
                         lease_id,
                         None,
@@ -1196,7 +1192,7 @@ impl Mailbox for JsonlMailbox {
     async fn try_recv_task_for(&self, recipient: &AgentId) -> Result<Option<A2ATask>, A2AError> {
         let _g = self.file_lock.lock().await;
         let target_id = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock();
             s.tasks
                 .iter()
                 .find(|t| t.recipient == *recipient)
@@ -1205,7 +1201,7 @@ impl Mailbox for JsonlMailbox {
         let Some(id) = target_id else { return Ok(None) };
         let lease_id = Uuid::new_v4();
         let leased_at_ms = epoch_ms();
-        let attempt = self.state.lock().unwrap().next_attempt(id);
+        let attempt = self.state.lock().next_attempt(id);
         self.append(&MailboxEvent::TaskLeased {
             task_id: id,
             lease_id,
@@ -1214,14 +1210,14 @@ impl Mailbox for JsonlMailbox {
             attempt,
         })
         .await?;
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock();
         Ok(s.lease_task(id, lease_id, Some(recipient.clone()), leased_at_ms, attempt))
     }
 
     async fn send_result(&self, result: A2ATaskResult) -> Result<(), A2AError> {
         let _g = self.file_lock.lock().await;
         let cache_event = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock();
             s.in_flight
                 .get(&result.task_id)
                 .and_then(|lease| idempotency_cache_key(&lease.task))
@@ -1237,7 +1233,7 @@ impl Mailbox for JsonlMailbox {
         if let Some(event) = &cache_event {
             self.append(event).await?;
         }
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock();
         s.apply(MailboxEvent::ResultPosted { result });
         if let Some(event) = cache_event {
             s.apply(event);
@@ -1253,14 +1249,13 @@ impl Mailbox for JsonlMailbox {
                 let front_id = self
                     .state
                     .lock()
-                    .unwrap()
                     .results
                     .front()
                     .map(|r| r.task_id);
                 if let Some(id) = front_id {
                     self.append(&MailboxEvent::ResultRecv { task_id: id })
                         .await?;
-                    if let Some(r) = self.state.lock().unwrap().results.pop_front() {
+                    if let Some(r) = self.state.lock().results.pop_front() {
                         return Ok(r);
                     }
                 }
@@ -1272,7 +1267,7 @@ impl Mailbox for JsonlMailbox {
     async fn try_recv_result_for(&self, peer: &AgentId) -> Result<Option<A2ATaskResult>, A2AError> {
         let _g = self.file_lock.lock().await;
         let target_task_id = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock();
             s.results.iter().find_map(|r| {
                 s.senders
                     .get(&r.task_id)
@@ -1284,7 +1279,7 @@ impl Mailbox for JsonlMailbox {
             return Ok(None);
         };
         self.append(&MailboxEvent::ResultRecv { task_id }).await?;
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock();
         let pos = s.results.iter().position(|r| r.task_id == task_id);
         Ok(pos.and_then(|p| s.results.remove(p)))
     }
@@ -1293,7 +1288,6 @@ impl Mailbox for JsonlMailbox {
         Ok(self
             .state
             .lock()
-            .unwrap()
             .tasks
             .iter()
             .take(limit)
@@ -1302,7 +1296,7 @@ impl Mailbox for JsonlMailbox {
     }
 
     async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError> {
-        Ok(self.state.lock().unwrap().task_queue(limit))
+        Ok(self.state.lock().task_queue(limit))
     }
 
     async fn repair_task(&self, request: A2ARepairRequest) -> Result<A2ARepairOutcome, A2AError> {
@@ -1315,7 +1309,7 @@ impl Mailbox for JsonlMailbox {
                 duplicate_risk,
             } => {
                 let lease = {
-                    let s = self.state.lock().unwrap();
+                    let s = self.state.lock();
                     s.in_flight
                         .get(&request.task_id)
                         .cloned()
@@ -1331,7 +1325,7 @@ impl Mailbox for JsonlMailbox {
                     attempt: lease.attempt,
                 };
                 self.append(&event).await?;
-                self.state.lock().unwrap().apply(event);
+                self.state.lock().apply(event);
                 self.task_notify.notify_one();
                 Ok(A2ARepairOutcome {
                     task_id: request.task_id,
@@ -1343,7 +1337,7 @@ impl Mailbox for JsonlMailbox {
             }
             A2ARepairCommand::ForceError { lease_id, message } => {
                 let lease = {
-                    let s = self.state.lock().unwrap();
+                    let s = self.state.lock();
                     s.in_flight
                         .get(&request.task_id)
                         .cloned()
@@ -1360,7 +1354,7 @@ impl Mailbox for JsonlMailbox {
                     attempt: lease.attempt,
                 };
                 self.append(&event).await?;
-                self.state.lock().unwrap().apply(event);
+                self.state.lock().apply(event);
                 self.result_notify.notify_one();
                 Ok(A2ARepairOutcome {
                     task_id: request.task_id,
@@ -1377,7 +1371,6 @@ impl Mailbox for JsonlMailbox {
         Ok(self
             .state
             .lock()
-            .unwrap()
             .results
             .iter()
             .take(limit)
@@ -1386,7 +1379,7 @@ impl Mailbox for JsonlMailbox {
     }
 
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
-        Ok(self.state.lock().unwrap().senders.get(&task_id).cloned())
+        Ok(self.state.lock().senders.get(&task_id).cloned())
     }
 
     async fn compact(&self) -> Result<u64, A2AError> {
@@ -1438,7 +1431,7 @@ impl Mailbox for JsonlMailbox {
         // Mirror the on-disk drop into in-memory state so the senders
         // map stays consistent without a reopen. Replay-on-open is the
         // ground truth; this update is purely a perf shortcut.
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock();
         for tid in &droppable {
             s.senders.remove(tid);
             s.in_flight.remove(tid);

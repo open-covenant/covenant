@@ -15,7 +15,7 @@ use covenant_tui::ipc::{
     recent_memory, recent_receipts, submit_intent, A2aFetchOutcome, AuditFetchOutcome,
     CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome, ReceiptsFetchOutcome,
 };
-use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome};
+use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome, HELP_BINDINGS};
 use crossterm::event::{Event, EventStream};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -265,10 +265,8 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     match app.mode() {
         Mode::Browsing => {
-            let header = Paragraph::new(
-                "covenant tui — i: draft · s: submit · g: grant · m: memory · a: audit · c: caps · A: a2a · r: receipts · q: quit",
-            )
-            .block(Block::default().borders(Borders::ALL).title("covenant"));
+            let header = Paragraph::new("covenant tui — ? for help · q: quit")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);
 
             let drafts = app.drafts();
@@ -430,6 +428,19 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             let body = Paragraph::new(message.as_str())
                 .style(Style::default().add_modifier(Modifier::REVERSED))
                 .block(Block::default().borders(Borders::ALL).title("grant error"));
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::Help => {
+            let header = Paragraph::new("help — any key returns to drafts")
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let lines: Vec<Line<'_>> = HELP_BINDINGS
+                .iter()
+                .map(|(key, desc)| Line::from(format!("  {key:<4}  {desc}")))
+                .collect();
+            let body = Paragraph::new(lines)
+                .block(Block::default().borders(Borders::ALL).title("keybindings"));
             frame.render_widget(body, layout[1]);
         }
         Mode::CapabilitiesTail {

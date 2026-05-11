@@ -122,12 +122,33 @@ pub enum Mode {
     /// Grant failed (daemon-side or wire-level). Any key returns to
     /// Browsing; `q` quits.
     GrantError { message: String },
+    /// Keybinding help overlay. Press `?` from Browsing to enter.
+    /// Any key (including `?`) returns to Browsing.
+    Help,
 }
 
 /// Drafted intents are capped so a stress-test (or an unattended
 /// keyboard) cannot grow the buffer without bound. The oldest entry
 /// drops when the cap is exceeded.
 const MAX_DRAFTS: usize = 64;
+
+/// Keybindings available from `Mode::Browsing`, paired with the
+/// short description rendered in the help overlay. The slice is the
+/// single source of truth — `handle_browsing` and the help renderer
+/// both read it so a new binding cannot land in the handler without
+/// showing up in the overlay (or vice versa).
+pub const HELP_BINDINGS: &[(&str, &str)] = &[
+    ("i", "draft intent"),
+    ("s", "submit most recent draft"),
+    ("g", "grant capability"),
+    ("m", "memory tail"),
+    ("a", "audit tail"),
+    ("c", "capabilities tail"),
+    ("A", "a2a inbox"),
+    ("r", "chain receipts"),
+    ("?", "this help"),
+    ("q", "quit"),
+];
 
 /// Top-level TUI state. Screens are added by future slices.
 #[derive(Debug, Default)]
@@ -280,6 +301,7 @@ impl App {
                 _ => Mode::GrantSubmitting { action },
             },
             Mode::GrantResult { .. } | Mode::GrantError { .. } => self.handle_terminal_view(event),
+            Mode::Help => Mode::Browsing,
         };
     }
 
@@ -596,6 +618,7 @@ impl App {
             KeyCode::Char('g') => Mode::GrantEditor {
                 buffer: String::new(),
             },
+            KeyCode::Char('?') => Mode::Help,
             _ => Mode::Browsing,
         }
     }
@@ -1579,6 +1602,69 @@ mod tests {
             receipts: Vec::new(),
         });
         assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn pressing_question_mark_in_browsing_enters_help() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('?')));
+        assert_eq!(app.mode(), &Mode::Help);
+    }
+
+    #[test]
+    fn any_key_in_help_returns_to_browsing() {
+        for key in [
+            KeyCode::Char('?'),
+            KeyCode::Char('q'),
+            KeyCode::Char('x'),
+            KeyCode::Esc,
+            KeyCode::Enter,
+            KeyCode::Tab,
+        ] {
+            let mut app = App::new();
+            app.on_key(press(KeyCode::Char('?')));
+            assert_eq!(app.mode(), &Mode::Help);
+            app.on_key(press(key));
+            assert_eq!(
+                app.mode(),
+                &Mode::Browsing,
+                "key {key:?} did not return to Browsing"
+            );
+        }
+    }
+
+    #[test]
+    fn question_mark_inside_intent_editor_is_a_literal_char() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('i')));
+        app.on_key(press(KeyCode::Char('?')));
+        assert_eq!(app.mode(), &Mode::Editing { buffer: "?".into() });
+    }
+
+    #[test]
+    fn question_mark_inside_grant_editor_is_a_literal_char() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('g')));
+        app.on_key(press(KeyCode::Char('?')));
+        assert_eq!(app.mode(), &Mode::GrantEditor { buffer: "?".into() });
+    }
+
+    #[test]
+    fn help_bindings_are_single_char_keys() {
+        // The renderer formats each binding with a width-4 key column;
+        // a multi-char key (e.g. "Ctrl-X") would silently overflow.
+        // Hard-coding single chars also matches the KeyCode::Char arms
+        // in handle_browsing. The reverse direction — every Browsing
+        // key has an entry — is enforced by review during the diff
+        // that adds the binding.
+        for (key, desc) in HELP_BINDINGS {
+            assert_eq!(
+                key.chars().count(),
+                1,
+                "help key must be a single char: {key:?}"
+            );
+            assert!(!desc.is_empty(), "help description must not be empty");
+        }
     }
 
     #[test]

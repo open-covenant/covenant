@@ -2064,6 +2064,101 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_recent_capabilities_serde_pins_default_bearing_single_field_variant() {
+        // Request::RecentCapabilities is the read-side
+        // default-bearing variant the CLI and HTTP gateway send to
+        // enumerate the most recent N SignedCapability ledger rows
+        // for operator triage. limit defaults to
+        // default_recent_limit() (10) via
+        // #[serde(default = "default_recent_limit")] so a stale
+        // CLI can omit the field. It pairs with
+        // Response::Capabilities (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='recent_capabilities' plus limit. No prior
+        // test pins the exact wire shape, limit numeric
+        // serialization, round-trip, or the default-on-missing
+        // decode contract for this variant. The default-on-missing
+        // decode is the compatibility hinge — a stale CLI that
+        // does not yet know to send limit must continue listing
+        // without a rebuild.
+        let event = Request::RecentCapabilities { limit: 25 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit"],
+            "Request::RecentCapabilities wire form must be exactly \
+             two top-level keys: 'kind' plus the single 'limit' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a typed PageOptions would \
+             nest 'limit' one level deeper and every CLI/HTTP \
+             capabilities-listing probe that sends \
+             {{\"kind\":\"recent_capabilities\",\"limit\":<n>}} \
+             would fail to decode on the daemon side — the \
+             operator's capability-ledger triage surface goes \
+             dark and grant/revoke evidence cannot be enumerated \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("recent_capabilities")),
+            "Request discriminator slug must be the durable \
+             'recent_capabilities'; a slug regression silently \
+             routes incoming listing frames to the daemon's \
+             catch-all error branch — every CLI/HTTP \
+             capabilities-listing probe fails with a confusing \
+             fallback message instead of Response::Capabilities, \
+             and the operator cannot enumerate the \
+             SignedCapability ledger through the supported path",
+        );
+        assert_eq!(
+            obj.get("limit").and_then(serde_json::Value::as_u64),
+            Some(25),
+            "Request::RecentCapabilities::limit must surface as \
+             the literal numeric page size — the daemon's listing \
+             path binds on this exact field; a rename or retype \
+             would silently return a different row count than the \
+             operator asked for, distorting CLI output and HTTP \
+             response payload sizes",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RecentCapabilities must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP capabilities-listing consumer \
+             leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "recent_capabilities"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::RecentCapabilities must decode from a \
+             payload missing 'limit' — the #[serde(default)] \
+             attribute is the durable compatibility hinge that \
+             lets stale CLIs continue listing without a rebuild",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::RecentCapabilities { limit: 10 },
+            "Request::RecentCapabilities with missing 'limit' \
+             must default to default_recent_limit() = 10 — a \
+             refactor that drops the #[serde(default)] attribute \
+             or repoints it at a helper returning a different \
+             constant silently changes the page size for every \
+             stale CLI in the field; the operator's \
+             capabilities-listing behaviour diverges from the \
+             documented contract without a single error surface",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

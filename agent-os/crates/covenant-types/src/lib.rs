@@ -544,6 +544,36 @@ mod tests {
     }
 
     #[test]
+    fn budget_pause_reason_serde_pins_snake_case_wire_form() {
+        // BudgetPauseReason rides inside BudgetPauseCheckpoint, which the
+        // daemon persists through JsonlPauseCheckpointStore. The slugs
+        // are durable on disk — renaming one without a migration would
+        // silently strand previously paused intents because the resume
+        // claim path can't deserialize them.
+        let cases: [(BudgetPauseReason, &str); 4] = [
+            (BudgetPauseReason::BudgetExhausted, "budget_exhausted"),
+            (BudgetPauseReason::OperatorRequested, "operator_requested"),
+            (BudgetPauseReason::Shutdown, "shutdown"),
+            (BudgetPauseReason::Maintenance, "maintenance"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(
+                wire,
+                format!("\"{slug}\""),
+                "{variant:?} must serialize to {slug:?}; a slug rename strands paused checkpoints written by older daemons",
+            );
+            let back: BudgetPauseReason = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        // Snake_case is the only accepted casing — a permissive fallback
+        // would silently mask a stale or mis-cased checkpoint.
+        assert!(serde_json::from_str::<BudgetPauseReason>("\"BudgetExhausted\"").is_err());
+        assert!(serde_json::from_str::<BudgetPauseReason>("\"budget-exhausted\"").is_err());
+    }
+
+    #[test]
     fn memory_tier_serde_pins_canonical_longterm_and_legacy_aliases() {
         // Canonical serialize form: lowercase rename_all + LongTerm
         // collapses to the dotless `longterm` slug. Audit-grep

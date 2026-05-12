@@ -574,6 +574,101 @@ entry = "x.f90"
     }
 
     #[test]
+    fn resources_section_serde_pins_four_default_bearing_fields() {
+        // Resources is the [resources] block in agent.toml with four
+        // fields — cpu_ms_per_task, memory_mb, disk_mb, network — each
+        // backed by a documented Default impl that returns the spec
+        // values (30_000 / 512 / 100 / OutboundHttpsOnly). The struct
+        // itself carries #[serde(default)] so omitted fields fall back
+        // to the impl's values.
+        //
+        // The existing parses_minimal_with_defaults test exercises the
+        // full-default path but does not pin each individual default
+        // value nor each field's name. A refactor that changed
+        // Resources::default()'s cpu_ms_per_task from 30_000 to 0 would
+        // silently zero-cap every agent's per-task CPU budget and every
+        // intent dispatch would be capped at 0ms; a refactor that
+        // renamed cpu_ms_per_task to cpu_budget_ms would silently drop
+        // every operator's tuned CPU cap.
+        let agent_block = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#;
+
+        // Full override — every field set to a non-default value so a
+        // refactor that swapped two fields' bindings would be loud.
+        let full = format!(
+            "{agent_block}\n[resources]\ncpu_ms_per_task = 1234\nmemory_mb = 256\ndisk_mb = 50\nnetwork = \"off\"\n"
+        );
+        let parsed = Manifest::parse(&full).expect("full resources block must parse");
+        assert_eq!(parsed.resources.cpu_ms_per_task, 1234);
+        assert_eq!(parsed.resources.memory_mb, 256);
+        assert_eq!(parsed.resources.disk_mb, 50);
+        assert_eq!(parsed.resources.network, NetworkPolicy::Off);
+
+        // Section omitted entirely → Default impl values surface.
+        let omitted =
+            Manifest::parse(agent_block).expect("manifest without [resources] must parse");
+        assert_eq!(
+            omitted.resources.cpu_ms_per_task, 30_000,
+            "Resources::cpu_ms_per_task default must be 30_000 — a \
+             refactor to 0 would silently zero-cap every agent's CPU \
+             budget per task; a refactor to a larger value would silently \
+             widen the cap past the spec floor"
+        );
+        assert_eq!(
+            omitted.resources.memory_mb, 512,
+            "Resources::memory_mb default must be 512"
+        );
+        assert_eq!(
+            omitted.resources.disk_mb, 100,
+            "Resources::disk_mb default must be 100"
+        );
+        assert_eq!(
+            omitted.resources.network,
+            NetworkPolicy::OutboundHttpsOnly,
+            "Resources::network default must be OutboundHttpsOnly — a \
+             refactor to Off would silently sever every agent's outbound \
+             call; a refactor to Full would silently open the network on \
+             every agent that did not opt out"
+        );
+
+        // Partial overrides — each field's omission must fall through to
+        // the default WITHOUT disturbing the other three.
+        let only_cpu = format!("{agent_block}\n[resources]\ncpu_ms_per_task = 7777\n");
+        let parsed = Manifest::parse(&only_cpu).unwrap();
+        assert_eq!(parsed.resources.cpu_ms_per_task, 7777);
+        assert_eq!(parsed.resources.memory_mb, 512);
+        assert_eq!(parsed.resources.disk_mb, 100);
+        assert_eq!(parsed.resources.network, NetworkPolicy::OutboundHttpsOnly);
+
+        let only_memory = format!("{agent_block}\n[resources]\nmemory_mb = 2048\n");
+        let parsed = Manifest::parse(&only_memory).unwrap();
+        assert_eq!(parsed.resources.cpu_ms_per_task, 30_000);
+        assert_eq!(parsed.resources.memory_mb, 2048);
+        assert_eq!(parsed.resources.disk_mb, 100);
+        assert_eq!(parsed.resources.network, NetworkPolicy::OutboundHttpsOnly);
+
+        let only_disk = format!("{agent_block}\n[resources]\ndisk_mb = 500\n");
+        let parsed = Manifest::parse(&only_disk).unwrap();
+        assert_eq!(parsed.resources.cpu_ms_per_task, 30_000);
+        assert_eq!(parsed.resources.memory_mb, 512);
+        assert_eq!(parsed.resources.disk_mb, 500);
+        assert_eq!(parsed.resources.network, NetworkPolicy::OutboundHttpsOnly);
+
+        let only_network = format!("{agent_block}\n[resources]\nnetwork = \"full\"\n");
+        let parsed = Manifest::parse(&only_network).unwrap();
+        assert_eq!(parsed.resources.cpu_ms_per_task, 30_000);
+        assert_eq!(parsed.resources.memory_mb, 512);
+        assert_eq!(parsed.resources.disk_mb, 100);
+        assert_eq!(parsed.resources.network, NetworkPolicy::Full);
+    }
+
+    #[test]
     fn manifest_serde_pins_required_agent_section_and_default_others() {
         // Manifest is the top-level agent.toml schema with five
         // sections: agent is strictly required (no serde default), and

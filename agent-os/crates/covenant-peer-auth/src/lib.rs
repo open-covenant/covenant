@@ -1598,6 +1598,155 @@ mod tests {
     }
 
     #[test]
+    fn revoke_outcome_newtype_variants_pin_flattened_peer_summary_wire_form() {
+        // RevokeOutcome carries #[serde(tag = "type", rename_all =
+        // "snake_case")] and ships three newtype variants over a
+        // PeerSummary payload: Revoked(PeerSummary),
+        // AlreadyRevoked(PeerSummary), and
+        // SelfRevokeForbidden(PeerSummary). With tag = "type", serde
+        // flattens the inner PeerSummary's four wire fields
+        // (agent_id, token_prefix, registered_at, revoked_at) next to
+        // 'type' on the wire — so each variant must surface exactly
+        // five top-level keys. The sibling
+        // revoke_outcome_serde_pins_each_snake_case_type_slug pins
+        // slug+round-trip across all five outcome variants, and
+        // revoke_outcome_ambiguous_truncated_pins_serde_default pins
+        // the struct-variant default contract, but nothing pins the
+        // flattened PeerSummary wire shape. A refactor that promoted
+        // any of these newtype variants to a struct variant (Revoked
+        // { summary: PeerSummary }) would silently nest PeerSummary
+        // one level deeper under 'summary' and every prior `covenant
+        // peers revoke --json` consumer that destructures on the
+        // flattened top-level fields would read each revoke outcome
+        // as a missing-field record — operator dashboards,
+        // post-incident triage scripts, and the CLI's revoke
+        // success/failure classification would all silently degrade.
+        let summary = PeerSummary {
+            agent_id: dummy_agent("alice@host"),
+            token_prefix: "abcdef".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: Some(1_700_000_010_000),
+        };
+
+        let cases: [(RevokeOutcome, &str); 3] = [
+            (RevokeOutcome::Revoked(summary.clone()), "revoked"),
+            (
+                RevokeOutcome::AlreadyRevoked(summary.clone()),
+                "already_revoked",
+            ),
+            (
+                RevokeOutcome::SelfRevokeForbidden(summary.clone()),
+                "self_revoke_forbidden",
+            ),
+        ];
+
+        for (variant, expected_slug) in &cases {
+            let wire = serde_json::to_value(variant).unwrap();
+            let obj = wire
+                .as_object()
+                .expect("RevokeOutcome serializes as a JSON object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec![
+                    "agent_id",
+                    "registered_at",
+                    "revoked_at",
+                    "token_prefix",
+                    "type",
+                ],
+                "RevokeOutcome::{variant:?} wire form must be exactly \
+                 five top-level keys: PeerSummary's four fields \
+                 flattened next to the 'type' discriminator. A \
+                 refactor from newtype variant to struct variant \
+                 would nest PeerSummary under a 'summary' key and \
+                 every covenant peers revoke --json consumer that \
+                 destructures on the flattened top-level fields would \
+                 read the outcome as a missing-field record",
+            );
+            assert_eq!(
+                obj.get("type"),
+                Some(&serde_json::json!(expected_slug)),
+                "RevokeOutcome discriminator slug for {variant:?} \
+                 must be snake_case {expected_slug:?}; a slug \
+                 regression silently strands every CLI consumer that \
+                 classifies revoke outcomes on this exact value",
+            );
+
+            let agent_id_obj = obj
+                .get("agent_id")
+                .and_then(serde_json::Value::as_object)
+                .expect("agent_id must serialize as a nested JSON object");
+            let mut agent_keys: Vec<&str> = agent_id_obj.keys().map(String::as_str).collect();
+            agent_keys.sort();
+            assert_eq!(
+                agent_keys,
+                vec!["display", "pubkey"],
+                "RevokeOutcome::{variant:?}::agent_id must surface \
+                 the AgentId display+pubkey shape; a refactor that \
+                 flattened or restructured AgentId would break the \
+                 audit-row attribution that pairs PeerRevoked rows \
+                 with the displayed revoke outcome",
+            );
+
+            assert_eq!(
+                obj.get("token_prefix").and_then(serde_json::Value::as_str),
+                Some("abcdef"),
+                "RevokeOutcome::{variant:?}::token_prefix must \
+                 surface as the literal 6-char redaction; a refactor \
+                 that renamed or skipped the field would strand \
+                 operator triage queries that grep on this exact key",
+            );
+
+            let back: RevokeOutcome = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(
+                &back, variant,
+                "RevokeOutcome::{variant:?} must round-trip through \
+                 serde_json verbatim — the PartialEq derive is the \
+                 contract every CLI consumer leans on when matching \
+                 the daemon's revoke outcome class",
+            );
+
+            assert!(
+                serde_json::from_value::<RevokeOutcome>(serde_json::json!({
+                    "type": expected_slug,
+                    "summary": {
+                        "agent_id": {"display": "alice@host", "pubkey": dummy_agent("alice@host").pubkey_base58()},
+                        "token_prefix": "abcdef",
+                        "registered_at": 1_700_000_000_000u64,
+                        "revoked_at": 1_700_000_010_000u64,
+                    },
+                }))
+                .is_err(),
+                "RevokeOutcome::{variant:?} struct-variant-promotion \
+                 wire form must be rejected; if a refactor nests \
+                 PeerSummary under 'summary', the flattened top-level \
+                 fields disappear and stale consumers silently \
+                 misread the outcome",
+            );
+        }
+
+        for required in ["agent_id", "token_prefix", "registered_at"] {
+            let wire = serde_json::to_value(RevokeOutcome::Revoked(summary.clone())).unwrap();
+            let mut missing = wire.as_object().unwrap().clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<RevokeOutcome>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "RevokeOutcome::Revoked wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] on PeerSummary would let a \
+                 malformed row decode with an empty token_prefix or \
+                 default AgentId and operator dashboards would \
+                 attribute a real revocation to a phantom peer — the \
+                 audit log's PeerRevoked row would record a \
+                 misleading subject",
+            );
+        }
+    }
+
+    #[test]
     fn token_round_trips_through_base58() {
         let t = PeerToken::generate();
         let s = t.to_b58();

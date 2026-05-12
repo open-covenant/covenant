@@ -10589,6 +10589,23 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn parse_env_u64_pins_trim_and_error_context() {
+        assert_eq!(parse_env_u64("X", "123").unwrap(), 123);
+        assert_eq!(parse_env_u64("X", " 456 ").unwrap(), 456);
+        assert_eq!(parse_env_u64("X", "4294967296").unwrap(), 4_294_967_296u64);
+        let err = parse_env_u64("COVENANT_X", "notanint").unwrap_err().to_string();
+        assert!(
+            err.contains("COVENANT_X must be an integer"),
+            "expected name-prefixed error context, got {err:?}"
+        );
+        let empty_err = parse_env_u64("COVENANT_X", "").unwrap_err().to_string();
+        assert!(
+            empty_err.contains("COVENANT_X must be an integer"),
+            "expected name-prefixed error context for empty input, got {empty_err:?}"
+        );
+    }
+
+    #[test]
     fn audit_failure_response_pins_message_and_variant() {
         let err = AuditError::ChainCorruption {
             events: 0,

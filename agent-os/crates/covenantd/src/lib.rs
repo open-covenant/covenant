@@ -155,6 +155,61 @@ pub fn runtime_runner_from_config(config: &RuntimeRunnerConfig) -> Arc<dyn Runne
     }
 }
 
+/// Gateway connection for the Hermes runtime backend
+/// (https://github.com/NousResearch/hermes-agent). Wraps the API base URL
+/// and an optional bearer token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesGatewayConfig {
+    pub base_url: String,
+    pub api_key: Option<String>,
+}
+
+/// Read the Hermes gateway config from env. Returns `None` if
+/// `HERMES_API_BASE_URL` is unset or empty — in which case any agent
+/// with `runtime = "hermes"` will fail dispatch with
+/// `RunnerError::HermesUnconfigured`.
+pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
+    hermes_gateway_config_from_values(
+        std::env::var("HERMES_API_BASE_URL").ok().as_deref(),
+        std::env::var("HERMES_API_KEY").ok().as_deref(),
+    )
+}
+
+pub fn hermes_gateway_config_from_values(
+    base_url: Option<&str>,
+    api_key: Option<&str>,
+) -> Option<HermesGatewayConfig> {
+    let base_url = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Some(HermesGatewayConfig { base_url, api_key })
+}
+
+/// Build the dispatching runner the daemon hands to `Server::new`. The
+/// local backend (subprocess or gVisor) handles `runtime = python3|node|rust-bin`;
+/// the Hermes gateway, if configured, handles `runtime = hermes`.
+pub fn runtime_runner_composite(
+    local: &RuntimeRunnerConfig,
+    hermes: Option<&HermesGatewayConfig>,
+) -> Arc<dyn Runner> {
+    let local_runner = runtime_runner_from_config(local);
+    let hermes_runner: Option<Arc<dyn Runner>> = hermes.map(|cfg| {
+        Arc::new(covenant_runtime::HermesRunner::new(
+            cfg.base_url.clone(),
+            cfg.api_key.clone(),
+        )) as Arc<dyn Runner>
+    });
+    Arc::new(covenant_runtime::CompositeRunner::new(
+        local_runner,
+        hermes_runner,
+    ))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct A2AAutoRetrySchedulerConfig {
     pub enabled: bool,
@@ -11017,6 +11072,37 @@ budget_credits_per_hour = {credits}
         assert_eq!(full.policy.max_attempts, 7);
         assert_eq!(full.policy.max_requeues, 3);
         assert_eq!(full.policy.scan_limit, 50);
+    }
+
+    #[test]
+    fn hermes_gateway_config_from_values_pins_env_to_struct_mapping() {
+        // Unset / empty base_url → None: the daemon must not pretend a
+        // Hermes gateway is configured when no env was set; otherwise a
+        // hermes-runtime agent would silently dispatch against an empty
+        // URL.
+        assert!(hermes_gateway_config_from_values(None, None).is_none());
+        assert!(hermes_gateway_config_from_values(Some("   "), Some("k")).is_none());
+
+        // Trimmed base_url, key absent → no api_key on the struct.
+        let bare = hermes_gateway_config_from_values(Some("  http://127.0.0.1:8642/v1 "), None)
+            .expect("non-empty base_url must produce a config");
+        assert_eq!(bare.base_url, "http://127.0.0.1:8642/v1");
+        assert_eq!(bare.api_key, None);
+
+        // Both fields set + trimmed.
+        let with_key =
+            hermes_gateway_config_from_values(Some("http://127.0.0.1:8642/v1"), Some(" key "))
+                .unwrap();
+        assert_eq!(with_key.api_key.as_deref(), Some("key"));
+
+        // Whitespace-only api_key collapses to None, not Some(""): an
+        // empty bearer would be sent on the wire and Hermes would
+        // reject with 401 instead of falling back to anonymous-on-
+        // loopback.
+        let empty_key =
+            hermes_gateway_config_from_values(Some("http://127.0.0.1:8642/v1"), Some("   "))
+                .unwrap();
+        assert_eq!(empty_key.api_key, None);
     }
 
     #[test]

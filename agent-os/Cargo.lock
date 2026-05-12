@@ -873,6 +873,7 @@ dependencies = [
  "covenant-manifest",
  "covenant-router",
  "covenant-types",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

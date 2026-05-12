@@ -26,6 +26,9 @@ pub struct Agent {
     pub name: String,
     pub version: String,
     pub runtime: Runtime,
+    /// Required for subprocess-style runtimes (python3, node, rust-bin).
+    /// Ignored for service-delegated runtimes (hermes) and may be omitted.
+    #[serde(default)]
     pub entry: String,
 }
 
@@ -36,6 +39,22 @@ pub enum Runtime {
     Node,
     #[serde(rename = "rust-bin")]
     RustBin,
+    /// Agent runs inside Hermes (https://github.com/NousResearch/hermes-agent)
+    /// over its HTTP API. The daemon dispatches the intent to a configured
+    /// Hermes endpoint; `entry` is ignored and may be left at its placeholder.
+    Hermes,
+}
+
+impl Runtime {
+    /// `true` for runtimes that need an executable on disk in the package
+    /// directory (subprocess-style). `false` for runtimes that delegate to
+    /// an external service (currently just Hermes).
+    pub fn requires_package_entry(self) -> bool {
+        match self {
+            Runtime::Python3 | Runtime::Node | Runtime::RustBin => true,
+            Runtime::Hermes => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -150,12 +169,17 @@ impl Manifest {
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
-        for (field, value) in [
+        let mut required_fields: Vec<(&str, &String)> = vec![
             ("agent.id", &self.agent.id),
             ("agent.name", &self.agent.name),
             ("agent.version", &self.agent.version),
-            ("agent.entry", &self.agent.entry),
-        ] {
+        ];
+        // Runtimes that spawn from the package dir need a real entry path.
+        // Service-delegated runtimes (Hermes) ignore it entirely.
+        if self.agent.runtime.requires_package_entry() {
+            required_fields.push(("agent.entry", &self.agent.entry));
+        }
+        for (field, value) in required_fields {
             if value.is_empty() {
                 return Err(ManifestError::Validation(format!(
                     "{field} must not be empty"
@@ -179,18 +203,20 @@ impl Manifest {
                 self.agent.id
             )));
         }
-        let entry_path = Path::new(&self.agent.entry);
-        if entry_path.is_absolute()
-            || entry_path.components().any(|c| {
-                matches!(
-                    c,
-                    Component::ParentDir | Component::Prefix(_) | Component::RootDir
-                )
-            })
-        {
-            return Err(ManifestError::Validation(
-                "agent.entry must be a relative path inside the agent package".into(),
-            ));
+        if self.agent.runtime.requires_package_entry() {
+            let entry_path = Path::new(&self.agent.entry);
+            if entry_path.is_absolute()
+                || entry_path.components().any(|c| {
+                    matches!(
+                        c,
+                        Component::ParentDir | Component::Prefix(_) | Component::RootDir
+                    )
+                })
+            {
+                return Err(ManifestError::Validation(
+                    "agent.entry must be a relative path inside the agent package".into(),
+                ));
+            }
         }
         for cap in self
             .capabilities
@@ -274,10 +300,11 @@ entry = "./tiny"
         struct Holder {
             runtime: Runtime,
         }
-        let cases: [(&str, Runtime); 3] = [
+        let cases: [(&str, Runtime); 4] = [
             ("python3", Runtime::Python3),
             ("node", Runtime::Node),
             ("rust-bin", Runtime::RustBin),
+            ("hermes", Runtime::Hermes),
         ];
         for (slug, expected) in cases {
             let toml_src = format!("runtime = \"{slug}\"");
@@ -698,6 +725,70 @@ entry = ""
                 );
             }
             other => panic!("expected validation error for empty entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hermes_runtime_omits_entry() {
+        // Hermes-backed agents delegate to an external gateway and have
+        // nothing on disk to execute. The manifest must therefore accept
+        // an omitted `entry` and skip the relative-path validation. If
+        // this fires, a refactor probably tightened entry-handling
+        // without consulting Runtime::requires_package_entry.
+        let toml_src = r#"
+[agent]
+id = "hermes-research"
+name = "Research via Hermes"
+version = "0.1.0"
+runtime = "hermes"
+"#;
+        let m = Manifest::parse(toml_src).expect("hermes manifest must parse without entry");
+        assert_eq!(m.agent.runtime, Runtime::Hermes);
+        assert_eq!(m.agent.entry, "");
+    }
+
+    #[test]
+    fn subprocess_runtime_still_requires_entry() {
+        // The relaxed-entry path is gated on runtime; the
+        // subprocess-style runtimes must still hit the validation
+        // error. Pin per-variant so a wrong predicate flip surfaces
+        // here instead of in production.
+        for slug in ["python3", "node", "rust-bin"] {
+            let toml_src = format!(
+                r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "{slug}"
+"#
+            );
+            match Manifest::parse(&toml_src) {
+                Err(ManifestError::Validation(msg)) => {
+                    assert!(msg.contains("agent.entry"), "{slug}: {msg}");
+                }
+                other => panic!("expected validation error for {slug:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn requires_package_entry_pins_each_variant() {
+        // Drives both manifest validation (above) and runtime backend
+        // dispatch (covenant-runtime::CompositeRunner). Adding a new
+        // Runtime variant without classifying it here would make either
+        // the validator or the dispatcher silently choose a default.
+        for (rt, expected) in [
+            (Runtime::Python3, true),
+            (Runtime::Node, true),
+            (Runtime::RustBin, true),
+            (Runtime::Hermes, false),
+        ] {
+            assert_eq!(
+                rt.requires_package_entry(),
+                expected,
+                "{rt:?} requires_package_entry classification must stay stable"
+            );
         }
     }
 
@@ -1285,14 +1376,21 @@ cpu_ms_per_task = 1000
         for (missing_field, toml_src) in cases {
             match Manifest::parse(toml_src) {
                 Err(ManifestError::Parse(_)) => {}
+                // `agent.entry` carries `#[serde(default)]` so the Hermes
+                // runtime can omit it. Subprocess-style runtimes still must
+                // reject an empty entry — the rejection moved from Parse to
+                // Validation. The `agent.entry must not be empty` Validation
+                // error keeps Command::new("") out of SubprocessRunner.
+                Err(ManifestError::Validation(msg))
+                    if missing_field == "entry"
+                        && msg.contains("agent.entry must not be empty") => {}
                 other => panic!(
                     "omitting agent.{missing_field} must fail with \
-                     ManifestError::Parse — a refactor that added \
-                     #[serde(default)] to agent.{missing_field} would \
-                     silently parse the malformed manifest with an \
-                     empty-string field and downstream router/runtime \
-                     paths would key on '' or `Command::new('')`; got \
-                     {other:?}",
+                     ManifestError::Parse (or Validation for entry on \
+                     subprocess runtimes) — a refactor that added \
+                     #[serde(default)] to agent.{missing_field} on a \
+                     subprocess-style runtime would silently let \
+                     `Command::new('')` reach the runner; got {other:?}",
                 ),
             }
         }

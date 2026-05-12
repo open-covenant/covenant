@@ -1,0 +1,33 @@
+## Example agent that delegates execution to a Hermes gateway.
+##
+## Copy this directory into $COVENANT_HOME/agents/<your-id>/ to register
+## the agent, set HERMES_API_BASE_URL (and HERMES_API_KEY if your gateway
+## requires auth), then dispatch an intent the way you would for any other
+## agent — Covenant signs the capability check, hands the run to Hermes,
+## and the result lands back in the audit log.
+
+[agent]
+id      = "hermes-research"
+name    = "Research via Hermes"
+version = "0.1.0"
+runtime = "hermes"
+# `entry` is intentionally omitted — Hermes-runtime agents have nothing
+# on disk to execute. The manifest still validates because
+# `Runtime::Hermes::requires_package_entry()` returns false.
+
+[capabilities]
+required = ["intent.subscribe", "memory.write"]
+optional = []
+
+[resources]
+# Wall-clock budget per intent. Covenant enforces this by polling the
+# Hermes run status and issuing POST /v1/runs/{id}/stop on timeout —
+# Hermes itself has no per-run budget knob in the request body.
+cpu_ms_per_task = 60_000
+memory_mb       = 0
+disk_mb         = 0
+network         = "outbound-https-only"
+
+[settlement]
+budget_credits_per_hour = 0
+priority                = "normal"

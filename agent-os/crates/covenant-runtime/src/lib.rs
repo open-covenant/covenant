@@ -20,10 +20,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, warn};
+
+mod hermes;
+pub use hermes::HermesRunner;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentResult {
@@ -60,6 +64,18 @@ pub enum RunnerError {
         backend: SandboxBackend,
         reason: String,
     },
+    #[error("agent {agent} declares runtime {got:?} but this runner only handles {expected:?}")]
+    WrongRuntime {
+        agent: String,
+        expected: &'static str,
+        got: &'static str,
+    },
+    #[error(
+        "agent {agent} declares runtime \"hermes\" but no Hermes gateway is configured — set HERMES_API_BASE_URL"
+    )]
+    HermesUnconfigured { agent: String },
+    #[error("remote runtime: status={status} message={message}")]
+    Remote { status: u16, message: String },
 }
 
 #[async_trait]
@@ -113,6 +129,16 @@ impl Runner for SubprocessRunner {
                 let mut c = Command::new("node");
                 c.arg(&entry_path);
                 c
+            }
+            RuntimeKind::Hermes => {
+                // Routed via CompositeRunner under normal operation. If
+                // SubprocessRunner is reached for a Hermes agent the
+                // wiring is broken — fail loud rather than silently.
+                return Err(RunnerError::WrongRuntime {
+                    agent: card.id.clone(),
+                    expected: "python3|node|rust-bin",
+                    got: "hermes",
+                });
             }
         };
         cmd.current_dir(&card.package_dir)
@@ -216,13 +242,20 @@ impl GvisorRunner {
         Ok(())
     }
 
-    fn args_for(card: &AgentCard) -> Vec<String> {
+    fn args_for(card: &AgentCard) -> Result<Vec<String>, RunnerError> {
         let entry = workspace_entry(&card.manifest.agent.entry);
-        match card.manifest.agent.runtime {
+        Ok(match card.manifest.agent.runtime {
             RuntimeKind::RustBin => vec![entry],
             RuntimeKind::Python3 => vec!["python3".into(), entry],
             RuntimeKind::Node => vec!["node".into(), entry],
-        }
+            RuntimeKind::Hermes => {
+                return Err(RunnerError::WrongRuntime {
+                    agent: card.id.clone(),
+                    expected: "python3|node|rust-bin",
+                    got: "hermes",
+                });
+            }
+        })
     }
 
     fn bundle_id(card: &AgentCard) -> String {
@@ -248,7 +281,7 @@ impl GvisorRunner {
             "process": {
                 "terminal": false,
                 "cwd": "/workspace",
-                "args": Self::args_for(card),
+                "args": Self::args_for(card)?,
                 "env": [
                     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                 ],
@@ -437,6 +470,39 @@ impl MockRunner {
 impl Runner for MockRunner {
     async fn run(&self, _card: &AgentCard, _intent: &Intent) -> Result<AgentResult, RunnerError> {
         Ok(self.response.clone())
+    }
+}
+
+/// Dispatches each agent to the runner appropriate for its declared
+/// `agent.runtime`. Subprocess-style runtimes (python3, node, rust-bin)
+/// go to the configured local backend (trusted-local subprocess or
+/// linux-gvisor). Hermes runtime goes to a configured Hermes gateway;
+/// missing configuration fails closed.
+pub struct CompositeRunner {
+    local: Arc<dyn Runner>,
+    hermes: Option<Arc<dyn Runner>>,
+}
+
+impl CompositeRunner {
+    pub fn new(local: Arc<dyn Runner>, hermes: Option<Arc<dyn Runner>>) -> Self {
+        Self { local, hermes }
+    }
+}
+
+#[async_trait]
+impl Runner for CompositeRunner {
+    async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
+        match card.manifest.agent.runtime {
+            RuntimeKind::Hermes => match &self.hermes {
+                Some(h) => h.run(card, intent).await,
+                None => Err(RunnerError::HermesUnconfigured {
+                    agent: card.id.clone(),
+                }),
+            },
+            RuntimeKind::Python3 | RuntimeKind::Node | RuntimeKind::RustBin => {
+                self.local.run(card, intent).await
+            }
+        }
     }
 }
 
@@ -1352,5 +1418,109 @@ filesystem = "read-only-package"
 
         assert!(matches!(result, Err(RunnerError::Io(_))));
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+    }
+
+    fn hermes_manifest() -> String {
+        r#"
+[agent]
+id = "hermes-research"
+name = "Research via Hermes"
+version = "0.1.0"
+runtime = "hermes"
+
+[resources]
+cpu_ms_per_task = 5000
+network = "outbound-https-only"
+"#
+        .to_string()
+    }
+
+    fn subprocess_manifest() -> String {
+        r#"
+[agent]
+id = "local-py"
+name = "Local Python"
+version = "0.1.0"
+runtime = "python3"
+entry = "main.py"
+
+[resources]
+cpu_ms_per_task = 5000
+"#
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn composite_routes_subprocess_runtime_to_local_backend() {
+        // The composite must keep the existing python3/node/rust-bin
+        // dispatch untouched. If a refactor that adds a new runtime
+        // accidentally widens the Hermes arm or narrows the local arm,
+        // a hello-world manifest would silently fail dispatch. Pin the
+        // happy path against a sentinel response from a mock local
+        // runner.
+        let local: Arc<dyn Runner> = Arc::new(MockRunner::new("from local"));
+        let hermes: Arc<dyn Runner> = Arc::new(MockRunner::new("from hermes"));
+        let composite = CompositeRunner::new(local, Some(hermes));
+        let dir = tempdir().unwrap();
+        let card = card_for(&subprocess_manifest(), dir.path().to_path_buf());
+
+        let out = composite.run(&card, &dummy_intent()).await.unwrap();
+        assert_eq!(out.text, "from local");
+    }
+
+    #[tokio::test]
+    async fn composite_routes_hermes_runtime_to_hermes_runner() {
+        let local: Arc<dyn Runner> = Arc::new(MockRunner::new("from local"));
+        let hermes: Arc<dyn Runner> = Arc::new(MockRunner::new("from hermes"));
+        let composite = CompositeRunner::new(local, Some(hermes));
+        let dir = tempdir().unwrap();
+        let card = card_for(&hermes_manifest(), dir.path().to_path_buf());
+
+        let out = composite.run(&card, &dummy_intent()).await.unwrap();
+        assert_eq!(out.text, "from hermes");
+    }
+
+    #[tokio::test]
+    async fn composite_hermes_runtime_without_gateway_returns_hermes_unconfigured() {
+        // The operator-error path. A manifest can declare runtime =
+        // "hermes" before the gateway env is set; dispatch must fail
+        // loud with a typed error rather than blanking into the
+        // subprocess path or panicking on the missing runner.
+        let local: Arc<dyn Runner> = Arc::new(MockRunner::new("from local"));
+        let composite = CompositeRunner::new(local, None);
+        let dir = tempdir().unwrap();
+        let card = card_for(&hermes_manifest(), dir.path().to_path_buf());
+
+        let err = composite.run(&card, &dummy_intent()).await.unwrap_err();
+        match err {
+            RunnerError::HermesUnconfigured { agent } => {
+                assert_eq!(agent, "hermes-research");
+            }
+            other => panic!("expected HermesUnconfigured, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn hermes_runner_rejects_non_hermes_runtime() {
+        // The HermesRunner is wired as a sibling of SubprocessRunner;
+        // if CompositeRunner is bypassed and a subprocess agent lands
+        // on the Hermes path, fail loud with a typed error.
+        let runner = HermesRunner::new("http://127.0.0.1:1", None);
+        let dir = tempdir().unwrap();
+        let card = card_for(&subprocess_manifest(), dir.path().to_path_buf());
+
+        let err = runner.run(&card, &dummy_intent()).await.unwrap_err();
+        match err {
+            RunnerError::WrongRuntime {
+                agent,
+                expected,
+                got,
+            } => {
+                assert_eq!(agent, "local-py");
+                assert_eq!(expected, "hermes");
+                assert_eq!(got, "python3");
+            }
+            other => panic!("expected WrongRuntime, got {other:?}"),
+        }
     }
 }

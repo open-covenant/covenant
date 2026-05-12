@@ -347,6 +347,44 @@ entry = "./tiny"
     }
 
     #[test]
+    fn network_policy_serde_pins_each_kebab_case_slug() {
+        // NetworkPolicy rides on every Resources section parsed from
+        // agent.toml. outbound-https-only is the documented default
+        // (Resources::default) and the slug used in the spec §5
+        // example (FULL above). A dropped rename_all = kebab-case
+        // attribute would silently refuse every existing manifest
+        // with `network = "outbound-https-only"` and the daemon would
+        // fail to load the agent with an opaque manifest-parse error.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            network: NetworkPolicy,
+        }
+        let cases: [(&str, NetworkPolicy); 3] = [
+            ("off", NetworkPolicy::Off),
+            ("outbound-https-only", NetworkPolicy::OutboundHttpsOnly),
+            ("full", NetworkPolicy::Full),
+        ];
+        for (slug, expected) in cases {
+            let toml_src = format!("network = \"{slug}\"");
+            let parsed: Holder = toml::from_str(&toml_src)
+                .unwrap_or_else(|err| panic!("network slug {slug:?} must deserialize, got: {err}"));
+            assert_eq!(parsed.network, expected);
+        }
+
+        // Dropping rename_all would surface the variant name verbatim
+        // (OutboundHttpsOnly); the kebab-case whitelist must reject
+        // that form so the regression fails loud at parse time.
+        assert!(toml::from_str::<Holder>("network = \"OutboundHttpsOnly\"").is_err());
+        // The kebab-case-default form (no hyphens) for multi-word
+        // variants must also fail so a future rename_all drop surfaces
+        // here instead of silently passing on the unhyphenated slug.
+        assert!(toml::from_str::<Holder>("network = \"outboundhttpsonly\"").is_err());
+        // snake_case must also fail — the contract is kebab-case only,
+        // not "any non-titlecase form".
+        assert!(toml::from_str::<Holder>("network = \"outbound_https_only\"").is_err());
+    }
+
+    #[test]
     fn parses_full_spec_example() {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.agent.id, "research");

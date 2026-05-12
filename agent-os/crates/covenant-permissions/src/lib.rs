@@ -2380,6 +2380,20 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_scope_allows_pins_validate_scope_version_error_propagation() {
+        let err = memory_repair_scope_allows(
+            "memory.repair.apply",
+            &serde_json::json!({ "version": 0 }),
+            "record-1",
+            "working",
+            0,
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
     fn memory_compaction_scope_allows_tiers_and_cutoffs() {
         let scope = serde_json::json!({
             "version": 1,

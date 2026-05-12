@@ -3169,6 +3169,46 @@ mod tests {
     }
 
     #[test]
+    fn optional_non_empty_string_or_null_pins_absent_null_non_string_and_empty_rejection() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_non_empty_string_or_null("chain.flush", empty, "x").is_ok(),
+            "absent field must be Ok; the let-else short-circuits before the type and emptiness checks so unscoped grants do not fail at the non-empty-string gate",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_non_empty_string_or_null("chain.flush", explicit_null, "x").is_ok(),
+            "{{\"x\": null}} must be Ok; the null arm is the documented unbounded marker and must short-circuit before the is_empty check",
+        );
+
+        let valid = serde_json::json!({ "x": "abc" });
+        let valid = valid.as_object().unwrap();
+        assert!(
+            optional_non_empty_string_or_null("chain.flush", valid, "x").is_ok(),
+            "a non-empty string must be Ok; otherwise the gate silently rejects its own intended input",
+        );
+
+        let non_string = serde_json::json!({ "x": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err = optional_non_empty_string_or_null("chain.flush", non_string, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-empty string or null")),
+            "non-string scope value must produce the 'non-empty string or null' error; got {err:?}. A regression that accepted non-string values would silently authorize partially-typed scope objects through the chain identifier gate.",
+        );
+
+        let empty_str = serde_json::json!({ "x": "" });
+        let empty_str = empty_str.as_object().unwrap();
+        let err = optional_non_empty_string_or_null("chain.flush", empty_str, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-empty string or null")),
+            "empty string must produce the same 'non-empty string or null' error; got {err:?}. A regression that accepted \"\" would silently authorize zero-length identifiers under chain.batch_id, mint, and cluster fields.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

@@ -544,6 +544,54 @@ mod tests {
     }
 
     #[test]
+    fn memory_tier_serde_pins_canonical_longterm_and_legacy_aliases() {
+        // Canonical serialize form: lowercase rename_all + LongTerm
+        // collapses to the dotless `longterm` slug. Audit-grep
+        // conventions and downstream metrics pin the canonical form,
+        // so changing it would silently split buckets across two slugs.
+        assert_eq!(serde_json::to_string(&MemoryTier::Working).unwrap(), "\"working\"");
+        assert_eq!(serde_json::to_string(&MemoryTier::Episodic).unwrap(), "\"episodic\"");
+        assert_eq!(serde_json::to_string(&MemoryTier::LongTerm).unwrap(), "\"longterm\"");
+
+        // Canonical deserialize: each lowercase slug round-trips.
+        assert_eq!(
+            serde_json::from_str::<MemoryTier>("\"working\"").unwrap(),
+            MemoryTier::Working,
+        );
+        assert_eq!(
+            serde_json::from_str::<MemoryTier>("\"episodic\"").unwrap(),
+            MemoryTier::Episodic,
+        );
+        assert_eq!(
+            serde_json::from_str::<MemoryTier>("\"longterm\"").unwrap(),
+            MemoryTier::LongTerm,
+        );
+
+        // Legacy LongTerm aliases must still deserialize so older audit
+        // lines and saved JSON written before the rename continue to
+        // reopen. Iterate over the explicit alias set so dropping one
+        // is loud.
+        for legacy in ["long-term", "long_term"] {
+            let wire = format!("\"{legacy}\"");
+            let parsed: MemoryTier = serde_json::from_str(&wire).unwrap_or_else(|err| {
+                panic!("legacy MemoryTier alias {legacy:?} must deserialize, got: {err}")
+            });
+            assert_eq!(
+                parsed,
+                MemoryTier::LongTerm,
+                "alias {legacy:?} must resolve to MemoryTier::LongTerm",
+            );
+        }
+
+        // Unknown slugs must fail loud — the contract is an exhaustive
+        // whitelist. A future #[serde(other)] arm would silently mask
+        // malformed audit lines on reopen.
+        assert!(serde_json::from_str::<MemoryTier>("\"Working\"").is_err());
+        assert!(serde_json::from_str::<MemoryTier>("\"longterms\"").is_err());
+        assert!(serde_json::from_str::<MemoryTier>("\"long term\"").is_err());
+    }
+
+    #[test]
     fn memory_compaction_policy_is_empty_pins_four_field_contract() {
         // Default: all four fields inactive, predicate is true.
         assert!(MemoryCompactionPolicy::default().is_empty());

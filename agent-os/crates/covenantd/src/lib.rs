@@ -10441,6 +10441,65 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn audit_kind_requires_persistence_pins_each_must_persist_kind() {
+        let must_persist = [
+            AuditKind::AuthenticationFailed {
+                transport: "ipc".into(),
+                reason: "missing token".into(),
+            },
+            AuditKind::OperatorTokenRotationRejected {
+                peer_display: "intruder@local".into(),
+                peer_pubkey_b58: "111".into(),
+            },
+            AuditKind::OperatorPeersListRejected {
+                peer_display: "intruder@local".into(),
+                peer_pubkey_b58: "222".into(),
+            },
+            AuditKind::OperatorPeerRevokeRejected {
+                peer_display: "intruder@local".into(),
+                peer_pubkey_b58: "333".into(),
+            },
+            AuditKind::A2ASenderMismatch {
+                peer_display: "claimed@local".into(),
+                claimed_sender_display: "spoofed@local".into(),
+            },
+            AuditKind::A2ARecipientRejected {
+                sender_display: "sender@local".into(),
+                recipient_display: "recipient@local".into(),
+                action: "a2a.recv".into(),
+            },
+            AuditKind::CapabilityRevokeRejected {
+                signature_b58: "sig".into(),
+                reason: "not owner".into(),
+            },
+            AuditKind::BudgetExhausted {
+                agent_display: "research@agent".into(),
+                intent_id: Uuid::new_v4(),
+                intent_text: "find papers".into(),
+                requested: 5,
+                tokens_remaining: 0,
+                refill_eta_ms: 1000,
+            },
+        ];
+        for kind in &must_persist {
+            assert!(
+                audit_kind_requires_persistence(kind),
+                "expected {:?} to be must-persist",
+                kind,
+            );
+        }
+
+        let best_effort = AuditKind::IntentDispatched {
+            intent_id: Uuid::new_v4(),
+            intent_text: "find papers".into(),
+            matched_agent: Some("research@agent".into()),
+            result_hash_hex: "deadbeef".into(),
+            status: "ok".into(),
+        };
+        assert!(!audit_kind_requires_persistence(&best_effort));
+    }
+
+    #[test]
     fn a2a_entry_matches_state_pins_filter_matrix() {
         let task = covenant_a2a::A2ATask {
             id: Uuid::new_v4(),

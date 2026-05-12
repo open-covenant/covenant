@@ -2097,6 +2097,80 @@ mod tests {
     }
 
     #[test]
+    fn task_queue_entry_serde_pins_lease_metadata_skip_empty_and_attempt_default() {
+        // A2ATaskQueueEntry is the persisted JSONL row written by
+        // JsonlMailbox on every queue change and read back by daemon
+        // restart. lease_id, leased_to, and leased_at_ms each carry
+        // #[serde(default, skip_serializing_if = "Option::is_none")] so
+        // queued (not-yet-leased) entries stay compact on disk without
+        // three null fields, and attempt rides #[serde(default)] so
+        // legacy queued JSONL rows written before the retry-counter
+        // feature decode as attempt=0 instead of failing the replay.
+        let task = dummy_task();
+        let queued = A2ATaskQueueEntry::queued(task.clone());
+        let wire = serde_json::to_value(&queued).unwrap();
+        let obj = wire.as_object().expect("wire form must be a JSON object");
+        for absent in ["lease_id", "leased_to", "leased_at_ms"] {
+            assert!(
+                !obj.contains_key(absent),
+                "queued entries must skip {absent} on the wire; a dropped skip_serializing_if inflates every queued JSONL row with three null fields",
+            );
+        }
+        assert_eq!(
+            wire.get("attempt").and_then(|v| v.as_u64()),
+            Some(0),
+            "attempt must surface as 0 explicitly on queued entries; there is no skip_serializing_if on the field",
+        );
+
+        let lease_id = Uuid::nil();
+        let leased_to = dummy_agent("research@local");
+        let in_flight = A2ATaskQueueEntry {
+            state: A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(lease_id),
+            leased_to: Some(leased_to.clone()),
+            leased_at_ms: Some(1_700_000_000_000),
+            attempt: 2,
+        };
+        let wire = serde_json::to_value(&in_flight).unwrap();
+        assert_eq!(
+            wire.get("lease_id").and_then(|v| v.as_str()),
+            Some(lease_id.to_string().as_str()),
+            "in-flight lease_id must surface verbatim",
+        );
+        assert!(
+            wire.get("leased_to").is_some(),
+            "in-flight leased_to must surface on the wire",
+        );
+        assert_eq!(
+            wire.get("leased_at_ms").and_then(|v| v.as_u64()),
+            Some(1_700_000_000_000),
+        );
+        assert_eq!(wire.get("attempt").and_then(|v| v.as_u64()), Some(2));
+
+        let legacy: A2ATaskQueueEntry = serde_json::from_value(serde_json::json!({
+            "state": "queued",
+            "task": serde_json::to_value(dummy_task()).unwrap(),
+        }))
+        .expect("legacy JSONL row that omits all lease metadata and attempt must decode");
+        assert_eq!(legacy.state, A2ATaskQueueState::Queued);
+        assert_eq!(legacy.lease_id, None);
+        assert_eq!(legacy.leased_to, None);
+        assert_eq!(legacy.leased_at_ms, None);
+        assert_eq!(
+            legacy.attempt, 0,
+            "legacy queued row must decode attempt as 0 via #[serde(default)]; a dropped attribute bricks every pre-retry queue replay",
+        );
+
+        let round_trip: A2ATaskQueueEntry =
+            serde_json::from_value(serde_json::to_value(&in_flight).unwrap()).unwrap();
+        assert_eq!(
+            round_trip, in_flight,
+            "in-flight entry must full-round-trip through serde",
+        );
+    }
+
+    #[test]
     fn a2a_duplicate_safety_serde_pins_snake_case_wire_form() {
         // A2ADuplicateSafety is the auto-retry policy gate — the
         // scheduler skips any task whose duplicate_safety is not

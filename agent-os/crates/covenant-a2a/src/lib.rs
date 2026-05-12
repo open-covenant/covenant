@@ -1760,6 +1760,34 @@ mod tests {
     }
 
     #[test]
+    fn a2a_repair_state_serde_pins_snake_case_wire_form() {
+        // A2ARepairState rides next to A2ARepairAction inside every
+        // A2ARepairOutcome audit row. ResultPending is load-bearing —
+        // the rename_all default would emit "ResultPending" titlecase
+        // and downstream operator dashboards keyed on result_pending
+        // would silently undercount in-flight repairs.
+        let cases: [(A2ARepairState, &str); 2] = [
+            (A2ARepairState::Queued, "queued"),
+            (A2ARepairState::ResultPending, "result_pending"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ARepairState = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<A2ARepairState>("\"ResultPending\"").is_err(),
+            "titlecase ResultPending (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<A2ARepairState>("\"resultPending\"").is_err(),
+            "camelCase resultPending must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

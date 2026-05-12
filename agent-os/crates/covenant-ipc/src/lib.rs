@@ -688,6 +688,86 @@ mod tests {
     }
 
     #[test]
+    fn verify_check_serde_pins_three_required_fields_and_rejected_renames() {
+        // VerifyCheck is the per-check row every Response::VerifyReport
+        // carries inside the `checks` vector. CLI `covenant verify` and
+        // HTTP `/verify` consumers render one line per check. All three
+        // fields are required — none carry `#[serde(default)]` or
+        // `#[serde(skip_serializing_if)]`. A refactor that adds default
+        // to any field would silently let a malformed payload decode
+        // with an empty-string or false default; the CLI would then
+        // render a misleading row (`passed: false` with empty name and
+        // message), hiding the real failure source.
+
+        let check = VerifyCheck {
+            name: "hash_chain".into(),
+            passed: true,
+            message: "verified 100 events".into(),
+        };
+        let wire = serde_json::to_value(&check).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("VerifyCheck serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["message", "name", "passed"],
+            "VerifyCheck wire object must contain exactly the three \
+             documented fields; an addition or rename of any field breaks \
+             every verify-report consumer's per-check destructuring"
+        );
+
+        let decoded: VerifyCheck = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, check,
+            "VerifyCheck must round-trip through serde_json verbatim — the \
+             Eq/PartialEq derive is the contract every fixture-replay test \
+             leans on"
+        );
+
+        for required in ["name", "passed", "message"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("name".into(), serde_json::Value::String("hash_chain".into()));
+            payload.insert("passed".into(), serde_json::Value::Bool(true));
+            payload.insert(
+                "message".into(),
+                serde_json::Value::String("verified 100 events".into()),
+            );
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<VerifyCheck>(serde_json::Value::Object(payload)).is_err(),
+                "VerifyCheck must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] would silently let the field default \
+                 and the CLI would render a misleading row hiding the real \
+                 verification outcome"
+            );
+        }
+
+        let renamed = serde_json::json!({
+            "check_name": "hash_chain",
+            "passed": true,
+            "message": "verified 100 events",
+        });
+        assert!(
+            serde_json::from_value::<VerifyCheck>(renamed).is_err(),
+            "renamed VerifyCheck::name field (check_name) must be rejected so \
+             the contract surface stays the documented three-key set"
+        );
+
+        let renamed_passed = serde_json::json!({
+            "name": "hash_chain",
+            "ok": true,
+            "message": "verified 100 events",
+        });
+        assert!(
+            serde_json::from_value::<VerifyCheck>(renamed_passed).is_err(),
+            "renamed VerifyCheck::passed field (ok) must be rejected — the wire \
+             key is the contract every JSON consumer destructures on"
+        );
+    }
+
+    #[test]
     fn verify_drift_serde_pins_skip_empty_id_and_required_fields() {
         // VerifyDrift is the drift row every Response::VerifyReport carries
         // through CLI `covenant verify`, HTTP `/verify`, and the IPC Verify

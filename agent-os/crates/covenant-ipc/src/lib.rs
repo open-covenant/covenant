@@ -688,6 +688,101 @@ mod tests {
     }
 
     #[test]
+    fn verify_drift_serde_pins_skip_empty_id_and_required_fields() {
+        // VerifyDrift is the drift row every Response::VerifyReport carries
+        // through CLI `covenant verify`, HTTP `/verify`, and the IPC Verify
+        // path; daemons surface hundreds of rows in real verify windows
+        // across memory, A2A, audit, and receipt namespaces. The contract
+        // surface this test pins:
+        //
+        // 1. `id: Option<String>` carries `#[serde(default,
+        //    skip_serializing_if = "Option::is_none")]` so a None id stays
+        //    compact on the wire — a refactor that drops the predicate
+        //    would emit `"id": null` on every None row, bloating every
+        //    verify response.
+        // 2. `kind`, `message`, `repair` carry no `#[serde(default)]`; the
+        //    wire payload must contain each one. A stray `#[serde(default)]`
+        //    introduction would silently let a malformed payload decode
+        //    with an empty-string default, and the CLI would render an
+        //    empty/unattributed drift row instead of failing loud at the
+        //    IPC boundary.
+
+        let none_id = VerifyDrift {
+            kind: "memory_drift".into(),
+            id: None,
+            message: "missing receipt".into(),
+            repair: "covenant memory repair".into(),
+        };
+        let wire = serde_json::to_value(&none_id).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("VerifyDrift serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "message", "repair"],
+            "VerifyDrift with id=None must not emit an id key on the wire; \
+             dropping skip_serializing_if = Option::is_none would bloat every \
+             None-id row in a verify report"
+        );
+
+        let some_id = VerifyDrift {
+            kind: "memory_drift".into(),
+            id: Some("uuid-123".into()),
+            message: "missing receipt".into(),
+            repair: "covenant memory repair".into(),
+        };
+        let wire = serde_json::to_value(&some_id).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("VerifyDrift serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["id", "kind", "message", "repair"],
+            "VerifyDrift with id=Some must surface the id key alongside the \
+             three required fields"
+        );
+        assert_eq!(
+            obj.get("id").and_then(serde_json::Value::as_str),
+            Some("uuid-123"),
+            "populated VerifyDrift::id must round-trip verbatim on the wire"
+        );
+
+        let no_id_wire = serde_json::json!({
+            "kind": "memory_drift",
+            "message": "missing receipt",
+            "repair": "covenant memory repair",
+        });
+        let decoded: VerifyDrift = serde_json::from_value(no_id_wire).unwrap();
+        assert_eq!(
+            decoded.id, None,
+            "VerifyDrift with id key omitted must decode as None; the \
+             #[serde(default)] on Option<String> is the forward-compatible \
+             contract every CLI built before the field landed depends on"
+        );
+
+        for required in ["kind", "message", "repair"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("kind".into(), serde_json::Value::String("memory_drift".into()));
+            payload.insert("message".into(), serde_json::Value::String("missing receipt".into()));
+            payload.insert(
+                "repair".into(),
+                serde_json::Value::String("covenant memory repair".into()),
+            );
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<VerifyDrift>(serde_json::Value::Object(payload)).is_err(),
+                "VerifyDrift must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] would silently let an empty-string \
+                 default decode and the CLI would render an unattributed drift row"
+            );
+        }
+    }
+
+    #[test]
     fn v1_response_fixtures_replay_against_current_parser() {
         let mut fixture_count = 0;
 

@@ -289,6 +289,55 @@ pub fn a2a_auto_retry_scheduler_config_from_values(
     Ok(config)
 }
 
+/// Lift a `RuntimeTrace` from a runner (currently only Hermes) into the
+/// matching `AuditKind` row. The raw `preview` payload is hashed here so
+/// the chain never embeds tool input verbatim.
+fn runtime_trace_to_audit_kind(
+    intent_id: Uuid,
+    trace: covenant_runtime::RuntimeTrace,
+) -> AuditKind {
+    use covenant_runtime::RuntimeTrace as T;
+    match trace {
+        T::HermesToolInvoked {
+            run_id,
+            tool,
+            preview,
+        } => AuditKind::HermesToolInvoked {
+            intent_id,
+            run_id,
+            tool,
+            preview_hash_hex: hash_hex(preview.as_bytes()),
+        },
+        T::HermesToolCompleted {
+            run_id,
+            tool,
+            duration_ms,
+            error,
+        } => AuditKind::HermesToolCompleted {
+            intent_id,
+            run_id,
+            tool,
+            duration_ms,
+            error,
+        },
+        T::HermesApprovalRequested { run_id, choices } => AuditKind::HermesApprovalRequested {
+            intent_id,
+            run_id,
+            choices,
+        },
+        T::HermesApprovalResponded {
+            run_id,
+            choice,
+            resolved,
+        } => AuditKind::HermesApprovalResolved {
+            intent_id,
+            run_id,
+            choice,
+            resolved,
+        },
+    }
+}
+
 fn parse_env_bool(value: &str) -> Result<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -2783,7 +2832,7 @@ impl Server {
             }
         }
 
-        let (text_out, sources_out) = if let Some(card) = card {
+        let (text_out, sources_out, runtime_events) = if let Some(card) = card {
             let required = card
                 .manifest
                 .capabilities
@@ -2918,7 +2967,7 @@ impl Server {
             let run_result = self.runner.run(card, &intent).await;
             self.clear_active_budget_checkpoint(intent_id).await;
             match run_result {
-                Ok(result) => (result.text, result.sources),
+                Ok(result) => (result.text, result.sources, result.runtime_events),
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
                     return Response::Error {
@@ -2929,6 +2978,7 @@ impl Server {
         } else {
             (
                 format!("phase 0 echo (no agent matched): {text}"),
+                Vec::new(),
                 Vec::new(),
             )
         };
@@ -2993,6 +3043,19 @@ impl Server {
             },
         };
         self.record_peer_event(peer, audit_event).await;
+
+        // Fold runtime-side events (currently only Hermes) into the
+        // chain after the dispatch row so the audit log captures the
+        // step trail under the same issuer that submitted the intent.
+        for trace in runtime_events {
+            let row = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: issuer.clone(),
+                kind: runtime_trace_to_audit_kind(intent_id, trace),
+            };
+            self.record_peer_event(peer, row).await;
+        }
 
         Response::IntentResult {
             intent_id,

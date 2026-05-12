@@ -929,6 +929,7 @@ dependencies = [
  "covenant-audit",
  "covenant-identity",
  "covenant-ipc",
+ "covenant-peer-auth",
  "covenant-permissions",
  "covenant-types",
  "crossterm",

@@ -12,8 +12,9 @@ use std::io::{self, Stdout};
 use anyhow::{Context, Result};
 use covenant_tui::ipc::{
     covenant_home, grant_capability, recent_a2a_tasks, recent_audit, recent_capabilities,
-    recent_memory, recent_receipts, submit_intent, A2aFetchOutcome, AuditFetchOutcome,
-    CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome, ReceiptsFetchOutcome,
+    recent_memory, recent_peers, recent_receipts, submit_intent, A2aFetchOutcome,
+    AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
+    PeersFetchOutcome, ReceiptsFetchOutcome,
 };
 use covenant_tui::{App, ExitReason, Mode, SubmissionOutcome, HELP_BINDINGS};
 use crossterm::event::{Event, EventStream};
@@ -143,6 +144,7 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
     let (caps_tx, mut caps_rx) = mpsc::unbounded_channel::<CapabilitiesFetchOutcome>();
     let (a2a_tx, mut a2a_rx) = mpsc::unbounded_channel::<A2aFetchOutcome>();
     let (receipts_tx, mut receipts_rx) = mpsc::unbounded_channel::<ReceiptsFetchOutcome>();
+    let (peers_tx, mut peers_rx) = mpsc::unbounded_channel::<PeersFetchOutcome>();
     let (grant_tx, mut grant_rx) = mpsc::unbounded_channel::<GrantOutcome>();
     let home = covenant_home()?;
 
@@ -236,6 +238,20 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             });
         }
 
+        if app.take_pending_peers_fetch() {
+            let tx = peers_tx.clone();
+            let home = home.clone();
+            tokio::spawn(async move {
+                let outcome =
+                    recent_peers(&home, 20)
+                        .await
+                        .unwrap_or_else(|e| PeersFetchOutcome::Failed {
+                            message: format!("{e:#}"),
+                        });
+                let _ = tx.send(outcome);
+            });
+        }
+
         if let Some(action) = app.take_pending_grant_submission() {
             let tx = grant_tx.clone();
             let home = home.clone();
@@ -272,6 +288,9 @@ async fn run(terminal: &mut Tui, app: &mut App) -> Result<ExitReason> {
             }
             Some(outcome) = receipts_rx.recv() => {
                 app.apply_receipts_fetch_outcome(outcome);
+            }
+            Some(outcome) = peers_rx.recv() => {
+                app.apply_peers_fetch_outcome(outcome);
             }
             Some(outcome) = grant_rx.recv() => {
                 app.apply_grant_outcome(outcome);
@@ -618,6 +637,60 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App, home: &std::path::Path) {
                     .collect();
                 Paragraph::new(lines)
                     .block(Block::default().borders(Borders::ALL).title("receipts"))
+            };
+            frame.render_widget(body, layout[1]);
+        }
+        Mode::PeersTail {
+            loading,
+            peers,
+            truncated,
+            error,
+        } => {
+            let title = if *truncated {
+                "peers — q / Esc to dismiss (truncated)"
+            } else {
+                "peers — q / Esc to dismiss"
+            };
+            let header = Paragraph::new(title)
+                .block(Block::default().borders(Borders::ALL).title("covenant"));
+            frame.render_widget(header, layout[0]);
+
+            let body = if let Some(message) = error {
+                Paragraph::new(message.as_str())
+                    .style(Style::default().add_modifier(Modifier::REVERSED))
+                    .block(Block::default().borders(Borders::ALL).title("peers error"))
+            } else if *loading {
+                Paragraph::new("fetching…")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("peers"))
+            } else if peers.is_empty() {
+                Paragraph::new("no peers registered")
+                    .style(Style::default().add_modifier(Modifier::DIM))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("peers"))
+            } else {
+                let lines: Vec<Line<'_>> = peers
+                    .iter()
+                    .map(|p| {
+                        let status = if p.revoked_at.is_some() {
+                            "revoked"
+                        } else {
+                            "live"
+                        };
+                        let pubkey_prefix: String =
+                            p.agent_id.pubkey_base58().chars().take(8).collect();
+                        Line::from(format!(
+                            "{display:<24}  {status:<8}  {token_prefix}…  {pubkey_prefix}  registered@{registered}",
+                            display = p.agent_id.display,
+                            status = status,
+                            token_prefix = p.token_prefix,
+                            pubkey_prefix = pubkey_prefix,
+                            registered = p.registered_at,
+                        ))
+                    })
+                    .collect();
+                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("peers"))
             };
             frame.render_widget(body, layout[1]);
         }

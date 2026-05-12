@@ -9,6 +9,7 @@
 
 use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
+use covenant_peer_auth::PeerSummary;
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, SettlementReceipt};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -18,7 +19,7 @@ pub mod ipc;
 
 pub use ipc::{
     A2aFetchOutcome, AuditFetchOutcome, CapabilitiesFetchOutcome, GrantOutcome, MemoryFetchOutcome,
-    ReceiptsFetchOutcome,
+    PeersFetchOutcome, ReceiptsFetchOutcome,
 };
 
 /// Reasons the event loop may exit. `None` while the app keeps running.
@@ -104,6 +105,18 @@ pub enum Mode {
         receipts: Vec<SettlementReceipt>,
         error: Option<String>,
     },
+    /// Peer registry view. Press `p` from Browsing to enter. Lists
+    /// bootstrapped peers newest-first, surfacing both live and
+    /// revoked rows; operator-only on the daemon side, so a non-
+    /// operator caller collapses into `error`. `truncated` reports
+    /// whether the daemon held back rows past the request's limit.
+    /// Press `q` / `Esc` to dismiss.
+    PeersTail {
+        loading: bool,
+        peers: Vec<PeerSummary>,
+        truncated: bool,
+        error: Option<String>,
+    },
     /// Grant editor. Press `g` from Browsing to enter. Chars
     /// accumulate as the capability action name (e.g. `memory.read`);
     /// Enter on a non-empty trimmed buffer transitions to
@@ -144,6 +157,7 @@ impl Mode {
             Mode::CapabilitiesTail { .. } => "capabilities-tail",
             Mode::A2aTail { .. } => "a2a-tail",
             Mode::ReceiptsTail { .. } => "receipts-tail",
+            Mode::PeersTail { .. } => "peers-tail",
             Mode::GrantEditor { .. } => "grant-editor",
             Mode::GrantSubmitting { .. } => "grant-submitting",
             Mode::GrantResult { .. } => "grant-result",
@@ -172,6 +186,7 @@ pub const HELP_BINDINGS: &[(&str, &str)] = &[
     ("c", "capabilities tail"),
     ("A", "a2a inbox"),
     ("r", "chain receipts"),
+    ("p", "peers"),
     ("?", "this help"),
     ("q", "quit"),
 ];
@@ -201,6 +216,8 @@ pub struct App {
     pending_a2a_fetch: bool,
     /// One-shot for the chain receipts fetch.
     pending_receipts_fetch: bool,
+    /// One-shot for the peer registry fetch.
+    pending_peers_fetch: bool,
     /// One-shot for an in-flight grant submission. Set on the
     /// transition into `GrantSubmitting`.
     pending_grant_submission: bool,
@@ -318,6 +335,20 @@ impl App {
                 _ => Mode::ReceiptsTail {
                     loading,
                     receipts,
+                    error,
+                },
+            },
+            Mode::PeersTail {
+                loading,
+                peers,
+                truncated,
+                error,
+            } => match event.code {
+                KeyCode::Char('q') | KeyCode::Esc => Mode::Browsing,
+                _ => Mode::PeersTail {
+                    loading,
+                    peers,
+                    truncated,
                     error,
                 },
             },
@@ -528,6 +559,37 @@ impl App {
         };
     }
 
+    /// One-shot flag for the peer registry fetch.
+    pub fn take_pending_peers_fetch(&mut self) -> bool {
+        if !self.pending_peers_fetch {
+            return false;
+        }
+        self.pending_peers_fetch = false;
+        true
+    }
+
+    /// Apply a peer registry fetch result. No-op if the user has
+    /// already navigated away from `Mode::PeersTail`.
+    pub fn apply_peers_fetch_outcome(&mut self, outcome: PeersFetchOutcome) {
+        let Mode::PeersTail { .. } = &self.mode else {
+            return;
+        };
+        self.mode = match outcome {
+            PeersFetchOutcome::Fetched { peers, truncated } => Mode::PeersTail {
+                loading: false,
+                peers,
+                truncated,
+                error: None,
+            },
+            PeersFetchOutcome::Failed { message } => Mode::PeersTail {
+                loading: false,
+                peers: Vec::new(),
+                truncated: false,
+                error: Some(message),
+            },
+        };
+    }
+
     /// Returns the action of a freshly-entered grant exactly once,
     /// same kickoff semantics as [`App::take_pending_submission`].
     pub fn take_pending_grant_submission(&mut self) -> Option<String> {
@@ -638,6 +700,15 @@ impl App {
                 Mode::ReceiptsTail {
                     loading: true,
                     receipts: Vec::new(),
+                    error: None,
+                }
+            }
+            KeyCode::Char('p') => {
+                self.pending_peers_fetch = true;
+                Mode::PeersTail {
+                    loading: true,
+                    peers: Vec::new(),
+                    truncated: false,
                     error: None,
                 }
             }
@@ -1626,6 +1697,117 @@ mod tests {
         assert_eq!(app.mode(), &Mode::Browsing);
         app.apply_receipts_fetch_outcome(ReceiptsFetchOutcome::Fetched {
             receipts: Vec::new(),
+        });
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    fn sample_peer() -> PeerSummary {
+        use covenant_types::AgentId;
+        PeerSummary {
+            agent_id: AgentId::new("user@local", [3u8; 32]),
+            token_prefix: "abcdef".into(),
+            registered_at: 1_700_000_000,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn pressing_p_enters_peers_tail_loading_and_arms_fetch() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::PeersTail {
+                    loading: true,
+                    error: None,
+                    truncated: false,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+        assert!(app.take_pending_peers_fetch());
+        assert!(!app.take_pending_peers_fetch());
+    }
+
+    #[test]
+    fn peers_tail_fetched_transitions_to_loaded() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        let peer = sample_peer();
+        app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {
+            peers: vec![peer.clone()],
+            truncated: true,
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::PeersTail {
+                    loading: false,
+                    error: None,
+                    truncated: true,
+                    peers,
+                } if peers.len() == 1 && peers[0].agent_id.pubkey == peer.agent_id.pubkey
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn peers_tail_fetch_failure_surfaces_in_embedded_error() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        app.apply_peers_fetch_outcome(PeersFetchOutcome::Failed {
+            message: "peers.list is operator-only".into(),
+        });
+        assert!(
+            matches!(
+                app.mode(),
+                Mode::PeersTail {
+                    loading: false,
+                    error: Some(_),
+                    truncated: false,
+                    ..
+                }
+            ),
+            "mode is {:?}",
+            app.mode()
+        );
+    }
+
+    #[test]
+    fn peers_tail_q_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        app.on_key(press(KeyCode::Char('q')));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn peers_tail_esc_returns_to_browsing() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn peers_tail_late_response_after_dismissal_is_noop() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        app.on_key(press(KeyCode::Esc));
+        assert_eq!(app.mode(), &Mode::Browsing);
+        app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {
+            peers: Vec::new(),
+            truncated: false,
         });
         assert_eq!(app.mode(), &Mode::Browsing);
     }

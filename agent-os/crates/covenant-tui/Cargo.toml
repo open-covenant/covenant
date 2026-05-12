@@ -21,6 +21,7 @@ bs58 = { workspace = true }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }
 covenant-ipc = { path = "../covenant-ipc" }
+covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-types = { path = "../covenant-types" }
 crossterm = { version = "0.28", features = ["event-stream"] }

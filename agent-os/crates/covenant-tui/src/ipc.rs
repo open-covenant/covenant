@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;
 use covenant_ipc::{read_frame, write_frame, Request, Response};
+use covenant_peer_auth::PeerSummary;
 use covenant_permissions::SignedCapability;
 use covenant_types::{MemoryRecord, MemoryTier, SettlementReceipt};
 use thiserror::Error;
@@ -95,6 +96,12 @@ pub const RECENT_A2A_LIMIT_CAP: usize = 50;
 /// peer; one row per resource consumption event.
 pub const RECENT_RECEIPTS_LIMIT_CAP: usize = 50;
 
+/// Hard cap on `Request::ListPeers::limit`. The peer registry is the
+/// operator's full view of bootstrapped peers (live + revoked); cap
+/// matches receipts so the TUI never asks the daemon to enumerate an
+/// unbounded registry in one frame.
+pub const RECENT_PEERS_LIMIT_CAP: usize = 50;
+
 /// Outcome of a [`grant_capability`] call. Same shape as
 /// [`SubmissionOutcome`]: wire-level errors bubble up as `Err`, and
 /// daemon-side rejections collapse into `Failed { message }` so a
@@ -158,6 +165,22 @@ pub enum A2aFetchOutcome {
 pub enum ReceiptsFetchOutcome {
     Fetched { receipts: Vec<SettlementReceipt> },
     Failed { message: String },
+}
+
+/// Outcome of a [`recent_peers`] call. The daemon's `Request::ListPeers`
+/// is operator-only, so a non-operator caller is rejected by the
+/// capability gate and surfaces as `Failed { message }`. The
+/// `truncated` flag is forwarded from `Response::PeerList` so the TUI
+/// can hint when the rendered list is partial.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeersFetchOutcome {
+    Fetched {
+        peers: Vec<PeerSummary>,
+        truncated: bool,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 /// Resolves `$COVENANT_HOME` with the same fallback shape as the
@@ -472,6 +495,54 @@ pub async fn recent_receipts(home: &Path, limit: usize) -> Result<ReceiptsFetchO
         Response::Receipts { receipts } => Ok(ReceiptsFetchOutcome::Fetched { receipts }),
         Response::Error { message } => Ok(ReceiptsFetchOutcome::Failed { message }),
         other => Ok(ReceiptsFetchOutcome::Failed {
+            message: format!("unexpected response: {other:?}"),
+        }),
+    }
+}
+
+/// Connects to `$COVENANT_HOME/sock`, authenticates with the operator
+/// token, sends `Request::ListPeers`, and maps the daemon response
+/// into a [`PeersFetchOutcome`]. The daemon enforces operator-only
+/// access, so a non-operator delegate collapses into
+/// `Failed { message }` rather than bubbling up as a wire error.
+///
+/// `limit` is clamped to [`RECENT_PEERS_LIMIT_CAP`]. No filter is
+/// applied here so the TUI sees the full mixed live/revoked view; a
+/// future slice can plumb `pubkey_prefix` and `status_filter` if the
+/// peers screen grows triage controls.
+pub async fn recent_peers(home: &Path, limit: usize) -> Result<PeersFetchOutcome, IpcError> {
+    let (mut stream, _sock) = connect_socket(home).await?;
+    let token_b58 = read_operator_token(home).await?;
+    write_frame(&mut stream, &Request::Authenticate { token_b58 }).await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::Authenticated { .. } => {}
+        Response::AuthenticationFailed { reason } => {
+            return Ok(PeersFetchOutcome::Failed {
+                message: format!("authentication failed: {reason}"),
+            });
+        }
+        other => {
+            return Ok(PeersFetchOutcome::Failed {
+                message: format!("unexpected response to authenticate: {other:?}"),
+            });
+        }
+    }
+    let limit = limit.min(RECENT_PEERS_LIMIT_CAP);
+    write_frame(
+        &mut stream,
+        &Request::ListPeers {
+            limit,
+            pubkey_prefix: None,
+            status_filter: None,
+        },
+    )
+    .await?;
+    match read_frame::<_, Response>(&mut stream).await? {
+        Response::PeerList {
+            peers, truncated, ..
+        } => Ok(PeersFetchOutcome::Fetched { peers, truncated }),
+        Response::Error { message } => Ok(PeersFetchOutcome::Failed { message }),
+        other => Ok(PeersFetchOutcome::Failed {
             message: format!("unexpected response: {other:?}"),
         }),
     }

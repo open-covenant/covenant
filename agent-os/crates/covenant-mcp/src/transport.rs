@@ -420,6 +420,80 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_request_serde_pins_three_required_and_params_skip_null() {
+        // JsonRpcRequest is the outgoing JSON-RPC 2.0 request envelope
+        // every StdioMcpClient::request frames. Four fields: jsonrpc
+        // (the string "2.0"), id (u64), method (String), params (Value,
+        // #[serde(default, skip_serializing_if = "Value::is_null")]).
+        // The existing json_rpc_request_serialises_with_jsonrpc_2 test
+        // only checks substring presence; a refactor that flattens
+        // params or swaps the skip predicate to a non-equivalent
+        // function would silently change every MCP server's request
+        // shape and pass the loose substring assertion. Pin the exact
+        // key set on both the empty-params (3-key) and populated-params
+        // (4-key) paths, plus the id-as-JSON-number contract.
+        let empty = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 7,
+            method: "tools/list".into(),
+            params: Value::Null,
+        };
+        let empty_wire = serde_json::to_value(&empty).unwrap();
+        let empty_obj = empty_wire
+            .as_object()
+            .expect("request serializes as a JSON object");
+        let empty_keys: std::collections::BTreeSet<&str> =
+            empty_obj.keys().map(String::as_str).collect();
+        let three: std::collections::BTreeSet<&str> =
+            ["jsonrpc", "id", "method"].into_iter().collect();
+        assert_eq!(
+            empty_keys, three,
+            "empty-params JsonRpcRequest wire form must be exactly three keys; \
+             a refactor that drops the skip_serializing_if = Value::is_null \
+             on params would surface params: null and silently change every \
+             MCP server's request shape",
+        );
+        assert_eq!(empty_obj.get("jsonrpc"), Some(&serde_json::json!("2.0")));
+        assert_eq!(
+            empty_obj.get("method"),
+            Some(&serde_json::json!("tools/list"))
+        );
+        // id must serialise as a JSON number, not a string. A Serialize
+        // override that stringified id would silently break every
+        // JSON-RPC 2.0 server that destructures id as u64.
+        assert_eq!(
+            empty_obj.get("id").and_then(serde_json::Value::as_u64),
+            Some(7),
+            "id must surface as a JSON number, not a string",
+        );
+
+        let populated = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 8,
+            method: "tools/call".into(),
+            params: serde_json::json!({ "name": "echo" }),
+        };
+        let populated_wire = serde_json::to_value(&populated).unwrap();
+        let populated_obj = populated_wire.as_object().unwrap();
+        let populated_keys: std::collections::BTreeSet<&str> =
+            populated_obj.keys().map(String::as_str).collect();
+        let four: std::collections::BTreeSet<&str> =
+            ["jsonrpc", "id", "method", "params"].into_iter().collect();
+        assert_eq!(
+            populated_keys, four,
+            "populated JsonRpcRequest wire form must be exactly four keys; \
+             a #[serde(flatten)] on params would lift inner params keys to \
+             the envelope and break JSON-RPC 2.0 routing",
+        );
+        assert_eq!(
+            populated_obj.get("params"),
+            Some(&serde_json::json!({ "name": "echo" })),
+            "non-null params must surface verbatim; a different skip \
+             predicate or a flatten would silently drop or merge the payload",
+        );
+    }
+
+    #[test]
     fn json_rpc_notification_serde_pins_no_id_and_skip_empty_params() {
         // JsonRpcNotification differs from JsonRpcRequest by carrying no
         // id field at all — the server treats a notification as

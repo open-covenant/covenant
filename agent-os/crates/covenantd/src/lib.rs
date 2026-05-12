@@ -11179,6 +11179,89 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn chain_receipt_allowed_pins_match_paths() {
+        let receipt = SettlementReceipt {
+            id: Uuid::new_v4(),
+            payer: AgentId::new("payer@local", [2u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 1_000,
+            chain: None,
+            cluster: Some("devnet".into()),
+            batch_id: Some("batch-1".into()),
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let payer_b58 = receipt.payer.pubkey_base58();
+
+        let allow_all = vec![("chain.receipts.read".to_string(), serde_json::json!({}))];
+        assert!(chain_receipt_allowed(&allow_all, &receipt));
+
+        let resource_match = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "resource": "memory"}),
+        )];
+        assert!(chain_receipt_allowed(&resource_match, &receipt));
+
+        let cluster_match = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "cluster": "devnet"}),
+        )];
+        assert!(chain_receipt_allowed(&cluster_match, &receipt));
+
+        let batch_match = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "batch_id": "batch-1"}),
+        )];
+        assert!(chain_receipt_allowed(&batch_match, &receipt));
+
+        let payer_match = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "payer_pubkey_b58": payer_b58}),
+        )];
+        assert!(chain_receipt_allowed(&payer_match, &receipt));
+
+        let denying_then_allow = vec![
+            (
+                "chain.receipts.read".to_string(),
+                serde_json::json!({"version": 1, "resource": "compute"}),
+            ),
+            ("chain.receipts.read".to_string(), serde_json::json!({})),
+        ];
+        assert!(chain_receipt_allowed(&denying_then_allow, &receipt));
+
+        let wrong_resource = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "resource": "compute"}),
+        )];
+        assert!(!chain_receipt_allowed(&wrong_resource, &receipt));
+
+        let wrong_cluster = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "cluster": "mainnet"}),
+        )];
+        assert!(!chain_receipt_allowed(&wrong_cluster, &receipt));
+
+        let wrong_batch = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!({"version": 1, "batch_id": "batch-2"}),
+        )];
+        assert!(!chain_receipt_allowed(&wrong_batch, &receipt));
+
+        let invalid_scope = vec![(
+            "chain.receipts.read".to_string(),
+            serde_json::json!(true),
+        )];
+        assert!(!chain_receipt_allowed(&invalid_scope, &receipt));
+
+        assert!(!chain_receipt_allowed(&[], &receipt));
+    }
+
+    #[test]
     fn memory_read_record_allowed_pins_scope_match_paths() {
         let record = MemoryRecord {
             id: Uuid::new_v4(),

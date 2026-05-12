@@ -4023,6 +4023,168 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_grant_capability_serde_pins_three_field_variant() {
+        // Request::GrantCapability is the operator/CLI verb for
+        // minting a signed capability grant. It pairs with
+        // Response::CapabilityGranted (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly four top-level
+        // keys: kind='grant_capability' plus action plus scope plus
+        // expires_at.
+        //
+        // action is a required String (the dotted capability slug,
+        // e.g., "memory.read"). scope is Option<serde_json::Value>
+        // with #[serde(default)] and NO skip_serializing_if — it
+        // surfaces as JSON null when None and as a JSON value when
+        // Some. expires_at is Option<u64> with #[serde(default)] and
+        // NO skip_serializing_if — it surfaces as JSON null when
+        // None and as a JSON number when Some.
+        //
+        // Distinct from the just-pinned ListPeers three-field
+        // variant — GrantCapability has a required String plus two
+        // Option fields and NO default-bearing primitive, so the
+        // shape is "required + two null-on-wire Options". This
+        // slice pins the required-plus-two-Options variant of the
+        // three-field shape.
+        //
+        // This slice locks: the exact wire shape (kind, action,
+        // scope, expires_at), the snake_case discriminator
+        // 'grant_capability', null-on-wire for both Option fields on
+        // the unscoped/perpetual path, the populated paths (scope
+        // as JSON object, expires_at as JSON number), round-trip for
+        // both shapes, and two independent forward-compat checks
+        // (omit scope, omit expires_at).
+        let unscoped = Request::GrantCapability {
+            action: "memory.read".into(),
+            scope: None,
+            expires_at: None,
+        };
+
+        let wire = serde_json::to_value(&unscoped).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "expires_at", "kind", "scope"],
+            "Request::GrantCapability wire form must be exactly \
+             four top-level keys: 'kind' plus the three variant \
+             fields ('action', 'scope', 'expires_at'). A refactor \
+             that added #[serde(skip_serializing_if = \
+             \"Option::is_none\")] to either Option field would \
+             shrink the unscoped/perpetual wire form from four keys \
+             to three or two and silently break CLI/HTTP consumers \
+             that switch on key presence to distinguish unscoped-\
+             from-scoped grants or perpetual-from-bounded grants",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("grant_capability")),
+            "Request discriminator slug must be the durable \
+             'grant_capability'. A refactor that renamed the \
+             variant (e.g., CapabilityGrant for surface parity with \
+             the response slug 'capability_granted') would shift \
+             the slug and operator-driven capability minting goes \
+             dark through the supported path",
+        );
+        assert_eq!(
+            obj.get("action"),
+            Some(&serde_json::json!("memory.read")),
+            "Request::GrantCapability::action must surface as a \
+             JSON string carrying the dotted capability slug; a \
+             refactor that promoted action to a typed Capability \
+             newtype without preserving Serialize-as-String would \
+             silently mismatch every CLI/HTTP caller that sends the \
+             dotted form",
+        );
+        assert_eq!(
+            obj.get("scope"),
+            Some(&serde_json::Value::Null),
+            "Request::GrantCapability::scope must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the unscoped wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+        assert_eq!(
+            obj.get("expires_at"),
+            Some(&serde_json::Value::Null),
+            "Request::GrantCapability::expires_at must surface as \
+             JSON null when None (the durable null-on-wire surface, \
+             NOT a missing key); a stray skip_serializing_if would \
+             shrink the perpetual wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, unscoped,
+            "Request::GrantCapability (unscoped/perpetual) must \
+             round-trip through serde_json verbatim — the PartialEq \
+             derive is the contract every CLI/HTTP grant-capability \
+             consumer leans on",
+        );
+
+        let scoped = Request::GrantCapability {
+            action: "memory.read".into(),
+            scope: Some(serde_json::json!({"tier": "working"})),
+            expires_at: Some(1_700_000_000_000),
+        };
+        let scoped_wire = serde_json::to_value(&scoped).unwrap();
+        let scoped_obj = scoped_wire.as_object().unwrap();
+        assert_eq!(
+            scoped_obj.get("scope"),
+            Some(&serde_json::json!({"tier": "working"})),
+            "populated scope must round-trip as the JSON value the \
+             caller supplied verbatim — Option<serde_json::Value> \
+             keeps the operator's scope payload opaque to the \
+             daemon's IPC layer; the four-key shape stays stable \
+             across unscoped and scoped",
+        );
+        assert_eq!(
+            scoped_obj.get("expires_at"),
+            Some(&serde_json::json!(1_700_000_000_000u64)),
+            "populated expires_at must round-trip as a JSON number \
+             matching the u64 input; the four-key shape stays \
+             stable across perpetual and bounded",
+        );
+        let scoped_back: Request = serde_json::from_value(scoped_wire.clone()).unwrap();
+        assert_eq!(
+            scoped_back, scoped,
+            "Request::GrantCapability (scoped/bounded) must round-\
+             trip through serde_json verbatim",
+        );
+
+        let mut missing_scope = obj.clone();
+        missing_scope.remove("scope");
+        let parsed_no_scope: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_scope)).unwrap();
+        assert_eq!(
+            parsed_no_scope, unscoped,
+            "Request::GrantCapability wire form must accept a \
+             payload missing 'scope' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the scope field",
+        );
+
+        let mut missing_expires_at = obj.clone();
+        missing_expires_at.remove("expires_at");
+        let parsed_no_expires_at: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_expires_at)).unwrap();
+        assert_eq!(
+            parsed_no_expires_at, unscoped,
+            "Request::GrantCapability wire form must accept a \
+             payload missing 'expires_at' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the expiry field",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

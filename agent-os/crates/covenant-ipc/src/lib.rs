@@ -1867,6 +1867,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_ignore_check_serde_pins_single_field_variant() {
+        // Request::IgnoreCheck is the operator-driven ignore-rule
+        // probe the CLI and HTTP gateway send to test whether a
+        // candidate intent string matches the local IgnoreList
+        // policy. It pairs with Response::IgnoreReport (already
+        // pinned) which carries ignored, matched_pattern, and
+        // rules_loaded back. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='ignore_check' plus text. No prior test pins
+        // the exact wire shape, string serialization, round-trip,
+        // or missing-field rejection for this variant. A
+        // serde-shape regression on this probe path either
+        // silently breaks the operator's policy preview (every
+        // probe returns an error fallback instead of a real
+        // ignore decision) or — worse — decodes a malformed frame
+        // with a stray serde(default) on text and runs the
+        // matcher against an empty string, returning a meaningless
+        // false-negative answer to a question the operator is
+        // using to gate production routing.
+        let event = Request::IgnoreCheck {
+            text: "deploy production rollout".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "text"],
+            "Request::IgnoreCheck wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'text' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a typed IgnoreCandidate would nest \
+             'text' one level deeper and every CLI/HTTP ignore \
+             probe that sends \
+             {{\"kind\":\"ignore_check\",\"text\":\"<s>\"}} would \
+             fail to decode on the daemon side — the operator's \
+             policy preview surface goes dark and ignore-rule \
+             rollout cannot be tested through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("ignore_check")),
+            "Request discriminator slug must be the durable \
+             'ignore_check'; a slug regression silently routes \
+             incoming probe frames to the daemon's catch-all \
+             error branch — every CLI/HTTP probe fails with a \
+             confusing fallback message instead of IgnoreReport, \
+             and the operator cannot validate a candidate intent \
+             against the loaded IgnoreList through the supported \
+             path",
+        );
+        assert_eq!(
+            obj.get("text").and_then(serde_json::Value::as_str),
+            Some("deploy production rollout"),
+            "Request::IgnoreCheck::text must surface as the \
+             literal JSON string — the daemon's matcher binds on \
+             this exact field; a rename, retype, or accidental \
+             byte-array coercion would silently miss every \
+             candidate the operator submitted, leaving the \
+             ignore-rule preview surface stuck on a no-match \
+             default",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::IgnoreCheck must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP ignore-probe consumer leans \
+             on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("text");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::IgnoreCheck wire form must reject a payload \
+             missing 'text'; a stray #[serde(default)] would let \
+             a malformed frame decode with text=\"\" and the \
+             daemon would run the IgnoreList matcher against an \
+             empty string — which matches nothing in any normal \
+             policy and returns ignored:false with a meaningless \
+             0-rule attribution, silently lying to the operator \
+             about whether a real candidate string would have \
+             been ignored, and that false-negative can leak a \
+             production intent through a gate the operator \
+             believed was active",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

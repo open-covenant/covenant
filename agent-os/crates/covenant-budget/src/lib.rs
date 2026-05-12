@@ -1004,6 +1004,116 @@ mod tests {
     }
 
     #[test]
+    fn budget_debit_serde_pins_four_required_fields() {
+        // BudgetDebit is persisted to the JSONL budget ledger and
+        // returned by BudgetLedger::recent_debits — the operator
+        // dashboard surface (CLI `covenant budget recent`, HTTP
+        // `/debits`, IPC RecentDebits → Response::Debits). The four
+        // wire keys document the budget-log ↔ settlement-receipt
+        // join: `paired_receipt` is the load-bearing UUID the
+        // runtime's settlement flush settles against the receipt
+        // log. None of the fields carry `#[serde(default)]` or
+        // `#[serde(skip_serializing_if)]`, so a refactor that
+        // added a default on paired_receipt would silently let a
+        // malformed budget event decode with Uuid::nil() and the
+        // reconciliation path would silently dereference a missing
+        // receipt.
+
+        let mut pubkey = [0u8; 32];
+        for (i, b) in b"alice@host".iter().take(32).enumerate() {
+            pubkey[i] = *b;
+        }
+        let debit = BudgetDebit {
+            agent: AgentId::new("alice@host", pubkey),
+            credits: 1500,
+            paired_receipt: Uuid::from_u128(0x1234),
+            at_ms: 12345,
+        };
+
+        let wire = serde_json::to_value(&debit).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetDebit serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent", "at_ms", "credits", "paired_receipt"],
+            "BudgetDebit wire object must contain exactly the four documented \
+             fields; an addition or rename of any field shifts every operator \
+             dashboard consumer and breaks JSONL replay of existing budget logs"
+        );
+
+        let agent_obj = obj
+            .get("agent")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent must serialise as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "BudgetDebit::agent must surface the AgentId display+pubkey shape; \
+             a refactor that flattened or restructured AgentId would break the \
+             budget-log JSONL replay and the operator dashboard's grouping"
+        );
+        assert_eq!(
+            agent_obj.get("display").and_then(serde_json::Value::as_str),
+            Some("alice@host")
+        );
+        let pubkey_b58 = agent_obj
+            .get("pubkey")
+            .and_then(serde_json::Value::as_str)
+            .expect("pubkey must serialise as a string");
+        assert_eq!(
+            pubkey_b58,
+            debit.agent.pubkey_base58().as_str(),
+            "BudgetDebit::agent.pubkey wire form must equal the AgentId's \
+             base58-encoded pubkey — the cross-type contract every JSONL \
+             replay and dashboard consumer leans on"
+        );
+
+        assert_eq!(
+            obj.get("credits").and_then(serde_json::Value::as_u64),
+            Some(1500),
+            "credits must surface as a u64 on the wire"
+        );
+        assert_eq!(
+            obj.get("at_ms").and_then(serde_json::Value::as_u64),
+            Some(12345),
+            "at_ms must surface as a u64 on the wire"
+        );
+        assert_eq!(
+            obj.get("paired_receipt").and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(0x1234).to_string().as_str()),
+            "paired_receipt must surface as the canonical UUID string on the \
+             wire — this is the load-bearing key the settlement-receipt join \
+             leans on"
+        );
+
+        let decoded: BudgetDebit = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, debit,
+            "BudgetDebit must round-trip through serde_json verbatim — the \
+             Eq derive is the contract the JSONL replay path leans on"
+        );
+
+        let full_obj = serde_json::to_value(&debit).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["agent", "credits", "paired_receipt", "at_ms"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetDebit>(serde_json::Value::Object(payload)).is_err(),
+                "BudgetDebit must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] introduction — particularly on \
+                 paired_receipt where the nil UUID default would silently mask \
+                 receipt-join failures — must fail the test loud"
+            );
+        }
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

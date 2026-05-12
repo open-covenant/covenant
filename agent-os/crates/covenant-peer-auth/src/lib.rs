@@ -1068,6 +1068,132 @@ mod tests {
     }
 
     #[test]
+    fn peer_event_registered_serde_pins_flattened_newtype_variant() {
+        // PeerEvent::Registered is the newtype variant wrapping PeerEntry,
+        // persisted to the JSONL peer-registry log on every successful
+        // PeerRegistry::register call. With #[serde(tag = "type")] on the
+        // enum, the newtype variant FLATTENS PeerEntry's three wire fields
+        // next to the 'type' discriminator — so the wire object is exactly
+        // four keys: type='registered', token (base58 string), agent_id
+        // (nested AgentId), registered_at (u64).
+        // peer_entry_serde_pins_three_required_fields covers the inner
+        // PeerEntry payload but not the enum-level flattened-newtype shape;
+        // a refactor that changed PeerEvent::Registered from a newtype
+        // variant to a struct variant (Registered { entry: PeerEntry })
+        // would silently nest PeerEntry one level deeper under an 'entry'
+        // key and every prior flattened-wire-form JSONL row would fail
+        // decode at JsonlPeerRegistry::open replay — every previously-
+        // registered peer would disappear from the in-memory state while
+        // their Revoked tombstones still apply, locking the operator out
+        // of resolving their own bootstrap token.
+        let mut pubkey = [0u8; 32];
+        for (i, b) in b"alice@host".iter().enumerate() {
+            pubkey[i] = *b;
+        }
+        let agent_id = AgentId::new("alice@host", pubkey);
+        let event = PeerEvent::Registered(PeerEntry {
+            token: PeerToken::from_bytes([7u8; 32]),
+            agent_id: agent_id.clone(),
+            registered_at: 12_000,
+        });
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("PeerEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent_id", "registered_at", "token", "type"],
+            "PeerEvent::Registered wire form must be exactly four keys: \
+             PeerEntry's three fields flattened next to the 'type' \
+             discriminator. A refactor from newtype variant to struct \
+             variant (Registered {{ entry: PeerEntry }}) would nest \
+             PeerEntry one level deeper under an 'entry' key and every \
+             prior JSONL Registered row would fail decode at \
+             JsonlPeerRegistry::open replay",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("registered")),
+            "PeerEvent discriminator slug must be snake_case 'registered'; \
+             a rename to 'register' or any #[serde(rename = ...)] regression \
+             silently strands every prior JSONL Registered row at replay and \
+             the registry rebuilds with an empty entry list while revoked \
+             tombstones survive — the operator sees a peer-list of zero \
+             live peers without any operator-initiated revocation",
+        );
+
+        let agent_obj = obj
+            .get("agent_id")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent_id must serialise as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "PeerEvent::Registered::agent_id must surface the AgentId \
+             display+pubkey shape; a refactor that flattened or \
+             restructured AgentId would break the cross-type contract \
+             between registry replay and capability subject resolution — \
+             capability checks would silently degrade to display-only \
+             matching and a malicious local process could claim any \
+             AgentId.display on the wire without holding the matching \
+             pubkey",
+        );
+        assert_eq!(
+            agent_obj.get("display").and_then(serde_json::Value::as_str),
+            Some("alice@host"),
+        );
+        assert_eq!(
+            agent_obj.get("pubkey").and_then(serde_json::Value::as_str),
+            Some(agent_id.pubkey_base58().as_str()),
+            "PeerEvent::Registered::agent_id.pubkey must equal the AgentId's \
+             base58 pubkey verbatim — registry replay's per-peer AgentId \
+             attribution depends on this cross-type binding staying stable",
+        );
+
+        let token_wire = obj
+            .get("token")
+            .and_then(serde_json::Value::as_str)
+            .expect("PeerEvent::Registered::token must serialise as a JSON string");
+        let len = token_wire.chars().count();
+        assert!(
+            len == 43 || len == 44,
+            "PeerEvent::Registered::token wire form must be the full base58 \
+             of the 32-byte secret (43 or 44 chars), got {len} chars — \
+             collapsing to PeerSummary's 6-char redacted prefix would mean \
+             registry replay could no longer authenticate peers because \
+             the prefix cannot reconstruct the full token",
+        );
+
+        let back: PeerEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "PeerEvent::Registered must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract the \
+             JsonlPeerRegistry::open replay path joins peer events against",
+        );
+
+        for required in ["token", "agent_id", "registered_at"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<PeerEvent>(serde_json::Value::Object(missing)).is_err(),
+                "PeerEvent::Registered wire form must reject a payload \
+                 missing {required:?}; a stray #[serde(default)] on \
+                 PeerEntry::token would let a malformed row decode with the \
+                 all-zero PeerToken and registry replay would silently bind \
+                 that empty-bytes token to any AgentId — a peer connecting \
+                 with no token would resolve to a registered identity and \
+                 bypass the capability-subject attribution contract",
+            );
+        }
+    }
+
+    #[test]
     fn summary_from_pins_token_prefix_redaction_and_field_mapping() {
         let (token, entry) = entry("alice@host");
         let full_b58 = token.to_b58();

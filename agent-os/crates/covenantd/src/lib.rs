@@ -10395,6 +10395,25 @@ budget_credits_per_hour = {credits}
         assert_eq!(a2a_repair_action(&force_error), "force_error");
     }
 
+    #[test]
+    fn a2a_duplicate_risk_pins_each_arm() {
+        let idempotent = covenant_a2a::A2ARepairCommand::Requeue {
+            lease_id: Some(Uuid::new_v4()),
+            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+        };
+        let operator_accepted = covenant_a2a::A2ARepairCommand::Requeue {
+            lease_id: Some(Uuid::new_v4()),
+            duplicate_risk: covenant_a2a::A2ADuplicateRisk::OperatorAccepted,
+        };
+        let force_error = covenant_a2a::A2ARepairCommand::ForceError {
+            lease_id: Some(Uuid::new_v4()),
+            message: "stuck".into(),
+        };
+        assert_eq!(a2a_duplicate_risk(&idempotent), Some("idempotent"));
+        assert_eq!(a2a_duplicate_risk(&operator_accepted), Some("operator_accepted"));
+        assert_eq!(a2a_duplicate_risk(&force_error), None);
+    }
+
     /// Wire response rounds tokens_remaining to a powers-of-5 bucket.
     /// Sanity covers the bucket boundaries.
     #[test]

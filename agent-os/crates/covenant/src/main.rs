@@ -3766,6 +3766,56 @@ mod tests {
     }
 
     #[test]
+    fn audit_recent_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["events", "kind", "limit", "since_ms"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("audit_recent_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "audit_recent_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("audit_recent"));
+            assert!(
+                value["limit"].is_u64(),
+                "limit must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["since_ms"].is_u64() || value["since_ms"].is_null(),
+                "since_ms must be u64-or-null (never a string-of-integer or other type): {value}",
+            );
+            assert!(
+                value["events"].is_array(),
+                "events must be an array: {value}",
+            );
+        }
+
+        let event = AuditEvent {
+            id: uuid::Uuid::nil(),
+            timestamp_ms: 1_700_000_000_000,
+            issuer: covenant_types::AgentId::new("operator@covenant", [7; 32]),
+            kind: AuditKind::CapabilityGranted {
+                subject_display: "operator@covenant".into(),
+                action: "tool.call.echo".into(),
+                granted_by_display: "operator@covenant".into(),
+                signature_b58: "sigb58".into(),
+            },
+        };
+        let events = [event];
+
+        assert_shape(&audit_recent_json(5, Some(1_699_999_999_000), &events));
+        assert_shape(&audit_recent_json(5, Some(1_699_999_999_000), &[]));
+        assert_shape(&audit_recent_json(5, None, &[]));
+    }
+
+    #[test]
     fn audit_verify_json_renders_stable_shape() {
         let report = AuditIntegrityReport {
             events: 2,

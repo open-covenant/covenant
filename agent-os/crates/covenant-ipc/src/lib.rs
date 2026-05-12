@@ -889,6 +889,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_try_recv_a2a_result_serde_pins_unit_variant() {
+        // Request::TryRecvA2AResult is the unit variant the CLI
+        // sends as a non-blocking result-fetch poll — it pairs
+        // with Response::A2AResultOpt (already pinned) which
+        // carries Some(result) on a hit and None on a miss, with
+        // the durable null-on-wire contract for the Option. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire form is exactly one top-level
+        // key: kind='try_recv_a2_a_result' — rename_all snake_case
+        // splits A2A on digit/upper boundaries, matching the
+        // durable a2_a slug rule for A2A* variants (project
+        // memory: serde_snake_case_a2a_quirk). No prior test pins
+        // the exact wire shape or round-trip of this variant. The
+        // non-blocking result poll is what the agent uses to drain
+        // completed task outcomes — a slug regression silently
+        // strands every result consumer, leaving completed work
+        // undeliverable to the originator.
+        let event = Request::TryRecvA2AResult;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::TryRecvA2AResult wire form must be exactly \
+             one top-level key: 'kind'. A refactor that promoted \
+             the variant from unit to struct or newtype would add \
+             a second top-level key and every result consumer that \
+             sends {{\"kind\":\"try_recv_a2_a_result\"}} alone \
+             would fail to decode on the daemon side — the \
+             originator would stop receiving completed task \
+             outcomes silently, leaving the agent unable to \
+             confirm dispatched work finished",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("try_recv_a2_a_result")),
+            "Request discriminator slug must be the durable \
+             'try_recv_a2_a_result' (rename_all = snake_case \
+             splits A2A on digit/upper boundaries); a slug \
+             regression silently routes incoming poll frames to \
+             the daemon's catch-all error branch — every result \
+             consumer fails with a confusing fallback message \
+             instead of the result-fetch outcome",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::TryRecvA2AResult must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every A2A result-consumer loop leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

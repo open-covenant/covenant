@@ -907,4 +907,100 @@ model = "nomic-embed-text"
         let e = embedder_from_config(&cfg).unwrap();
         assert_eq!(e.name(), "ollama");
     }
+
+    #[test]
+    fn embed_section_serde_pins_required_provider_and_option_defaults() {
+        // EmbedSection is the [embed] block operators write to
+        // secrets.toml to pick the embedding provider. Mirrors
+        // LlmSection's asymmetric contract: provider is strictly
+        // required (no serde default) while model and endpoint each
+        // carry #[serde(default)] so a stale or minimal secrets.toml
+        // stays forward-compatible.
+        //
+        // The existing embedder_config_parses_ollama_block test
+        // exercises a happy path but no test pins the strict-required-
+        // provider contract: a refactor that added #[serde(default)] to
+        // provider would silently parse blocks with no provider as
+        // provider='', embedder_from_config would return None,
+        // pick_embedder would fall back to MockEmbedder, and operator-
+        // driven memory retrieval would silently use the deterministic
+        // FNV hash stub instead of the configured provider's real
+        // embeddings — semantic search would degrade silently with no
+        // error or breadcrumb.
+        let full = r#"
+[embed]
+provider = "ollama"
+model = "nomic-embed-text"
+endpoint = "http://localhost:11434"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(full).unwrap();
+        let embed = cfg
+            .embed
+            .as_ref()
+            .expect("[embed] block must surface as EmbedSection");
+        assert_eq!(embed.provider, "ollama");
+        assert_eq!(embed.model.as_deref(), Some("nomic-embed-text"));
+        assert_eq!(embed.endpoint.as_deref(), Some("http://localhost:11434"));
+
+        let minimal = r#"
+[embed]
+provider = "ollama"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(minimal).unwrap();
+        let embed = cfg.embed.as_ref().unwrap();
+        assert_eq!(embed.provider, "ollama");
+        assert!(
+            embed.model.is_none(),
+            "EmbedSection::model must decode as None when omitted; a \
+             refactor that dropped #[serde(default)] would silently fail \
+             parse for every operator deployment relying on the default \
+             'nomic-embed-text' model"
+        );
+        assert!(
+            embed.endpoint.is_none(),
+            "EmbedSection::endpoint must decode as None when omitted; a \
+             refactor that dropped #[serde(default)] would silently fail \
+             parse for every operator deployment relying on the default \
+             Ollama endpoint"
+        );
+
+        // Each Option field's omission must be tolerated independently.
+        let no_model = r#"
+[embed]
+provider = "ollama"
+endpoint = "http://localhost:11434"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(no_model).unwrap();
+        let embed = cfg.embed.as_ref().unwrap();
+        assert!(embed.model.is_none());
+        assert_eq!(embed.endpoint.as_deref(), Some("http://localhost:11434"));
+
+        let no_endpoint = r#"
+[embed]
+provider = "ollama"
+model = "nomic-embed-text"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(no_endpoint).unwrap();
+        let embed = cfg.embed.as_ref().unwrap();
+        assert!(embed.endpoint.is_none());
+        assert_eq!(embed.model.as_deref(), Some("nomic-embed-text"));
+
+        // Provider is the only strictly-required field; omitting it must
+        // fail parse so a future #[serde(default)] regression on
+        // provider does not silently fall back to MockEmbedder and
+        // degrade semantic search invisibly.
+        let no_provider = r#"
+[embed]
+model = "nomic-embed-text"
+"#;
+        assert!(
+            toml::from_str::<EmbedderConfig>(no_provider).is_err(),
+            "EmbedSection::provider must remain strictly required; a \
+             #[serde(default)] regression would silently parse blocks \
+             with no provider as provider='' and pick_embedder would fall \
+             back to MockEmbedder — operator memory retrieval would \
+             silently use deterministic 768-dim stub embeddings instead \
+             of the configured provider"
+        );
+    }
 }

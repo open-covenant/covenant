@@ -3357,6 +3357,38 @@ mod tests {
     }
 
     #[test]
+    fn optional_string_or_null_pins_absent_null_string_and_non_string_rejection() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_string_or_null("a2a.deliver", empty, "x").is_ok(),
+            "absent field must be Ok; the if-let short-circuits before the !is_null && !is_string check so unscoped grants do not fail at the string-or-null gate",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_string_or_null("a2a.deliver", explicit_null, "x").is_ok(),
+            "{{\"x\": null}} must be Ok; the !is_null half of the conjunction short-circuits before the type check, since null is the documented unbounded marker for peer/task/lease/record_id/tool fields",
+        );
+
+        let string_value = serde_json::json!({ "x": "abc" });
+        let string_value = string_value.as_object().unwrap();
+        assert!(
+            optional_string_or_null("a2a.deliver", string_value, "x").is_ok(),
+            "any string must be Ok; this helper has no emptiness or enum check, so a regression that added one would silently shrink the accepted set below what callers expect",
+        );
+
+        let non_string = serde_json::json!({ "x": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err = optional_string_or_null("a2a.deliver", non_string, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("string or null")),
+            "{{\"x\": 42}} must produce the 'string or null' error; got {err:?}. A regression that flipped the && polarity (e.g., to ||) would silently authorize numbers, arrays, and objects through identifier fields like a2a.task_id, peer_pubkey_b58, lease_id, memory.record_id, and tool.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

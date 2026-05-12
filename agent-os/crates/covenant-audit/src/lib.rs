@@ -1418,6 +1418,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_capability_scope_rejected_serde_pins_three_field_variant() {
+        // AuditKind::CapabilityScopeRejected records every scope-mismatched
+        // dispatch — the action field carries the dotted-path scope key
+        // (memory.write, a2a.send.<sender>) and is the load-bearing
+        // diagnostic field.
+        let kind = AuditKind::CapabilityScopeRejected {
+            agent_id: "research@local".into(),
+            action: "memory.write".into(),
+            reason: "tier mismatch".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["action", "agent_id", "reason", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_scope_rejected")),
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["agent_id", "action", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityScopeRejected wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

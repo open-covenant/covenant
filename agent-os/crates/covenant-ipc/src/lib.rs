@@ -1879,6 +1879,97 @@ mod tests {
     }
 
     #[test]
+    fn response_operator_token_rotated_serde_pins_single_field_variant() {
+        // Response::OperatorTokenRotated is the variant the daemon
+        // sends after RotateOperatorToken installs a fresh operator
+        // peer-auth token. It carries token_b58: String — the
+        // base58-encoded new token the CLI must persist and use to
+        // authenticate new connections (the daemon writes it to
+        // $COVENANT_HOME/peers/operator.token mode 0600 and revokes
+        // the prior token). With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly two top-level keys: kind='operator_token_rotated'
+        // plus token_b58. No prior test pins the exact wire shape,
+        // round-trip, or omission rejection. A refactor that
+        // promoted OperatorTokenRotated from a struct variant to a
+        // newtype variant would nest token_b58 one level deeper and
+        // the CLI's rotation flow could no longer extract the new
+        // token to persist; a stray #[serde(default)] on token_b58
+        // would let a malformed row decode with an empty string and
+        // the CLI would persist a zero-length token to
+        // operator.token — bricking operator auth in single-peer v0
+        // until manual recovery.
+        let token_b58 = "5DkPzkAozsAjEvyZ7DJ2dEoEoVHHFvjpSizMV2ohHfMr".to_string();
+        let event = Response::OperatorTokenRotated {
+            token_b58: token_b58.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "token_b58"],
+            "Response::OperatorTokenRotated wire form must be exactly \
+             two top-level keys: 'kind' plus the single 'token_b58' \
+             field. A refactor that promoted the variant from struct \
+             to newtype wrapping a payload struct would nest \
+             'token_b58' one level deeper and the CLI's rotation \
+             flow could no longer extract the new token — the \
+             operator would be locked out of new connections in \
+             single-peer v0 because the old token has already been \
+             revoked",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("operator_token_rotated")),
+            "Response discriminator slug must be the durable \
+             'operator_token_rotated'; a slug regression silently \
+             strands every CLI parser that classifies rotation \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback message instead of \
+             confirming rotation and may even discard the new token \
+             while the daemon has already revoked the old one",
+        );
+        assert_eq!(
+            obj.get("token_b58").and_then(serde_json::Value::as_str),
+            Some(token_b58.as_str()),
+            "Response::OperatorTokenRotated::token_b58 must surface \
+             as the base58 string verbatim — the CLI persists this \
+             exact byte sequence to $COVENANT_HOME/peers/operator.token \
+             (mode 0600) and any transformation would silently \
+             corrupt the token before the next authenticate call",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::OperatorTokenRotated must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI rotation consumer leans on to \
+             confirm the new token bytes match what was sent",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("token_b58");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::OperatorTokenRotated wire form must reject a \
+             payload missing 'token_b58'; a stray #[serde(default)] \
+             would let a malformed row decode with an empty string \
+             and the CLI would persist a zero-length token to \
+             operator.token — the file exists so the auth bootstrap \
+             accepts it, but the empty bytes never match any \
+             registry entry and every subsequent operator command \
+             fails to authenticate, locking the operator out of \
+             single-peer v0",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

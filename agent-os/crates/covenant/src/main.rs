@@ -3996,6 +3996,34 @@ mod tests {
     }
 
     #[test]
+    fn a2a_compact_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["dropped", "kind"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("a2a_compact_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "a2a_compact_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("a2a_compacted"));
+            assert!(
+                value["dropped"].is_u64(),
+                "dropped must be a non-negative integer, not a string: {value}",
+            );
+        }
+
+        assert_shape(&a2a_compact_json(3));
+        assert_shape(&a2a_compact_json(0));
+    }
+
+    #[test]
     fn a2a_retry_json_renders_stable_shape() {
         let mut report = A2AAutoRetryReport::new(A2AAutoRetryPolicy {
             enabled: true,

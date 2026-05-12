@@ -716,6 +716,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_chain_status_serde_pins_unit_variant() {
+        // Request::ChainStatus is the unit variant the CLI sends
+        // after Authenticate to dump the daemon's on-chain
+        // readiness state — it pairs with Response::ChainStatus
+        // (already pinned) which surfaces the settlement chain,
+        // cluster, RPC URLs, program ID, mint, ready flag, and
+        // missing-key list. With #[serde(tag = "kind", rename_all
+        // = "snake_case")] on the Request enum, the wire form is
+        // exactly one top-level key: kind='chain_status'. No prior
+        // test pins the exact wire shape or round-trip of this
+        // variant. The chain-status probe is the surface
+        // operators use to confirm settlement is wired up before
+        // flushing receipts or anchoring batches; a slug
+        // regression silently strands the probe and the operator's
+        // CLI prints an authentication-error fallback where the
+        // real failure is a serde-shape regression.
+        let event = Request::ChainStatus;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::ChainStatus wire form must be exactly one \
+             top-level key: 'kind'. A refactor that promoted the \
+             variant from unit to struct or newtype would add a \
+             second top-level key and every CLI chain-status probe \
+             that sends {{\"kind\":\"chain_status\"}} alone would \
+             fail to decode on the daemon side — the operator's \
+             pre-flush readiness check would silently start \
+             returning Error responses instead of ChainStatus",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("chain_status")),
+            "Request discriminator slug must be the durable \
+             'chain_status'; a slug regression silently routes \
+             incoming readiness-probe frames to the daemon's \
+             catch-all error branch — every CLI chain readiness \
+             probe fails with a confusing fallback message instead \
+             of the settlement-state snapshot, masking on-chain \
+             wiring gaps during incident triage",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::ChainStatus must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI chain-readiness consumer leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

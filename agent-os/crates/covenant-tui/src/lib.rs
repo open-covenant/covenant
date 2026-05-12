@@ -1758,6 +1758,85 @@ mod tests {
     }
 
     #[test]
+    fn peers_tail_fetched_truncated_false_clears_initial_false() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        match app.mode() {
+            Mode::PeersTail {
+                loading: true,
+                truncated: false,
+                ..
+            } => {}
+            other => panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}"),
+        }
+        let peer = sample_peer();
+        app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {
+            peers: vec![peer.clone()],
+            truncated: false,
+        });
+        match app.mode() {
+            Mode::PeersTail {
+                loading: false,
+                truncated,
+                peers,
+                error: None,
+            } => {
+                assert!(!truncated, "truncated=false outcome must propagate verbatim");
+                assert_eq!(peers.len(), 1);
+                assert_eq!(peers[0].agent_id.pubkey, peer.agent_id.pubkey);
+            }
+            other => panic!("expected loaded peers-tail with truncated=false: {other:?}"),
+        }
+        assert_eq!(
+            app.mode().name(),
+            "peers-tail",
+            "Mode::name() must report the stable 'peers-tail' discriminant string the status bar reads — a rename here is the audit signal for downstream UI"
+        );
+    }
+
+    #[test]
+    fn peers_tail_fetched_truncated_true_flips_initial_false() {
+        let mut app = App::new();
+        app.on_key(press(KeyCode::Char('p')));
+        let _ = app.take_pending_peers_fetch();
+        match app.mode() {
+            Mode::PeersTail {
+                loading: true,
+                truncated: false,
+                ..
+            } => {}
+            other => panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}"),
+        }
+        let peer = sample_peer();
+        app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {
+            peers: vec![peer.clone()],
+            truncated: true,
+        });
+        match app.mode() {
+            Mode::PeersTail {
+                loading: false,
+                truncated,
+                peers,
+                error: None,
+            } => {
+                assert!(
+                    *truncated,
+                    "truncated=true outcome must propagate verbatim — the renderer's banner toggle reads this flag",
+                );
+                assert_eq!(peers.len(), 1);
+                assert_eq!(peers[0].agent_id.pubkey, peer.agent_id.pubkey);
+            }
+            other => panic!("expected loaded peers-tail with truncated=true: {other:?}"),
+        }
+        assert_eq!(
+            app.mode().name(),
+            "peers-tail",
+            "Mode::name() must remain 'peers-tail' when truncated=true so the status bar discriminant does not depend on payload state",
+        );
+    }
+
+    #[test]
     fn peers_tail_fetch_failure_surfaces_in_embedded_error() {
         let mut app = App::new();
         app.on_key(press(KeyCode::Char('p')));

@@ -2135,6 +2135,20 @@ mod tests {
     }
 
     #[test]
+    fn memory_read_scope_allows_pins_non_object_unscoped_and_tier_none_with_bound_scope() {
+        assert!(
+            !memory_read_scope_allows("memory", &serde_json::json!([]), Some("working")).unwrap()
+        );
+
+        let empty = serde_json::json!({});
+        assert!(memory_read_scope_allows("memory.read", &empty, Some("working")).unwrap());
+        assert!(memory_read_scope_allows("memory.read", &empty, None).unwrap());
+
+        let tier_bound = serde_json::json!({ "version": 1, "tiers": ["working"] });
+        assert!(memory_read_scope_allows("memory.read", &tier_bound, None).unwrap());
+    }
+
+    #[test]
     fn memory_read_record_scope_allows_pins_action_mismatch_non_object_and_explicit_null_before_ms()
     {
         let bound_scope = serde_json::json!({ "version": 1, "tiers": ["working"] });

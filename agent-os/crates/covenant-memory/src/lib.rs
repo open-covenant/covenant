@@ -933,6 +933,86 @@ mod tests {
     }
 
     #[test]
+    fn validate_compaction_request_pins_reason_and_empty_policy_arms() {
+        let request = |policy: MemoryCompactionPolicy, reason: &str| MemoryCompactionRequest {
+            mode: MemoryRepairMode::DryRun,
+            policy,
+            reason: reason.into(),
+        };
+
+        let non_empty_policy = MemoryCompactionPolicy {
+            delete_working_before_ms: Some(123),
+            ..MemoryCompactionPolicy::default()
+        };
+
+        // Non-empty reason and non-empty policy validate Ok.
+        assert!(validate_compaction_request(&request(
+            non_empty_policy.clone(),
+            "operator-initiated"
+        ))
+        .is_ok());
+
+        // Empty/whitespace reason rejects regardless of policy so a
+        // policy-only check cannot mask a blank reason.
+        for reason in ["", "   "] {
+            let err = validate_compaction_request(&request(non_empty_policy.clone(), reason))
+                .unwrap_err();
+            match err {
+                MemoryError::InvalidCompaction(message) => assert!(
+                    message.contains("reason must not be empty"),
+                    "unexpected InvalidCompaction payload: {message:?}",
+                ),
+                other => panic!("expected InvalidCompaction, got {other:?}"),
+            }
+        }
+
+        // All-default policy rejects with the documented message even
+        // when reason is non-empty; this is the no-op compaction guard.
+        let err =
+            validate_compaction_request(&request(MemoryCompactionPolicy::default(), "operator"))
+                .unwrap_err();
+        match err {
+            MemoryError::InvalidCompaction(message) => assert!(
+                message.contains("policy must enable at least one compaction action"),
+                "unexpected InvalidCompaction payload: {message:?}",
+            ),
+            other => panic!("expected InvalidCompaction, got {other:?}"),
+        }
+
+        // detach_stale_parents=true alone validates Ok; the boolean
+        // must NOT be treated as inert by is_empty(), or the legitimate
+        // detach-only compaction shape would be silently rejected.
+        assert!(validate_compaction_request(&request(
+            MemoryCompactionPolicy {
+                detach_stale_parents: true,
+                ..MemoryCompactionPolicy::default()
+            },
+            "operator-initiated",
+        ))
+        .is_ok());
+
+        // Each individual before_ms cutoff alone validates Ok so the
+        // is_empty() short-circuit cannot regress to require multiple
+        // policy fields to be set.
+        for policy in [
+            MemoryCompactionPolicy {
+                delete_working_before_ms: Some(1),
+                ..MemoryCompactionPolicy::default()
+            },
+            MemoryCompactionPolicy {
+                delete_episodic_before_ms: Some(1),
+                ..MemoryCompactionPolicy::default()
+            },
+            MemoryCompactionPolicy {
+                mark_longterm_stale_before_ms: Some(1),
+                ..MemoryCompactionPolicy::default()
+            },
+        ] {
+            assert!(validate_compaction_request(&request(policy, "operator")).is_ok());
+        }
+    }
+
+    #[test]
     fn cosine_basics() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];

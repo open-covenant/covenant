@@ -10588,6 +10588,66 @@ budget_credits_per_hour = {credits}
         assert_eq!(memory_repair_action(&backfill), "backfill_provenance");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn require_operator_token_mode_0600_pins_accept_reject_paths() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        let p0600 = dir.path().join("tok.0600");
+        fs::write(&p0600, b"x").expect("write tok.0600");
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o600))
+            .expect("chmod 0o600");
+        require_operator_token_mode_0600(&p0600).expect("0o600 must pass");
+
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o400))
+            .expect("chmod 0o400");
+        require_operator_token_mode_0600(&p0600).expect("0o400 must pass");
+
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o000))
+            .expect("chmod 0o000");
+        require_operator_token_mode_0600(&p0600).expect("0o000 must pass");
+
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o600))
+            .expect("chmod 0o600 (restore)");
+
+        let p0640 = dir.path().join("tok.0640");
+        fs::write(&p0640, b"x").expect("write tok.0640");
+        fs::set_permissions(&p0640, fs::Permissions::from_mode(0o640))
+            .expect("chmod 0o640");
+        let err640 = require_operator_token_mode_0600(&p0640)
+            .expect_err("0o640 must reject");
+        let msg640 = err640.to_string();
+        assert!(
+            msg640.contains("mode is") && msg640.contains("expected 0o600"),
+            "0o640 reject missing expected fragments: {msg640}"
+        );
+
+        let p0604 = dir.path().join("tok.0604");
+        fs::write(&p0604, b"x").expect("write tok.0604");
+        fs::set_permissions(&p0604, fs::Permissions::from_mode(0o604))
+            .expect("chmod 0o604");
+        let err604 = require_operator_token_mode_0600(&p0604)
+            .expect_err("0o604 must reject");
+        let msg604 = err604.to_string();
+        assert!(
+            msg604.contains("mode is") && msg604.contains("expected 0o600"),
+            "0o604 reject missing expected fragments: {msg604}"
+        );
+
+        let link = dir.path().join("tok.link");
+        std::os::unix::fs::symlink(&p0600, &link).expect("create symlink");
+        let err_link = require_operator_token_mode_0600(&link)
+            .expect_err("symlink must reject even when target is 0o600");
+        let msg_link = err_link.to_string();
+        assert!(
+            msg_link.contains("symlink"),
+            "symlink reject missing 'symlink': {msg_link}"
+        );
+    }
+
     #[test]
     fn a2a_auto_retry_scheduler_config_from_values_pins_defaults_and_overrides() {
         let default = a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)

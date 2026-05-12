@@ -2401,6 +2401,22 @@ mod tests {
     }
 
     #[test]
+    fn memory_write_scope_allows_pins_before_ms_equal_boundary_rejected() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "apply": true,
+            "before_ms": 1_000
+        });
+        assert!(
+            !memory_write_scope_allows("memory.write", &scope, "record-1", "working", 1_000)
+                .unwrap()
+        );
+        assert!(
+            memory_write_scope_allows("memory.write", &scope, "record-1", "working", 999).unwrap()
+        );
+    }
+
+    #[test]
     fn memory_repair_scope_allows_record_tier_and_mode() {
         let scope = serde_json::json!({
             "version": 1,

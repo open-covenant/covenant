@@ -4508,6 +4508,232 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_a2a_queue_serde_pins_four_field_variant() {
+        // Request::A2AQueue is the operator/CLI verb for inspecting
+        // queued and in-flight A2A tasks plus pending results. It
+        // pairs with Response::A2AQueue (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly five top-level
+        // keys: kind='a2_a_queue' plus limit plus min_lease_age_ms
+        // plus deadline_within_ms plus state_filter.
+        //
+        // The kind slug rides on the documented serde rename_all
+        // snake_case quirk: 'A2AQueue' splits on the digit/upper
+        // boundaries between '2', 'A', and 'Q', yielding 'a2_a_queue'
+        // — NOT the surface-natural 'a2a_queue'. The sibling Request
+        // variants try_recv_a2_a_task and recent_a2_a_results pin
+        // the same quirk. A normalising refactor that 'fixes' the
+        // slug to 'a2a_queue' would silently brick operator-driven
+        // A2A queue inspection on the supported path.
+        //
+        // limit has #[serde(default = "default_recent_limit")]
+        // returning 10. min_lease_age_ms is Option<u64> with
+        // #[serde(default)] and NO skip_serializing_if.
+        // deadline_within_ms is Option<u64> with #[serde(default)]
+        // and NO skip_serializing_if. state_filter is
+        // Option<A2ATaskQueueState> with #[serde(default)] and NO
+        // skip_serializing_if. Distinct from the just-pinned
+        // SearchMemory four-field variant — A2AQueue has NO required
+        // field, all four are default-tolerant.
+        //
+        // This slice locks: the exact wire shape (kind, limit,
+        // min_lease_age_ms, deadline_within_ms, state_filter), the
+        // 'a2_a_queue' slug, limit=10 on the daemon-default path,
+        // null-on-wire for all three Option fields on the unfiltered
+        // path, populated paths (min_lease_age_ms as JSON number,
+        // deadline_within_ms as JSON number, state_filter as
+        // 'in_flight' slug), round-trip for both shapes, and four
+        // independent forward-compat checks.
+        let unfiltered = Request::A2AQueue {
+            limit: 10,
+            min_lease_age_ms: None,
+            deadline_within_ms: None,
+            state_filter: None,
+        };
+
+        let wire = serde_json::to_value(&unfiltered).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "deadline_within_ms",
+                "kind",
+                "limit",
+                "min_lease_age_ms",
+                "state_filter",
+            ],
+            "Request::A2AQueue wire form must be exactly five \
+             top-level keys: 'kind' plus the four variant fields \
+             ('limit', 'min_lease_age_ms', 'deadline_within_ms', \
+             'state_filter'). A refactor that added \
+             #[serde(skip_serializing_if = \"Option::is_none\")] to \
+             any Option field would shrink the unfiltered wire form \
+             from five keys to four, three, or two and silently \
+             break CLI/HTTP A2A-triage consumers that switch on key \
+             presence to distinguish unfiltered-from-filtered queue \
+             snapshots",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_queue")),
+            "Request discriminator slug must be the durable \
+             'a2_a_queue' (rename_all = snake_case splits 'A2AQueue' \
+             on the digit/upper boundaries between '2', 'A', and \
+             'Q'). A normalising refactor that 'fixed' the slug to \
+             the surface-natural 'a2a_queue' would silently route \
+             incoming a2a-queue frames to the catch-all error branch \
+             and operator-driven A2A queue inspection goes dark — \
+             the same quirk that pins the sibling 'try_recv_a2_a_\
+             task' and 'recent_a2_a_results' slugs",
+        );
+        assert_eq!(
+            obj.get("limit"),
+            Some(&serde_json::json!(10)),
+            "Request::A2AQueue::limit must surface as a JSON \
+             number; a refactor that promoted limit to a string or \
+             enum would silently mismatch every CLI/HTTP caller \
+             that sends a numeric usize page size",
+        );
+        assert_eq!(
+            obj.get("min_lease_age_ms"),
+            Some(&serde_json::Value::Null),
+            "Request::A2AQueue::min_lease_age_ms must surface as \
+             JSON null when None (the durable null-on-wire surface, \
+             NOT a missing key); a stray skip_serializing_if would \
+             shrink the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence to \
+             distinguish lease-aged-from-fresh queue snapshots",
+        );
+        assert_eq!(
+            obj.get("deadline_within_ms"),
+            Some(&serde_json::Value::Null),
+            "Request::A2AQueue::deadline_within_ms must surface as \
+             JSON null when None (the durable null-on-wire surface, \
+             NOT a missing key); a stray skip_serializing_if would \
+             shrink the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence to \
+             distinguish deadline-windowed-from-full queue snapshots",
+        );
+        assert_eq!(
+            obj.get("state_filter"),
+            Some(&serde_json::Value::Null),
+            "Request::A2AQueue::state_filter must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence to \
+             distinguish queued-or-in-flight-scoped from full \
+             queue snapshots",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, unfiltered,
+            "Request::A2AQueue (unfiltered) must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract every CLI/HTTP a2a-queue consumer leans \
+             on",
+        );
+
+        let filtered = Request::A2AQueue {
+            limit: 10,
+            min_lease_age_ms: Some(5_000),
+            deadline_within_ms: Some(60_000),
+            state_filter: Some(covenant_a2a::A2ATaskQueueState::InFlight),
+        };
+        let filtered_wire = serde_json::to_value(&filtered).unwrap();
+        let filtered_obj = filtered_wire.as_object().unwrap();
+        assert_eq!(
+            filtered_obj.get("min_lease_age_ms"),
+            Some(&serde_json::json!(5_000u64)),
+            "populated min_lease_age_ms must round-trip as a JSON \
+             number matching the u64 input; the five-key shape \
+             stays stable across unfiltered and filtered",
+        );
+        assert_eq!(
+            filtered_obj.get("deadline_within_ms"),
+            Some(&serde_json::json!(60_000u64)),
+            "populated deadline_within_ms must round-trip as a JSON \
+             number matching the u64 input; the five-key shape \
+             stays stable across unfiltered and deadline-windowed",
+        );
+        assert_eq!(
+            filtered_obj
+                .get("state_filter")
+                .and_then(serde_json::Value::as_str),
+            Some("in_flight"),
+            "populated state_filter must round-trip as the durable \
+             snake_case slug 'in_flight' (rename_all = \
+             \"snake_case\" on A2ATaskQueueState splits 'InFlight' \
+             on the upper boundary); the five-key shape stays \
+             stable across unfiltered and state-scoped",
+        );
+        let filtered_back: Request = serde_json::from_value(filtered_wire.clone()).unwrap();
+        assert_eq!(
+            filtered_back, filtered,
+            "Request::A2AQueue (filtered) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_limit = obj.clone();
+        missing_limit.remove("limit");
+        let parsed_no_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_limit)).unwrap();
+        assert_eq!(
+            parsed_no_limit, unfiltered,
+            "Request::A2AQueue wire form must accept a payload \
+             missing 'limit' (decodes as 10 via \
+             default_recent_limit); a refactor that dropped the \
+             default would silently break stale CLIs that omit \
+             limit, returning an empty page where operators expect \
+             the latest queue entries",
+        );
+
+        let mut missing_min_lease_age_ms = obj.clone();
+        missing_min_lease_age_ms.remove("min_lease_age_ms");
+        let parsed_no_min_lease_age_ms: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_min_lease_age_ms)).unwrap();
+        assert_eq!(
+            parsed_no_min_lease_age_ms, unfiltered,
+            "Request::A2AQueue wire form must accept a payload \
+             missing 'min_lease_age_ms' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the lease-age filter",
+        );
+
+        let mut missing_deadline_within_ms = obj.clone();
+        missing_deadline_within_ms.remove("deadline_within_ms");
+        let parsed_no_deadline_within_ms: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_deadline_within_ms)).unwrap();
+        assert_eq!(
+            parsed_no_deadline_within_ms, unfiltered,
+            "Request::A2AQueue wire form must accept a payload \
+             missing 'deadline_within_ms' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the deadline-window filter",
+        );
+
+        let mut missing_state_filter = obj.clone();
+        missing_state_filter.remove("state_filter");
+        let parsed_no_state_filter: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_state_filter)).unwrap();
+        assert_eq!(
+            parsed_no_state_filter, unfiltered,
+            "Request::A2AQueue wire form must accept a payload \
+             missing 'state_filter' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the queue-state filter",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -3199,6 +3199,104 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_task_sent_serde_pins_nested_task_variant() {
+        // MailboxEvent::TaskSent is the queue-head append the daemon
+        // writes to the JSONL mailbox log after send_task accepts a new
+        // task. With #[serde(tag = "type", rename_all = "snake_case")]
+        // on the enum, the wire object is exactly two top-level keys:
+        // type='task_sent' plus task (a nested A2ATask object carrying
+        // id, sender, recipient, intent_text, and four
+        // #[serde(default, skip_serializing_if)] Option fields).
+        // a2a_task_serde_pins_four_required_and_four_option_skip_empty
+        // covers the inner A2ATask payload, but no test pins the
+        // enum-level struct-variant wrapper. A refactor that promoted
+        // TaskSent from a struct variant to a newtype variant
+        // (TaskSent(A2ATask)) would flatten A2ATask's fields next to
+        // 'type' on the wire and every prior JSONL TaskSent row that
+        // nests under 'task' would silently fail decode at
+        // JsonlMailbox::open replay — every queued-but-not-leased task
+        // disappears across daemon restart, sender histories rebuild
+        // empty, and the a2a.respond.<sender> capability check loses
+        // its registry source.
+        let mut task = dummy_task();
+        task.id = Uuid::from_u128(13);
+        let event = MailboxEvent::TaskSent { task: task.clone() };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["task", "type"],
+            "MailboxEvent::TaskSent wire form must be exactly two \
+             top-level keys: 'type' plus the nested 'task' field. A \
+             refactor that promoted TaskSent from struct variant to \
+             newtype variant would flatten A2ATask's fields next to \
+             'type' and every prior JSONL TaskSent row that nests under \
+             'task' would silently fail decode at replay — every \
+             queued-but-not-leased task would disappear across daemon \
+             restart",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("task_sent")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'task_sent'; a refactor that flipped the slug or removed \
+             rename_all = \"snake_case\" silently strands every prior \
+             JSONL TaskSent row at replay and the mailbox rebuilds with \
+             an empty tasks deque — senders that already enqueued tasks \
+             before the restart see their tasks disappear and the \
+             recipient never receives them",
+        );
+
+        let task_obj = obj
+            .get("task")
+            .and_then(serde_json::Value::as_object)
+            .expect("MailboxEvent::TaskSent::task must serialise as a nested JSON object");
+        for required in ["id", "sender", "recipient", "intent_text"] {
+            assert!(
+                task_obj.contains_key(required),
+                "MailboxEvent::TaskSent::task must surface the four \
+                 required A2ATask fields at the nested level; missing \
+                 {required:?} would break the cross-event join replay \
+                 uses to attribute the queued task to its sender and \
+                 recipient",
+            );
+        }
+        assert_eq!(
+            task_obj.get("id").and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(13).to_string().as_str()),
+            "MailboxEvent::TaskSent::task.id must surface as the Uuid's \
+             hyphenated string form — replay matches TaskSent against \
+             TaskRecv/TaskLeased tombstones by this exact representation",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::TaskSent must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract the \
+             JsonlMailbox::open replay path joins mailbox events against",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("task");
+        assert!(
+            serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
+            "MailboxEvent::TaskSent wire form must reject a payload \
+             missing 'task'; a stray #[serde(default)] would let a \
+             malformed row decode with A2ATask::default() — a queued \
+             task with a nil id, empty sender, empty recipient, and \
+             empty intent_text — and replay would enqueue that \
+             zero-payload entry, exposing whoever is listening to a \
+             malformed dispatch with no traceable origin",
+        );
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

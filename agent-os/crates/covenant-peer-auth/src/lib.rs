@@ -847,6 +847,138 @@ mod tests {
     }
 
     #[test]
+    fn peer_summary_serde_pins_four_field_wire_form() {
+        // PeerSummary is the read-only redacted peer-registry view that
+        // crosses every IPC and HTTP wire: Response::PeerList carries
+        // Vec<PeerSummary>, and RevokeOutcome::Revoked / AlreadyRevoked /
+        // Ambiguous each wrap one or more summaries. The four-field
+        // wire contract is load-bearing:
+        //
+        // * `agent_id` carries the nested AgentId {display, pubkey-b58}.
+        // * `token_prefix` is the 6-char redaction the operator pastes
+        //   from grep'd debug logs into `peers revoke`.
+        // * `registered_at` is the registration timestamp.
+        // * `revoked_at: Option<u64>` is None for live entries and
+        //   Some(ts) for tombstoned ones; the absence of
+        //   skip_serializing_if means the key is always present on the
+        //   wire (null on the live path).
+        //
+        // No test pins this contract. A refactor that flattened the
+        // struct, renamed token_prefix, or added skip_serializing_if to
+        // revoked_at would silently shift every operator-triage and
+        // revoke-outcome consumer.
+
+        let mut pubkey = [0u8; 32];
+        pubkey[0] = 0xAA;
+        let live = PeerSummary {
+            agent_id: AgentId::new("alice@host", pubkey),
+            token_prefix: "abcdef".into(),
+            registered_at: 1_000,
+            revoked_at: None,
+        };
+        let wire = serde_json::to_value(&live).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("PeerSummary serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent_id", "registered_at", "revoked_at", "token_prefix"],
+            "PeerSummary wire object must always carry the four documented \
+             fields; adding skip_serializing_if = Option::is_none on \
+             revoked_at would silently drop the key on the live-peer path \
+             and break every operator-triage consumer destructuring on the \
+             four-key shape"
+        );
+        assert_eq!(
+            obj.get("revoked_at"),
+            Some(&serde_json::Value::Null),
+            "live PeerSummary must surface revoked_at as JSON null on the wire \
+             — the absence of skip_serializing_if is what keeps the four-key \
+             shape stable across live and revoked states"
+        );
+
+        let agent_obj = obj
+            .get("agent_id")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent_id must serialise as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "PeerSummary::agent_id must surface the AgentId display+pubkey \
+             shape; flattening or restructuring AgentId here would break \
+             every peer-auth consumer cross-binding to AgentId"
+        );
+        assert_eq!(
+            agent_obj.get("display").and_then(serde_json::Value::as_str),
+            Some("alice@host"),
+        );
+        assert_eq!(
+            agent_obj.get("pubkey").and_then(serde_json::Value::as_str),
+            Some(live.agent_id.pubkey_base58().as_str()),
+            "PeerSummary::agent_id.pubkey must equal the AgentId's base58 \
+             pubkey verbatim — the redaction invariant that no token bytes \
+             leak depends on this cross-type binding staying stable"
+        );
+
+        let revoked = PeerSummary {
+            agent_id: AgentId::new("alice@host", pubkey),
+            token_prefix: "abcdef".into(),
+            registered_at: 1_000,
+            revoked_at: Some(2_000),
+        };
+        let revoked_wire = serde_json::to_value(&revoked).unwrap();
+        assert_eq!(
+            revoked_wire
+                .get("revoked_at")
+                .and_then(serde_json::Value::as_u64),
+            Some(2_000),
+            "Some revoked_at must round-trip verbatim on the wire"
+        );
+
+        let decoded: PeerSummary = serde_json::from_value(revoked_wire).unwrap();
+        assert_eq!(
+            decoded, revoked,
+            "PeerSummary must round-trip through serde_json verbatim — the \
+             Eq derive is the contract every redacted peer-list consumer \
+             leans on"
+        );
+
+        let full_obj = serde_json::to_value(&live).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["agent_id", "token_prefix", "registered_at"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<PeerSummary>(serde_json::Value::Object(payload))
+                    .is_err(),
+                "PeerSummary must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] introduction on a non-Option field \
+                 would silently let a malformed redacted view decode"
+            );
+        }
+
+        let no_revoked_at = serde_json::json!({
+            "agent_id": {
+                "display": "alice@host",
+                "pubkey": live.agent_id.pubkey_base58(),
+            },
+            "token_prefix": "abcdef",
+            "registered_at": 1_000,
+        });
+        let decoded: PeerSummary = serde_json::from_value(no_revoked_at).unwrap();
+        assert_eq!(
+            decoded.revoked_at, None,
+            "PeerSummary with revoked_at omitted must decode as None — \
+             serde's auto-default for Option<u64> is the forward-compatible \
+             contract every stale CLI built before the field landed leans on"
+        );
+    }
+
+    #[test]
     fn summary_from_pins_token_prefix_redaction_and_field_mapping() {
         let (token, entry) = entry("alice@host");
         let full_b58 = token.to_b58();

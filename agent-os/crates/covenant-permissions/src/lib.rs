@@ -3203,6 +3203,149 @@ mod tests {
         }
     }
 
+    #[test]
+    fn revocation_serde_pins_two_required_fields() {
+        // covenant_permissions::Revocation is the durable record the
+        // daemon writes to revoked.jsonl per revoke() call; a
+        // capability is treated as live iff its signature is in
+        // granted.jsonl AND NOT in revoked.jsonl. The wire form is
+        // exactly two top-level keys: 'signature' plus 'revoked_at'.
+        //
+        // signature is [u8; 64] with #[serde(with = "sig_b58")] —
+        // base58 string on the wire, NOT a JSON array of 64 numbers,
+        // NOT hex. The decoder enforces a strict 64-byte length and
+        // rejects any other length. revoked_at is u64 (Unix ms
+        // timestamp). Both fields are required — neither has
+        // #[serde(default)].
+        //
+        // This slice locks: the exact two-key wire shape, the base58
+        // string encoding of signature, the strict length-64
+        // rejection on decode (a shorter or longer base58 string
+        // must be rejected, NOT zero-padded), the rejection of a
+        // JSON array of 64 numbers in the signature slot (the
+        // custom serializer is string-based), and round-trip.
+        //
+        // The durable jsonl read path is
+        // `Self::read_jsonl::<Revocation>(&self.revoked_path)`, so
+        // a regression that swapped signature for a JSON array
+        // would silently fail to deserialise every existing
+        // revocation record on operator restart — silently
+        // restoring 'unrevoked' status to every legitimate
+        // revocation.
+        let revocation = Revocation {
+            signature: [7u8; 64],
+            revoked_at: 1_700_000_000_000,
+        };
+
+        let wire = serde_json::to_value(&revocation).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Revocation serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["revoked_at", "signature"],
+            "Revocation wire form must be exactly two top-level \
+             keys ('signature', 'revoked_at'). A refactor that \
+             added a third field without bumping the durable \
+             revoked.jsonl format would silently mismatch every \
+             existing revocation record on operator restart",
+        );
+
+        let sig_str = obj
+            .get("signature")
+            .and_then(serde_json::Value::as_str)
+            .expect(
+                "Revocation::signature must surface as a JSON string \
+                 (custom sig_b58 serializer); a refactor that dropped \
+                 the #[serde(with = \"sig_b58\")] attribute would \
+                 surface signature as a JSON array of 64 numbers and \
+                 invalidate every persisted revoked.jsonl row on \
+                 operator restart",
+            );
+        let expected_b58 = bs58::encode([7u8; 64]).into_string();
+        assert_eq!(
+            sig_str, expected_b58,
+            "Revocation::signature wire form must equal \
+             bs58::encode(signature_bytes); a refactor to base64 or \
+             hex would invalidate every existing revoked.jsonl row \
+             on operator restart and silently restore 'unrevoked' \
+             status to every legitimate revocation",
+        );
+
+        assert_eq!(
+            obj.get("revoked_at"),
+            Some(&serde_json::json!(1_700_000_000_000u64)),
+            "Revocation::revoked_at must surface as a JSON number \
+             (Unix ms timestamp); a refactor that added \
+             #[serde(skip_serializing_if)] or changed the type to a \
+             string would silently break operator-driven retention \
+             purges that key on revoked_at < before_ms",
+        );
+
+        let back: Revocation = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, revocation,
+            "Revocation must round-trip through serde_json verbatim \
+             — the PartialEq derive is the contract every \
+             revoked.jsonl read path leans on",
+        );
+
+        let mut missing_signature = obj.clone();
+        missing_signature.remove("signature");
+        assert!(
+            serde_json::from_value::<Revocation>(serde_json::Value::Object(missing_signature))
+                .is_err(),
+            "Revocation wire form must reject a payload missing \
+             'signature' (no #[serde(default)] on the field) — a \
+             relaxation would let untyped tombstones slip into \
+             revoked.jsonl and silently restore 'unrevoked' status \
+             to every existing revocation",
+        );
+
+        let mut missing_revoked_at = obj.clone();
+        missing_revoked_at.remove("revoked_at");
+        assert!(
+            serde_json::from_value::<Revocation>(serde_json::Value::Object(missing_revoked_at))
+                .is_err(),
+            "Revocation wire form must reject a payload missing \
+             'revoked_at' (no #[serde(default)] on the field) — a \
+             relaxation would let undated tombstones slip into \
+             revoked.jsonl and break operator-driven retention \
+             purges that key on revoked_at < before_ms",
+        );
+
+        let payload_array_signature = serde_json::json!({
+            "signature": vec![7u8; 64],
+            "revoked_at": 1_700_000_000_000u64,
+        });
+        assert!(
+            serde_json::from_value::<Revocation>(payload_array_signature).is_err(),
+            "Revocation wire form must reject a JSON array of 64 \
+             numbers in the signature slot — the custom sig_b58 \
+             serializer is string-based; a relaxation would silently \
+             accept a non-canonical wire form and split the \
+             revoked.jsonl read path between string and array shapes",
+        );
+
+        let short_b58 = bs58::encode([0u8; 32]).into_string();
+        let payload_short_b58 = serde_json::json!({
+            "signature": short_b58,
+            "revoked_at": 1_700_000_000_000u64,
+        });
+        assert!(
+            serde_json::from_value::<Revocation>(payload_short_b58).is_err(),
+            "Revocation wire form must reject a base58 string whose \
+             decoded byte length is not 64 (e.g., a 32-byte pubkey \
+             b58 placed in the signature slot); a relaxed length \
+             check would zero-pad the [u8; 64] and silently make \
+             every revocation's signature equality match return \
+             false in is_revoked() — restoring live status to every \
+             revoked capability",
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_revoke_removes_from_subject_list() {
         let issuer = LocalIdentity::generate("authority@local");

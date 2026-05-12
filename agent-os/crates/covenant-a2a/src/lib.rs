@@ -2012,6 +2012,81 @@ mod tests {
     }
 
     #[test]
+    fn a2a_repair_request_serde_pins_three_required_fields() {
+        // A2ARepairRequest is the request envelope every daemon, HTTP,
+        // and CLI A2A repair command dispatches through. Three strictly
+        // required fields with no serde attributes: task_id (Uuid),
+        // command (A2ARepairCommand — the tagged enum pinned by
+        // a2a_repair_command_serde_pins_each_snake_case_action_slug),
+        // reason (String). A refactor that flattened command into the
+        // top-level envelope would leak the inner "action" discriminator
+        // to the request shape; renaming reason would silently break
+        // audit attribution on every repaired task; adding
+        // skip_serializing_if = String::is_empty to reason would hide
+        // un-attributed repair rows from operator dashboards that grep
+        // on key presence.
+        let request = A2ARepairRequest {
+            task_id: Uuid::nil(),
+            command: A2ARepairCommand::ForceError {
+                lease_id: None,
+                message: "boom".into(),
+            },
+            reason: "manual".into(),
+        };
+
+        let wire = serde_json::to_value(&request).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2ARepairRequest serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["task_id", "command", "reason"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "A2ARepairRequest wire form must be exactly three keys; a \
+             #[serde(flatten)] on command would leak the inner action \
+             discriminator to the envelope, and a skip_serializing_if on \
+             reason would silently drop audit attribution",
+        );
+
+        // Cross-bind to A2ARepairCommand's #[serde(tag = "action",
+        // rename_all = "snake_case")] contract: the command value must
+        // carry an inner "action" discriminator with the snake_case
+        // slug, not a top-level discriminator the envelope would expose
+        // if command were flattened.
+        let command_obj = obj
+            .get("command")
+            .and_then(serde_json::Value::as_object)
+            .expect("command must serialise as a nested JSON object");
+        assert_eq!(
+            command_obj.get("action"),
+            Some(&serde_json::json!("force_error")),
+            "command must carry the inner action discriminator with the \
+             snake_case slug; a flatten would lift action to the envelope",
+        );
+        assert!(
+            !obj.contains_key("action"),
+            "envelope must not expose action at the top level — that \
+             would mean command was flattened",
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract.
+        let back: A2ARepairRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, request);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["task_id", "command", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2ARepairRequest>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2ARepairRequest wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
+    #[test]
     fn a2a_repair_state_serde_pins_snake_case_wire_form() {
         // A2ARepairState rides next to A2ARepairAction inside every
         // A2ARepairOutcome audit row. ResultPending is load-bearing —

@@ -822,6 +822,60 @@ mod tests {
     }
 
     #[test]
+    fn chain_hash_pins_separator_and_sha256_composition() {
+        let prev = "a".repeat(64);
+        let evt = "b".repeat(64);
+
+        let chained = chain_hash(&prev, &evt);
+        assert_eq!(chained.len(), 64, "chain_hash must return 64-char hex");
+        assert!(
+            chained
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "chain_hash must return lowercase hex, got {chained}",
+        );
+
+        let manual = sha256_hex(format!("{prev}\n{evt}").as_bytes());
+        assert_eq!(
+            chained, manual,
+            "chain_hash must equal sha256_hex of 'prev\\nevt' verbatim; \
+             changing the separator silently invalidates every on-disk audit chain",
+        );
+
+        assert_eq!(
+            chain_hash(&prev, &evt),
+            chained,
+            "chain_hash must be deterministic across calls",
+        );
+
+        let no_separator = sha256_hex(format!("{prev}{evt}").as_bytes());
+        assert_ne!(
+            chained, no_separator,
+            "chain_hash must NOT match a separator-collapsed concatenation; \
+             that would create ambiguity across (prev,evt) boundaries",
+        );
+
+        let other_prev = "c".repeat(64);
+        assert_ne!(
+            chain_hash(&other_prev, &evt),
+            chained,
+            "different previous hash must produce a different chain hash",
+        );
+        let other_evt = "d".repeat(64);
+        assert_ne!(
+            chain_hash(&prev, &other_evt),
+            chained,
+            "different event hash must produce a different chain hash",
+        );
+
+        assert_eq!(
+            chain_hash(ZERO_CHAIN_HASH, &evt),
+            sha256_hex(format!("{ZERO_CHAIN_HASH}\n{evt}").as_bytes()),
+            "the genesis previous-hash must compose the same way as any other previous hash",
+        );
+    }
+
+    #[test]
     fn audit_event_round_trips_through_serde() {
         let e = dummy(intent_kind("ok"));
         let json = serde_json::to_string(&e).unwrap();

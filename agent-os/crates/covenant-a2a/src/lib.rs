@@ -2436,6 +2436,85 @@ mod tests {
     }
 
     #[test]
+    fn a2a_auto_retry_requeued_serde_pins_four_required_fields() {
+        // A2AAutoRetryRequeued is the per-task row in
+        // A2AAutoRetryReport.requeued — the scheduler's success record
+        // for every queued entry the auto-retry policy actually
+        // requeued. Four strictly required fields with no serde
+        // attributes: task_id, lease_id, attempt, idempotency_key. The
+        // empty-string idempotency_key path is realistic — the
+        // intent_text fallback can produce a non-empty key for an
+        // empty task_kind, but a bug that collapses the key must
+        // surface on the audit row, not hide.
+        let requeued = A2AAutoRetryRequeued {
+            task_id: Uuid::nil(),
+            lease_id: Uuid::new_v4(),
+            attempt: 2,
+            idempotency_key: "k".into(),
+        };
+
+        let wire = serde_json::to_value(&requeued).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2AAutoRetryRequeued serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> =
+            obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "task_id",
+            "lease_id",
+            "attempt",
+            "idempotency_key",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "A2AAutoRetryRequeued wire form must be exactly four keys; a \
+             skip_serializing_if on any field would silently shift the \
+             scheduler audit row and break operator triage queries that \
+             grep on key presence",
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract.
+        let back: A2AAutoRetryRequeued = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, requeued);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["task_id", "lease_id", "attempt", "idempotency_key"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AAutoRetryRequeued>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2AAutoRetryRequeued wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Empty idempotency_key must still surface on the wire — pinning
+        // that String::is_empty is NOT skipped. A bug that collapsed the
+        // key to empty needs to leave a trail on the audit row, not
+        // silently drop the column.
+        let empty_key = A2AAutoRetryRequeued {
+            task_id: Uuid::nil(),
+            lease_id: Uuid::new_v4(),
+            attempt: 0,
+            idempotency_key: String::new(),
+        };
+        let empty_wire = serde_json::to_value(&empty_key).unwrap();
+        let empty_obj = empty_wire.as_object().unwrap();
+        assert!(
+            empty_obj.contains_key("idempotency_key"),
+            "empty idempotency_key must remain present on the wire — a \
+             skip_serializing_if = String::is_empty would silently hide \
+             the bug surface the audit row exists to preserve",
+        );
+        assert_eq!(
+            empty_obj.get("idempotency_key").unwrap(),
+            &serde_json::json!(""),
+        );
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

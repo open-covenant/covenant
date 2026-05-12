@@ -201,6 +201,61 @@ mod tests {
     use crate::transport::MockMcpClient;
 
     #[test]
+    fn matches_filter_pins_star_exact_and_prefix_glob_branches() {
+        assert!(
+            matches_filter("*", "anything"),
+            "'*' must pass every tool name; dropping this arm silently blocks every tool when the operator wires '*' in allowed_tools",
+        );
+        assert!(
+            matches_filter("*", ""),
+            "'*' must even pass the empty name so the all-pass arm is unconditional",
+        );
+
+        assert!(
+            matches_filter("foo", "foo"),
+            "an exact literal must match itself",
+        );
+        assert!(
+            !matches_filter("foo", "bar"),
+            "an exact literal must not match a different name",
+        );
+        assert!(
+            !matches_filter("foo", "foobar"),
+            "an exact literal must NOT match a longer name; otherwise the literal silently widens to a prefix",
+        );
+
+        assert!(
+            matches_filter("foo*", "foo"),
+            "the trailing-* glob must match the bare prefix; pattern='foo*' is documented to allow 'foo'",
+        );
+        assert!(
+            matches_filter("foo*", "foobar"),
+            "the trailing-* glob must match anything that starts with the prefix",
+        );
+        assert!(
+            !matches_filter("foo*", "fo"),
+            "the trailing-* glob must NOT match a name that is shorter than the prefix",
+        );
+        assert!(
+            !matches_filter("foo*", "barfoo"),
+            "the trailing-* glob is starts_with, not contains; embedded matches must reject",
+        );
+
+        assert!(
+            matches_filter("  *  ", "x"),
+            "leading/trailing whitespace on '*' must be trimmed before matching",
+        );
+        assert!(
+            matches_filter("  foo  ", "foo"),
+            "leading/trailing whitespace on an exact pattern must be trimmed before matching",
+        );
+        assert!(
+            matches_filter(" foo* ", "foobar"),
+            "leading/trailing whitespace on a glob pattern must be trimmed before matching",
+        );
+    }
+
+    #[test]
     fn sanitize_prefix_maps_non_alnum_to_underscore_trims_edges_and_falls_back_to_remote() {
         assert_eq!(
             sanitize_prefix("myserver"),

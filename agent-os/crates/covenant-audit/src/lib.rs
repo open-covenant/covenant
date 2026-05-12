@@ -1271,6 +1271,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_capability_granted_serde_pins_four_field_variant() {
+        // AuditKind::CapabilityGranted is the durable audit row that
+        // ties a SignedCapability's signature_b58 back to the actor who
+        // issued the grant. The audit verifier and operator triage
+        // tooling correlate on signature_b58, so the four fields
+        // (subject_display, action, granted_by_display, signature_b58)
+        // are load-bearing. A rename or #[serde(default)] regression on
+        // signature_b58 would silently break the grant-audit correlation
+        // chain.
+        let kind = AuditKind::CapabilityGranted {
+            subject_display: "research@local".into(),
+            action: "memory.write".into(),
+            granted_by_display: "authority@local".into(),
+            signature_b58: "deadbeef".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "action",
+                "granted_by_display",
+                "signature_b58",
+                "subject_display",
+                "type",
+            ],
+            "AuditKind::CapabilityGranted wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_granted")),
+            "AuditKind discriminator slug must be snake_case 'capability_granted'; a titlecase 'CapabilityGranted' regression breaks every prior grant audit row",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::CapabilityGranted must round-trip through serde_json verbatim — the PartialEq derive is the contract the grant-audit correlation chain leans on",
+        );
+
+        for required in [
+            "subject_display",
+            "action",
+            "granted_by_display",
+            "signature_b58",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityGranted wire form must reject a payload missing {required:?}; a stray #[serde(default)] on signature_b58 would silently let the row decode with an empty signature and break the SignedCapability correlation",
+            );
+        }
+
+        let titlecase = serde_json::json!({
+            "type": "CapabilityGranted",
+            "subject_display": "research@local",
+            "action": "memory.write",
+            "granted_by_display": "authority@local",
+            "signature_b58": "deadbeef",
+        });
+        assert!(
+            serde_json::from_value::<AuditKind>(titlecase).is_err(),
+            "titlecase 'CapabilityGranted' must reject — the rename_all = snake_case contract is what keeps every prior grant audit row decoding stably across rebuilds",
+        );
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

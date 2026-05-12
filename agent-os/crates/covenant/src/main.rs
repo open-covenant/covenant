@@ -3508,6 +3508,61 @@ mod tests {
     }
 
     #[test]
+    fn receipt_list_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "limit", "receipts", "since_ms"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("receipt_list_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "receipt_list_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("receipt_list"));
+            assert!(
+                value["limit"].is_u64(),
+                "limit must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["since_ms"].is_u64() || value["since_ms"].is_null(),
+                "since_ms must be u64-or-null (never a string-of-integer or other type): {value}",
+            );
+            assert!(
+                value["receipts"].is_array(),
+                "receipts must be an array: {value}",
+            );
+        }
+
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::nil(),
+            payer: AgentId::new("payer@local", [4u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: Some(uuid::Uuid::nil()),
+            credits_consumed: 1,
+            settled_at: 1_700_000_000_000,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let receipts = [receipt];
+
+        assert_shape(&receipt_list_json(10, Some(1_699_999_999_000), &receipts));
+        assert_shape(&receipt_list_json(10, None, &receipts));
+        assert_shape(&receipt_list_json(10, None, &[]));
+    }
+
+    #[test]
     fn intent_result_json_renders_stable_shape() {
         let value = intent_result_json(
             uuid::Uuid::nil(),

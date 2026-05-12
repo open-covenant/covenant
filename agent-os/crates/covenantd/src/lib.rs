@@ -10441,6 +10441,25 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_repair_id_pins_each_repair_command_variant() {
+        let detach_id = Uuid::new_v4();
+        let delete_id = Uuid::new_v4();
+        let backfill_id = Uuid::new_v4();
+        let detach = MemoryRepairCommand::DetachParent {
+            id: detach_id,
+            expected_parent: Some(Uuid::new_v4()),
+        };
+        let delete = MemoryRepairCommand::DeleteRecord { id: delete_id };
+        let backfill = MemoryRepairCommand::BackfillProvenance {
+            id: backfill_id,
+            provenance: serde_json::json!({}),
+        };
+        assert_eq!(memory_repair_id(&detach), detach_id);
+        assert_eq!(memory_repair_id(&delete), delete_id);
+        assert_eq!(memory_repair_id(&backfill), backfill_id);
+    }
+
+    #[test]
     fn memory_repair_action_pins_each_repair_command_variant() {
         let detach = MemoryRepairCommand::DetachParent {
             id: Uuid::new_v4(),

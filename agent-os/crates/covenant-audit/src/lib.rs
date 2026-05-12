@@ -2304,6 +2304,122 @@ mod tests {
         );
     }
 
+    #[test]
+    fn audit_kind_a2a_auto_retry_scheduler_scan_serde_pins_ten_field_variant() {
+        // AuditKind::A2AAutoRetrySchedulerScan is the summary audit row
+        // covenantd's disabled-by-default scheduler emits after each
+        // automatic A2A retry scan. Requeued tasks still get individual
+        // A2ARepairApplied rows; this row makes skipped and rejected
+        // scheduler runs visible without duplicating task payloads.
+        // Ten fields: enabled (bool), considered (u64), requeued (u64),
+        // skipped (u64), skipped_by_reason (BTreeMap<String, u64>),
+        // min_lease_age_ms (u64), max_attempts (u32), max_requeues
+        // (u64), scan_limit (u64), error (Option<String>). The error
+        // field has no #[serde(skip_serializing_if)] so the wire shape
+        // must surface the key as null on success scans; a regression
+        // there would shrink the wire form for success vs. failure
+        // cases. The durable slug is 'a2_a_auto_retry_scheduler_scan'
+        // per the serde rename_all = snake_case digit/upper split.
+        let mut skipped_by_reason = BTreeMap::new();
+        skipped_by_reason.insert("max_attempts".into(), 5);
+        skipped_by_reason.insert("lease_age".into(), 3);
+        let kind = AuditKind::A2AAutoRetrySchedulerScan {
+            enabled: true,
+            considered: 10,
+            requeued: 2,
+            skipped: 8,
+            skipped_by_reason: skipped_by_reason.clone(),
+            min_lease_age_ms: 30_000,
+            max_attempts: 3,
+            max_requeues: 100,
+            scan_limit: 200,
+            error: Some("lock contention".into()),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "considered",
+                "enabled",
+                "error",
+                "max_attempts",
+                "max_requeues",
+                "min_lease_age_ms",
+                "requeued",
+                "scan_limit",
+                "skipped",
+                "skipped_by_reason",
+                "type",
+            ],
+            "AuditKind::A2AAutoRetrySchedulerScan wire form must be exactly eleven keys: the ten variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("a2_a_auto_retry_scheduler_scan")),
+            "AuditKind discriminator slug must be 'a2_a_auto_retry_scheduler_scan' — serde's rename_all = snake_case splits the 'A2A' prefix on each digit/uppercase boundary, producing 'a2_a_…'. This is the durable wire form every persisted A2AAutoRetrySchedulerScan summary row uses; a refactor that 'fixed' the slug to 'a2a_auto_retry_scheduler_scan' would silently strand every prior scheduler-summary audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::A2AAutoRetrySchedulerScan must round-trip through serde_json verbatim — the PartialEq derive is the contract retry-scheduler observability joins on",
+        );
+
+        // Omission-rejection only walks the nine strictly-required
+        // fields; error is Option<String> and serde accepts a missing
+        // key as None. The null-on-wire assertion below is what pins
+        // the skip_serializing_if regression for the error field.
+        for required in [
+            "enabled",
+            "considered",
+            "requeued",
+            "skipped",
+            "skipped_by_reason",
+            "min_lease_age_ms",
+            "max_attempts",
+            "max_requeues",
+            "scan_limit",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::A2AAutoRetrySchedulerScan wire form must reject a payload missing {required:?}; a stray #[serde(default)] on skipped_by_reason would let a malformed row decode with an empty BTreeMap and erase the per-reason breakdown distinguishing operator-misconfig from policy gates",
+            );
+        }
+
+        let success_case = AuditKind::A2AAutoRetrySchedulerScan {
+            enabled: true,
+            considered: 5,
+            requeued: 5,
+            skipped: 0,
+            skipped_by_reason: BTreeMap::new(),
+            min_lease_age_ms: 30_000,
+            max_attempts: 3,
+            max_requeues: 100,
+            scan_limit: 200,
+            error: None,
+        };
+        let wire_success = serde_json::to_value(&success_case).unwrap();
+        let obj_success = wire_success.as_object().unwrap();
+        assert_eq!(
+            obj_success.get("error"),
+            Some(&serde_json::Value::Null),
+            "error: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across success and failure scheduler scans",
+        );
+        assert_eq!(
+            obj_success.len(),
+            11,
+            "AuditKind::A2AAutoRetrySchedulerScan with error=None must still surface eleven keys on the wire; a skip_serializing_if regression would silently shrink the wire form for success scans",
+        );
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

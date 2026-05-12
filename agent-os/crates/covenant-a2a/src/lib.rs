@@ -3900,6 +3900,169 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_idempotency_result_replayed_serde_pins_nested_wire_form() {
+        // MailboxEvent::IdempotencyResultReplayed is the JSONL mailbox
+        // replay event the daemon appends when send_task receives a
+        // duplicate request that matches a prior task's A2AIdempotency
+        // cache key — instead of re-dispatching the task, the daemon
+        // synthesises a fresh A2ATaskResult from the cached entry and
+        // enqueues both the inbound task envelope and the cached result
+        // so recv_task and recv_result can deliver the replay to the
+        // new sender. With #[serde(tag = "type", rename_all =
+        // "snake_case")] on the enum, the wire object is exactly three
+        // top-level keys: type='idempotency_result_replayed' plus task
+        // (nested A2ATask: id, sender, recipient, intent_text, four
+        // Option fields under skip_if_none) plus result (nested
+        // A2ATaskResult: task_id, status, content with
+        // #[serde(default)], error_message under skip_if_none).
+        // a2a_task_serde_pins_four_required_and_four_option_skip_empty
+        // and a2a_task_result_serde_pins_content_default_and_error_message_skip_empty
+        // cover the inner payloads, and the sibling TaskSent /
+        // ResultPosted struct-variant pins cover their wrappers, but no
+        // test pins the IdempotencyResultReplayed enum-level wrapper.
+        // A refactor that promoted IdempotencyResultReplayed from a
+        // struct variant to a newtype variant would silently flatten
+        // one of the nested types next to 'type' on the wire and every
+        // prior JSONL replay row would fail decode at
+        // JsonlMailbox::open — duplicate-sends that were already
+        // replayed before the restart silently re-execute the task on
+        // the recipient side and their senders never see the result
+        // that was already produced upstream of the restart.
+        let mut task = dummy_task();
+        task.id = Uuid::from_u128(61);
+        let result = A2ATaskResult::ok(Uuid::from_u128(61), Vec::new());
+        let event = MailboxEvent::IdempotencyResultReplayed {
+            task: task.clone(),
+            result: result.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["result", "task", "type"],
+            "MailboxEvent::IdempotencyResultReplayed wire form must be \
+             exactly three top-level keys: 'type' plus the two nested \
+             fields. A refactor that promoted the variant from struct \
+             to newtype would flatten one of the nested objects next \
+             to 'type' and every prior JSONL replay row that nests \
+             under task+result would silently fail decode at \
+             JsonlMailbox::open — duplicate-sends that were already \
+             replayed before the restart would silently re-execute on \
+             the recipient and their senders would never see the \
+             cached result they were entitled to",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("idempotency_result_replayed")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'idempotency_result_replayed'; a refactor that flipped \
+             the slug or removed rename_all = \"snake_case\" silently \
+             strands every prior JSONL replay row at restart, the \
+             duplicate-send replay history rebuilds empty, and the \
+             daemon silently re-dispatches every duplicate as a fresh \
+             task — exposing the recipient to repeated work and the \
+             sender to inconsistent results when the second execution \
+             diverges from the first",
+        );
+
+        let task_obj = obj
+            .get("task")
+            .and_then(serde_json::Value::as_object)
+            .expect(
+                "MailboxEvent::IdempotencyResultReplayed::task must \
+                 serialise as a nested JSON object",
+            );
+        for required in ["id", "sender", "recipient", "intent_text"] {
+            assert!(
+                task_obj.contains_key(required),
+                "MailboxEvent::IdempotencyResultReplayed::task must \
+                 surface the four required A2ATask fields at the \
+                 nested level; missing {required:?} would break the \
+                 cross-event join replay uses to attribute the \
+                 replayed task to its sender and recipient",
+            );
+        }
+        assert_eq!(
+            task_obj.get("id").and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(61).to_string().as_str()),
+            "MailboxEvent::IdempotencyResultReplayed::task.id must \
+             surface as the Uuid's hyphenated string form — replay \
+             correlates the synthesised task envelope with its \
+             matching result by this exact representation",
+        );
+
+        let result_obj = obj
+            .get("result")
+            .and_then(serde_json::Value::as_object)
+            .expect(
+                "MailboxEvent::IdempotencyResultReplayed::result must \
+                 serialise as a nested JSON object",
+            );
+        for required in ["task_id", "status", "content"] {
+            assert!(
+                result_obj.contains_key(required),
+                "MailboxEvent::IdempotencyResultReplayed::result must \
+                 surface {required:?} at the nested level; missing \
+                 this key would break the recv_result delivery the \
+                 sender depends on after a duplicate-send replay",
+            );
+        }
+        assert_eq!(
+            result_obj
+                .get("task_id")
+                .and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(61).to_string().as_str()),
+            "MailboxEvent::IdempotencyResultReplayed::result.task_id \
+             must surface as the Uuid's hyphenated string form — \
+             replay matches the synthesised result against the \
+             enqueued task envelope by this exact representation",
+        );
+        assert_eq!(
+            result_obj.get("content"),
+            Some(&serde_json::json!([])),
+            "MailboxEvent::IdempotencyResultReplayed::result.content \
+             must surface as [] for an empty-content result — a \
+             refactor that added skip_serializing_if = Vec::is_empty \
+             would drop the column on the wire and break downstream \
+             consumers that destructure on key presence",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::IdempotencyResultReplayed must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract the JsonlMailbox::open replay path joins \
+             mailbox events against",
+        );
+
+        for required in ["task", "result"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MailboxEvent::IdempotencyResultReplayed wire form \
+                 must reject a payload missing {required:?}; a stray \
+                 #[serde(default)] on task would let a malformed row \
+                 decode with A2ATask::default() and enqueue a \
+                 zero-payload envelope alongside the cached result — \
+                 recv_task would hand the recipient an unrouteable \
+                 task whose id can never match a real send_task \
+                 request, while a default on result would decode with \
+                 A2ATaskResult::default() and recv_result would \
+                 deliver an empty Ok payload to the sender instead of \
+                 the cached content the original task produced",
+            );
+        }
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

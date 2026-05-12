@@ -645,6 +645,49 @@ mod tests {
     }
 
     #[test]
+    fn protocol_info_serde_pins_required_fields_and_rejected_renames() {
+        // protocol_info_matches_v1_fixture pins serialization against the
+        // checked-in v1 fixture; this test pins the deserialization side
+        // of the contract: every field must remain required (no silent
+        // #[serde(default)] introduction that would let a malformed
+        // negotiation frame decode as version=0), and any rename of the
+        // wire field names must fail loud at parse time so a refactor
+        // cannot quietly shift the protocol surface for every existing
+        // CLI client.
+        let info = protocol_info();
+        let wire = serde_json::to_value(&info).unwrap();
+        let obj = wire.as_object().expect("ProtocolInfo serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["max_supported", "min_supported", "protocol", "version"],
+            "ProtocolInfo wire object must contain exactly the four documented fields; an addition or rename of any field breaks every CLI's negotiation handshake",
+        );
+
+        for required in ["protocol", "version", "min_supported", "max_supported"] {
+            let mut shortened = obj.clone();
+            shortened.remove(required);
+            let payload = serde_json::Value::Object(shortened);
+            assert!(
+                serde_json::from_value::<ProtocolInfo>(payload).is_err(),
+                "ProtocolInfo must reject a wire payload that omits {required}; a stray #[serde(default)] would silently let a malformed handshake decode",
+            );
+        }
+
+        let renamed = serde_json::json!({
+            "proto": PROTOCOL_NAME,
+            "version": PROTOCOL_VERSION,
+            "min_supported": MIN_PROTOCOL_VERSION,
+            "max_supported": MAX_PROTOCOL_VERSION,
+        });
+        assert!(
+            serde_json::from_value::<ProtocolInfo>(renamed).is_err(),
+            "renamed protocol field (proto) must be rejected so the contract surface stays the documented key set",
+        );
+    }
+
+    #[test]
     fn v1_response_fixtures_replay_against_current_parser() {
         let mut fixture_count = 0;
 

@@ -3641,6 +3641,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_memory_repaired_serde_pins_single_field_variant() {
+        // Response::MemoryRepaired is the variant the daemon sends
+        // after Request::MemoryRepair applies (or dry-runs) a scoped
+        // repair against a memory row — detaching a stale parent,
+        // deleting a record, or backfilling provenance — and reports
+        // the per-row outcome. It carries outcome: MemoryRepairOutcome,
+        // the struct the CLI surfaces (id, action, mode, would_change,
+        // changed, optional before/after snapshots) so the operator
+        // can confirm exactly which row was touched and how. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='memory_repaired' plus outcome. No prior test
+        // pins the exact wire shape, round-trip, or omission
+        // rejection of this variant's required field. The inner
+        // MemoryRepairOutcome shape is pinned by covenant-memory and
+        // covenant-types tests; this slice locks the outer Response
+        // variant shape only — a minimally constructed outcome is
+        // sufficient to catch the slug, key set, and default-attribute
+        // regressions on the outer variant.
+        let event = Response::MemoryRepaired {
+            outcome: MemoryRepairOutcome {
+                id: Uuid::nil(),
+                action: covenant_types::MemoryRepairAction::DetachParent,
+                mode: covenant_types::MemoryRepairMode::DryRun,
+                would_change: false,
+                changed: false,
+                before: None,
+                after: None,
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "outcome"],
+            "Response::MemoryRepaired wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'outcome' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping MemoryRepairOutcome would either inline \
+             its fields next to 'kind' or nest 'outcome' one level \
+             deeper — either form silently breaks every CLI consumer \
+             that reads .outcome.id, .outcome.action, or \
+             .outcome.changed",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("memory_repaired")),
+            "Response discriminator slug must be the durable \
+             'memory_repaired'; a slug regression silently strands \
+             every CLI parser that classifies memory-repair outcomes \
+             by this exact value — the operator's CLI prints a \
+             confusing fallback instead of the repair outcome, \
+             masking whether the row was changed, would-be-changed \
+             (dry-run), or untouched",
+        );
+        assert!(
+            obj.get("outcome")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::MemoryRepaired::outcome must serialize as a \
+             nested JSON object — the inner MemoryRepairOutcome shape \
+             is pinned by covenant-types tests; this slice only locks \
+             that outcome appears as one keyed object under the outer \
+             variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::MemoryRepaired must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI memory-repair consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("outcome");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::MemoryRepaired wire form must reject a payload \
+             missing 'outcome'; a stray #[serde(default)] would let a \
+             malformed row decode with a synthetic default \
+             MemoryRepairOutcome and the CLI would surface a phantom \
+             'unchanged' state — a real fetch failure (truncated \
+             frame, partial decode error) would be silently \
+             reclassified as a clean apply where the operator \
+             believes the repair completed without mutation when in \
+             fact the daemon's repair path produced an error the \
+             boundary swallowed",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

@@ -1491,6 +1491,57 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_a2a_recipient_rejected_serde_pins_three_field_variant() {
+        // AuditKind::A2ARecipientRejected is the audit row emitted when
+        // SendA2ATask is rejected because the recipient peer has not
+        // granted `a2a.recv.<sender>` to themselves. Distinct from
+        // CapabilityCheck because the missing cap belongs to a different
+        // subject than the issuer of the audit row — collapsing this
+        // into CapabilityCheck would misattribute which peer's caps
+        // were short. sender_display, recipient_display, and action
+        // (the missing scope name) are all load-bearing for triage; a
+        // rename or #[serde(default)] would collapse the two-party
+        // diagnostic and lose the missing-scope correlation back to the
+        // recipient's grant decisions.
+        let kind = AuditKind::A2ARecipientRejected {
+            sender_display: "attacker@local".into(),
+            recipient_display: "victim@local".into(),
+            action: "a2a.recv.attacker@local".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "recipient_display", "sender_display", "type"],
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("a2_a_recipient_rejected")),
+            "AuditKind discriminator slug must be 'a2_a_recipient_rejected' — serde's rename_all = snake_case splits the 'A2A' prefix on each digit/uppercase boundary, producing 'a2_a_…'. This is the durable wire form every persisted A2ARecipientRejected audit row uses; a refactor that 'fixed' the slug to 'a2a_recipient_rejected' would silently strand every prior recipient-cap-rejection audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::A2ARecipientRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract recipient-cap-rejection triage joins on",
+        );
+
+        for required in ["sender_display", "recipient_display", "action"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::A2ARecipientRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on action would silently let the row decode with an empty scope string and break the missing-cap correlation back to the recipient's grant decisions",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_a2a_sender_mismatch_serde_pins_two_field_variant() {
         // AuditKind::A2ASenderMismatch is the audit row emitted when
         // SendA2ATask is rejected because the supplied task.sender does

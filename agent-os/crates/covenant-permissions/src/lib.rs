@@ -1982,6 +1982,23 @@ mod tests {
     }
 
     #[test]
+    fn peer_scope_allows_pins_non_object_scope_and_validate_scope_error_propagation() {
+        let request = PeerScopeRequest::default();
+        assert!(
+            !peer_scope_allows("peers", &serde_json::json!([]), "peers.revoke", request).unwrap()
+        );
+
+        let err = peer_scope_allows(
+            "peers.revoke",
+            &serde_json::json!({ "version": 0 }),
+            "peers.revoke",
+            request,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
     fn chain_scope_allows_limit_environment_and_receipt_predicates() {
         let payer = bs58::encode([9u8; 32]).into_string();
         let scope = serde_json::json!({

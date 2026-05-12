@@ -68,6 +68,42 @@ pub enum AuditKind {
         result_hash_hex: String,
         status: String,
     },
+    /// A tool invocation inside a Hermes-runtime agent's run. `preview_hash_hex`
+    /// is the SHA-256 of Hermes's short tool-input preview; we hash before
+    /// persisting so the audit chain never embeds raw tool input.
+    HermesToolInvoked {
+        intent_id: Uuid,
+        run_id: String,
+        tool: String,
+        preview_hash_hex: String,
+    },
+    /// A tool invocation in a Hermes run finished. `error` is `true` iff
+    /// the tool itself raised; a `false` here followed by a failed run
+    /// status means Hermes failed elsewhere in the loop.
+    HermesToolCompleted {
+        intent_id: Uuid,
+        run_id: String,
+        tool: String,
+        duration_ms: u64,
+        error: bool,
+    },
+    /// A Hermes run paused pending operator approval. Recorded so a run
+    /// stalled at the approval prompt is auditable even when the
+    /// operator console is closed.
+    HermesApprovalRequested {
+        intent_id: Uuid,
+        run_id: String,
+        choices: Vec<String>,
+    },
+    /// An operator (or auto-policy) answered a pending Hermes approval.
+    /// `resolved` is the count of pending requests Hermes reports as
+    /// resolved by this response.
+    HermesApprovalResolved {
+        intent_id: Uuid,
+        run_id: String,
+        choice: String,
+        resolved: u32,
+    },
     CapabilityCheck {
         agent_id: String,
         required_actions: Vec<String>,
@@ -2901,5 +2937,90 @@ mod tests {
         let log = JsonlAuditLog::open(path.clone()).await.unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(log.purge_older_than(1_000_000).await.unwrap(), 0);
+    }
+
+    fn pin_audit_variant(kind: AuditKind, slug: &str, expected_keys: &[&str]) {
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        let mut expected: Vec<&str> = expected_keys.iter().copied().chain(["type"]).collect();
+        expected.sort();
+        assert_eq!(
+            keys, expected,
+            "AuditKind::{slug} wire form must be exactly the listed keys plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!(slug)),
+            "AuditKind discriminator slug must be snake_case {slug:?}",
+        );
+        let back: AuditKind = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::{slug} must round-trip through serde_json verbatim",
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_tool_invoked_serde_pins_four_field_variant() {
+        // Drives the audit fold for HermesRunner. Each tool start
+        // becomes one audit row carrying the run id, tool name, and a
+        // SHA-256 of the short tool-input preview — raw preview must
+        // never appear in the chain.
+        pin_audit_variant(
+            AuditKind::HermesToolInvoked {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                tool: "terminal".into(),
+                preview_hash_hex: "deadbeef".into(),
+            },
+            "hermes_tool_invoked",
+            &["intent_id", "preview_hash_hex", "run_id", "tool"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_tool_completed_serde_pins_five_field_variant() {
+        pin_audit_variant(
+            AuditKind::HermesToolCompleted {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                tool: "terminal".into(),
+                duration_ms: 42,
+                error: true,
+            },
+            "hermes_tool_completed",
+            &["duration_ms", "error", "intent_id", "run_id", "tool"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_approval_requested_serde_pins_three_field_variant() {
+        pin_audit_variant(
+            AuditKind::HermesApprovalRequested {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                choices: vec!["once".into(), "deny".into()],
+            },
+            "hermes_approval_requested",
+            &["choices", "intent_id", "run_id"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_approval_resolved_serde_pins_four_field_variant() {
+        pin_audit_variant(
+            AuditKind::HermesApprovalResolved {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                choice: "once".into(),
+                resolved: 3,
+            },
+            "hermes_approval_resolved",
+            &["choice", "intent_id", "resolved", "run_id"],
+        );
     }
 }

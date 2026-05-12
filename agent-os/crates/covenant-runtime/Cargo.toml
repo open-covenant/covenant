@@ -12,7 +12,8 @@ covenant-manifest = { path = "../covenant-manifest" }
 covenant-router = { path = "../covenant-router" }
 covenant-types = { path = "../covenant-types" }
 async-trait = { workspace = true }
-reqwest = { workspace = true }
+futures = "0.3"
+reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

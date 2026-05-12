@@ -34,6 +34,50 @@ pub struct AgentResult {
     pub text: String,
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Runner-emitted events captured during the dispatch. Subprocess
+    /// runners leave this empty; the Hermes runner populates it from the
+    /// gateway's `/v1/runs/{id}/events` SSE stream. The daemon folds the
+    /// vec into the hash-chained audit log after the dispatch returns.
+    #[serde(default)]
+    pub runtime_events: Vec<RuntimeTrace>,
+}
+
+/// Mid-run signals from a runner. Distinct from `AuditKind` so the
+/// `covenant-runtime` crate stays free of an audit-log dependency; the
+/// daemon converts each variant into the matching `AuditKind` row when
+/// it folds the result into the chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RuntimeTrace {
+    /// Hermes invoked an internal tool. `preview` is the short label
+    /// Hermes emits (e.g. `"ls"` for the terminal tool); the daemon
+    /// hashes it before persisting so the chain never embeds raw tool
+    /// input.
+    HermesToolInvoked {
+        run_id: String,
+        tool: String,
+        preview: String,
+    },
+    /// Hermes finished invoking a tool. `error` is `true` when the tool
+    /// raised, `false` otherwise. Independent from `HermesRunFailed`.
+    HermesToolCompleted {
+        run_id: String,
+        tool: String,
+        duration_ms: u64,
+        error: bool,
+    },
+    /// Hermes paused the run pending operator approval. Recorded so a
+    /// stalled run is auditable even when no operator is watching.
+    HermesApprovalRequested {
+        run_id: String,
+        choices: Vec<String>,
+    },
+    /// An operator (or auto-policy) answered the pending approval.
+    HermesApprovalResponded {
+        run_id: String,
+        choice: String,
+        resolved: u32,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -461,6 +505,7 @@ impl MockRunner {
             response: AgentResult {
                 text: text.into(),
                 sources: Vec::new(),
+                runtime_events: Vec::new(),
             },
         }
     }
@@ -582,11 +627,12 @@ mod tests {
         let empty = AgentResult {
             text: "hi".into(),
             sources: vec![],
+            runtime_events: vec![],
         };
         let wire = serde_json::to_value(&empty).unwrap();
         assert_eq!(
             wire,
-            serde_json::json!({"text": "hi", "sources": []}),
+            serde_json::json!({"text": "hi", "sources": [], "runtime_events": []}),
             "empty sources must serialize as an explicit empty array; a future skip_serializing_if would silently drop the key",
         );
     }

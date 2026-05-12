@@ -372,6 +372,125 @@ mod tests {
     }
 
     #[test]
+    fn capability_serde_pins_five_field_wire_form() {
+        // Capability is the inner payload of SignedCapability and the
+        // read shape every JSONL grant log line, IPC RecentCapabilities
+        // response, and HTTP grants list response destructures on.
+        //
+        // * subject / action / scope / granted_by are strictly required.
+        // * expires_at: Option<u64> carries #[serde(default)] with no
+        //   skip_serializing_if. The serialize side always emits the
+        //   key (null on the perpetual-grant path); the deserialize
+        //   side accepts missing expires_at and decodes as None.
+        //
+        // The signed_capability_round_trips_through_serde test pins the
+        // outer envelope; this test pins the inner contract directly.
+
+        let subject = AgentId::new("research@local", [7u8; 32]);
+        let granted_by = AgentId::new("authority@local", [11u8; 32]);
+        let perpetual = Capability {
+            subject: subject.clone(),
+            action: "memory.write".into(),
+            scope: serde_json::json!({"tier": "working"}),
+            granted_by: granted_by.clone(),
+            expires_at: None,
+        };
+        let wire = serde_json::to_value(&perpetual).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Capability serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "expires_at", "granted_by", "scope", "subject"],
+            "Capability wire object must always carry the five documented \
+             fields; adding skip_serializing_if to expires_at would silently \
+             drop the key for perpetual grants and break consumers \
+             destructuring on the five-key shape"
+        );
+        assert_eq!(
+            obj.get("expires_at"),
+            Some(&serde_json::Value::Null),
+            "Capability with expires_at=None must surface expires_at as JSON \
+             null on the wire — the absence of skip_serializing_if is what \
+             keeps the five-key shape stable across perpetual and \
+             time-bounded grants"
+        );
+        assert_eq!(
+            obj.get("action").and_then(serde_json::Value::as_str),
+            Some("memory.write"),
+            "action must surface verbatim as a JSON string — capability \
+             enforcement matches on this exact dotted-path key"
+        );
+        assert_eq!(
+            obj.get("scope"),
+            Some(&serde_json::json!({"tier": "working"})),
+            "scope must surface as a serde_json::Value pass-through — the \
+             per-action scope shape (memory tier, audit before_ms, tool \
+             arguments-allow, etc.) leans on this verbatim round-trip"
+        );
+
+        let decoded: Capability = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, perpetual,
+            "Capability must round-trip through serde_json verbatim — the \
+             PartialEq derive is the contract every JSONL replay leans on"
+        );
+
+        let timed = Capability {
+            subject: subject.clone(),
+            action: "memory.write".into(),
+            scope: serde_json::json!({"tier": "working"}),
+            granted_by: granted_by.clone(),
+            expires_at: Some(123_456),
+        };
+        let timed_wire = serde_json::to_value(&timed).unwrap();
+        assert_eq!(
+            timed_wire
+                .get("expires_at")
+                .and_then(serde_json::Value::as_u64),
+            Some(123_456),
+            "populated expires_at must round-trip verbatim on the wire"
+        );
+
+        let no_expires_at = serde_json::json!({
+            "subject": {
+                "display": subject.display,
+                "pubkey": subject.pubkey_base58(),
+            },
+            "action": "memory.write",
+            "scope": {"tier": "working"},
+            "granted_by": {
+                "display": granted_by.display,
+                "pubkey": granted_by.pubkey_base58(),
+            },
+        });
+        let decoded: Capability = serde_json::from_value(no_expires_at).unwrap();
+        assert_eq!(
+            decoded.expires_at, None,
+            "Capability with expires_at omitted must decode as None — the \
+             #[serde(default)] forward-compat contract every stale CLI built \
+             before the field landed leans on"
+        );
+
+        let full_obj = serde_json::to_value(&perpetual).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["subject", "action", "scope", "granted_by"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<Capability>(serde_json::Value::Object(payload)).is_err(),
+                "Capability must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] introduction on any of the four \
+                 strictly required fields would silently let a malformed \
+                 grant decode and break capability enforcement at the IPC \
+                 boundary"
+            );
+        }
+    }
+
+    #[test]
     fn intent_serde_pins_six_field_wire_form() {
         // Intent is the load-bearing dispatch envelope:
         // covenantd::Server::dispatch_intent, the router, the audit log,

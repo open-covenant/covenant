@@ -1769,6 +1769,104 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_revoke_capability_serde_pins_single_field_variant() {
+        // Request::RevokeCapability is the operator-driven
+        // capability-revocation variant the CLI and HTTP gateway
+        // send to revoke a previously-granted SignedCapability by
+        // its base58 ed25519 signature. It pairs with
+        // Response::CapabilityRevoked (already pinned) which
+        // carries the signature back plus a removed boolean. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='revoke_capability' plus signature_b58. No
+        // prior test pins the exact wire shape, string
+        // serialization, round-trip, or missing-field rejection
+        // for this variant. A serde-shape regression on this
+        // revocation path either silently strands the operator's
+        // revocation order (the daemon's capability ledger keeps
+        // honoring a compromised grant) or — worse — decodes a
+        // malformed frame with a stray serde(default) and revokes
+        // against an empty signature, collapsing every audit-row
+        // attribution for the revocation.
+        let event = Request::RevokeCapability {
+            signature_b58: "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "signature_b58"],
+            "Request::RevokeCapability wire form must be exactly \
+             two top-level keys: 'kind' plus the single \
+             'signature_b58' field. A refactor that promoted the \
+             variant from struct to newtype wrapping a typed \
+             RevocationTarget would nest 'signature_b58' one \
+             level deeper and every CLI/HTTP revocation call that \
+             sends \
+             {{\"kind\":\"revoke_capability\",\"signature_b58\":\"<b58>\"}} \
+             would fail to decode on the daemon side — the \
+             operator's revocation request would fail silently or \
+             with a confusing fallback message and the \
+             compromised capability would remain live in the \
+             daemon's ledger",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("revoke_capability")),
+            "Request discriminator slug must be the durable \
+             'revoke_capability'; a slug regression silently \
+             routes incoming revocation frames to the daemon's \
+             catch-all error branch — every CLI/HTTP revocation \
+             probe fails with a confusing fallback message \
+             instead of CapabilityRevoked, and the operator \
+             cannot revoke a compromised signed capability \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("signature_b58").and_then(serde_json::Value::as_str),
+            Some("3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr"),
+            "Request::RevokeCapability::signature_b58 must surface \
+             as the literal base58 string — the daemon's \
+             revocation path binds on this exact field to locate \
+             the matching SignedCapability row; a rename, retype, \
+             or accidental byte-array coercion would silently \
+             miss every revocation target the operator submitted, \
+             and the compromised capability would remain live",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RevokeCapability must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP capability-revocation \
+             consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("signature_b58");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::RevokeCapability wire form must reject a \
+             payload missing 'signature_b58'; a stray \
+             #[serde(default)] would let a malformed frame decode \
+             with signature_b58=\"\" and the daemon would attempt \
+             revocation against an empty signature — the lookup \
+             either no-ops silently (the operator believes they \
+             revoked a capability they did not) or, with a \
+             flipped equality in the revocation path, removes an \
+             unintended row, and every audit-row attribution for \
+             the revocation collapses to a meaningless \
+             empty-string subject",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

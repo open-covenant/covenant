@@ -145,16 +145,12 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
         return { contourX: 1, contourY: 0, detail: 0.3, luminance: 0.5 };
       }
 
-      const scale = Math.max(
-        rect.width / imageSample.width,
-        rect.height / imageSample.height,
-      );
-      const drawWidth = imageSample.width * scale;
-      const drawHeight = imageSample.height * scale;
-      const offsetX = (rect.width - drawWidth) / 2;
-      const offsetY = (rect.height - drawHeight) / 2;
-      const imageX = (containerX - offsetX) / scale;
-      const imageY = (containerY - offsetY) / scale;
+      // Intrinsic size, centered — matches PixelReveal's projection so the
+      // mesh glyphs sit on the same pixels they're sampling.
+      const offsetX = (rect.width - imageSample.width) / 2;
+      const offsetY = (rect.height - imageSample.height) / 2;
+      const imageX = containerX - offsetX;
+      const imageY = containerY - offsetY;
 
       const luminance = sampleLuminance(imageX, imageY);
       const left = sampleLuminance(imageX - 1.2, imageY);
@@ -512,13 +508,8 @@ export function HeroMesh({ src }: { src: string }) {
     <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
       <div
         aria-hidden
-        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-        style={{
-          zIndex: 0,
-          width: "min(95vw, 130vh)",
-          aspectRatio: "1168 / 784",
-          maxHeight: "85vh",
-        }}
+        className="absolute inset-0"
+        style={{ zIndex: 0 }}
       >
         <PixelReveal src={src} stagger={720} fadeDur={280} />
       </div>

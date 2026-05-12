@@ -20,7 +20,7 @@ export default function Page() {
           width={255}
           height={54}
           priority
-          className="pointer-events-auto h-[42px] w-auto opacity-95 sm:h-[60px]"
+          className="pointer-events-auto h-[48px] w-auto opacity-95 sm:h-[69px]"
         />
       </header>
 
@@ -81,15 +81,11 @@ export default function Page() {
       </nav>
 
 
-      <p className="absolute left-1/2 top-[80%] z-10 -translate-x-1/2 px-4 text-[12px] tracking-[0.4em] text-neutral-400 sm:text-[14px]">
-        {RELEASE_DATE}
-      </p>
-
       <footer
         className="absolute inset-x-0 z-20 flex justify-center px-4 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]"
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       >
-        open agent-native operating layer
+        open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}
       </footer>
     </main>
   );

@@ -56,28 +56,47 @@ export function PixelReveal({
       return rect;
     }
 
+    function coverFit(rect: DOMRect) {
+      // Intrinsic size, centered. Mesh samples with the same projection so
+      // glyphs line up with the underlying figure.
+      const scale = 1;
+      const drawW = img.naturalWidth;
+      const drawH = img.naturalHeight;
+      const offsetX = (rect.width - drawW) / 2;
+      const offsetY = (rect.height - drawH) / 2;
+      return { scale, drawW, drawH, offsetX, offsetY };
+    }
+
     function drawFull() {
       const rect = host!.getBoundingClientRect();
       ctx!.clearRect(0, 0, rect.width, rect.height);
-      ctx!.drawImage(img, 0, 0, rect.width, rect.height);
+      const fit = coverFit(rect);
+      ctx!.drawImage(img, fit.offsetX, fit.offsetY, fit.drawW, fit.drawH);
     }
 
     function drawCell(cell: Cell, alpha: number, rect: DOMRect) {
+      const fit = coverFit(rect);
       const x = cell.col * cellSize;
       const y = cell.row * cellSize;
-      const sx = (x / rect.width) * img.naturalWidth;
-      const sy = (y / rect.height) * img.naturalHeight;
-      const sw = Math.min(
-        (cellSize / rect.width) * img.naturalWidth,
-        img.naturalWidth - sx,
-      );
-      const sh = Math.min(
-        (cellSize / rect.height) * img.naturalHeight,
-        img.naturalHeight - sy,
-      );
-      if (sw <= 0 || sh <= 0) return;
+      const sx = (x - fit.offsetX) / fit.scale;
+      const sy = (y - fit.offsetY) / fit.scale;
+      const sw = cellSize / fit.scale;
+      const sh = cellSize / fit.scale;
+      // Outside the cover rect: source is clamped by canvas API; nothing
+      // useful to draw, skip to avoid edge-pixel smearing.
+      if (sx + sw <= 0 || sy + sh <= 0) return;
+      if (sx >= img.naturalWidth || sy >= img.naturalHeight) return;
+      const clampedSx = Math.max(0, sx);
+      const clampedSy = Math.max(0, sy);
+      const clampedSw = Math.min(sw - (clampedSx - sx), img.naturalWidth - clampedSx);
+      const clampedSh = Math.min(sh - (clampedSy - sy), img.naturalHeight - clampedSy);
+      if (clampedSw <= 0 || clampedSh <= 0) return;
+      const dx = x + (clampedSx - sx) * fit.scale;
+      const dy = y + (clampedSy - sy) * fit.scale;
+      const dw = clampedSw * fit.scale;
+      const dh = clampedSh * fit.scale;
       ctx!.globalAlpha = alpha;
-      ctx!.drawImage(img, sx, sy, sw, sh, x, y, cellSize, cellSize);
+      ctx!.drawImage(img, clampedSx, clampedSy, clampedSw, clampedSh, dx, dy, dw, dh);
     }
 
     function render(now: number) {

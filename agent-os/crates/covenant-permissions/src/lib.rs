@@ -3110,6 +3110,65 @@ mod tests {
     }
 
     #[test]
+    fn optional_pubkey_b58_or_null_pins_absent_null_non_string_decode_error_and_length() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_pubkey_b58_or_null("peers.revoke", empty, "k").is_ok(),
+            "absent field must be Ok; the let-else short-circuits before any decoding so unscoped grants do not fail at the pubkey gate",
+        );
+
+        let explicit_null = serde_json::json!({ "k": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_pubkey_b58_or_null("peers.revoke", explicit_null, "k").is_ok(),
+            "{{\"k\": null}} must be Ok; the null arm is the documented unbounded marker and must short-circuit before the as_str() and decode checks",
+        );
+
+        let valid_key = bs58::encode([0u8; 32]).into_string();
+        let valid = serde_json::json!({ "k": valid_key });
+        let valid = valid.as_object().unwrap();
+        assert!(
+            optional_pubkey_b58_or_null("peers.revoke", valid, "k").is_ok(),
+            "a base58-encoded 32-byte key must be Ok; constructed from a 32-byte zero array to avoid coupling the test to a magic string while still exercising the length-check success path",
+        );
+
+        let non_string = serde_json::json!({ "k": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err = optional_pubkey_b58_or_null("peers.revoke", non_string, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("base58 public key or null")),
+            "non-string scope value must produce the 'base58 public key or null' error path; got {err:?}. A regression that accepted non-string scope values would silently authorize partially-typed scope objects through the pubkey gate.",
+        );
+
+        let invalid_alphabet = serde_json::json!({ "k": "0OIl" });
+        let invalid_alphabet = invalid_alphabet.as_object().unwrap();
+        let err = optional_pubkey_b58_or_null("peers.revoke", invalid_alphabet, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("base58 public key or null")),
+            "non-base58 string must produce the same 'base58 public key or null' error via bs58::decode failure; got {err:?}. A regression that swallowed bs58::decode errors as Ok would silently accept characters outside the documented base58 alphabet.",
+        );
+
+        let short_key = bs58::encode([0u8; 31]).into_string();
+        let short = serde_json::json!({ "k": short_key });
+        let short = short.as_object().unwrap();
+        let err = optional_pubkey_b58_or_null("peers.revoke", short, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("32-byte public key")),
+            "a base58 string that decodes to 31 bytes must produce the '32-byte public key' error path (distinct from the 'base58 public key or null' decode-failure path); got {err:?}. A regression that dropped the length check would silently accept shorter base58 strings as ed25519 public keys.",
+        );
+
+        let long_key = bs58::encode([0u8; 33]).into_string();
+        let long = serde_json::json!({ "k": long_key });
+        let long = long.as_object().unwrap();
+        let err = optional_pubkey_b58_or_null("peers.revoke", long, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("32-byte public key")),
+            "a base58 string that decodes to 33 bytes must produce the '32-byte public key' error path symmetrically with the short-key case; got {err:?}. A regression that dropped the length check would silently accept longer base58 strings as ed25519 public keys.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

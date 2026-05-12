@@ -3304,6 +3304,73 @@ mod tests {
     }
 
     #[test]
+    fn peer_list_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "filter_pubkey_prefix",
+            "kind",
+            "limit",
+            "matched_count",
+            "operator_pubkey_b58",
+            "peers",
+            "truncated",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value.as_object().expect("peer_list_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "peer_list_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("peer_list"));
+            assert!(
+                value["limit"].is_u64(),
+                "limit must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["filter_pubkey_prefix"].is_string()
+                    || value["filter_pubkey_prefix"].is_null(),
+                "filter_pubkey_prefix must be string or null (never integer / array): {value}",
+            );
+            assert!(
+                value["matched_count"].is_u64(),
+                "matched_count must serialize as a non-negative integer, not a string-of-integer: {value}",
+            );
+            assert!(
+                value["peers"].is_array(),
+                "peers must be an array: {value}",
+            );
+            assert!(
+                value["operator_pubkey_b58"].is_string(),
+                "operator_pubkey_b58 must be a string: {value}",
+            );
+            assert!(
+                value["truncated"].is_boolean(),
+                "truncated must be a boolean, not 0/1: {value}",
+            );
+        }
+
+        let populated = peer_list_json(
+            20,
+            Some("ABcde"),
+            &[
+                make_peer(7, "alice@host", false),
+                make_peer(8, "bob@host", true),
+            ],
+            "OPB58",
+            true,
+        );
+        assert_shape(&populated);
+
+        let empty = peer_list_json(20, None, &[], "OPB58", false);
+        assert_shape(&empty);
+    }
+
+    #[test]
     fn peer_list_lines_appends_truncation_hint_when_truncated() {
         let p = make_peer(7, "alice@host", false);
         let q = make_peer(8, "bob@host", false);

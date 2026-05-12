@@ -4320,6 +4320,194 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_search_memory_serde_pins_four_field_variant() {
+        // Request::SearchMemory is the operator/CLI verb for
+        // semantic search across the memory store. It pairs with
+        // Response::Memories (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly five top-level
+        // keys: kind='search_memory' plus query plus tier plus
+        // limit plus min_relevance.
+        //
+        // query is a required String. tier is Option<MemoryTier>
+        // with #[serde(default)] and NO skip_serializing_if. limit
+        // has #[serde(default = "default_recent_limit")] returning
+        // 10. min_relevance is Option<f32> with #[serde(default)]
+        // and NO skip_serializing_if. First four-field variant in
+        // the pin sequence — distinct from the just-pinned CallTool
+        // two-field shape and the GrantCapability three-field shape.
+        //
+        // This slice locks: the exact wire shape (kind, query,
+        // tier, limit, min_relevance), the snake_case discriminator
+        // 'search_memory', null-on-wire for both Option fields on
+        // the unfiltered path, limit=10 on the daemon-default path,
+        // populated paths (tier='working' slug, limit as JSON
+        // number, min_relevance as JSON number), round-trip for
+        // both shapes, and three independent forward-compat checks
+        // (omit tier, omit limit, omit min_relevance).
+        let unfiltered = Request::SearchMemory {
+            query: "hello".into(),
+            tier: None,
+            limit: 10,
+            min_relevance: None,
+        };
+
+        let wire = serde_json::to_value(&unfiltered).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "min_relevance", "query", "tier"],
+            "Request::SearchMemory wire form must be exactly five \
+             top-level keys: 'kind' plus the four variant fields \
+             ('query', 'tier', 'limit', 'min_relevance'). A \
+             refactor that added #[serde(skip_serializing_if = \
+             \"Option::is_none\")] to either Option field would \
+             shrink the unfiltered wire form from five keys to four \
+             or three and silently break CLI/HTTP consumers that \
+             switch on key presence to distinguish tier-scoped or \
+             relevance-floored queries from unfiltered ones",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("search_memory")),
+            "Request discriminator slug must be the durable \
+             'search_memory'. A refactor that renamed the variant \
+             (e.g., MemorySearch for surface parity with the \
+             internal verb order) would shift the slug and \
+             operator-driven semantic search goes dark through the \
+             supported path",
+        );
+        assert_eq!(
+            obj.get("query"),
+            Some(&serde_json::json!("hello")),
+            "Request::SearchMemory::query must surface as a JSON \
+             string carrying the search text verbatim; a refactor \
+             that promoted query to a typed newtype without \
+             preserving Serialize-as-String would silently mismatch \
+             every CLI/HTTP caller that sends a raw query string",
+        );
+        assert_eq!(
+            obj.get("tier"),
+            Some(&serde_json::Value::Null),
+            "Request::SearchMemory::tier must surface as JSON null \
+             when None (the durable null-on-wire surface, NOT a \
+             missing key); a stray skip_serializing_if would shrink \
+             the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+        assert_eq!(
+            obj.get("limit"),
+            Some(&serde_json::json!(10)),
+            "Request::SearchMemory::limit must surface as a JSON \
+             number; a refactor that promoted limit to a string or \
+             enum would silently mismatch every CLI/HTTP caller \
+             that sends a numeric usize page size",
+        );
+        assert_eq!(
+            obj.get("min_relevance"),
+            Some(&serde_json::Value::Null),
+            "Request::SearchMemory::min_relevance must surface as \
+             JSON null when None (the durable null-on-wire surface, \
+             NOT a missing key); a stray skip_serializing_if would \
+             shrink the unfloored wire form and silently break CLI \
+             consumers that switch on the key's presence to \
+             distinguish floored-from-unfloored relevance queries",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, unfiltered,
+            "Request::SearchMemory (unfiltered) must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract every CLI/HTTP search-memory consumer \
+             leans on",
+        );
+
+        let hit = Request::SearchMemory {
+            query: "hello".into(),
+            tier: Some(covenant_types::MemoryTier::Working),
+            limit: 25,
+            min_relevance: Some(0.75),
+        };
+        let hit_wire = serde_json::to_value(&hit).unwrap();
+        let hit_obj = hit_wire.as_object().unwrap();
+        assert_eq!(
+            hit_obj.get("tier").and_then(serde_json::Value::as_str),
+            Some("working"),
+            "populated tier must round-trip as the durable \
+             lowercase MemoryTier slug 'working' (rename_all = \
+             \"lowercase\" on MemoryTier); the five-key shape stays \
+             stable across hit and miss",
+        );
+        assert_eq!(
+            hit_obj.get("limit"),
+            Some(&serde_json::json!(25)),
+            "populated limit must round-trip as a JSON number \
+             matching the usize input; the five-key shape stays \
+             stable across daemon-default and operator-override",
+        );
+        assert_eq!(
+            hit_obj
+                .get("min_relevance")
+                .and_then(serde_json::Value::as_f64),
+            Some(0.75_f64),
+            "populated min_relevance must round-trip as a JSON \
+             number matching the f32 input (within f32->f64 \
+             widening); the five-key shape stays stable across \
+             unfloored and floored",
+        );
+        let hit_back: Request = serde_json::from_value(hit_wire.clone()).unwrap();
+        assert_eq!(
+            hit_back, hit,
+            "Request::SearchMemory (hit) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_tier = obj.clone();
+        missing_tier.remove("tier");
+        let parsed_no_tier: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_tier)).unwrap();
+        assert_eq!(
+            parsed_no_tier, unfiltered,
+            "Request::SearchMemory wire form must accept a payload \
+             missing 'tier' (Option<T> with #[serde(default)] \
+             decodes as None); this is the forward-compatibility \
+             contract for stale CLIs that predate the tier filter",
+        );
+
+        let mut missing_limit = obj.clone();
+        missing_limit.remove("limit");
+        let parsed_no_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_limit)).unwrap();
+        assert_eq!(
+            parsed_no_limit, unfiltered,
+            "Request::SearchMemory wire form must accept a payload \
+             missing 'limit' (decodes as 10 via \
+             default_recent_limit); a refactor that dropped the \
+             default would silently break stale CLIs that omit \
+             limit, returning an empty page where operators expect \
+             the top-K hits",
+        );
+
+        let mut missing_min_relevance = obj.clone();
+        missing_min_relevance.remove("min_relevance");
+        let parsed_no_min_relevance: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_min_relevance)).unwrap();
+        assert_eq!(
+            parsed_no_min_relevance, unfiltered,
+            "Request::SearchMemory wire form must accept a payload \
+             missing 'min_relevance' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             documented forward-compatibility contract for stale \
+             CLIs that predate the relevance floor",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

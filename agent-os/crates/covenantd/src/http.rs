@@ -885,6 +885,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn http_parse_status_pins_accepted_spellings_and_permissive_fallback() {
+        use covenant_peer_auth::PeerStatusFilter;
+
+        assert_eq!(
+            parse_status(Some("live")),
+            Some(PeerStatusFilter::Live),
+            "the documented ?status=live spelling must resolve to the Live filter so existing HTTP clients keep working",
+        );
+        assert_eq!(
+            parse_status(Some("revoked")),
+            Some(PeerStatusFilter::Revoked),
+            "the documented ?status=revoked spelling must resolve to the Revoked filter so existing HTTP clients keep working",
+        );
+
+        assert_eq!(
+            parse_status(None),
+            None,
+            "an absent ?status= param must mean no filter, not an implicit Live filter, so the default response shape matches what clients see today",
+        );
+        assert_eq!(
+            parse_status(Some("")),
+            None,
+            "an empty ?status= must degrade to no-filter under the documented permissive query-layer posture",
+        );
+        assert_eq!(
+            parse_status(Some("Live")),
+            None,
+            "parse_status is case-sensitive by design; tightening to case-insensitive would silently change response shape for clients that send ?status=Live expecting no filter",
+        );
+        assert_eq!(
+            parse_status(Some("unknown")),
+            None,
+            "unknown status values must degrade to no-filter rather than error, matching the documented permissive query-layer posture for typos",
+        );
+        assert_eq!(
+            parse_status(Some("all")),
+            None,
+            "a future synonym like ?status=all must NOT be silently accepted; if added, it should be added with an explicit arm and a test, not via a fallthrough match arm",
+        );
+    }
+
+    #[test]
     fn cors_origins_default_when_value_is_none() {
         let v = cors_origins_from_value(None);
         assert_eq!(v.len(), 1);

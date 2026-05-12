@@ -2450,6 +2450,61 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_before_ms_pins_absent_null_present_compare_and_zero_fallback() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_before_ms(empty, 0),
+            "absent 'before_ms' field must allow any threshold including zero; otherwise unscoped grants reject every purge",
+        );
+        assert!(
+            scope_allows_before_ms(empty, u64::MAX),
+            "absent 'before_ms' field must allow the maximum threshold; the absent-key branch is unconditional",
+        );
+
+        let explicit_null = serde_json::json!({ "before_ms": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_before_ms(explicit_null, 0),
+            "{{\"before_ms\": null}} is the documented unbounded marker and must allow any threshold",
+        );
+        assert!(
+            scope_allows_before_ms(explicit_null, u64::MAX),
+            "{{\"before_ms\": null}} must allow the maximum threshold; a regression that flips this would silently reject the unbounded marker",
+        );
+
+        let bounded = serde_json::json!({ "before_ms": 100u64 });
+        let bounded = bounded.as_object().unwrap();
+        assert!(
+            scope_allows_before_ms(bounded, 0),
+            "scope before_ms=100 must allow request before_ms=0; the comparison is inclusive on the low end",
+        );
+        assert!(
+            scope_allows_before_ms(bounded, 99),
+            "scope before_ms=100 must allow request before_ms=99; below the scoped maximum",
+        );
+        assert!(
+            scope_allows_before_ms(bounded, 100),
+            "scope before_ms=100 must allow request before_ms=100; the <= comparison must include equality, otherwise boundary-bound purges silently fail",
+        );
+        assert!(
+            !scope_allows_before_ms(bounded, 101),
+            "scope before_ms=100 must NOT allow request before_ms=101; a regression that flipped <= to < or used the wrong direction would silently authorize wider purge windows",
+        );
+
+        let malformed = serde_json::json!({ "before_ms": "oops" });
+        let malformed = malformed.as_object().unwrap();
+        assert!(
+            scope_allows_before_ms(malformed, 0),
+            "a non-u64 'before_ms' must collapse the threshold to zero via unwrap_or(0); zero is still <= 0, so only the strict-zero request is allowed",
+        );
+        assert!(
+            !scope_allows_before_ms(malformed, 1),
+            "a non-u64 'before_ms' must reject any non-zero threshold via the zero-fallback; relaxing this to unwrap_or(u64::MAX) would silently allow any purge through a malformed scope object",
+        );
+    }
+
+    #[test]
     fn scope_allows_record_id_pins_absent_key_exact_match_and_non_string_fallthrough() {
         let empty = serde_json::json!({});
         let empty = empty.as_object().unwrap();

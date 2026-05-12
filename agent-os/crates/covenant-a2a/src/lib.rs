@@ -1732,6 +1732,34 @@ mod tests {
     }
 
     #[test]
+    fn a2a_repair_action_serde_pins_snake_case_wire_form() {
+        // A2ARepairAction is the discriminator on every A2ARepairOutcome
+        // emitted by manual and scheduled repair flows; the slug lands in
+        // daemon repair audit rows and downstream operator dashboards.
+        // ForcedError is load-bearing — the rename_all default would emit
+        // "ForcedError" titlecase and silently bisect repair telemetry.
+        let cases: [(A2ARepairAction, &str); 2] = [
+            (A2ARepairAction::Requeued, "requeued"),
+            (A2ARepairAction::ForcedError, "forced_error"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ARepairAction = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<A2ARepairAction>("\"ForcedError\"").is_err(),
+            "titlecase ForcedError (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<A2ARepairAction>("\"forcedError\"").is_err(),
+            "camelCase forcedError must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

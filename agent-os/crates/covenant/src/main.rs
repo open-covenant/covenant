@@ -3499,6 +3499,88 @@ mod tests {
     }
 
     #[test]
+    fn intents_resume_ok_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "intent_id",
+            "kind",
+            "mode",
+            "ok",
+            "settlement",
+            "sources",
+            "status",
+            "text",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("intents_resume_ok_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "intents_resume_ok_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("intents_resume"));
+            assert!(
+                value["ok"].is_boolean(),
+                "ok must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert!(value["mode"].is_string(), "mode must be a string: {value}");
+            assert!(
+                value["intent_id"].is_string(),
+                "intent_id must be a string-serialized uuid: {value}",
+            );
+            assert!(
+                value["status"].is_string(),
+                "status must be a string: {value}",
+            );
+            assert!(value["text"].is_string(), "text must be a string: {value}");
+            assert!(
+                value["sources"].is_array(),
+                "sources must be an array of strings: {value}",
+            );
+            assert!(
+                value["settlement"].is_object() || value["settlement"].is_null(),
+                "settlement must be a structured object or null: {value}",
+            );
+        }
+
+        let intent_id = uuid::Uuid::nil();
+        let payer = AgentId::new("payer@local", [3u8; 32]);
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::nil(),
+            payer,
+            resource: ResourceKind::Memory,
+            memory_record_id: Some(uuid::Uuid::nil()),
+            credits_consumed: 42,
+            settled_at: 1_700_000_000_000,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        assert_shape(&intents_resume_ok_json(
+            "explicit",
+            intent_id,
+            "ok",
+            "resumed intent text",
+            &["a".into(), "b".into()],
+            &Some(receipt),
+        ));
+        assert_shape(&intents_resume_ok_json(
+            "latest", intent_id, "ok", "", &[], &None,
+        ));
+    }
+
+    #[test]
     fn receipt_list_json_renders_stable_shape() {
         let payer = AgentId::new("payer@local", [3u8; 32]);
         let receipt = SettlementReceipt {

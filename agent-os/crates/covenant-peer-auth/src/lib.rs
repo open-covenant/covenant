@@ -1194,6 +1194,108 @@ mod tests {
     }
 
     #[test]
+    fn peer_event_revoked_serde_pins_two_field_variant() {
+        // PeerEvent::Revoked is the tombstone variant the daemon appends
+        // to the JSONL peer-registry log on every successful
+        // PeerRegistry::revoke call (single revocation, prefix-driven
+        // revoke, and bulk purge-and-revoke paths). With #[serde(tag =
+        // "type")] on the enum and rename_all = "snake_case", the wire
+        // object is exactly three keys: type='revoked', token (base58
+        // string carrying the full 32-byte secret bytes — the registry
+        // uses it to look up the entry for tombstoning), revoked_at (u64
+        // epoch ms). No test pins the enum-level wire form. A refactor
+        // that flipped the discriminator slug, renamed the fields, or
+        // added #[serde(default)] to either field would silently corrupt
+        // registry replay — Revoked tombstones decoded with zero-byte
+        // tokens or zero revoked_at timestamps would either tombstone the
+        // all-zero PeerToken (locking out a freshly seeded operator) or
+        // surface a revoked peer as still-live (re-authenticating a
+        // revoked token).
+        let event = PeerEvent::Revoked {
+            token: PeerToken::from_bytes([9u8; 32]),
+            revoked_at: 18_000,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("PeerEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["revoked_at", "token", "type"],
+            "PeerEvent::Revoked wire form must be exactly three keys: the \
+             two variant fields plus the 'type' discriminator. A refactor \
+             that renamed token or revoked_at without #[serde(rename = ...)] \
+             would silently fail decode on every prior JSONL Revoked row, \
+             empty the tombstone map at registry replay, and let every \
+             previously-revoked peer reauthenticate with their old token",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("revoked")),
+            "PeerEvent discriminator slug must be snake_case 'revoked'; a \
+             rename to 'revoke' or any #[serde(rename = ...)] regression \
+             silently strands every prior JSONL Revoked row at replay and \
+             registry replay rebuilds with all live entries but no \
+             tombstones — every previously-revoked peer reauthenticates \
+             because their token is no longer in the revoked map, \
+             bypassing the operator's incident-response revocation",
+        );
+
+        let token_wire = obj
+            .get("token")
+            .and_then(serde_json::Value::as_str)
+            .expect("PeerEvent::Revoked::token must serialise as a JSON string");
+        let len = token_wire.chars().count();
+        assert!(
+            len == 43 || len == 44,
+            "PeerEvent::Revoked::token wire form must be the full base58 of \
+             the 32-byte secret (43 or 44 chars), got {len} chars — \
+             collapsing to PeerSummary's 6-char redacted prefix would mean \
+             registry replay could no longer match the tombstone against \
+             the registered entry's full token and revocation would \
+             silently no-op",
+        );
+
+        assert_eq!(
+            obj.get("revoked_at").and_then(serde_json::Value::as_u64),
+            Some(18_000),
+            "PeerEvent::Revoked::revoked_at must round-trip verbatim on the \
+             wire — the purge_older_than compaction path drops every \
+             Revoked tombstone with revoked_at < before_ms, so any \
+             representation shift silently changes which tombstones get \
+             retained after compaction",
+        );
+
+        let back: PeerEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "PeerEvent::Revoked must round-trip through serde_json verbatim \
+             — the PartialEq derive is the contract the JsonlPeerRegistry::\
+             open replay path joins tombstones against",
+        );
+
+        for required in ["token", "revoked_at"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<PeerEvent>(serde_json::Value::Object(missing)).is_err(),
+                "PeerEvent::Revoked wire form must reject a payload missing \
+                 {required:?}; a stray #[serde(default)] on token would let \
+                 a malformed row decode with the all-zero PeerToken and \
+                 registry replay would tombstone the all-zero token — \
+                 locking out a future operator whose bootstrap token \
+                 happens to fall in the rejection set, while a default on \
+                 revoked_at would let compaction drop tombstones that lost \
+                 their timestamp on the wire and silently re-authenticate \
+                 a revoked peer",
+            );
+        }
+    }
+
+    #[test]
     fn summary_from_pins_token_prefix_redaction_and_field_mapping() {
         let (token, entry) = entry("alice@host");
         let full_b58 = token.to_b58();

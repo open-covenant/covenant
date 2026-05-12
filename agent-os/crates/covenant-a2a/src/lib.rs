@@ -2267,6 +2267,75 @@ mod tests {
     }
 
     #[test]
+    fn a2a_idempotency_cache_key_serde_pins_four_required_fields() {
+        // A2AIdempotencyCacheKey is the receiver-side cache key for
+        // duplicate-safe A2A sends — the keyed struct A2AIdempotencyCachedResult
+        // maps from. Four strictly required fields with no serde
+        // attributes: sender_pubkey_b58, recipient_pubkey_b58, task_kind,
+        // key. The struct derives Hash so it's also the HashMap key for
+        // the in-memory idempotency cache. A skip_serializing_if =
+        // String::is_empty on task_kind would silently drop the field
+        // for the empty-task_kind path (where idempotency_cache_key's
+        // fallback fills task_kind with intent_text), and a rename of
+        // sender_pubkey_b58 or recipient_pubkey_b58 would silently lose
+        // pair-scope on cache lookups across daemon restarts.
+        let key = A2AIdempotencyCacheKey {
+            sender_pubkey_b58: "S".into(),
+            recipient_pubkey_b58: "R".into(),
+            task_kind: "research".into(),
+            key: "abc".into(),
+        };
+
+        let wire = serde_json::to_value(&key).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2AIdempotencyCacheKey serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["key", "recipient_pubkey_b58", "sender_pubkey_b58", "task_kind"],
+            "A2AIdempotencyCacheKey wire object must contain exactly four \
+             documented fields; a skip_serializing_if would silently shift \
+             the cache key shape and split cache lookups across two forms \
+             on daemon restart",
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract.
+        let back: A2AIdempotencyCacheKey = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, key);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["sender_pubkey_b58", "recipient_pubkey_b58", "task_kind", "key"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AIdempotencyCacheKey>(serde_json::Value::Object(
+                    missing,
+                ))
+                .is_err(),
+                "A2AIdempotencyCacheKey wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Hash derive identity: two keys with the same field values must
+        // hash and compare identically, so the in-memory cache HashMap
+        // resolves a lookup against a freshly-built key. A refactor that
+        // dropped Hash from the derive or changed its impl would silently
+        // re-process every duplicate task on cache miss.
+        let mut cache: std::collections::HashMap<A2AIdempotencyCacheKey, u32> =
+            std::collections::HashMap::new();
+        cache.insert(key.clone(), 7);
+        let probe = A2AIdempotencyCacheKey {
+            sender_pubkey_b58: "S".into(),
+            recipient_pubkey_b58: "R".into(),
+            task_kind: "research".into(),
+            key: "abc".into(),
+        };
+        assert_eq!(cache.get(&probe), Some(&7));
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

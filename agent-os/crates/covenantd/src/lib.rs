@@ -10396,6 +10396,32 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_repair_lease_id_pins_each_arm() {
+        let requeue_lease = Uuid::new_v4();
+        let force_lease = Uuid::new_v4();
+        let requeue_with = covenant_a2a::A2ARepairCommand::Requeue {
+            lease_id: Some(requeue_lease),
+            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+        };
+        let requeue_without = covenant_a2a::A2ARepairCommand::Requeue {
+            lease_id: None,
+            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+        };
+        let force_with = covenant_a2a::A2ARepairCommand::ForceError {
+            lease_id: Some(force_lease),
+            message: "stuck".into(),
+        };
+        let force_without = covenant_a2a::A2ARepairCommand::ForceError {
+            lease_id: None,
+            message: "stuck".into(),
+        };
+        assert_eq!(a2a_repair_lease_id(&requeue_with), Some(requeue_lease));
+        assert_eq!(a2a_repair_lease_id(&requeue_without), None);
+        assert_eq!(a2a_repair_lease_id(&force_with), Some(force_lease));
+        assert_eq!(a2a_repair_lease_id(&force_without), None);
+    }
+
+    #[test]
     fn settlement_resource_name_pins_each_resource_kind_variant() {
         assert_eq!(settlement_resource_name(ResourceKind::Compute), "compute");
         assert_eq!(settlement_resource_name(ResourceKind::Memory), "memory");

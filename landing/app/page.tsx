@@ -97,9 +97,9 @@ export default function Page() {
         <Image
           src="/logomark.svg"
           alt="covenant"
-          width={40}
-          height={20}
-          className="h-auto w-[40px] opacity-70"
+          width={30}
+          height={15}
+          className="h-auto w-[30px] opacity-70"
         />
         <span>Covenant  ·  open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
       </footer>

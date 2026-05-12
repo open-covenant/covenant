@@ -10589,6 +10589,42 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_matches_min_lease_age_pins_filter_matrix() {
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: AgentId::new("sender@local", [1u8; 32]),
+            recipient: AgentId::new("recipient@local", [2u8; 32]),
+            intent_text: "anything".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let queued = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::Queued,
+            task: task.clone(),
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let in_flight = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::new_v4()),
+            leased_to: Some(AgentId::new("leasee@local", [3u8; 32])),
+            leased_at_ms: Some(100),
+            attempt: 1,
+        };
+        assert!(a2a_entry_matches_min_lease_age(&queued, None, 200));
+        assert!(a2a_entry_matches_min_lease_age(&in_flight, None, 200));
+        assert!(a2a_entry_matches_min_lease_age(&queued, Some(50), 200));
+        assert!(a2a_entry_matches_min_lease_age(&in_flight, Some(50), 200));
+        assert!(!a2a_entry_matches_min_lease_age(&in_flight, Some(500), 200));
+        assert!(!a2a_entry_matches_min_lease_age(&in_flight, Some(50), 80));
+    }
+
+    #[test]
     fn a2a_entry_visible_to_peer_pins_each_visibility_path() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);

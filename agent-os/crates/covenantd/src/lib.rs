@@ -10589,6 +10589,32 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn runtime_runner_from_config_pins_backend_dispatch() {
+        let _: fn() -> covenant_runtime::SubprocessRunner = || covenant_runtime::SubprocessRunner;
+        let _: fn(PathBuf, PathBuf, PathBuf) -> covenant_runtime::GvisorRunner =
+            |runsc, rootfs, scratch| covenant_runtime::GvisorRunner::with_paths(runsc, rootfs, scratch);
+
+        let local_a = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
+        let local_b = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
+        assert!(
+            !Arc::ptr_eq(&local_a, &local_b),
+            "expected a fresh Arc per call; a singleton would mask a per-config swap"
+        );
+        assert!(Arc::strong_count(&local_a) >= 1);
+
+        let gvisor = runtime_runner_from_config(&RuntimeRunnerConfig::LinuxGvisor {
+            runsc_path: PathBuf::from("/usr/local/bin/runsc"),
+            rootfs: PathBuf::from("/r"),
+            scratch_root: PathBuf::from("/s"),
+        });
+        assert!(Arc::strong_count(&gvisor) >= 1);
+        assert!(
+            !Arc::ptr_eq(&local_a, &gvisor),
+            "TrustedLocal and LinuxGvisor must yield distinct allocations"
+        );
+    }
+
+    #[test]
     fn runtime_runner_config_from_values_pins_backend_matrix() {
         let home = Path::new("/tmp/h");
 

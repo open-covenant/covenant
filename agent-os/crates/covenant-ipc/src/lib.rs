@@ -2392,6 +2392,128 @@ mod tests {
     }
 
     #[test]
+    fn response_tool_result_serde_pins_two_field_variant() {
+        // Response::ToolResult is the variant the daemon sends
+        // after a ToolCall reaches an MCP tool and the tool
+        // produces a result. It carries content: Vec<Content> (the
+        // MCP content blocks the tool returned) and is_error: bool
+        // (whether the tool reported an in-band error — distinct
+        // from a transport-level error). With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the
+        // wire object is exactly three top-level keys:
+        // kind='tool_result' plus content plus is_error. No prior
+        // test pins the exact wire shape, round-trip, or omission
+        // rejection. A refactor that promoted ToolResult from a
+        // struct variant to a newtype variant would nest both
+        // fields one level deeper; a stray #[serde(default)] on
+        // is_error would let a malformed row decode with
+        // is_error=false and an actual in-band tool error would be
+        // silently reclassified as a successful call — downstream
+        // automation that branches on is_error never trips and the
+        // operator's UI shows the error string but the call is
+        // treated as healthy.
+        for (event, expected_is_error) in [
+            (
+                Response::ToolResult {
+                    content: vec![Content::text("ok")],
+                    is_error: false,
+                },
+                false,
+            ),
+            (
+                Response::ToolResult {
+                    content: vec![Content::text("ok")],
+                    is_error: true,
+                },
+                true,
+            ),
+        ] {
+            let wire = serde_json::to_value(&event).unwrap();
+            let obj = wire
+                .as_object()
+                .expect("Response serializes as a JSON object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec!["content", "is_error", "kind"],
+                "Response::ToolResult wire form must be exactly \
+                 three top-level keys for both is_error=true and \
+                 is_error=false: 'kind' plus the two variant \
+                 fields. A refactor that promoted the variant from \
+                 struct to newtype wrapping a payload struct would \
+                 nest 'content' and 'is_error' one level deeper and \
+                 every CLI consumer that destructures the top-level \
+                 fields would silently fail",
+            );
+            assert_eq!(
+                obj.get("kind"),
+                Some(&serde_json::json!("tool_result")),
+                "Response discriminator slug must be the durable \
+                 'tool_result'; a slug regression silently strands \
+                 every CLI parser that classifies tool-call \
+                 outcomes by this exact value — the operator's CLI \
+                 prints a confusing fallback instead of the tool's \
+                 response and masks both the tool output and the \
+                 is_error signal",
+            );
+            assert_eq!(
+                obj.get("is_error").and_then(serde_json::Value::as_bool),
+                Some(expected_is_error),
+                "Response::ToolResult::is_error must surface as the \
+                 bool verbatim — downstream automation distinguishes \
+                 a healthy tool call from an in-band tool error by \
+                 this exact bool",
+            );
+            let content_arr = obj
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .expect("Response::ToolResult::content must serialize as an array");
+            assert_eq!(
+                content_arr.len(),
+                1,
+                "Response::ToolResult::content must round-trip the \
+                 exact element count from the wire payload — a \
+                 length regression silently truncates tool output \
+                 blocks before the operator's UI renders them",
+            );
+
+            let back: Response = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(
+                back, event,
+                "Response::ToolResult must round-trip through \
+                 serde_json verbatim — the PartialEq derive is the \
+                 contract every CLI tool-call consumer leans on to \
+                 render the tool output and classify success vs. \
+                 in-band error",
+            );
+        }
+
+        let wire = serde_json::to_value(Response::ToolResult {
+            content: vec![Content::text("ok")],
+            is_error: false,
+        })
+        .unwrap();
+        let obj = wire.as_object().unwrap();
+        for required in ["content", "is_error"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::ToolResult wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] on is_error would let a malformed \
+                 row decode with is_error=false and an actual \
+                 in-band tool error would be silently reclassified \
+                 as a successful call — a default on content would \
+                 let a malformed row decode with an empty content \
+                 vec, masquerading as a successful no-output tool \
+                 call",
+            );
+        }
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

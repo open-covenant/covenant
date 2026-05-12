@@ -385,6 +385,46 @@ entry = "./tiny"
     }
 
     #[test]
+    fn filesystem_policy_serde_pins_each_kebab_case_slug() {
+        // FilesystemPolicy rides on every Sandbox section parsed from
+        // agent.toml. read-only-package is the documented default
+        // (Sandbox::default) and the slug used in the spec §5 example
+        // (FULL above). A dropped rename_all = kebab-case attribute
+        // would silently refuse every existing manifest with
+        // `filesystem = "read-only-package"` and the daemon would
+        // fail to load the agent with an opaque manifest-parse error,
+        // weakening the sandbox boundary at startup.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            filesystem: FilesystemPolicy,
+        }
+        let cases: [(&str, FilesystemPolicy); 3] = [
+            ("read-only-package", FilesystemPolicy::ReadOnlyPackage),
+            ("ephemeral", FilesystemPolicy::Ephemeral),
+            ("host", FilesystemPolicy::Host),
+        ];
+        for (slug, expected) in cases {
+            let toml_src = format!("filesystem = \"{slug}\"");
+            let parsed: Holder = toml::from_str(&toml_src).unwrap_or_else(|err| {
+                panic!("filesystem slug {slug:?} must deserialize, got: {err}")
+            });
+            assert_eq!(parsed.filesystem, expected);
+        }
+
+        // Dropping rename_all would surface the variant name verbatim
+        // (ReadOnlyPackage); the kebab-case whitelist must reject
+        // that form so the regression fails loud at parse time.
+        assert!(toml::from_str::<Holder>("filesystem = \"ReadOnlyPackage\"").is_err());
+        // The kebab-case-default form (no hyphens) for multi-word
+        // variants must also fail so a future rename_all drop surfaces
+        // here instead of silently passing on the unhyphenated slug.
+        assert!(toml::from_str::<Holder>("filesystem = \"readonlypackage\"").is_err());
+        // snake_case must also fail — the contract is kebab-case only,
+        // not "any non-titlecase form".
+        assert!(toml::from_str::<Holder>("filesystem = \"read_only_package\"").is_err());
+    }
+
+    #[test]
     fn parses_full_spec_example() {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.agent.id, "research");

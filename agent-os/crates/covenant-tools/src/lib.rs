@@ -302,6 +302,69 @@ pub fn pick_search(secrets_path: &Path) -> Box<dyn SearchProvider> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn search_hit_serde_pins_three_required_fields() {
+        // SearchHit is the wire form every search-tool result flows
+        // through, from BraveSearch / SerpApiSearch JSON deserialisation
+        // up into the MCP ToolCallResult content array and finally into
+        // the LLM agent's context. Three strictly required String fields:
+        // title, url, snippet. No #[serde(default)] or
+        // #[serde(skip_serializing_if)] attributes — the wire form must
+        // always carry the three keys. A refactor that flipped one to
+        // optional would silently let a malformed provider response
+        // decode with an empty-string default and the agent would see a
+        // half-populated result with no signal that the integration
+        // dropped a field.
+        let hit = SearchHit {
+            title: "t".into(),
+            url: "u".into(),
+            snippet: "s".into(),
+        };
+        let wire = serde_json::to_value(&hit).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("SearchHit serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["snippet", "title", "url"],
+            "SearchHit wire form must be exactly three keys; a skip_serializing_if on any field would silently shrink the wire form when a provider returned an empty value",
+        );
+
+        let back: SearchHit = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, hit,
+            "SearchHit must round-trip through serde_json verbatim — the PartialEq + Eq derive is the contract every MCP ToolCallResult consumer leans on",
+        );
+
+        for required in ["title", "url", "snippet"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<SearchHit>(serde_json::Value::Object(missing)).is_err(),
+                "SearchHit wire form must reject a payload missing {required:?}; a stray #[serde(default)] would silently let a provider response decode with an empty-string default and the agent would see a half-populated result",
+            );
+        }
+
+        let empty_snippet = SearchHit {
+            title: "t".into(),
+            url: "u".into(),
+            snippet: String::new(),
+        };
+        let wire = serde_json::to_value(&empty_snippet).unwrap();
+        assert_eq!(
+            wire.as_object().unwrap().len(),
+            3,
+            "empty-snippet SearchHit must still surface all three keys on the wire — pinning no skip_serializing_if = String::is_empty regression",
+        );
+        let back: SearchHit = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, empty_snippet,
+            "empty snippet must round-trip verbatim — a String::is_empty skip would silently drop the key and produce a two-key decode",
+        );
+    }
+
     #[tokio::test]
     async fn mock_search_returns_canned_hits() {
         let s = MockSearch::stub();

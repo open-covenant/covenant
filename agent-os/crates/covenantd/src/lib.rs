@@ -10441,6 +10441,54 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_matches_state_pins_filter_matrix() {
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: AgentId::new("sender@local", [1u8; 32]),
+            recipient: AgentId::new("recipient@local", [2u8; 32]),
+            intent_text: "anything".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let queued = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::Queued,
+            task: task.clone(),
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let in_flight = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::new_v4()),
+            leased_to: Some(AgentId::new("leasee@local", [3u8; 32])),
+            leased_at_ms: Some(0),
+            attempt: 1,
+        };
+        assert!(a2a_entry_matches_state(&queued, None));
+        assert!(a2a_entry_matches_state(&in_flight, None));
+        assert!(a2a_entry_matches_state(
+            &queued,
+            Some(covenant_a2a::A2ATaskQueueState::Queued)
+        ));
+        assert!(!a2a_entry_matches_state(
+            &in_flight,
+            Some(covenant_a2a::A2ATaskQueueState::Queued)
+        ));
+        assert!(!a2a_entry_matches_state(
+            &queued,
+            Some(covenant_a2a::A2ATaskQueueState::InFlight)
+        ));
+        assert!(a2a_entry_matches_state(
+            &in_flight,
+            Some(covenant_a2a::A2ATaskQueueState::InFlight)
+        ));
+    }
+
+    #[test]
     fn memory_repair_mode_pins_each_mode_variant() {
         assert_eq!(memory_repair_mode(MemoryRepairMode::DryRun), "dry_run");
         assert_eq!(memory_repair_mode(MemoryRepairMode::Apply), "apply");

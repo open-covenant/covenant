@@ -2202,6 +2202,22 @@ mod tests {
     }
 
     #[test]
+    fn chain_scope_allows_pins_limit_equal_boundary_accepted() {
+        let scope = serde_json::json!({ "version": 1, "limit": 10 });
+        let equal = ChainScopeRequest {
+            limit: Some(10),
+            ..ChainScopeRequest::default()
+        };
+        assert!(chain_scope_allows("chain.flush", &scope, "chain.flush", equal).unwrap());
+
+        let beyond = ChainScopeRequest {
+            limit: Some(11),
+            ..ChainScopeRequest::default()
+        };
+        assert!(!chain_scope_allows("chain.flush", &scope, "chain.flush", beyond).unwrap());
+    }
+
+    #[test]
     fn memory_purge_scope_allows_tier_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

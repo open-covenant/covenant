@@ -3257,6 +3257,62 @@ mod tests {
     }
 
     #[test]
+    fn optional_positive_integer_pins_absent_positive_zero_negative_and_non_integer() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_positive_integer("audit.verify", empty, "x").is_ok(),
+            "absent field must be Ok; the if-let short-circuits before the > 0 check",
+        );
+
+        let one = serde_json::json!({ "x": 1u64 });
+        let one = one.as_object().unwrap();
+        assert!(
+            optional_positive_integer("audit.verify", one, "x").is_ok(),
+            "{{\"x\": 1}} must be Ok; the > 0 boundary must include 1, otherwise the smallest valid window/limit is silently rejected",
+        );
+
+        let max = serde_json::json!({ "x": u64::MAX });
+        let max = max.as_object().unwrap();
+        assert!(
+            optional_positive_integer("audit.verify", max, "x").is_ok(),
+            "{{\"x\": u64::MAX}} must be Ok; the helper must not gate the upper end of the u64 range, since callers depend on as_u64 round-tripping the full domain",
+        );
+
+        let zero = serde_json::json!({ "x": 0u64 });
+        let zero = zero.as_object().unwrap();
+        let err = optional_positive_integer("audit.verify", zero, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("positive integer")),
+            "{{\"x\": 0}} must produce the 'positive integer' error; got {err:?}. A regression that flipped > 0 to >= 0 would silently accept zero limits and zero windows, producing always-empty audit and chain queries through a permissive grant.",
+        );
+
+        let negative = serde_json::json!({ "x": -1i64 });
+        let negative = negative.as_object().unwrap();
+        let err = optional_positive_integer("audit.verify", negative, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("positive integer")),
+            "{{\"x\": -1}} must produce the 'positive integer' error via the value.as_u64() returning None on a negative number; got {err:?}. A regression that fell back to as_i64 would silently accept negative integers.",
+        );
+
+        let non_int = serde_json::json!({ "x": "oops" });
+        let non_int = non_int.as_object().unwrap();
+        let err = optional_positive_integer("audit.verify", non_int, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("positive integer")),
+            "non-integer scope value must produce the 'positive integer' error; got {err:?}. A regression that accepted non-integer values would silently let partially-typed scope objects through the positive-integer gate.",
+        );
+
+        let null_value = serde_json::json!({ "x": null });
+        let null_value = null_value.as_object().unwrap();
+        let err = optional_positive_integer("audit.verify", null_value, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("positive integer")),
+            "{{\"x\": null}} must produce the 'positive integer' error; got {err:?}. Unlike optional_non_negative_integer_or_null, this helper has no or_null variant — null is not the documented unbounded marker for limit/window, and a regression that added a null bypass would silently authorize unbounded chain/audit queries through a null-valued scope field.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

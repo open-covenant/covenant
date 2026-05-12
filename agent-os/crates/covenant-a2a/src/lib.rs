@@ -1863,6 +1863,55 @@ mod tests {
     }
 
     #[test]
+    fn assert_lease_match_pins_expected_actual_and_none_paths() {
+        let task_id = Uuid::new_v4();
+        let lease_a = Uuid::new_v4();
+        let lease_b = Uuid::new_v4();
+
+        // expected=None means the caller did not pin a specific lease,
+        // so any actual must be accepted including None and Some(x).
+        assert!(assert_lease_match(task_id, None, None).is_ok());
+        assert!(assert_lease_match(task_id, None, Some(lease_a)).is_ok());
+
+        // Same-lease match returns Ok so operator-initiated repair under
+        // a pinned lease still flows through.
+        assert!(assert_lease_match(task_id, Some(lease_a), Some(lease_a)).is_ok());
+
+        // Mismatched lease returns LeaseMismatch and binds task_id,
+        // expected, and actual so the caller can surface both lease ids
+        // in the audit trail.
+        let err = assert_lease_match(task_id, Some(lease_a), Some(lease_b)).unwrap_err();
+        match err {
+            A2AError::LeaseMismatch {
+                task_id: tid,
+                expected,
+                actual,
+            } => {
+                assert_eq!(tid, task_id);
+                assert_eq!(expected, Some(lease_a));
+                assert_eq!(actual, Some(lease_b));
+            }
+            other => panic!("expected LeaseMismatch, got {other:?}"),
+        }
+
+        // expected=Some, actual=None still mismatches so a never-leased
+        // task cannot be silently repaired under an explicit lease_id.
+        let err = assert_lease_match(task_id, Some(lease_a), None).unwrap_err();
+        match err {
+            A2AError::LeaseMismatch {
+                task_id: tid,
+                expected,
+                actual,
+            } => {
+                assert_eq!(tid, task_id);
+                assert_eq!(expected, Some(lease_a));
+                assert_eq!(actual, None);
+            }
+            other => panic!("expected LeaseMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

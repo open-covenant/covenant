@@ -2061,6 +2061,47 @@ mod tests {
     }
 
     #[test]
+    fn memory_read_record_scope_allows_pins_action_mismatch_non_object_and_explicit_null_before_ms()
+    {
+        let bound_scope = serde_json::json!({ "version": 1, "tiers": ["working"] });
+        assert!(!memory_read_record_scope_allows(
+            "memory.read.short",
+            &bound_scope,
+            "record-1",
+            "long",
+            0
+        )
+        .unwrap());
+
+        assert!(!memory_read_record_scope_allows(
+            "memory",
+            &serde_json::json!([]),
+            "record-1",
+            "working",
+            0
+        )
+        .unwrap());
+
+        let explicit_null = serde_json::json!({ "version": 1, "before_ms": null });
+        assert!(memory_read_record_scope_allows(
+            "memory.read",
+            &explicit_null,
+            "record-1",
+            "working",
+            0
+        )
+        .unwrap());
+        assert!(memory_read_record_scope_allows(
+            "memory.read",
+            &explicit_null,
+            "record-1",
+            "working",
+            u64::MAX
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn memory_write_scope_allows_tier_record_mode_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

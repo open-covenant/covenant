@@ -2577,6 +2577,44 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_scope_allows_pins_detach_stale_parents_tiers_key_conditional() {
+        let request = MemoryCompactionScopeRequest {
+            apply: true,
+            delete_working_before_ms: None,
+            delete_episodic_before_ms: None,
+            mark_longterm_stale_before_ms: None,
+            detach_stale_parents: true,
+        };
+
+        let no_tiers = serde_json::json!({
+            "version": 1,
+            "apply": true
+        });
+        assert!(
+            memory_compaction_scope_allows("memory.compact.apply", &no_tiers, request).unwrap()
+        );
+
+        let all_tiers = serde_json::json!({
+            "version": 1,
+            "tiers": ["working", "episodic", "longterm"],
+            "apply": true
+        });
+        assert!(
+            memory_compaction_scope_allows("memory.compact.apply", &all_tiers, request).unwrap()
+        );
+
+        let partial_tiers = serde_json::json!({
+            "version": 1,
+            "tiers": ["working", "episodic"],
+            "apply": true
+        });
+        assert!(
+            !memory_compaction_scope_allows("memory.compact.apply", &partial_tiers, request)
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn sign_and_verify_round_trip() {
         let issuer = LocalIdentity::generate("authority@local");
         let subject = LocalIdentity::generate("research@local").agent_id();

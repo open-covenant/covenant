@@ -1004,6 +1004,65 @@ mod tests {
     }
 
     #[test]
+    fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
+        let a = agent("alice@local");
+        let intent = Uuid::from_u128(1);
+
+        let ok = checkpoint(&a, intent);
+        validate_pause_checkpoint(&ok).expect("valid checkpoint must pass");
+
+        let mut future_version = checkpoint(&a, intent);
+        future_version.version = BudgetPauseCheckpoint::VERSION + 1;
+        let err = validate_pause_checkpoint(&future_version).unwrap_err();
+        match &err {
+            BudgetCheckpointError::InvalidCheckpoint(msg) => assert!(
+                msg.contains("unsupported checkpoint version"),
+                "version-mismatch message must name the guard: {msg}",
+            ),
+            other => panic!("expected InvalidCheckpoint, got {other:?}"),
+        }
+
+        let mut zero_credits = checkpoint(&a, intent);
+        zero_credits.requested_credits = 0;
+        let err = validate_pause_checkpoint(&zero_credits).unwrap_err();
+        match &err {
+            BudgetCheckpointError::InvalidCheckpoint(msg) => assert!(
+                msg.contains("requested_credits must be non-zero"),
+                "zero-credits message must name the guard: {msg}",
+            ),
+            other => panic!("expected InvalidCheckpoint, got {other:?}"),
+        }
+
+        let mut nested_array = checkpoint(&a, intent);
+        nested_array.resume_state.insert(
+            "trace".to_string(),
+            json!(["ok", "/tmp/covenant-state", "ok"]),
+        );
+        let err = validate_pause_checkpoint(&nested_array).unwrap_err();
+        match &err {
+            BudgetCheckpointError::InvalidCheckpoint(msg) => assert!(
+                msg.contains("machine-local path"),
+                "array-nested machine-local path must be rejected: {msg}",
+            ),
+            other => panic!("expected InvalidCheckpoint, got {other:?}"),
+        }
+
+        let mut nested_object = checkpoint(&a, intent);
+        nested_object.resume_state.insert(
+            "scratch".to_string(),
+            json!({"deep": {"local": "~/.config/covenant"}}),
+        );
+        let err = validate_pause_checkpoint(&nested_object).unwrap_err();
+        match &err {
+            BudgetCheckpointError::InvalidCheckpoint(msg) => assert!(
+                msg.contains("machine-local path"),
+                "object-nested machine-local path must be rejected: {msg}",
+            ),
+            other => panic!("expected InvalidCheckpoint, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn looks_machine_local_path_pins_unix_tilde_homevar_and_windows_prefixes_and_rejects_non_paths()
     {
         for s in [

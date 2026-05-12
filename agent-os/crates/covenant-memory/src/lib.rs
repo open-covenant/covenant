@@ -849,6 +849,90 @@ mod tests {
     }
 
     #[test]
+    fn validate_repair_request_pins_reason_and_backfill_provenance_arms() {
+        let id = Uuid::new_v4();
+        let detach = || MemoryRepairCommand::DetachParent {
+            id,
+            expected_parent: None,
+        };
+        let delete = || MemoryRepairCommand::DeleteRecord { id };
+        let backfill = |provenance: serde_json::Value| MemoryRepairCommand::BackfillProvenance {
+            id,
+            provenance,
+        };
+
+        // DetachParent with non-empty reason validates Ok.
+        assert!(validate_repair_request(&MemoryRepairRequest {
+            mode: MemoryRepairMode::DryRun,
+            command: detach(),
+            reason: "operator-initiated".into(),
+        })
+        .is_ok());
+
+        // Empty/whitespace reason rejects for every command variant so
+        // the reason field cannot silently widen across the three arms.
+        for reason in ["", "   "] {
+            for command in [
+                detach(),
+                delete(),
+                backfill(serde_json::json!({"source": "manual"})),
+            ] {
+                let err = validate_repair_request(&MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command,
+                    reason: reason.into(),
+                })
+                .unwrap_err();
+                match err {
+                    MemoryError::InvalidRepair(message) => assert!(
+                        message.contains("reason must not be empty"),
+                        "unexpected InvalidRepair payload: {message:?}",
+                    ),
+                    other => panic!("expected InvalidRepair, got {other:?}"),
+                }
+            }
+        }
+
+        // BackfillProvenance with null provenance rejects even when
+        // reason is non-empty. The provenance check only fires for
+        // BackfillProvenance; DetachParent and DeleteRecord do not
+        // carry a provenance field.
+        let err = validate_repair_request(&MemoryRepairRequest {
+            mode: MemoryRepairMode::DryRun,
+            command: backfill(serde_json::Value::Null),
+            reason: "operator-initiated".into(),
+        })
+        .unwrap_err();
+        match err {
+            MemoryError::InvalidRepair(message) => assert!(
+                message.contains("provenance must not be null"),
+                "unexpected InvalidRepair payload: {message:?}",
+            ),
+            other => panic!("expected InvalidRepair, got {other:?}"),
+        }
+
+        // BackfillProvenance with a non-null provenance object validates
+        // Ok so legitimate backfills still flow through.
+        assert!(validate_repair_request(&MemoryRepairRequest {
+            mode: MemoryRepairMode::DryRun,
+            command: backfill(serde_json::json!({"source": "manual"})),
+            reason: "operator-initiated".into(),
+        })
+        .is_ok());
+
+        // DetachParent and DeleteRecord with non-empty reason validate
+        // Ok; the provenance branch must not widen onto these arms.
+        for command in [detach(), delete()] {
+            assert!(validate_repair_request(&MemoryRepairRequest {
+                mode: MemoryRepairMode::DryRun,
+                command,
+                reason: "operator-initiated".into(),
+            })
+            .is_ok());
+        }
+    }
+
+    #[test]
     fn cosine_basics() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];

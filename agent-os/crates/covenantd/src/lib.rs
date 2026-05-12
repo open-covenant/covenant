@@ -10589,6 +10589,22 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn agent_id_for_card_pins_synth_display_and_pubkey_shape() {
+        let card = stub_card("agentA", vec![]);
+        let id = agent_id_for_card(&card);
+        assert_eq!(id.display, "agentA@agent");
+        assert_eq!(&id.pubkey[..6], b"agentA");
+        assert_eq!(&id.pubkey[6..], &[0u8; 26]);
+
+        let long = "a".repeat(40);
+        let long_card = stub_card(&long, vec![]);
+        let long_id = agent_id_for_card(&long_card);
+        assert_eq!(long_id.pubkey, [b'a'; 32]);
+        assert!(long_id.display.ends_with("@agent"));
+        assert!(long_id.display.starts_with(&long));
+    }
+
+    #[test]
     fn token_b58_prefix_pins_first_six_chars() {
         let token = PeerToken::from_bytes([1u8; 32]);
         let prefix = token_b58_prefix(&token);

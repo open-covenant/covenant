@@ -4732,6 +4732,69 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_plan_json_pins_expected_receipt_changes_schema() {
+        const EXPECTED_KEYS: &[&str] = &["mode", "reason", "records"];
+
+        fn assert_expected_receipt_changes_shape(value: &serde_json::Value) {
+            let block = value["expected_receipt_changes"]
+                .as_object()
+                .expect("memory_compaction_plan_json expected_receipt_changes field must be an object");
+            let mut keys: Vec<String> = block.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_compaction_plan_json expected_receipt_changes keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["expected_receipt_changes"]["mode"].is_string(),
+                "expected_receipt_changes.mode must be a string, not a structured object: {value}",
+            );
+            assert_eq!(
+                value["expected_receipt_changes"]["mode"].as_str(),
+                Some("none"),
+                "dry-run compaction planning must report expected_receipt_changes.mode = none: {value}",
+            );
+            assert!(
+                value["expected_receipt_changes"]["records"].is_array(),
+                "expected_receipt_changes.records must be an array, not a string blob: {value}",
+            );
+            assert_eq!(
+                value["expected_receipt_changes"]["records"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(0),
+                "dry-run compaction planning must report empty expected_receipt_changes.records until receipt-aware compaction lands: {value}",
+            );
+            assert!(
+                value["expected_receipt_changes"]["reason"].is_string(),
+                "expected_receipt_changes.reason must be a string, not a structured object: {value}",
+            );
+        }
+
+        let populated = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::DryRun,
+            would_change: true,
+            changed: false,
+            deleted: vec![uuid::Uuid::nil()],
+            stale_marked: vec![uuid::Uuid::nil()],
+            parents_detached: vec![uuid::Uuid::nil()],
+        };
+        let zero = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::DryRun,
+            would_change: false,
+            changed: false,
+            deleted: vec![],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+
+        assert_expected_receipt_changes_shape(&memory_compaction_plan_json(&populated));
+        assert_expected_receipt_changes_shape(&memory_compaction_plan_json(&zero));
+    }
+
+    #[test]
     fn memory_receipt_backfill_plan_json_pairs_legacy_receipts_by_owner() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let memory_id = uuid::Uuid::from_u128(10);

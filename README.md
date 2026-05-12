@@ -17,7 +17,7 @@ Covenant sits below agent applications and above the host operating system. It o
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
-- **Paper:** [`paper/main.pdf`](./paper/main.pdf) · [DOI: 10.5281/zenodo.20134416](https://doi.org/10.5281/zenodo.20134416)
+- **Paper:** [DOI: 10.5281/zenodo.20134416](https://doi.org/10.5281/zenodo.20134416)
 
 ## Quick start
 

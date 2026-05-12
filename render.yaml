@@ -1,25 +1,25 @@
-## Two-service deployment for the Covenant public sandbox.
+## Public sandbox deployment for the Covenant operator console.
 ##
-## - covenant-demo-daemon: covenantd HTTP gateway, internal-only network.
-## - covenant-demo-web: Next.js operator console, talks to the daemon
-##   over the Render private network at http://covenant-demo-daemon:8421.
-## - covenant-demo-reset: 12-hour cron that restarts the daemon via the
+## - covenant-sandbox-daemon: covenantd HTTP gateway, internal-only network.
+## - covenant-sandbox-web: Next.js operator console, talks to the daemon
+##   over Render's private network at http://covenant-sandbox-daemon:8421.
+## - covenant-sandbox-reset: 12-hour cron that restarts the daemon via the
 ##   Render REST API so the sandbox stays clean.
 ##
-## Shared secret COVENANT_OPERATOR_TOKEN is injected from the env group below.
+## Shared secret COVENANT_OPERATOR_TOKEN lives in the env group below.
 
 services:
   - type: pserv
-    name: covenant-demo-daemon
+    name: covenant-sandbox-daemon
     runtime: docker
     plan: starter
-    region: oregon
+    region: frankfurt
     autoDeploy: true
     rootDir: .
     dockerfilePath: ./deploy/Dockerfile.daemon
     dockerContext: .
     disk:
-      name: covenant-demo-data
+      name: covenant-sandbox-data
       mountPath: /data
       sizeGB: 1
     envVars:
@@ -27,13 +27,13 @@ services:
         value: "8421"
       - key: COVENANT_HTTP_BIND_ADDR
         value: "0.0.0.0"
-      - fromGroup: covenant-demo-shared
+      - fromGroup: covenant-sandbox-shared
 
   - type: web
-    name: covenant-demo-web
+    name: covenant-sandbox-web
     runtime: node
     plan: starter
-    region: oregon
+    region: frankfurt
     autoDeploy: true
     rootDir: agent-os/covenant-web
     buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
@@ -44,14 +44,14 @@ services:
       - key: NEXT_PUBLIC_DEMO_MODE
         value: "1"
       - key: COVENANT_DAEMON_URL
-        value: http://covenant-demo-daemon:8421
-      - fromGroup: covenant-demo-shared
+        value: http://covenant-sandbox-daemon:8421
+      - fromGroup: covenant-sandbox-shared
 
   - type: cron
-    name: covenant-demo-reset
+    name: covenant-sandbox-reset
     runtime: node
     plan: starter
-    region: oregon
+    region: frankfurt
     schedule: "0 */12 * * *"
     rootDir: .
     buildCommand: ""
@@ -67,7 +67,7 @@ services:
         sync: false  # team-scoped Render API key
 
 envVarGroups:
-  - name: covenant-demo-shared
+  - name: covenant-sandbox-shared
     envVars:
       - key: COVENANT_OPERATOR_TOKEN
-        generateValue: true  # Render mints a random value once and pins it
+        value: BZgM5nHPW11ATBMMNunZj5Q2tWqwgqbwkMNLgmb8FJ3X

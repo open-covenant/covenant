@@ -1047,6 +1047,75 @@ mod tests {
         assert_eq!(e, back);
     }
 
+    #[test]
+    fn audit_event_serde_pins_four_required_fields() {
+        // AuditEvent is the load-bearing audit envelope every JSONL audit
+        // row decodes into and every IPC/HTTP /audit response surfaces.
+        // Four wire keys: id, timestamp_ms, issuer, kind — none carry
+        // #[serde(default)] or #[serde(skip_serializing_if)], so the wire
+        // must always contain the four keys. The chain_hash composition
+        // and AuditChainEntry replay both lean on this stable shape; a
+        // refactor that defaulted any field would silently let a
+        // corrupted row decode, and the verifier would accept a broken
+        // chain.
+        let event = AuditEvent {
+            id: Uuid::nil(),
+            timestamp_ms: 1_700_000_000_000,
+            issuer: AgentId::new("user@local", [0u8; 32]),
+            kind: AuditKind::CapabilityCheck {
+                agent_id: "x@y".into(),
+                required_actions: vec!["memory.read".into()],
+                missing_actions: vec![],
+                passed: true,
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["id", "issuer", "kind", "timestamp_ms"],
+            "AuditEvent wire object must contain exactly four documented \
+             fields; a skip_serializing_if on any one would silently shift \
+             every persisted JSONL audit row and break chain_hash's \
+             stable-serialization dependency"
+        );
+
+        // kind must carry an inner discriminator under "type", pinning
+        // AuditKind's #[serde(tag = \"type\", rename_all = \"snake_case\")]
+        // contract at the envelope boundary.
+        let kind_obj = wire
+            .get("kind")
+            .and_then(serde_json::Value::as_object)
+            .expect("kind must serialise as a JSON object");
+        assert_eq!(
+            kind_obj.get("type"),
+            Some(&serde_json::json!("capability_check")),
+            "AuditKind discriminator tag must be \"type\" and slug must be \
+             snake_case; a refactor that drops the tag attribute would \
+             silently break every CLI/HTTP consumer destructuring on the \
+             type field"
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract on every field.
+        let back: AuditEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, event);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["id", "timestamp_ms", "issuer", "kind"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditEvent>(serde_json::Value::Object(missing)).is_err(),
+                "AuditEvent wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

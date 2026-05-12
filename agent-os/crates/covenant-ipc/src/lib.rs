@@ -863,6 +863,122 @@ mod tests {
     }
 
     #[test]
+    fn chain_status_serde_pins_strict_required_fields() {
+        // ChainStatus is the daemon's settlement-chain readiness response,
+        // used by IPC `Request::ChainStatus`, HTTP `/chain/status`, and
+        // CLI `covenant chain status`. None of the fields carry
+        // `#[serde(skip_serializing_if)]`, so the wire payload always
+        // carries every key — the four Option<String> fields surface as
+        // JSON null when None instead of being absent. Of the eight
+        // fields, four are non-Option (chain, cluster, ready, missing)
+        // and must be present on decode; the four Option<String> fields
+        // (rpc_url, ws_url, program_id, covnt_mint) are auto-defaulted
+        // to None by serde when missing, which is the documented contract
+        // every fixture replay leans on.
+
+        let unconfigured = ChainStatus {
+            chain: "solana".into(),
+            cluster: "devnet".into(),
+            rpc_url: None,
+            ws_url: None,
+            program_id: None,
+            covnt_mint: None,
+            ready: false,
+            missing: vec!["rpc_url".into(), "program_id".into()],
+        };
+        let wire = serde_json::to_value(&unconfigured).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("ChainStatus serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "chain",
+                "cluster",
+                "covnt_mint",
+                "missing",
+                "program_id",
+                "ready",
+                "rpc_url",
+                "ws_url",
+            ],
+            "ChainStatus wire object must always carry the eight documented \
+             keys — adding skip_serializing_if to any Option field would \
+             silently drop keys on the not-yet-configured path"
+        );
+        for nullable in ["rpc_url", "ws_url", "program_id", "covnt_mint"] {
+            assert_eq!(
+                obj.get(nullable),
+                Some(&serde_json::Value::Null),
+                "None {nullable} must surface as JSON null on the wire — \
+                 dropping a key here would shift the chain-status shape \
+                 for the not-yet-configured path"
+            );
+        }
+
+        let configured = ChainStatus {
+            chain: "solana".into(),
+            cluster: "devnet".into(),
+            rpc_url: Some("https://api.devnet.solana.com".into()),
+            ws_url: Some("wss://api.devnet.solana.com".into()),
+            program_id: Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2".into()),
+            covnt_mint: Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E".into()),
+            ready: true,
+            missing: vec![],
+        };
+        let decoded: ChainStatus =
+            serde_json::from_value(serde_json::to_value(&configured).unwrap()).unwrap();
+        assert_eq!(
+            decoded, configured,
+            "ChainStatus must round-trip every populated field verbatim — \
+             the Eq derive is the contract every fixture-replay test leans on"
+        );
+
+        let full_obj = serde_json::to_value(&configured).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["chain", "cluster", "ready", "missing"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<ChainStatus>(serde_json::Value::Object(payload)).is_err(),
+                "ChainStatus must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] introduction on any of the non-Option \
+                 fields would silently let the field default and the CLI would \
+                 render chain readiness inconsistently with the underlying \
+                 configuration"
+            );
+        }
+
+        for nullable in ["rpc_url", "ws_url", "program_id", "covnt_mint"] {
+            let mut payload = full_map.clone();
+            payload.remove(nullable);
+            let decoded =
+                serde_json::from_value::<ChainStatus>(serde_json::Value::Object(payload)).unwrap();
+            let got = match nullable {
+                "rpc_url" => decoded.rpc_url.as_deref(),
+                "ws_url" => decoded.ws_url.as_deref(),
+                "program_id" => decoded.program_id.as_deref(),
+                "covnt_mint" => decoded.covnt_mint.as_deref(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                got, None,
+                "ChainStatus with {nullable} omitted must decode as None — \
+                 serde's auto-default for Option<T> is the forward-compatible \
+                 contract every stale CLI built before a Solana key landed leans on"
+            );
+        }
+
+        // Wire-key rename detection lives in the eight-key set assertion
+        // above: a refactor that renamed rpc_url to (say) rpc would change
+        // the serialized key set, the sorted-keys assertion would go red,
+        // and the rename would fail loud before any decode-side change
+        // could silently shift consumers to the new shape.
+    }
+
+    #[test]
     fn receipt_batch_summary_serde_pins_default_not_skip_and_required_fields() {
         // ReceiptBatchSummary lives inside Response::ReceiptBatchFlushed
         // and Response::ReceiptBatches; every CLI `receipts flush` /

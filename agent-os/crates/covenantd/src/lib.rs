@@ -10589,6 +10589,50 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn covenant_home_pins_env_precedence() {
+        use std::sync::Mutex;
+
+        static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let saved_covenant_home = std::env::var("COVENANT_HOME").ok();
+        let saved_home = std::env::var("HOME").ok();
+
+        std::env::set_var("COVENANT_HOME", "/explicit/path");
+        std::env::set_var("HOME", "/should/be/ignored");
+        assert_eq!(
+            covenant_home().unwrap(),
+            PathBuf::from("/explicit/path"),
+            "COVENANT_HOME must win over HOME, with no .covenant suffix"
+        );
+
+        std::env::remove_var("COVENANT_HOME");
+        std::env::set_var("HOME", "/home/u");
+        assert_eq!(
+            covenant_home().unwrap(),
+            PathBuf::from("/home/u/.covenant"),
+            "HOME fallback must join .covenant suffix"
+        );
+
+        std::env::remove_var("COVENANT_HOME");
+        std::env::remove_var("HOME");
+        let err = covenant_home().expect_err("missing HOME must fail");
+        assert!(
+            err.to_string().contains("HOME not set"),
+            "expected 'HOME not set' context, got {err}"
+        );
+
+        match saved_covenant_home {
+            Some(v) => std::env::set_var("COVENANT_HOME", v),
+            None => std::env::remove_var("COVENANT_HOME"),
+        }
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
     fn chain_status_from_env_pins_defaults_missing_and_ready() {
         use std::sync::Mutex;
 

@@ -95,7 +95,7 @@ export default function Page() {
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       >
         <Image
-          src="/logomark.svg"
+          src="/logomark.png"
           alt="covenant"
           width={40}
           height={40}

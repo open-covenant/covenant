@@ -1307,6 +1307,98 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_purge_audit_serde_pins_single_field_variant() {
+        // Request::PurgeAudit is the operator-driven retention
+        // variant the CLI and HTTP gateway send to drop audit
+        // events strictly older than before_ms (no scheduled
+        // compaction in v0). It pairs with Response::AuditPurged
+        // (already pinned) which carries the dropped row count.
+        // With #[serde(tag = "kind", rename_all = "snake_case")]
+        // on the Request enum, the wire object is exactly two
+        // top-level keys: kind='purge_audit' plus before_ms.
+        // No prior test pins the exact wire shape, numeric u64
+        // serialization, or missing-field rejection for this
+        // variant. The audit-purge probe is the only
+        // operator-driven hand on audit-log size and the row that
+        // surfaces destructive retention; a serde-shape regression
+        // silently strands the request and the operator either
+        // sees the daemon's catch-all Error response while the log
+        // keeps growing, or — worse — a malformed frame decodes as
+        // a default-zero cutoff and the retention path runs
+        // against the wrong window.
+        let event = Request::PurgeAudit {
+            before_ms: 1_700_000_000_000,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["before_ms", "kind"],
+            "Request::PurgeAudit wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'before_ms' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a typed RetentionWindow \
+             would nest 'before_ms' one level deeper and every \
+             CLI/HTTP retention call that sends \
+             {{\"kind\":\"purge_audit\",\"before_ms\":<n>}} \
+             would fail to decode on the daemon side — the \
+             operator could not prune the audit log through the \
+             supported path and storage would grow without bound",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("purge_audit")),
+            "Request discriminator slug must be the durable \
+             'purge_audit'; a slug regression silently routes \
+             incoming retention frames to the daemon's catch-all \
+             error branch — every CLI/HTTP retention probe fails \
+             with a confusing fallback message instead of \
+             AuditPurged, and the audit log keeps growing without \
+             the operator noticing",
+        );
+        assert_eq!(
+            obj.get("before_ms").and_then(serde_json::Value::as_u64),
+            Some(1_700_000_000_000),
+            "Request::PurgeAudit::before_ms must surface as the \
+             literal u64 cutoff in milliseconds — the daemon's \
+             retention path binds on this exact field with strict \
+             greater-than-or-equal semantics; a rename, retype, \
+             or accidental signed coercion would silently shift \
+             the window and either skip rows the operator meant \
+             to drop or drop rows the operator meant to keep",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::PurgeAudit must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP audit-retention consumer \
+             leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("before_ms");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::PurgeAudit wire form must reject a payload \
+             missing 'before_ms'; a stray #[serde(default)] would \
+             let a malformed frame decode with before_ms=0 and \
+             the daemon would run retention against an unintended \
+             cutoff — with a flipped comparison or off-by-one in \
+             the retention path this becomes a fleet-wide audit \
+             wipe in response to a request the operator did not \
+             send, destroying the very evidence operator triage \
+             needs to detect the incident",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -1344,6 +1344,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn audit_kind_intent_ignored_serde_pins_three_field_variant() {
+        // AuditKind::IntentIgnored records which CLI-installed ignore
+        // pattern fired on a dispatched intent. matched_pattern is the
+        // only durable link back to the operator's decision to suppress
+        // — a rename or default would silently break ignore-rule
+        // diagnostics.
+        let kind = AuditKind::IntentIgnored {
+            intent_id: Uuid::nil(),
+            intent_text: "ignored".into(),
+            matched_pattern: "rule-a".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["intent_id", "intent_text", "matched_pattern", "type"],
+        );
+        assert_eq!(obj.get("type"), Some(&serde_json::json!("intent_ignored")),);
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["intent_id", "intent_text", "matched_pattern"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::IntentIgnored wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

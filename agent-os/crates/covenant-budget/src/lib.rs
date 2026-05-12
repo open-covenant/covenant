@@ -1260,6 +1260,78 @@ mod tests {
     }
 
     #[test]
+    fn budget_event_debit_serde_pins_flattened_newtype_variant() {
+        // BudgetEvent::Debit is the newtype variant wrapping BudgetDebit,
+        // persisted to the JSONL budget ledger on every successful
+        // try_debit. With #[serde(tag = "type")] on the enum, the
+        // newtype variant FLATTENS BudgetDebit's four wire fields next
+        // to the 'type' discriminator — so the wire object is exactly
+        // five keys: type='debit', agent (nested AgentId), credits,
+        // paired_receipt, at_ms. budget_debit_serde_pins_four_required_fields
+        // covers the inner BudgetDebit payload but not the enum-level
+        // flattened-newtype shape; a refactor that changed
+        // BudgetEvent::Debit from a newtype variant to a struct variant
+        // (Debit { debit: BudgetDebit }) would silently nest the
+        // BudgetDebit one level deeper under a 'debit' key and every
+        // prior flattened-wire-form JSONL row would fail decode at
+        // replay.
+        let mut pubkey = [0u8; 32];
+        for (i, b) in b"alice@host".iter().enumerate() {
+            pubkey[i] = *b;
+        }
+        let event = BudgetEvent::Debit(BudgetDebit {
+            agent: AgentId::new("alice@host", pubkey),
+            credits: 1500,
+            paired_receipt: Uuid::from_u128(0x1234),
+            at_ms: 12345,
+        });
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetEvent serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent", "at_ms", "credits", "paired_receipt", "type"],
+            "BudgetEvent::Debit wire form must be exactly five keys: BudgetDebit's four fields flattened next to the 'type' discriminator. A refactor from newtype variant to struct variant would nest BudgetDebit one level deeper and every prior JSONL Debit row would fail decode",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&json!("debit")),
+            "BudgetEvent discriminator slug must be snake_case 'debit'; a rename to 'budget_debit' or any #[serde(rename = ...)] regression silently strands every prior JSONL Debit row at replay and replay drops the entire debit history while CapacitySet/Snapshot rows still apply",
+        );
+
+        let agent_obj = obj
+            .get("agent")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent must serialize as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "BudgetEvent::Debit::agent must surface the AgentId display+pubkey shape; a refactor that flattened or restructured AgentId would break replay's per-agent debit attribution",
+        );
+
+        let back: BudgetEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "BudgetEvent::Debit must round-trip through serde_json verbatim — the Eq derive is the contract the JSONL replay path and operator dashboard lean on",
+        );
+
+        for required in ["agent", "credits", "paired_receipt", "at_ms"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetEvent>(serde_json::Value::Object(missing)).is_err(),
+                "BudgetEvent::Debit wire form must reject a payload missing {required:?}; a stray #[serde(default)] on paired_receipt would let a malformed row decode with Uuid::nil() and the settlement-receipt-join would silently dereference a missing receipt",
+            );
+        }
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

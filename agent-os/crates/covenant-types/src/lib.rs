@@ -624,6 +624,36 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_action_serde_pins_snake_case_wire_form() {
+        // MemoryRepairAction is the action discriminator on every
+        // MemoryRepairOutcome audit row emitted by daemon, HTTP, and
+        // CLI memory repair commands. All three slugs land in audit
+        // JSON keyed on the snake_case form; the rename_all default
+        // would emit them titlecased and silently bisect repair
+        // dashboards.
+        let cases: [(MemoryRepairAction, &str); 3] = [
+            (MemoryRepairAction::DetachParent, "detach_parent"),
+            (MemoryRepairAction::DeleteRecord, "delete_record"),
+            (MemoryRepairAction::BackfillProvenance, "backfill_provenance"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: MemoryRepairAction = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<MemoryRepairAction>("\"DetachParent\"").is_err(),
+            "titlecase DetachParent (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<MemoryRepairAction>("\"detach-parent\"").is_err(),
+            "kebab-case detach-parent must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn memory_tier_serde_pins_canonical_longterm_and_legacy_aliases() {
         // Canonical serialize form: lowercase rename_all + LongTerm
         // collapses to the dotless `longterm` slug. Audit-grep

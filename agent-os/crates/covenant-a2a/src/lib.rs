@@ -3629,6 +3629,138 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_task_force_errored_serde_pins_six_field_variant() {
+        // MailboxEvent::TaskForceErrored is the operator-initiated
+        // lease-fail repair event the daemon appends to the JSONL
+        // mailbox log when an in-flight task is force-errored — the
+        // operator's ForceError repair command terminates the lease and
+        // synthesises a failure result for the sender. With
+        // #[serde(tag = "type", rename_all = "snake_case")] on the
+        // enum, the wire object is exactly seven keys:
+        // type='task_force_errored' plus task_id (Uuid), lease_id
+        // (Uuid), result (nested A2ATaskResult with task_id,
+        // status='error', content, error_message), reason (String —
+        // the operator's free-text reason), forced_at_ms (u64),
+        // attempt (u32). No test pins the enum-level wire form. A
+        // refactor that flipped the discriminator slug, renamed any of
+        // the six fields, added #[serde(default)] to any non-Option
+        // field, or restructured the nested A2ATaskResult would
+        // silently corrupt repair replay — operator force-error events
+        // would either be stranded entirely or rebuild without their
+        // original failure-result attribution, leaving the sender's
+        // recv_result with no signal that the lease was operator-killed.
+        let result = A2ATaskResult::error(Uuid::from_u128(41), "killed");
+        let event = MailboxEvent::TaskForceErrored {
+            task_id: Uuid::from_u128(41),
+            lease_id: Uuid::from_u128(42),
+            result: result.clone(),
+            reason: "operator".into(),
+            forced_at_ms: 50_000,
+            attempt: 3,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "attempt",
+                "forced_at_ms",
+                "lease_id",
+                "reason",
+                "result",
+                "task_id",
+                "type",
+            ],
+            "MailboxEvent::TaskForceErrored wire form must be exactly \
+             seven keys: the six variant fields plus the 'type' \
+             discriminator. A refactor that renamed any of task_id, \
+             lease_id, result, reason, forced_at_ms, or attempt without \
+             #[serde(rename = ...)] would silently fail decode on every \
+             prior JSONL TaskForceErrored row and the audit trail of \
+             operator-initiated lease kills would rebuild empty — \
+             operator triage could not reconstruct which leases were \
+             force-errored, by whom, and with what reason",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("task_force_errored")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'task_force_errored'; a refactor that replaced rename_all \
+             with camelCase (yielding 'taskForceErrored') silently \
+             strands every prior JSONL TaskForceErrored row at replay, \
+             the operator-killed lease history rebuilds empty, and the \
+             sender's recv_result loop blocks indefinitely waiting for \
+             a result the operator already synthesised",
+        );
+
+        let result_obj = obj
+            .get("result")
+            .and_then(serde_json::Value::as_object)
+            .expect(
+                "MailboxEvent::TaskForceErrored::result must serialise as a nested JSON object",
+            );
+        assert_eq!(
+            result_obj.get("task_id").and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(41).to_string().as_str()),
+            "MailboxEvent::TaskForceErrored::result.task_id must match \
+             the outer task_id — the sender's recv_result joins on this \
+             id and any drift silently delivers a result no caller is \
+             listening for",
+        );
+        assert_eq!(
+            result_obj
+                .get("error_message")
+                .and_then(serde_json::Value::as_str),
+            Some("killed"),
+            "MailboxEvent::TaskForceErrored::result.error_message must \
+             surface the operator's failure message — a refactor that \
+             dropped error_message from the nested A2ATaskResult would \
+             leave the sender with no actionable signal that the lease \
+             was operator-killed",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::TaskForceErrored must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             the JsonlMailbox::open replay path joins repair events \
+             against",
+        );
+
+        for required in [
+            "task_id",
+            "lease_id",
+            "result",
+            "reason",
+            "forced_at_ms",
+            "attempt",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MailboxEvent::TaskForceErrored wire form must reject a \
+                 payload missing {required:?}; a stray #[serde(default)] \
+                 on result would let a malformed row decode with \
+                 A2ATaskResult::default() (task_id Uuid::nil(), status \
+                 default-variant, content [], error_message None) and \
+                 replay would enqueue that synthetic zero-result entry \
+                 under the original lease — recv_result would silently \
+                 deliver a nil-task error to the sender, masking the \
+                 real operator-initiated kill with a fake nil-task \
+                 error",
+            );
+        }
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

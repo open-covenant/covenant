@@ -1071,6 +1071,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_rotate_operator_token_serde_pins_unit_variant() {
+        // Request::RotateOperatorToken is the unit variant the CLI
+        // and HTTP gateway send to mint a fresh bootstrap token,
+        // register it in the peer registry, rewrite
+        // $COVENANT_HOME/peers/operator.token (mode 0600), and
+        // revoke the old token — gated to peer.pubkey ==
+        // self.identity.pubkey so a guest peer cannot rotate the
+        // operator's own token. It pairs with
+        // Response::OperatorTokenRotated (already pinned) which
+        // carries the new token to HTTP callers that cannot read
+        // the on-disk file. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Request enum, the wire
+        // form is exactly one top-level key:
+        // kind='rotate_operator_token'. No prior test pins the
+        // exact wire shape or round-trip of this variant. Token
+        // rotation is the only operator-driven path to revoke a
+        // leaked bootstrap token; a slug regression silently
+        // strands the request and the operator sees the daemon's
+        // catch-all Error response while the compromised token
+        // stays live.
+        let event = Request::RotateOperatorToken;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::RotateOperatorToken wire form must be \
+             exactly one top-level key: 'kind'. A refactor that \
+             promoted the variant from unit to struct or newtype \
+             would add a second top-level key and every CLI/HTTP \
+             rotation trigger that sends \
+             {{\"kind\":\"rotate_operator_token\"}} alone would \
+             fail to decode on the daemon side — the operator \
+             could not revoke a leaked bootstrap token through \
+             the supported path, and the compromised token would \
+             stay live until manual filesystem intervention",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("rotate_operator_token")),
+            "Request discriminator slug must be the durable \
+             'rotate_operator_token'; a slug regression silently \
+             routes incoming rotation frames to the daemon's \
+             catch-all error branch — every CLI/HTTP rotation \
+             probe fails with a confusing fallback message instead \
+             of OperatorTokenRotated, and the operator cannot \
+             complete bootstrap-token rotation during a \
+             credential-leak response",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RotateOperatorToken must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every operator-token-rotation consumer leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

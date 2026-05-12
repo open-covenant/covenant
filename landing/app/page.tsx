@@ -91,10 +91,17 @@ export default function Page() {
       </a>
 
       <footer
-        className="absolute inset-x-0 z-20 flex justify-center px-4 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]"
+        className="absolute inset-x-0 z-20 flex items-center justify-center gap-2.5 px-4 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]"
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       >
-        open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}
+        <Image
+          src="/logomark.png"
+          alt=""
+          width={14}
+          height={14}
+          className="h-[14px] w-[14px] opacity-70"
+        />
+        <span>open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
       </footer>
     </main>
   );

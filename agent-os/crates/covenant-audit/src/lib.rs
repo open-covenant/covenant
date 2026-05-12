@@ -1382,6 +1382,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_capability_grant_rejected_serde_pins_three_field_variant() {
+        // AuditKind::CapabilityGrantRejected records denied authority
+        // claims. reason is the durable record of *why* the grant was
+        // denied — a rename or default would break the rejection trail.
+        let kind = AuditKind::CapabilityGrantRejected {
+            subject_display: "research@local".into(),
+            action: "memory.write".into(),
+            reason: "scope rejected".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["action", "reason", "subject_display", "type"],);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_grant_rejected")),
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["subject_display", "action", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityGrantRejected wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

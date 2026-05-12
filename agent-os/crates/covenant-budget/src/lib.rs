@@ -1400,6 +1400,141 @@ mod tests {
     }
 
     #[test]
+    fn budget_checkpoint_event_pause_saved_serde_pins_nested_checkpoint_variant() {
+        // BudgetCheckpointEvent::PauseSaved is the JSONL checkpoint-
+        // store append the daemon writes from
+        // JsonlPauseCheckpointStore::save_pause when a budget-
+        // exhausted intent is paused and the operator can later issue
+        // `covenant intents resume <intent-id>` to claim it. With
+        // #[serde(tag = "type", rename_all = "snake_case")] on the
+        // enum, the wire object is exactly two top-level keys:
+        // type='pause_saved' plus checkpoint (a nested
+        // BudgetPauseCheckpoint object carrying version, intent_id,
+        // agent, reason, requested_credits, tokens_remaining,
+        // refill_eta_ms, saved_at_ms, plus resume_state under
+        // skip_serializing_if = serde_json::Map::is_empty).
+        // pause_checkpoint_event_round_trips_with_stable_fields covers
+        // inner field stability but neither asserts the exact
+        // top-level key list nor walks omission rejection on
+        // 'checkpoint', so a refactor that defaulted the nested field
+        // — letting BudgetPauseCheckpoint::default() decode from a
+        // malformed row — would not fail any existing test. The
+        // sibling ResumeClaimed pin follows the full pin shape;
+        // PauseSaved needs the same coverage so a regression that
+        // promoted the variant to a newtype or stamped
+        // #[serde(default)] on the nested field cannot land silently.
+        let intent_id = Uuid::from_u128(71);
+        let agent_id = agent("a@local");
+        let event = BudgetCheckpointEvent::PauseSaved {
+            checkpoint: checkpoint(&agent_id, intent_id),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetCheckpointEvent serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["checkpoint", "type"],
+            "BudgetCheckpointEvent::PauseSaved wire form must be \
+             exactly two top-level keys: 'type' plus the nested \
+             'checkpoint' field. A refactor that promoted the variant \
+             from struct to newtype (PauseSaved(BudgetPauseCheckpoint)) \
+             would flatten BudgetPauseCheckpoint's eight required \
+             fields next to 'type' and every prior JSONL PauseSaved \
+             row that nests under 'checkpoint' would silently fail \
+             decode at JsonlPauseCheckpointStore::open replay — every \
+             paused intent across daemon restart disappears and \
+             `covenant intents resume <intent-id>` returns NotFound \
+             while the bucket stays drained",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&json!("pause_saved")),
+            "BudgetCheckpointEvent discriminator slug must be \
+             snake_case 'pause_saved'; a titlecase or kebab-case \
+             regression silently strands every prior JSONL paused \
+             intent at replay and operator-pause/resume semantics \
+             break without warning",
+        );
+
+        let checkpoint_obj = obj
+            .get("checkpoint")
+            .and_then(serde_json::Value::as_object)
+            .expect(
+                "BudgetCheckpointEvent::PauseSaved::checkpoint must \
+                 serialize as a nested JSON object",
+            );
+        for required in [
+            "version",
+            "intent_id",
+            "agent",
+            "reason",
+            "requested_credits",
+            "tokens_remaining",
+            "refill_eta_ms",
+            "saved_at_ms",
+        ] {
+            assert!(
+                checkpoint_obj.contains_key(required),
+                "BudgetCheckpointEvent::PauseSaved::checkpoint must \
+                 surface the eight required BudgetPauseCheckpoint \
+                 fields at the nested level; missing {required:?} \
+                 would break the cross-event join replay uses to \
+                 attribute the paused intent back to its bucket and \
+                 to validate the checkpoint at resume time",
+            );
+        }
+        assert_eq!(
+            checkpoint_obj
+                .get("intent_id")
+                .and_then(serde_json::Value::as_str),
+            Some(intent_id.to_string().as_str()),
+            "BudgetCheckpointEvent::PauseSaved::checkpoint.intent_id \
+             must surface as the Uuid's hyphenated string form — \
+             replay matches PauseSaved against ResumeClaimed tombstones \
+             by this exact representation",
+        );
+        assert!(
+            checkpoint_obj.contains_key("resume_state"),
+            "BudgetCheckpointEvent::PauseSaved::checkpoint.resume_state \
+             must surface on the wire when the helper populates it; \
+             skip_serializing_if = serde_json::Map::is_empty drops the \
+             key only for the empty-map default, so a refactor that \
+             changed the skip predicate would silently strip non-empty \
+             cursor state across restart and the resumed dispatch \
+             would lose its position",
+        );
+
+        let back: BudgetCheckpointEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "BudgetCheckpointEvent::PauseSaved must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract the checkpoint replay path joins paused \
+             intents against",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("checkpoint");
+        assert!(
+            serde_json::from_value::<BudgetCheckpointEvent>(serde_json::Value::Object(missing))
+                .is_err(),
+            "BudgetCheckpointEvent::PauseSaved wire form must reject \
+             a payload missing 'checkpoint'; a stray #[serde(default)] \
+             would let a malformed row decode with \
+             BudgetPauseCheckpoint::default() (version=0, Uuid::nil() \
+             intent_id, default agent, default reason, zero \
+             credits/tokens, empty resume_state) and replay would bind \
+             that synthetic checkpoint as active — a future legitimate \
+             resume against any matching intent_id silently consumes \
+             the agent's next dispatch budget against a phantom origin",
+        );
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

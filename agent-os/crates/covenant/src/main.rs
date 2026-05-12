@@ -4527,6 +4527,57 @@ mod tests {
     }
 
     #[test]
+    fn flush_receipts_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["batch", "kind", "limit", "receipts_updated"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("flush_receipts_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "flush_receipts_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("receipt_batch_flushed"));
+            assert!(
+                value["limit"].is_u64(),
+                "limit must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["receipts_updated"].is_u64(),
+                "receipts_updated must serialize as a non-negative integer, not a string-of-integer: {value}",
+            );
+            assert!(
+                value["batch"].is_object(),
+                "batch must be a structured object, not a string blob: {value}",
+            );
+        }
+
+        let unconfirmed = ReceiptBatchSummary {
+            batch_id: "batch-1".into(),
+            merkle_root: "ab".repeat(32),
+            receipt_count: 2,
+            tx_sig: None,
+            slot: None,
+        };
+        let confirmed = ReceiptBatchSummary {
+            batch_id: "batch-2".into(),
+            merkle_root: "cd".repeat(32),
+            receipt_count: 5,
+            tx_sig: Some("sigb58".into()),
+            slot: Some(123_456),
+        };
+
+        assert_shape(&flush_receipts_json(10, &unconfirmed, 7));
+        assert_shape(&flush_receipts_json(10, &confirmed, 5));
+    }
+
+    #[test]
     fn a2a_status_json_renders_stable_shape() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);

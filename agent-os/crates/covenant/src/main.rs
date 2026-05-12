@@ -6151,6 +6151,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_uuid_returns_value_on_documented_uuid_and_reports_field_name_on_invalid_input() {
+        let literal = "550e8400-e29b-41d4-a716-446655440000";
+        let expected = uuid::Uuid::parse_str(literal).unwrap();
+        assert_eq!(
+            parse_uuid(literal, "memory-id").unwrap(),
+            expected,
+            "parse_uuid must accept the same hyphenated UUID form as uuid::Uuid::parse_str so JSON envelopes and CLI flags agree on the canonical spelling",
+        );
+
+        let err = parse_uuid("not-a-uuid", "memory-id").unwrap_err();
+        assert!(
+            err.to_string().contains("memory-id"),
+            "invalid UUID rejection must bind the caller-provided field name so the CLI can map a single parse failure back to the flag the operator typed: {err:?}",
+        );
+
+        let err = parse_uuid("", "task-id").unwrap_err();
+        assert!(
+            err.to_string().contains("task-id"),
+            "empty input must still bind the field name so an unset flag does not look like a generic UUID error: {err:?}",
+        );
+    }
+
+    #[test]
     fn peer_revoke_json_exit_classification_matches_human_cli() {
         let p = make_peer(7, "alice@host", false);
         assert!(!peer_revoke_is_failure(&RevokeOutcome::Revoked(p.clone())));

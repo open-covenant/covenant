@@ -2569,6 +2569,99 @@ mod tests {
     }
 
     #[test]
+    fn response_capabilities_serde_pins_single_field_variant() {
+        // Response::Capabilities is the variant the daemon sends
+        // after ListCapabilities returns the SignedCapability rows
+        // the caller's authorization permits. It carries
+        // capabilities: Vec<SignedCapability> — the capability list
+        // the CLI renders to the operator. With #[serde(tag =
+        // "kind", rename_all = "snake_case")] on the Response enum,
+        // the wire object is exactly two top-level keys:
+        // kind='capabilities' plus capabilities. No prior test pins
+        // the exact wire shape, round-trip, or omission rejection
+        // of this variant's required field. The inner
+        // SignedCapability element wire form is pinned by
+        // covenant-permissions tests; this slice locks the outer
+        // Response variant shape only — an empty Vec is sufficient
+        // to catch the slug, key set, and default-attribute
+        // regressions on the outer variant. A refactor that
+        // promoted Capabilities from a struct variant to a newtype
+        // variant would nest 'capabilities' one level deeper; a
+        // stray #[serde(default)] on capabilities would let a
+        // malformed row decode with an empty list and the operator
+        // would see a phantom empty registry — masking a real
+        // fetch failure as a clean state.
+        let event = Response::Capabilities {
+            capabilities: vec![],
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["capabilities", "kind"],
+            "Response::Capabilities wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'capabilities' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'capabilities' one level deeper and every CLI consumer \
+             that destructures the top-level array would silently \
+             fail — the operator's capability list would render \
+             empty even when the daemon returned a populated \
+             registry",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("capabilities")),
+            "Response discriminator slug must be the durable \
+             'capabilities'; a slug regression silently strands \
+             every CLI parser that classifies capability-list \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback instead of rendering the \
+             capability list",
+        );
+        let capabilities_arr = obj
+            .get("capabilities")
+            .and_then(serde_json::Value::as_array)
+            .expect("Response::Capabilities::capabilities must serialize as an array");
+        assert_eq!(
+            capabilities_arr.len(),
+            0,
+            "Response::Capabilities::capabilities must round-trip \
+             the exact element count from the wire payload — the \
+             empty-vec construction is sufficient to lock the outer \
+             variant shape; element-level wire form is pinned by \
+             covenant-permissions",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::Capabilities must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI capability-list consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("capabilities");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::Capabilities wire form must reject a payload \
+             missing 'capabilities'; a stray #[serde(default)] \
+             would let a malformed row decode with an empty list \
+             and the CLI would surface a phantom empty registry — \
+             a real fetch failure (truncated frame, partial decode \
+             error) would be silently reclassified as a clean \
+             state where the operator believes no capabilities \
+             exist when the daemon's registry is in fact populated",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

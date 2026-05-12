@@ -2042,6 +2042,23 @@ mod tests {
     }
 
     #[test]
+    fn chain_scope_allows_pins_non_object_scope_and_validate_scope_error_propagation() {
+        let request = ChainScopeRequest::default();
+        assert!(
+            !chain_scope_allows("chain", &serde_json::json!([]), "chain.flush", request).unwrap()
+        );
+
+        let err = chain_scope_allows(
+            "chain.flush",
+            &serde_json::json!({ "version": 0 }),
+            "chain.flush",
+            request,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
     fn memory_purge_scope_allows_tier_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

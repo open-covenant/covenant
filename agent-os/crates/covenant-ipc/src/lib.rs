@@ -2255,6 +2255,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_recent_a2a_tasks_serde_pins_default_bearing_single_field_variant() {
+        // Request::RecentA2ATasks is the read-side default-bearing
+        // variant the CLI and HTTP gateway send to enumerate the
+        // most recent N A2A tasks the daemon has observed (queued
+        // or in-flight) for operator triage. limit defaults to
+        // default_recent_limit() (10) via
+        // #[serde(default = "default_recent_limit")] so a stale
+        // CLI can omit the field. It pairs with Response::A2ATasks
+        // (already pinned). With #[serde(tag = "kind", rename_all
+        // = "snake_case")] on the Request enum, the wire object is
+        // exactly two top-level keys: kind='recent_a2_a_tasks'
+        // plus limit. The snake_case slug splits A2A on the
+        // digit/uppercase boundary into 'a2_a' — this is the
+        // documented durable shape, not a typo, and a refactor
+        // that 'fixes' it to 'a2a' would silently break every
+        // CLI/HTTP listing client. No prior test pins the exact
+        // wire shape, the a2_a slug split, limit numeric
+        // serialization, round-trip, or the default-on-missing
+        // decode contract for this variant.
+        let event = Request::RecentA2ATasks { limit: 25 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit"],
+            "Request::RecentA2ATasks wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'limit' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a typed PageOptions would nest \
+             'limit' one level deeper and every CLI/HTTP \
+             A2A-tasks listing probe that sends \
+             {{\"kind\":\"recent_a2_a_tasks\",\"limit\":<n>}} \
+             would fail to decode on the daemon side — operator \
+             triage of queued/in-flight A2A tasks goes dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("recent_a2_a_tasks")),
+            "Request discriminator slug must be the durable \
+             'recent_a2_a_tasks' (rename_all = snake_case splits \
+             the A2A boundary digit/uppercase into 'a2_a' — this \
+             is the documented form, not a typo). A refactor that \
+             'fixes' the slug to 'recent_a2a_tasks' would silently \
+             route incoming listing frames to the daemon's \
+             catch-all error branch — every CLI/HTTP listing \
+             probe fails and the operator cannot enumerate \
+             queued/in-flight A2A tasks through the supported \
+             path",
+        );
+        assert_eq!(
+            obj.get("limit").and_then(serde_json::Value::as_u64),
+            Some(25),
+            "Request::RecentA2ATasks::limit must surface as the \
+             literal numeric page size — the daemon's listing \
+             path binds on this exact field; a rename or retype \
+             would silently return a different row count than the \
+             operator asked for, distorting CLI output and HTTP \
+             response payload sizes",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RecentA2ATasks must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP A2A-tasks listing consumer \
+             leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "recent_a2_a_tasks"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::RecentA2ATasks must decode from a payload \
+             missing 'limit' — the #[serde(default)] attribute is \
+             the durable compatibility hinge that lets stale CLIs \
+             continue listing without a rebuild",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::RecentA2ATasks { limit: 10 },
+            "Request::RecentA2ATasks with missing 'limit' must \
+             default to default_recent_limit() = 10 — a refactor \
+             that drops the #[serde(default)] attribute or \
+             repoints it at a helper returning a different \
+             constant silently changes the page size for every \
+             stale CLI in the field; the operator's A2A-tasks \
+             listing behaviour diverges from the documented \
+             contract without a single error surface",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

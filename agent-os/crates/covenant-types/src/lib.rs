@@ -690,6 +690,125 @@ mod tests {
     }
 
     #[test]
+    fn agent_id_serde_pins_two_field_wire_form() {
+        // AgentId is the foundational identity envelope that flows into
+        // every Capability::subject, Capability::granted_by, Intent::issuer,
+        // SettlementReceipt::payer, BudgetDebit::agent, and PeerSummary
+        // record. It ships a custom Serialize/Deserialize that maps the
+        // [u8; 32] pubkey to a base58 JSON string and validates the
+        // display whitelist on every wire-derived AgentId.
+        //
+        // The existing tests cover round-trip (agent_id_roundtrip_uses_base58_pubkey),
+        // pubkey length (agent_id_rejects_wrong_pubkey_length), and display
+        // whitelist (agent_id_deserialize_rejects_invalid_display /
+        // agent_id_deserialize_accepts_valid_display). None of them pin
+        // the exact two-key wire shape, the JSON-string-not-array
+        // contract for pubkey, or the per-required-field omission reject —
+        // so a refactor that dropped the custom Serialize impl in favour
+        // of `derive Serialize` on the [u8; 32] pubkey could land
+        // silently, surfacing pubkey as a JSON array of 32 numbers and
+        // invalidating every persisted JSONL grant log, A2A mailbox
+        // event, audit row, and settlement receipt on operator restart.
+        let id = AgentId::new("research@local", [7u8; 32]);
+
+        let wire = serde_json::to_value(&id).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AgentId serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["display", "pubkey"],
+            "AgentId wire form must be exactly two top-level keys \
+             ('display', 'pubkey'). A refactor that grew AgentIdRepr a \
+             third field without a #[serde(default)] would brick every \
+             persisted JSONL grant log line, A2A mailbox event, audit \
+             row, and settlement receipt on operator restart"
+        );
+
+        assert_eq!(
+            obj.get("display"),
+            Some(&serde_json::json!("research@local")),
+            "AgentId::display must surface as a JSON string equal to \
+             the constructor input; a refactor that renamed the field \
+             or applied #[serde(rename)] would split capability lookups \
+             across two wire forms"
+        );
+
+        let pubkey_str = obj
+            .get("pubkey")
+            .and_then(serde_json::Value::as_str)
+            .expect(
+                "AgentId::pubkey must surface as a JSON string (custom \
+                 Serialize impl); a refactor that dropped the impl in \
+                 favour of derived Serialize on [u8; 32] would emit a \
+                 JSON array of 32 numbers and invalidate every persisted \
+                 grant/event/receipt",
+            );
+        let expected_b58 = bs58::encode([7u8; 32]).into_string();
+        assert_eq!(
+            pubkey_str, expected_b58,
+            "AgentId::pubkey wire form must equal bs58::encode(pubkey_bytes); \
+             a refactor to base64 or hex would silently strand every JSONL \
+             grant log line, A2A mailbox event, audit row, and settlement \
+             receipt at the daemon's bs58::decode boundary"
+        );
+
+        let serialized = serde_json::to_string(&id).unwrap();
+        assert!(
+            !serialized.contains("[7,7"),
+            "serialized AgentId must not contain a raw [u8; 32] byte \
+             array; the contract is bs58 string encoding, not derived \
+             array Serialize"
+        );
+
+        let back: AgentId = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, id,
+            "AgentId must round-trip through serde_json verbatim — \
+             the PartialEq derive is the contract every wire and JSONL \
+             read path leans on"
+        );
+
+        let mut missing_display = obj.clone();
+        missing_display.remove("display");
+        assert!(
+            serde_json::from_value::<AgentId>(serde_json::Value::Object(missing_display)).is_err(),
+            "AgentId wire form must reject a payload missing 'display'; \
+             a regression that gave display a #[serde(default)] would \
+             silently substitute an empty string and bypass the \
+             validate_agent_id_display whitelist"
+        );
+
+        let mut missing_pubkey = obj.clone();
+        missing_pubkey.remove("pubkey");
+        assert!(
+            serde_json::from_value::<AgentId>(serde_json::Value::Object(missing_pubkey)).is_err(),
+            "AgentId wire form must reject a payload missing 'pubkey'; \
+             a regression that gave pubkey a #[serde(default)] would \
+             silently substitute an empty string and decode to a 0-byte \
+             buffer that the length check would have to catch downstream"
+        );
+
+        let pubkey_as_array = serde_json::json!({
+            "display": "research@local",
+            "pubkey": [
+                7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+                7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+            ],
+        });
+        assert!(
+            serde_json::from_value::<AgentId>(pubkey_as_array).is_err(),
+            "AgentId wire form must reject a pubkey serialised as a JSON \
+             array of 32 numbers — the custom deserializer is \
+             string-based; accepting the array form would silently \
+             accept payloads emitted by a regressed derive-Serialize \
+             refactor and let the two encodings diverge in the wild"
+        );
+    }
+
+    #[test]
     fn scoped_action_alternatives_emits_display_first() {
         let id = AgentId::new("research@local", [7u8; 32]);
         let pair = id.scoped_action_alternatives("a2a.send");

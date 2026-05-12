@@ -574,6 +574,78 @@ entry = "x.f90"
     }
 
     #[test]
+    fn manifest_serde_pins_required_agent_section_and_default_others() {
+        // Manifest is the top-level agent.toml schema with five
+        // sections: agent is strictly required (no serde default), and
+        // capabilities / resources / sandbox / settlement each carry
+        // #[serde(default)] so a minimal manifest with only [agent]
+        // still parses. The existing parses_minimal_with_defaults test
+        // exercises the happy path but does not pin the strictly-
+        // required-agent-section contract.
+        //
+        // A refactor that gave Manifest::agent a #[serde(default)] would
+        // silently let an empty agent.toml parse with agent.id='',
+        // agent.entry='', agent.runtime defaulted to the first variant;
+        // the router would key its keyword tables on the empty id,
+        // SubprocessRunner would attempt Command::new("") at intent
+        // dispatch, and operator deployments would lose every previously
+        // routed intent path without a parse error.
+        let full = Manifest::parse(FULL).expect("full manifest must parse");
+        assert_eq!(full.agent.id, "research");
+        assert!(!full.capabilities.required.is_empty());
+        // Resources fully populated from FULL — pin one field to
+        // confirm the section actually deserialised rather than landing
+        // on its default.
+        assert_eq!(full.resources.cpu_ms_per_task, 30_000);
+        assert!(full.sandbox.required);
+        assert_eq!(full.settlement.budget_credits_per_hour, 10);
+
+        let minimal = Manifest::parse(MINIMAL).expect("minimal manifest must parse");
+        // Each default-bearing section must surface its Default impl
+        // values verbatim when omitted from the TOML. Pin one field per
+        // section so a refactor that swapped a Default::default() return
+        // value (e.g., changed Resources::cpu_ms_per_task default from
+        // 30_000 to 0) is loud, and a refactor that dropped
+        // #[serde(default)] from any section is also loud (the parse
+        // would fail before this assertion fires).
+        assert!(minimal.capabilities.required.is_empty());
+        assert!(minimal.capabilities.optional.is_empty());
+        assert_eq!(minimal.resources.cpu_ms_per_task, 30_000);
+        assert_eq!(minimal.resources.memory_mb, 512);
+        assert_eq!(minimal.resources.disk_mb, 100);
+        assert_eq!(minimal.resources.network, NetworkPolicy::OutboundHttpsOnly);
+        assert!(!minimal.sandbox.required);
+        assert_eq!(minimal.sandbox.backend, SandboxBackend::TrustedLocal);
+        assert_eq!(
+            minimal.sandbox.filesystem,
+            FilesystemPolicy::ReadOnlyPackage
+        );
+        assert_eq!(minimal.settlement.budget_credits_per_hour, 0);
+        assert_eq!(minimal.settlement.priority, Priority::Normal);
+
+        // Manifest must reject a TOML payload with NO [agent] section —
+        // every other section's default does not extend to agent.
+        let no_agent = r#"
+[capabilities]
+required = ["intent.subscribe"]
+
+[resources]
+cpu_ms_per_task = 1000
+"#;
+        match Manifest::parse(no_agent) {
+            Err(ManifestError::Parse(_)) => {}
+            other => panic!(
+                "manifest with no [agent] section must fail with \
+                 ManifestError::Parse — a refactor that gave Manifest::\
+                 agent a #[serde(default)] would silently parse an empty \
+                 manifest, the router would key on an empty agent.id, \
+                 and SubprocessRunner would Command::new(\"\") at intent \
+                 dispatch; got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn agent_section_serde_pins_five_required_fields() {
         // The [agent] block in every agent.toml carries five fields
         // declared without serde defaults: id, name, version, runtime,

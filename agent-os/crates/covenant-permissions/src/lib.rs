@@ -3209,6 +3209,54 @@ mod tests {
     }
 
     #[test]
+    fn optional_base58_prefix_or_null_pins_absent_null_non_string_empty_and_decode_error() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_base58_prefix_or_null("peers.revoke", empty, "k").is_ok(),
+            "absent field must be Ok; the let-else short-circuits before any type or alphabet checks",
+        );
+
+        let explicit_null = serde_json::json!({ "k": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_base58_prefix_or_null("peers.revoke", explicit_null, "k").is_ok(),
+            "{{\"k\": null}} must be Ok; the null arm is the documented unbounded marker for the token-prefix gate",
+        );
+
+        let valid = serde_json::json!({ "k": "abc" });
+        let valid = valid.as_object().unwrap();
+        assert!(
+            optional_base58_prefix_or_null("peers.revoke", valid, "k").is_ok(),
+            "a non-empty decodable base58 prefix like \"abc\" must be Ok; otherwise the gate silently rejects its own intended input",
+        );
+
+        let non_string = serde_json::json!({ "k": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err = optional_base58_prefix_or_null("peers.revoke", non_string, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-empty base58 prefix or null")),
+            "non-string scope value must produce the 'non-empty base58 prefix or null' error; got {err:?}. A regression that accepted non-string values would silently authorize partially-typed scope objects through the token-prefix gate.",
+        );
+
+        let empty_str = serde_json::json!({ "k": "" });
+        let empty_str = empty_str.as_object().unwrap();
+        let err = optional_base58_prefix_or_null("peers.revoke", empty_str, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-empty base58 prefix or null")),
+            "empty token_prefix must produce the same error; got {err:?}. A regression that accepted \"\" would collapse the prefix-allows-all into the gate, silently authorizing any token through a prefix-scoped peer grant.",
+        );
+
+        let bad_alphabet = serde_json::json!({ "k": "0OIl" });
+        let bad_alphabet = bad_alphabet.as_object().unwrap();
+        let err = optional_base58_prefix_or_null("peers.revoke", bad_alphabet, "k").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-empty base58 prefix or null")),
+            "a non-base58 string like \"0OIl\" (contains characters outside the base58 alphabet) must produce the same error via bs58::decode failure; got {err:?}. A regression that swallowed decode errors would silently widen the token_prefix gate beyond the documented base58 alphabet.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

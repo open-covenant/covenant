@@ -3568,6 +3568,51 @@ mod tests {
     }
 
     #[test]
+    fn optional_string_enum_pins_absent_allowed_unsupported_non_string_and_null() {
+        let allowed = &["idempotent", "operator-accepted", "operator_accepted"];
+
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_string_enum("a2a.deliver", empty, "r", allowed).is_ok(),
+            "absent field must be Ok; the let-else short-circuits before the type and enum checks so unscoped a2a grants do not fail at the duplicate_risk gate",
+        );
+
+        for value in ["idempotent", "operator-accepted", "operator_accepted"] {
+            let json = serde_json::json!({ "r": value });
+            let obj = json.as_object().unwrap();
+            assert!(
+                optional_string_enum("a2a.deliver", obj, "r", allowed).is_ok(),
+                "{{\"r\": {value:?}}} must be Ok; otherwise the duplicate_risk gate silently rejects an explicitly documented accepted value, breaking a2a deliveries that bind it",
+            );
+        }
+
+        let unsupported = serde_json::json!({ "r": "unknown" });
+        let unsupported = unsupported.as_object().unwrap();
+        let err = optional_string_enum("a2a.deliver", unsupported, "r", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("unsupported value")),
+            "{{\"r\": \"unknown\"}} must produce the 'unsupported value' error; got {err:?}. A regression that broadened the allowed list to include arbitrary strings would silently authorize unsupported duplicate-risk classes, weakening operator-accepted-only delivery paths into accept-anything paths.",
+        );
+
+        let non_string = serde_json::json!({ "r": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err = optional_string_enum("a2a.deliver", non_string, "r", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("must be a string")),
+            "{{\"r\": 42}} must produce the 'must be a string' error via as_str() returning None; got {err:?}. A regression that fell through to the contains check on a non-string would either panic or silently bypass the enum gate for partially-typed scope objects.",
+        );
+
+        let null_value = serde_json::json!({ "r": null });
+        let null_value = null_value.as_object().unwrap();
+        let err = optional_string_enum("a2a.deliver", null_value, "r", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("must be a string")),
+            "{{\"r\": null}} must produce the 'must be a string' error via as_str() returning None on a JSON null; got {err:?}. This is the strict-deny path that distinguishes optional_string_enum from optional_string_enum_or_null — a2a.duplicate_risk has no documented unbounded marker, and a regression that accepted null would silently merge the two helpers' contracts and start treating null as 'unset' across the duplicate-risk gate.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

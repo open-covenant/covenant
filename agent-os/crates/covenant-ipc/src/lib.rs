@@ -1246,6 +1246,117 @@ mod tests {
         assert!(json.contains("\"kind\":\"intent_result\""));
     }
 
+    #[test]
+    fn response_intent_result_serde_pins_five_field_variant() {
+        // Response::IntentResult is the variant the daemon sends
+        // after dispatch_intent completes — it carries intent_id,
+        // status, text, sources, and settlement (Option<SettlementReceipt>).
+        // With #[serde(tag = "kind", rename_all = "snake_case")] on
+        // the Response enum, the wire object is exactly six keys:
+        // kind='intent_result' plus the five variant fields. The
+        // sibling intent_result_serialises_settlement_null test only
+        // does substring matches on the serialised JSON; it does not
+        // pin the exact key set, the round-trip PartialEq, or
+        // omission rejection on the four required fields. A refactor
+        // that promoted IntentResult from a struct variant to a
+        // newtype variant wrapping a payload struct would nest the
+        // five fields one level deeper next to 'kind' and break every
+        // CLI consumer that destructures on intent_id / status / text
+        // / sources / settlement; a stray skip_serializing_if =
+        // Option::is_none on settlement would drop the column for
+        // legacy intent rows and stale CLIs that branch on key
+        // presence would silently treat every unsettled result as if
+        // the field had never existed.
+        let intent_id = Uuid::from_u128(81);
+        let event = Response::IntentResult {
+            intent_id,
+            status: "ok".into(),
+            text: "echo".into(),
+            sources: vec!["path/one.md".into()],
+            settlement: None,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["intent_id", "kind", "settlement", "sources", "status", "text"],
+            "Response::IntentResult wire form must be exactly six \
+             top-level keys: 'kind' plus the five variant fields. A \
+             refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest the five \
+             fields one level deeper and every CLI consumer that \
+             destructures on intent_id / status / text / sources / \
+             settlement would silently fail to extract the result",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("intent_result")),
+            "Response discriminator slug must be snake_case \
+             'intent_result'; a slug regression silently strands \
+             every CLI consumer that classifies dispatch outcomes by \
+             this exact value — the daemon returns a successful \
+             response but the CLI cannot map it back to a successful \
+             dispatch",
+        );
+        assert_eq!(
+            obj.get("intent_id").and_then(serde_json::Value::as_str),
+            Some(intent_id.to_string().as_str()),
+            "Response::IntentResult::intent_id must surface as the \
+             Uuid's hyphenated string form — operator triage scripts \
+             correlate audit rows with intent results by this exact \
+             representation",
+        );
+        assert_eq!(
+            obj.get("settlement"),
+            Some(&serde_json::Value::Null),
+            "Response::IntentResult::settlement must surface as null \
+             when the result has not settled; there is no \
+             skip_serializing_if applied, so a refactor that added it \
+             would drop the column for legacy unsettled rows and \
+             stale CLIs that branch on key presence would silently \
+             degrade to treating every result as if the field had \
+             never existed",
+        );
+        assert_eq!(
+            obj.get("sources"),
+            Some(&serde_json::json!(["path/one.md"])),
+            "Response::IntentResult::sources must surface as a JSON \
+             array even when it holds a single source — a refactor \
+             that flattened or renamed the field would break the \
+             operator's at-a-glance view of which memory rows \
+             contributed to the dispatched intent",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::IntentResult must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI consumer leans on when matching \
+             dispatch outcomes",
+        );
+
+        for required in ["intent_id", "status", "text", "sources"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::IntentResult wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] on intent_id would let a malformed \
+                 row decode with Uuid::nil() and operator triage \
+                 would attribute the result to a phantom dispatch — \
+                 a default on status would mask whether the daemon \
+                 succeeded or fell through to a fail-open arm",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

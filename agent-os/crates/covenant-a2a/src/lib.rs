@@ -1863,6 +1863,103 @@ mod tests {
     }
 
     #[test]
+    fn event_belongs_to_droppable_pins_each_variant_lookup_and_idempotency_cache_invariant() {
+        let mut task = dummy_task();
+        let task_id = task.id;
+        let other_id = Uuid::new_v4();
+        let lease_id = Uuid::new_v4();
+        let droppable: HashSet<Uuid> = std::iter::once(task_id).collect();
+        let disjoint: HashSet<Uuid> = std::iter::once(other_id).collect();
+
+        let make_result = |id: Uuid| A2ATaskResult::ok(id, vec![]);
+        let make_cache_key = || A2AIdempotencyCacheKey {
+            sender_pubkey_b58: task.sender.pubkey_base58(),
+            recipient_pubkey_b58: task.recipient.pubkey_base58(),
+            task_kind: task.intent_text.clone(),
+            key: "k".into(),
+        };
+        let make_cached_result = || A2AIdempotencyCachedResult {
+            source_task_id: task_id,
+            status: A2ATaskStatus::Ok,
+            content: vec![],
+            error_message: None,
+        };
+
+        let task_id_variants: Vec<MailboxEvent> = vec![
+            MailboxEvent::TaskSent { task: task.clone() },
+            MailboxEvent::TaskRecv { task_id },
+            MailboxEvent::TaskLeased {
+                task_id,
+                lease_id,
+                leased_to: task.recipient.clone(),
+                leased_at_ms: 0,
+                attempt: 0,
+            },
+            MailboxEvent::TaskRequeued {
+                task_id,
+                lease_id,
+                reason: "operator".into(),
+                duplicate_risk: A2ADuplicateRisk::Idempotent,
+                requeued_at_ms: 0,
+                attempt: 0,
+            },
+            MailboxEvent::TaskForceErrored {
+                task_id,
+                lease_id,
+                result: make_result(task_id),
+                reason: "upstream".into(),
+                forced_at_ms: 0,
+                attempt: 0,
+            },
+            MailboxEvent::IdempotencyResultReplayed {
+                task: task.clone(),
+                result: make_result(task_id),
+            },
+            MailboxEvent::ResultPosted {
+                result: make_result(task_id),
+            },
+            MailboxEvent::ResultRecv { task_id },
+        ];
+
+        for ev in &task_id_variants {
+            assert!(
+                event_belongs_to_droppable(ev, &droppable),
+                "variant must be droppable when its task_id is in the set: {ev:?}",
+            );
+            assert!(
+                !event_belongs_to_droppable(ev, &disjoint),
+                "variant must not be droppable when its task_id is absent: {ev:?}",
+            );
+        }
+
+        // IdempotencyResultCached must never be droppable even when the
+        // underlying replayed task_id is in the set; the cache row is
+        // operator-visible replay provenance and a compaction pass that
+        // dropped it would silently break the audit trail.
+        let cached = MailboxEvent::IdempotencyResultCached {
+            cache_key: make_cache_key(),
+            result: make_cached_result(),
+        };
+        assert!(!event_belongs_to_droppable(&cached, &droppable));
+        assert!(!event_belongs_to_droppable(&cached, &disjoint));
+
+        // Re-use task to anchor the suppression check on a fresh id so a
+        // future refactor that introduced any droppable.contains lookup
+        // for the cached variant would fail this assertion.
+        task.id = other_id;
+        let cached_other = MailboxEvent::IdempotencyResultCached {
+            cache_key: make_cache_key(),
+            result: A2AIdempotencyCachedResult {
+                source_task_id: other_id,
+                status: A2ATaskStatus::Ok,
+                content: vec![],
+                error_message: None,
+            },
+        };
+        assert!(!event_belongs_to_droppable(&cached_other, &disjoint));
+    }
+
+    #[test]
     fn assert_lease_match_pins_expected_actual_and_none_paths() {
         let task_id = Uuid::new_v4();
         let lease_a = Uuid::new_v4();

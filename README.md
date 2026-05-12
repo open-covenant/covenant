@@ -3,17 +3,42 @@
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20134416.svg)](https://doi.org/10.5281/zenodo.20134416)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](./rust-toolchain.toml)
 
-> Agent- and blockchain-native operating layer for governed autonomous systems.
+> A capability-based operating layer for long-running autonomous software engineering agents.
 
-Covenant is an agent- and blockchain-native operating layer for autonomous software engineering systems. It coordinates agents, tools, memory, execution, authorization, audit, provenance, and settlement through a local control plane designed for research teams and engineering organizations building agents that operate across real codebases.
+<p align="center">
+  <img src="./assets/architecture.png" alt="Covenant architecture: clients reach covenantd over CLI / IPC / HTTP / MCP / A2A; the daemon dispatches through eight primitives over a cross-cutting audit layer running on an unprivileged Linux/macOS host." width="900"/>
+</p>
 
-Covenant sits below agent applications and above the host operating system. It gives autonomous systems a disciplined substrate for planning, execution, review, repair, and handoff while keeping privileged actions scoped, inspectable, resumable, and attributable.
+Covenant sits below agent applications and above the host operating system. It owns the state, authority, and accountability concerns that recur across agent frameworks — scoped capabilities, durable memory, runtime isolation, append-only audit, and commit-scoped provenance — so individual frameworks can stop reinventing them.
 
-Covenant is developed through the same governed agent workflows it exposes: agents plan work, produce changes, record validation evidence, and leave provenance for human review. The result is infrastructure shaped around the operational requirements of agents rather than a human-only developer environment retrofitted with automation.
+**Status.** Local control plane is real and live-tested (19 Rust crates, ~62k lines, 848 tests including 107 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
+- **Paper:** [`paper/main.pdf`](./paper/main.pdf) · [DOI: 10.5281/zenodo.20134416](https://doi.org/10.5281/zenodo.20134416)
+
+## Quick start
+
+Build the daemon and CLI, register the sample agent, and dispatch an intent:
+
+```bash
+git clone https://github.com/open-covenant/covenant && cd covenant
+cd agent-os && cargo build --workspace --exclude covenant-settlement-program
+
+# Register the example agent (daemon loads $COVENANT_HOME/agents/ at startup)
+mkdir -p ~/.covenant/agents
+cp -R ../examples/hello-agent ~/.covenant/agents/hello
+
+# In one terminal — start the daemon
+./target/debug/covenantd
+
+# In another — dispatch an intent
+./target/debug/covenant intent "say hello"
+```
+
+The intent is routed by `covenantd`, dispatched against a scoped capability, and recorded as an `IntentDispatched` audit row with a hash-chained sidecar entry. See [examples/hello-agent](./examples/hello-agent/) for the full walkthrough and [docs/demo.md](./docs/demo.md) for a transcript of the primitives in action.
 
 ## Why Covenant
 

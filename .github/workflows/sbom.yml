@@ -1,0 +1,47 @@
+name: SBOM
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-os/target
+          key: ${{ runner.os }}-cargo-sbom-${{ hashFiles('agent-os/Cargo.lock') }}
+
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom --locked
+
+      - name: Generate SBOM
+        run: bash scripts/sbom.sh
+
+      - name: Upload SBOM as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: covenant-sbom-spdx
+          path: dist/covenant-sbom.spdx.json
+          if-no-files-found: error
+
+      - name: Attach SBOM to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" dist/covenant-sbom.spdx.json --clobber

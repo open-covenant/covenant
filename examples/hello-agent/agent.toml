@@ -1,0 +1,20 @@
+[agent]
+id      = "hello"
+name    = "Hello Agent"
+version = "0.1.0"
+runtime = "python3"
+entry   = "main.py"
+
+[capabilities]
+required = ["intent.subscribe"]
+optional = []
+
+[resources]
+cpu_ms_per_task = 5_000
+memory_mb       = 64
+disk_mb         = 10
+network         = "off"
+
+[settlement]
+budget_credits_per_hour = 0
+priority                = "low"

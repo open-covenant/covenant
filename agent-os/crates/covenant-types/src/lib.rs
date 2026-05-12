@@ -372,6 +372,126 @@ mod tests {
     }
 
     #[test]
+    fn intent_serde_pins_six_field_wire_form() {
+        // Intent is the load-bearing dispatch envelope:
+        // covenantd::Server::dispatch_intent, the router, the audit log,
+        // and the budget ledger all destructure on its six fields.
+        //
+        // * id / text / issuer / issued_at are strictly required.
+        // * priority carries #[serde(default)] with no
+        //   #[serde(skip_serializing_if)]. The serialize side always
+        //   emits the key; missing on decode falls back to the Default
+        //   impl (Priority::Normal, marked with #[default]).
+        // * parent carries #[serde(default)] (redundant for Option<T>
+        //   but documents the contract); always emits the key on
+        //   serialize, decodes as None when missing.
+        //
+        // priority serialises in lowercase due to
+        // #[serde(rename_all = "lowercase")] on the enum.
+
+        let intent = Intent {
+            id: Uuid::from_u128(0x42),
+            text: "ship the slice".into(),
+            issuer: dummy_id(),
+            issued_at: 1_000,
+            priority: Priority::High,
+            parent: None,
+        };
+        let wire = serde_json::to_value(&intent).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Intent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["id", "issued_at", "issuer", "parent", "priority", "text"],
+            "Intent wire object must always carry the six documented fields; \
+             adding skip_serializing_if to parent or priority would silently \
+             drop the key for the None/default path and break consumers \
+             destructuring on Intent shape"
+        );
+        assert_eq!(
+            obj.get("parent"),
+            Some(&serde_json::Value::Null),
+            "Intent with parent=None must surface parent as JSON null on the \
+             wire — the absence of skip_serializing_if keeps the six-key shape \
+             stable across delegated and top-level intents"
+        );
+        assert_eq!(
+            obj.get("priority").and_then(serde_json::Value::as_str),
+            Some("high"),
+            "Priority must serialise as the lowercase string \"high\" — \
+             dropping #[serde(rename_all = \"lowercase\")] would silently \
+             shift every persisted intent's priority wire form to a \
+             different case"
+        );
+
+        let decoded: Intent = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, intent,
+            "Intent must round-trip through serde_json verbatim — the Eq \
+             derive is the contract every dispatch consumer leans on"
+        );
+
+        let minimal = serde_json::json!({
+            "id": Uuid::from_u128(0x42).to_string(),
+            "text": "ship the slice",
+            "issuer": {
+                "display": dummy_id().display,
+                "pubkey": dummy_id().pubkey_base58(),
+            },
+            "issued_at": 1_000,
+        });
+        let decoded: Intent = serde_json::from_value(minimal).unwrap();
+        assert_eq!(
+            decoded.priority,
+            Priority::Normal,
+            "Intent with priority omitted must decode as Priority::Normal — \
+             the #[default] arm on the Priority enum is the forward-compat \
+             contract every stale CLI built before the priority field landed \
+             relies on"
+        );
+        assert_eq!(
+            decoded.parent, None,
+            "Intent with parent omitted must decode as None — serde's \
+             auto-default for Option<Uuid> is the forward-compat contract \
+             every stale CLI relies on"
+        );
+
+        let full_obj = serde_json::to_value(&intent).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["id", "text", "issuer", "issued_at"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<Intent>(serde_json::Value::Object(payload)).is_err(),
+                "Intent must reject a wire payload that omits {required}; a \
+                 stray #[serde(default)] introduction on any of the strictly \
+                 required fields would silently let a malformed dispatch \
+                 envelope decode at the IPC boundary"
+            );
+        }
+
+        let bad_case = serde_json::json!({
+            "id": Uuid::from_u128(0x42).to_string(),
+            "text": "ship the slice",
+            "issuer": {
+                "display": dummy_id().display,
+                "pubkey": dummy_id().pubkey_base58(),
+            },
+            "issued_at": 1_000,
+            "priority": "Normal",
+        });
+        assert!(
+            serde_json::from_value::<Intent>(bad_case).is_err(),
+            "Capitalised priority (\"Normal\") must be rejected — the \
+             rename_all = lowercase contract is what keeps every persisted \
+             intent's priority wire form stable across rebuilds"
+        );
+    }
+
+    #[test]
     fn agent_id_roundtrip_uses_base58_pubkey() {
         let a = dummy_id();
         let json = serde_json::to_string(&a).unwrap();

@@ -1491,6 +1491,61 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_operator_token_rotated_serde_pins_three_field_variant() {
+        // AuditKind::OperatorTokenRotated records every operator
+        // bootstrap-token rotation. Token bytes never enter the audit
+        // log — only 6-char base58 prefixes (matching PeerToken::Debug
+        // redaction) so an operator can correlate a rotation row with
+        // the on-disk file's first chars. old_token_prefix and
+        // new_token_prefix together form the verification link letting
+        // the operator confirm whether a rotation they did or did not
+        // initiate matches the durable file state. A rename or default
+        // breaks that link; a refactor that swapped prefixes for full
+        // token bytes converts an audit-row leak into credential theft.
+        let kind = AuditKind::OperatorTokenRotated {
+            peer_display: "user@local".into(),
+            old_token_prefix: "aaaaaa".into(),
+            new_token_prefix: "bbbbbb".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "new_token_prefix",
+                "old_token_prefix",
+                "peer_display",
+                "type",
+            ],
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("operator_token_rotated")),
+            "AuditKind discriminator slug must be snake_case 'operator_token_rotated'; a titlecase regression silently strands every prior rotation audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::OperatorTokenRotated must round-trip through serde_json verbatim — the PartialEq derive is the contract the on-disk-file-vs-audit-row rotation verification leans on",
+        );
+
+        for required in ["peer_display", "old_token_prefix", "new_token_prefix"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::OperatorTokenRotated wire form must reject a payload missing {required:?}; a stray #[serde(default)] on new_token_prefix would break the on-disk-file-vs-audit-row correlation an operator uses to confirm a rotation matches the durable file state, masking a silent rotation or compromise",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_budget_unseeded_serde_pins_three_field_variant() {
         // AuditKind::BudgetUnseeded is the audit row emitted when
         // dispatch_intent falls into the NoCapacity fail-open arm:

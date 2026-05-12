@@ -478,6 +478,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_result_pins_first_non_empty_line_fallback_and_malformed_stdout() {
+        let leading_blank =
+            b"\n{\"text\":\"hello\",\"sources\":[]}\nthen garbage that must be ignored\n";
+        let parsed = parse_result(leading_blank).expect(
+            "the first non-empty line must be picked even when the buffer starts with a blank newline; otherwise agents that flush a leading newline are silently broken",
+        );
+        assert_eq!(
+            parsed.text, "hello",
+            "the picked line must decode to the first non-empty AgentResult; a refactor that took the last line would silently swap the result for trailing debug output",
+        );
+
+        let no_newline = b"{\"text\":\"single-line\",\"sources\":[]}";
+        let parsed = parse_result(no_newline).expect(
+            "a buffer with no newline at all must still decode via the single-slice split; dropping this would break agents that omit a trailing newline",
+        );
+        assert_eq!(
+            parsed.text, "single-line",
+            "the no-newline buffer must decode as one whole line; otherwise the AgentResult is silently dropped on every newline-less stdout",
+        );
+
+        let only_newlines = b"\n\n";
+        let err = parse_result(only_newlines)
+            .expect_err("a buffer made of only newline separators leaves every split slice empty; find() returns None and the fallback returns the whole buffer, which is not valid AgentResult JSON");
+        match err {
+            RunnerError::MalformedStdout { .. } => {}
+            other => panic!(
+                "the fallback branch must map an unparseable whole-buffer to RunnerError::MalformedStdout so the daemon-side branch on this variant still fires; got: {other:?}"
+            ),
+        }
+
+        let not_json = b"not-json";
+        let err = parse_result(not_json).expect_err(
+            "a non-JSON single line must error: parse_result must never silently coerce arbitrary stdout into a default AgentResult",
+        );
+        match err {
+            RunnerError::MalformedStdout { .. } => {}
+            other => panic!(
+                "a serde_json::from_slice failure must map to RunnerError::MalformedStdout; otherwise the daemon loses the diagnostic that classifies malformed agent output. got: {other:?}"
+            ),
+        }
+    }
+
     fn dummy_intent() -> Intent {
         Intent {
             id: Uuid::nil(),

@@ -1305,6 +1305,90 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_policy_serde_pins_optional_cutoffs_skip_empty_and_bool_always_present() {
+        // MemoryCompactionPolicy is the per-tier compaction policy
+        // embedded in MemoryCompactionRequest.policy. Five fields:
+        // four Option<u64> cutoffs each with #[serde(default,
+        // skip_serializing_if = "Option::is_none")] —
+        // delete_working_before_ms, delete_episodic_before_ms,
+        // mark_longterm_stale_before_ms, marked_at_ms — plus the bool
+        // detach_stale_parents with #[serde(default)] only (no
+        // skip-empty so it always surfaces). The empty-policy wire
+        // form is exactly the single key {detach_stale_parents: false};
+        // dropping the skip-empty arm on any Option would silently
+        // inflate every default-policy audit row with four null
+        // columns and split downstream consumers that filter on field
+        // presence to count tier-scoped compactions.
+        let default_wire = serde_json::to_value(MemoryCompactionPolicy::default()).unwrap();
+        let default_obj = default_wire
+            .as_object()
+            .expect("MemoryCompactionPolicy serialises as a JSON object");
+        let default_keys: std::collections::BTreeSet<&str> =
+            default_obj.keys().map(String::as_str).collect();
+        let default_expected: std::collections::BTreeSet<&str> =
+            ["detach_stale_parents"].into_iter().collect();
+        assert_eq!(
+            default_keys, default_expected,
+            "default MemoryCompactionPolicy wire form must be exactly one \
+             key (detach_stale_parents=false); the four Option<u64> cutoffs \
+             are skipped via skip_serializing_if = Option::is_none",
+        );
+        assert_eq!(
+            default_obj.get("detach_stale_parents"),
+            Some(&serde_json::json!(false)),
+            "detach_stale_parents must surface as false on the default \
+             wire form — a skip_serializing_if = std::ops::Not::not would \
+             drop the key and break consumers that filter on key presence",
+        );
+
+        let populated = MemoryCompactionPolicy {
+            delete_working_before_ms: Some(1),
+            delete_episodic_before_ms: Some(2),
+            mark_longterm_stale_before_ms: Some(3),
+            detach_stale_parents: true,
+            marked_at_ms: Some(4),
+        };
+        let populated_wire = serde_json::to_value(&populated).unwrap();
+        let populated_obj = populated_wire.as_object().unwrap();
+        let populated_keys: std::collections::BTreeSet<&str> =
+            populated_obj.keys().map(String::as_str).collect();
+        let populated_expected: std::collections::BTreeSet<&str> = [
+            "delete_working_before_ms",
+            "delete_episodic_before_ms",
+            "mark_longterm_stale_before_ms",
+            "detach_stale_parents",
+            "marked_at_ms",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            populated_keys, populated_expected,
+            "fully-populated MemoryCompactionPolicy wire form must be \
+             exactly the five documented fields",
+        );
+
+        // Empty-object decode yields the Default (every field has
+        // #[serde(default)]). A refactor that drops the default on any
+        // Option<u64> would refuse a historic row that omitted the
+        // cutoff and silently disable that tier's compaction on daemon
+        // reopen.
+        let from_empty: MemoryCompactionPolicy = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            from_empty,
+            MemoryCompactionPolicy::default(),
+            "empty JSON object must round-trip to MemoryCompactionPolicy::default()",
+        );
+
+        // Round-trip pins the PartialEq derive contract on both paths.
+        let back_default: MemoryCompactionPolicy =
+            serde_json::from_value(default_wire.clone()).unwrap();
+        assert_eq!(back_default, MemoryCompactionPolicy::default());
+        let back_populated: MemoryCompactionPolicy =
+            serde_json::from_value(populated_wire).unwrap();
+        assert_eq!(back_populated, populated);
+    }
+
+    #[test]
     fn settlement_receipt_memory_record_id_skip_empty_pin() {
         // SettlementReceipt carries an asymmetric serde contract:
         // memory_record_id rides #[serde(default, skip_serializing_if =

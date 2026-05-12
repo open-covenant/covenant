@@ -948,6 +948,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_verify_audit_integrity_serde_pins_unit_variant() {
+        // Request::VerifyAuditIntegrity is the unit variant the
+        // CLI, HTTP gateway, and daemon dispatch route to trigger a
+        // full audit hash-chain integrity sweep — it pairs with
+        // Response::AuditIntegrity (already pinned) which carries
+        // the AuditIntegrityReport the operator inspects to confirm
+        // the chain has not been tampered with. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire form is exactly one top-level key:
+        // kind='verify_audit_integrity'. No prior test pins the
+        // exact wire shape or round-trip of this variant. The
+        // audit-integrity probe is the security boundary that
+        // surfaces tampered or truncated audit chains; a slug
+        // regression silently strands the probe and the operator
+        // sees the daemon's catch-all Error response instead of the
+        // integrity report, masking real tampering during incident
+        // triage.
+        let event = Request::VerifyAuditIntegrity;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::VerifyAuditIntegrity wire form must be \
+             exactly one top-level key: 'kind'. A refactor that \
+             promoted the variant from unit to struct or newtype \
+             would add a second top-level key and every CLI/HTTP \
+             audit-integrity probe that sends \
+             {{\"kind\":\"verify_audit_integrity\"}} alone would \
+             fail to decode on the daemon side — the operator \
+             would stop receiving integrity evidence silently, \
+             masking real audit-chain tampering during incident \
+             triage",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("verify_audit_integrity")),
+            "Request discriminator slug must be the durable \
+             'verify_audit_integrity'; a slug regression silently \
+             routes incoming integrity-probe frames to the \
+             daemon's catch-all error branch — every CLI/HTTP \
+             integrity probe fails with a confusing fallback \
+             message instead of the AuditIntegrityReport, and \
+             tampered audit chains go undetected until a human \
+             notices the wrong response shape",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::VerifyAuditIntegrity must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every audit-integrity probe consumer leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

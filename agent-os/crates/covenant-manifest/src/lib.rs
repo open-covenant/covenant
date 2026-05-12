@@ -574,6 +574,111 @@ entry = "x.f90"
     }
 
     #[test]
+    fn capabilities_section_serde_pins_two_default_bearing_fields() {
+        // Capabilities is the [capabilities] block in agent.toml with two
+        // fields — required: Vec<String> and optional: Vec<String> —
+        // backed by the derived Default impl which returns (empty,
+        // empty). The struct carries struct-level #[serde(default)] so
+        // an omitted block parses with both Vecs empty, and the field-
+        // level defaults (from #[derive(Default)]) also surface when the
+        // block is present but unkeyed.
+        //
+        // parses_minimal_with_defaults exercises the omitted-block path
+        // via two is_empty assertions but does not pin the field names,
+        // the unkeyed-block path, or the partial-override contract that
+        // lets one Vec be set without disturbing the other. A refactor
+        // that renamed Capabilities::required to Capabilities::granted
+        // (or applied #[serde(rename)] in either direction) would
+        // silently let every agent.toml writing required = [...] parse
+        // with that Vec taking its empty default, capability dispatch
+        // would refuse every previously-granted call at intent time, and
+        // operator deployments would see no parse-layer signal.
+        let agent_block = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#;
+
+        // Full override — non-default values for both Vec fields so a
+        // refactor that swapped the two bindings would be loud. Use
+        // reserved-namespace capability strings so the validate()
+        // cross-check (rejects_bad_capability_namespace) does not fire
+        // here.
+        let full = format!(
+            "{agent_block}\n[capabilities]\nrequired = [\"intent.subscribe\", \"memory.write\"]\noptional = [\"tool.web_search\"]\n"
+        );
+        let parsed = Manifest::parse(&full).expect("full capabilities block must parse");
+        assert_eq!(
+            parsed.capabilities.required,
+            vec!["intent.subscribe".to_string(), "memory.write".to_string()],
+        );
+        assert_eq!(
+            parsed.capabilities.optional,
+            vec!["tool.web_search".to_string()],
+        );
+
+        // Section omitted entirely → struct-level #[serde(default)]
+        // returns Capabilities::default() with both Vecs empty.
+        let omitted =
+            Manifest::parse(agent_block).expect("manifest without [capabilities] must parse");
+        assert!(
+            omitted.capabilities.required.is_empty(),
+            "Capabilities::required default must be the empty Vec — a \
+             refactor that dropped the struct-level #[serde(default)] \
+             would turn every existing minimal agent.toml (no \
+             [capabilities] block) into a parse error at daemon start, \
+             and operator deployments would fail to load any agent until \
+             each manifest re-added an explicit empty block",
+        );
+        assert!(
+            omitted.capabilities.optional.is_empty(),
+            "Capabilities::optional default must be the empty Vec",
+        );
+
+        // Unkeyed [capabilities] block (section header present, no
+        // required/optional keys) → field-level #[serde(default)] on
+        // each Vec surfaces the empty default. A refactor that dropped
+        // a field-level default would fail this path while the omitted-
+        // block path above still passed, so the regression surfaces
+        // here rather than at a downstream call site.
+        let unkeyed = format!("{agent_block}\n[capabilities]\n");
+        let parsed =
+            Manifest::parse(&unkeyed).expect("manifest with unkeyed [capabilities] must parse");
+        assert!(
+            parsed.capabilities.required.is_empty(),
+            "field-level #[serde(default)] on Capabilities::required \
+             must surface the empty Vec when the [capabilities] block \
+             is present but unkeyed",
+        );
+        assert!(parsed.capabilities.optional.is_empty());
+
+        // Partial override — only required set, optional must fall back
+        // to the empty Vec without the present field disturbing it.
+        let only_required =
+            format!("{agent_block}\n[capabilities]\nrequired = [\"intent.subscribe\"]\n");
+        let parsed = Manifest::parse(&only_required).unwrap();
+        assert_eq!(
+            parsed.capabilities.required,
+            vec!["intent.subscribe".to_string()],
+        );
+        assert!(parsed.capabilities.optional.is_empty());
+
+        // Partial override — only optional set, required must fall back
+        // to the empty Vec.
+        let only_optional =
+            format!("{agent_block}\n[capabilities]\noptional = [\"tool.web_search\"]\n");
+        let parsed = Manifest::parse(&only_optional).unwrap();
+        assert!(parsed.capabilities.required.is_empty());
+        assert_eq!(
+            parsed.capabilities.optional,
+            vec!["tool.web_search".to_string()],
+        );
+    }
+
+    #[test]
     fn settlement_section_serde_pins_two_default_bearing_fields() {
         // Settlement is the [settlement] block in agent.toml with two
         // fields — budget_credits_per_hour (u64) and priority

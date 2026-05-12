@@ -1491,6 +1491,50 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_operator_peers_list_rejected_serde_pins_two_field_variant() {
+        // AuditKind::OperatorPeersListRejected is the daemon-as-issuer
+        // probe row emitted when ListPeers is rejected because the
+        // authenticated peer is not the operator. Mirrors the
+        // OperatorTokenRotationRejected audience model so the row
+        // surfaces on the operator's /audit feed without making the
+        // rejected peer's own feed a probe-was-logged oracle.
+        // peer_pubkey_b58 is the unforgeable identifier; peer_display
+        // is wire-supplied.
+        let kind = AuditKind::OperatorPeersListRejected {
+            peer_display: "guest@local".into(),
+            peer_pubkey_b58: "guestPubkeyB58".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["peer_display", "peer_pubkey_b58", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("operator_peers_list_rejected")),
+            "AuditKind discriminator slug must be snake_case 'operator_peers_list_rejected'; a titlecase or kebab-case regression silently strands every prior peer-enumeration probe row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::OperatorPeersListRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract peer-enumeration-probe triage joins on",
+        );
+
+        for required in ["peer_display", "peer_pubkey_b58"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::OperatorPeersListRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on peer_pubkey_b58 would leave only the wire-controlled peer_display and erase the unforgeable probe-attribution signal",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_operator_token_rotation_rejected_serde_pins_two_field_variant() {
         // AuditKind::OperatorTokenRotationRejected is the daemon-as-
         // issuer probe row emitted when RotateOperatorToken is rejected

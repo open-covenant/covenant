@@ -1674,6 +1674,64 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_cache_key_pins_safety_kind_fallback_and_empty_key_paths() {
+        let base = dummy_task();
+        let sender_b58 = base.sender.pubkey_base58();
+        let recipient_b58 = base.recipient.pubkey_base58();
+
+        // No idempotency metadata → not cacheable.
+        assert!(idempotency_cache_key(&base).is_none());
+
+        // duplicate_safety=Unsafe → not cacheable even when a key is set.
+        let mut unsafe_task = base.clone();
+        unsafe_task.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Unsafe, "k"));
+        assert!(idempotency_cache_key(&unsafe_task).is_none());
+
+        // Empty key → not cacheable (a single empty key would otherwise
+        // collapse every Idempotent task into one cache slot).
+        let mut empty_key = base.clone();
+        empty_key.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, ""));
+        assert!(idempotency_cache_key(&empty_key).is_none());
+
+        // Whitespace-only key → not cacheable; trim must happen before
+        // the emptiness check, not after.
+        let mut blank_key = base.clone();
+        blank_key.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "   "));
+        assert!(idempotency_cache_key(&blank_key).is_none());
+
+        // task_kind=Some(non-empty) → cache key uses the explicit kind
+        // and the trimmed key value; sender/recipient base58 are bound.
+        let mut with_kind = base.clone();
+        with_kind.task_kind = Some("research.lookup".into());
+        with_kind.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "  research:agent-memory:2026-05-12  ",
+        ));
+        let key = idempotency_cache_key(&with_kind).expect("kind+key must cache");
+        assert_eq!(key.task_kind, "research.lookup");
+        assert_eq!(key.key, "research:agent-memory:2026-05-12");
+        assert_eq!(key.sender_pubkey_b58, sender_b58);
+        assert_eq!(key.recipient_pubkey_b58, recipient_b58);
+
+        // task_kind=None → fall back to intent_text so legacy senders
+        // that did not learn the explicit kind metadata still share a
+        // cache bucket per intent.
+        let mut no_kind = base.clone();
+        no_kind.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "k"));
+        let key = idempotency_cache_key(&no_kind).expect("intent fallback must cache");
+        assert_eq!(key.task_kind, base.intent_text);
+
+        // task_kind=Some(whitespace) → also fall back to intent_text;
+        // an all-whitespace kind is treated as missing so it cannot
+        // silently shard the cache off from the intent_text bucket.
+        let mut blank_kind = base.clone();
+        blank_kind.task_kind = Some("   ".into());
+        blank_kind.idempotency = Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "k"));
+        let key = idempotency_cache_key(&blank_kind).expect("whitespace kind must fall back");
+        assert_eq!(key.task_kind, base.intent_text);
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

@@ -2132,6 +2132,18 @@ mod tests {
     }
 
     #[test]
+    fn peer_scope_allows_pins_before_ms_actual_none_with_bound_scope_rejected() {
+        let scope = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        let actual_none = PeerScopeRequest {
+            before_ms: None,
+            ..PeerScopeRequest::default()
+        };
+        assert!(
+            !peer_scope_allows("peers.purge", &scope, "peers.purge", actual_none).unwrap()
+        );
+    }
+
+    #[test]
     fn chain_scope_allows_limit_environment_and_receipt_predicates() {
         let payer = bs58::encode([9u8; 32]).into_string();
         let scope = serde_json::json!({

@@ -3,20 +3,19 @@
 ## - covenant-demo-daemon: covenantd HTTP gateway, internal-only network.
 ## - covenant-demo-web: Next.js operator console, talks to the daemon
 ##   over the Render private network at http://covenant-demo-daemon:8421.
+## - covenant-demo-reset: 12-hour cron that restarts the daemon via the
+##   Render REST API so the sandbox stays clean.
 ##
 ## Shared secret COVENANT_OPERATOR_TOKEN is injected from the env group below.
-## A daily cron restarts the daemon so the sandbox stays clean.
 
 services:
   - type: pserv
     name: covenant-demo-daemon
-    runtime: image
+    runtime: docker
     plan: starter
     region: oregon
     autoDeploy: true
     rootDir: .
-    image:
-      url: docker.io/library/scratch  # replaced by the Dockerfile build below
     dockerfilePath: ./deploy/Dockerfile.daemon
     dockerContext: .
     disk:
@@ -48,32 +47,27 @@ services:
         value: http://covenant-demo-daemon:8421
       - fromGroup: covenant-demo-shared
 
+  - type: cron
+    name: covenant-demo-reset
+    runtime: node
+    plan: starter
+    region: oregon
+    schedule: "0 */12 * * *"
+    rootDir: .
+    buildCommand: ""
+    startCommand: |
+      curl -fsSL "https://api.render.com/v1/services/$DAEMON_SVC_ID/restart" \
+           -X POST \
+           -H "Authorization: Bearer $RENDER_API_KEY" \
+        || echo "restart trigger failed; sandbox will reset on next deploy"
+    envVars:
+      - key: DAEMON_SVC_ID
+        sync: false  # paste the daemon service id after first deploy
+      - key: RENDER_API_KEY
+        sync: false  # team-scoped Render API key
+
 envVarGroups:
   - name: covenant-demo-shared
     envVars:
       - key: COVENANT_OPERATOR_TOKEN
         generateValue: true  # Render mints a random value once and pins it
-
-crons:
-  - type: cron
-    name: covenant-demo-reset
-    runtime: image
-    image:
-      url: docker.io/library/alpine:3.19
-    schedule: "0 */12 * * *"
-    region: oregon
-    plan: starter
-    buildCommand: ""
-    startCommand: |
-      apk add --no-cache curl
-      curl -fsSL "$RENDER_API/services/$DAEMON_SVC_ID/restart" \
-           -X POST \
-           -H "Authorization: Bearer $RENDER_API_KEY" \
-        || echo "restart trigger failed; sandbox will reset on next deploy"
-    envVars:
-      - key: RENDER_API
-        value: https://api.render.com/v1
-      - key: DAEMON_SVC_ID
-        sync: false  # paste the demo-daemon service id after first deploy
-      - key: RENDER_API_KEY
-        sync: false  # owner-scoped API key

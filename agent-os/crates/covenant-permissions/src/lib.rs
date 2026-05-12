@@ -2317,6 +2317,33 @@ mod tests {
     }
 
     #[test]
+    fn memory_read_record_scope_allows_pins_before_ms_equal_boundary_rejected() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "apply": false,
+            "tiers": ["working"],
+            "record_id": "rec-1",
+            "before_ms": 1_000
+        });
+        assert!(!memory_read_record_scope_allows(
+            "memory.read.working",
+            &scope,
+            "rec-1",
+            "working",
+            1_000
+        )
+        .unwrap());
+        assert!(memory_read_record_scope_allows(
+            "memory.read.working",
+            &scope,
+            "rec-1",
+            "working",
+            999
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn memory_write_scope_allows_tier_record_mode_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

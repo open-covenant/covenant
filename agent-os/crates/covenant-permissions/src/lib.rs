@@ -2106,6 +2106,16 @@ mod tests {
     }
 
     #[test]
+    fn peer_scope_allows_pins_token_prefix_actual_none_rejected() {
+        let scope = serde_json::json!({ "version": 1, "token_prefix": "abc" });
+        let actual_none = PeerScopeRequest {
+            token_prefix: None,
+            ..PeerScopeRequest::default()
+        };
+        assert!(!peer_scope_allows("peers.revoke", &scope, "peers.revoke", actual_none).unwrap());
+    }
+
+    #[test]
     fn chain_scope_allows_limit_environment_and_receipt_predicates() {
         let payer = bs58::encode([9u8; 32]).into_string();
         let scope = serde_json::json!({

@@ -11008,6 +11008,36 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn parse_env_u32_and_usize_pin_trim_value_and_overflow() {
+        assert_eq!(parse_env_u32("X", "7").unwrap(), 7);
+        assert_eq!(parse_env_u32("X", " 8 ").unwrap(), 8);
+        let bad_u32 = parse_env_u32("COVENANT_X", "notanint")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            bad_u32.contains("COVENANT_X must be an integer"),
+            "expected name-prefixed error context, got {bad_u32:?}"
+        );
+        let overflow = parse_env_u32("COVENANT_X", "4294967296")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            overflow.contains("COVENANT_X must be an integer"),
+            "u32::MAX+1 must overflow-reject with the same context, got {overflow:?}"
+        );
+
+        assert_eq!(parse_env_usize("X", "9").unwrap(), 9);
+        assert_eq!(parse_env_usize("X", " 10 ").unwrap(), 10);
+        let bad_usize = parse_env_usize("COVENANT_X", "notanint")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            bad_usize.contains("COVENANT_X must be an integer"),
+            "expected name-prefixed error context, got {bad_usize:?}"
+        );
+    }
+
+    #[test]
     fn parse_env_u64_pins_trim_and_error_context() {
         assert_eq!(parse_env_u64("X", "123").unwrap(), 123);
         assert_eq!(parse_env_u64("X", " 456 ").unwrap(), 456);

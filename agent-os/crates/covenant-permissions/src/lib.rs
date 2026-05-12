@@ -1654,6 +1654,59 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_scope_allows_pins_action_mismatch_non_object_and_missing_arguments_paths() {
+        let bound_scope = serde_json::json!({ "version": 1, "tool": "search" });
+        assert!(!tool_call_scope_allows(
+            "tool.call.search",
+            &bound_scope,
+            "echo",
+            &serde_json::json!({})
+        )
+        .unwrap());
+
+        assert!(!tool_call_scope_allows(
+            "tool",
+            &serde_json::json!([]),
+            "echo",
+            &serde_json::json!({})
+        )
+        .unwrap());
+
+        let tool_only_scope = serde_json::json!({ "version": 1, "tool": "foo" });
+        assert!(tool_call_scope_allows(
+            "tool.call.foo",
+            &tool_only_scope,
+            "foo",
+            &serde_json::json!({})
+        )
+        .unwrap());
+        assert!(tool_call_scope_allows(
+            "tool.call.foo",
+            &tool_only_scope,
+            "foo",
+            &serde_json::json!({ "any": "value" })
+        )
+        .unwrap());
+
+        let args_without_allow =
+            serde_json::json!({ "version": 1, "tool": "foo", "arguments": {} });
+        assert!(tool_call_scope_allows(
+            "tool.call.foo",
+            &args_without_allow,
+            "foo",
+            &serde_json::json!({})
+        )
+        .unwrap());
+        assert!(tool_call_scope_allows(
+            "tool.call.foo",
+            &args_without_allow,
+            "foo",
+            &serde_json::json!({ "any": "value" })
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn audit_purge_scope_allows_unscoped_grants() {
         assert!(audit_purge_scope_allows("audit.purge", &serde_json::json!({}), 1_000).unwrap());
     }

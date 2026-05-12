@@ -2336,6 +2336,106 @@ mod tests {
     }
 
     #[test]
+    fn a2a_auto_retry_skipped_serde_pins_three_required_and_lease_age_skip_empty() {
+        // A2AAutoRetrySkipped is the per-task row in
+        // A2AAutoRetryReport.skipped, written into the
+        // A2AAutoRetrySchedulerScan audit envelope's skipped_by_reason
+        // counters and surfaced through the operator triage CLI/HTTP
+        // path. Three required fields: task_id, reason, attempt; one
+        // optional: lease_age_ms with #[serde(default,
+        // skip_serializing_if = "Option::is_none")] so the
+        // OperatorDisabled and NotInFlight branches (which fire before
+        // a lease is read) stay compact on disk.
+        let task_id = Uuid::nil();
+
+        // None path: three keys, lease_age_ms must be dropped. The
+        // Disabled and NotInFlight branches fire before the entry's
+        // lease is read, so lease_age_ms = None is the realistic shape
+        // for those audit rows.
+        let none = A2AAutoRetrySkipped {
+            task_id,
+            reason: A2AAutoRetrySkipReason::Disabled,
+            attempt: 0,
+            lease_age_ms: None,
+        };
+        let none_wire = serde_json::to_value(&none).unwrap();
+        let none_obj = none_wire
+            .as_object()
+            .expect("A2AAutoRetrySkipped serialises as a JSON object");
+        let none_keys: std::collections::BTreeSet<&str> =
+            none_obj.keys().map(String::as_str).collect();
+        let three_keys: std::collections::BTreeSet<&str> =
+            ["task_id", "reason", "attempt"].into_iter().collect();
+        assert_eq!(
+            none_keys, three_keys,
+            "A2AAutoRetrySkipped with lease_age_ms=None must emit exactly \
+             three keys; dropping skip_serializing_if would silently \
+             double the bytes per Disabled audit row by emitting \
+             \"lease_age_ms\":null",
+        );
+
+        // Some path: four keys, lease_age_ms surfaces verbatim.
+        let some = A2AAutoRetrySkipped {
+            task_id,
+            reason: A2AAutoRetrySkipReason::LeaseTooYoung,
+            attempt: 1,
+            lease_age_ms: Some(60_000),
+        };
+        let some_wire = serde_json::to_value(&some).unwrap();
+        let some_keys: std::collections::BTreeSet<&str> = some_wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let four_keys: std::collections::BTreeSet<&str> = [
+            "task_id",
+            "reason",
+            "attempt",
+            "lease_age_ms",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(some_keys, four_keys);
+        assert_eq!(
+            some_wire.get("lease_age_ms").unwrap(),
+            &serde_json::json!(60_000),
+        );
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["task_id", "reason", "attempt"] {
+            let mut missing = none_obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AAutoRetrySkipped>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2AAutoRetrySkipped wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Omitting lease_age_ms must decode to None — the #[serde(default)]
+        // forward-compat path for any audit row that pre-dates the field.
+        let mut without_age = some_wire.as_object().unwrap().clone();
+        without_age.remove("lease_age_ms");
+        let legacy: A2AAutoRetrySkipped =
+            serde_json::from_value(serde_json::Value::Object(without_age)).unwrap();
+        assert!(legacy.lease_age_ms.is_none());
+
+        // Round-trips on both paths.
+        let back_none: A2AAutoRetrySkipped = serde_json::from_value(none_wire.clone()).unwrap();
+        assert_eq!(back_none, none);
+        let back_some: A2AAutoRetrySkipped = serde_json::from_value(some_wire.clone()).unwrap();
+        assert_eq!(back_some, some);
+
+        // Cross-binding: reason on Disabled serialises to "disabled"
+        // (a2a_auto_retry_skip_reason_serde_pins_each_snake_case_slug).
+        assert_eq!(
+            none_wire.get("reason").unwrap(),
+            &serde_json::json!("disabled"),
+        );
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

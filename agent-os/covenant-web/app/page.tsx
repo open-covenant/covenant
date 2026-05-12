@@ -91,7 +91,7 @@ export default function OverviewPage() {
       <PageHeader
         eyebrow="local control plane"
         title="Overview"
-        subhead="Operator-side view of the covenant daemon: dispatches, capabilities, memory tiers, and audit integrity — all signed and chained, all on this machine."
+        subhead="Dispatch intents, manage capabilities, and verify audit integrity. Everything is signed and hash-chained on this machine."
         syncMs={lastSyncMs}
         error={error}
         right={
@@ -110,13 +110,13 @@ export default function OverviewPage() {
       <section className="dispatch-card">
         <form onSubmit={onDispatch}>
           <div className="row">
-            <p className="eyebrow">submit intent</p>
-            <span className="text-muted text-mono kbd-hint">⌘K palette · type {">  "}your intent</span>
+            <p className="eyebrow">dispatch intent</p>
+            <span className="text-muted text-mono kbd-hint">⌘K to open the palette</span>
           </div>
           <textarea
             value={intent}
             onChange={(e) => setIntent(e.target.value)}
-            placeholder='try "say hello"  ·  the hello-agent matches on intent.subscribe keywords'
+            placeholder="What should your agents do?"
             rows={2}
           />
           <div className="actions">
@@ -134,19 +134,19 @@ export default function OverviewPage() {
           <span className="eyebrow">live peers</span>
           <span className="value">{livePeers.length}</span>
           <span className="caption">
-            {peers.length - livePeers.length} revoked in current view
+            {peers.length - livePeers.length} revoked
           </span>
         </article>
         <article className="metric">
           <span className="eyebrow">capabilities</span>
           <span className="value">{caps.length}</span>
-          <span className="caption">signed grants in registry</span>
+          <span className="caption">active grants</span>
         </article>
         <article className="metric">
           <span className="eyebrow">memory records</span>
           <span className="value">{memory.length}</span>
           <span className="caption">
-            {memory.filter((m) => m.tier === "working").length}w / {memory.filter((m) => m.tier === "episodic").length}e / {memory.filter((m) => m.tier === "longterm").length}l
+            {memory.filter((m) => m.tier === "working").length} working · {memory.filter((m) => m.tier === "episodic").length} episodic · {memory.filter((m) => m.tier === "longterm").length} long-term
           </span>
         </article>
         <article className="metric">
@@ -174,7 +174,7 @@ export default function OverviewPage() {
             </Link>
           </div>
           {recent.length === 0 ? (
-            <p className="empty">no events yet — dispatch an intent to seed the chain</p>
+            <p className="empty">Nothing here yet. Your activity will appear as it happens.</p>
           ) : (
             <div className="records">
               {recent.slice(0, 8).map((event) => {
@@ -222,7 +222,7 @@ export default function OverviewPage() {
             </div>
           </div>
           {reviewRows.length === 0 ? (
-            <p className="empty">no failed checks, exhausted budgets, or rejected A2A traffic</p>
+            <p className="empty">All clear. Nothing needs your attention.</p>
           ) : (
             <div className="records">
               {reviewRows.map((event) => (

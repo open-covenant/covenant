@@ -233,7 +233,11 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8421);
-    let http_addr = std::net::SocketAddr::from(([127, 0, 0, 1], http_port));
+    let http_bind: std::net::IpAddr = std::env::var("COVENANT_HTTP_BIND_ADDR")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let http_addr = std::net::SocketAddr::new(http_bind, http_port);
     let http_state = covenantd::http::HttpState {
         server: server.clone(),
     };

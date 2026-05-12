@@ -6,6 +6,7 @@ export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
 
 export const NAV_LINKS = [
+  { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "paper", href: "/paper.pdf", external: false as const },
   { label: "roadmap", href: "/roadmap", external: false as const },

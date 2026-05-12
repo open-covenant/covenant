@@ -29,6 +29,7 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
   const dispatchKind = dispatched?.kind.type === "intent_dispatched" ? dispatched.kind : null;
   const totalDurationMs =
     trace.length > 1 ? trace[trace.length - 1].timestamp_ms - trace[0].timestamp_ms : null;
+  const isLoading = data === null && error === null;
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -48,8 +49,8 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
           dispatchKind
             ? dispatchKind.matched_agent
               ? `Routed to agent ${dispatchKind.matched_agent}. Result hash ${dispatchKind.result_hash_hex}.`
-              : `No agent matched. The daemon returned the echo-fallback string.`
-            : "Looking for related audit events for this intent id."
+              : `No agent matched. The daemon returned the fallback response.`
+            : "Loading trace…"
         }
         syncMs={lastSyncMs}
         error={error}
@@ -79,11 +80,14 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
         </article>
       </section>
 
-      {trace.length === 0 ? (
+      {isLoading ? (
+        <div className="panel">
+          <p className="empty">Loading trace…</p>
+        </div>
+      ) : trace.length === 0 ? (
         <div className="panel">
           <p className="empty">
-            no events found for this intent id in the recent audit window. it may be older than the
-            cache, or the id is malformed.
+            No trace found for this intent. It may be older than what is cached locally.
           </p>
         </div>
       ) : (

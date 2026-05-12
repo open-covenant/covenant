@@ -1,0 +1,44 @@
+## Multi-stage Dockerfile for covenantd in demo mode on Render.
+## Build context expected: repository root (so agent-os/, examples/, deploy/ are visible).
+## Final image runs covenantd as a private HTTP gateway. The companion
+## covenant-demo-web service proxies browser traffic to it.
+
+FROM rust:1.83-slim-bookworm AS builder
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      pkg-config libssl-dev ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+WORKDIR /src/agent-os
+# Build only the daemon and the operator CLI; skip the on-chain settlement
+# program (Solana toolchain not available, not needed by the demo).
+RUN cargo build --release \
+      --bin covenantd \
+      --bin covenant
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates python3 curl jq \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash covenant
+WORKDIR /home/covenant
+
+COPY --from=builder /src/agent-os/target/release/covenantd /usr/local/bin/covenantd
+COPY --from=builder /src/agent-os/target/release/covenant /usr/local/bin/covenant
+
+# Demo seed bundle: hello-agent + entrypoint that primes operator token,
+# baseline capabilities, and waits for daemon readiness.
+COPY examples/hello-agent /opt/covenant/hello-agent
+COPY deploy/entrypoint.sh /usr/local/bin/covenant-demo-entrypoint
+RUN chmod +x /usr/local/bin/covenant-demo-entrypoint
+
+ENV COVENANT_HOME=/data
+ENV COVENANT_HTTP_PORT=8421
+ENV COVENANT_HTTP_BIND_ADDR=0.0.0.0
+USER covenant
+EXPOSE 8421
+ENTRYPOINT ["/usr/local/bin/covenant-demo-entrypoint"]

@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
+import { DemoBanner } from "./components/DemoBanner";
 import { Shell } from "./components/Shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "covenant · operator console",
-  description: "Local control plane for the covenant agent operating layer.",
+  title: "Covenant · Operator Console",
+  description: "The local control plane for Covenant. Dispatch intents, manage capabilities, and verify the audit chain.",
 };
 
 export default function RootLayout({
@@ -15,6 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <DemoBanner />
         <Shell>{children}</Shell>
       </body>
     </html>

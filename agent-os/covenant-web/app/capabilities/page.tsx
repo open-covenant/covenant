@@ -83,9 +83,9 @@ export default function CapabilitiesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="signed delegated authority"
+        eyebrow="signed grants"
         title="Capabilities"
-        subhead="Every privileged action requires a signed capability bound to a subject, action, and scope. Each grant lands in the audit log; revocations leave tombstones."
+        subhead="Every privileged action requires a signed capability. Grants and revocations are recorded in the audit log."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -97,14 +97,14 @@ export default function CapabilitiesPage() {
             <input
               value={action}
               onChange={(e) => setAction(e.target.value)}
-              placeholder="memory.write   ·   tool.web_search   ·   a2a.send.<pubkey-prefix>"
+              placeholder="memory.write · tool.web_search · agent.spawn"
             />
             <button type="submit" className="btn primary" disabled={!action}>
               grant
             </button>
           </div>
           <p className="text-muted text-mono hint">
-            namespaces: <em>intent.</em> · <em>memory.</em> · <em>identity.</em> · <em>tool.</em> · <em>agent.</em>
+            Namespaces: <em>intent</em> · <em>memory</em> · <em>identity</em> · <em>tool</em> · <em>agent</em>
           </p>
         </form>
       </section>
@@ -123,11 +123,11 @@ export default function CapabilitiesPage() {
         </div>
 
         {caps.length === 0 ? (
-          <p className="empty">no active grants — dispatching an intent will require memory.write at minimum</p>
+          <p className="empty">Nothing granted yet.</p>
         ) : (
           <div className="records">
-            {caps.map((cap) => (
-              <article key={cap.signature} className="record">
+            {caps.map((cap, idx) => (
+              <article key={`${cap.signature}-${idx}`} className="record">
                 <div className="ts">
                   <span>{cap.capability.subject.display}</span>
                   <em>signed by {cap.capability.granted_by.display}</em>

@@ -61,7 +61,7 @@ export default function AuditPage() {
       <PageHeader
         eyebrow="signed · hash-chained"
         title="Audit"
-        subhead="Append-only JSONL with a SHA-256 chain sidecar. Every state transition lands here, and the chain root is verifiable in one click."
+        subhead="Every state change is signed and hash-chained. The chain root is verifiable in one click."
         syncMs={lastSyncMs}
         error={error}
         right={
@@ -78,7 +78,7 @@ export default function AuditPage() {
             <p>
               {verifyResult.events} events across {verifyResult.anchors} anchors.{" "}
               {verifyResult.valid
-                ? "Every retained row hashes correctly into its successor."
+                ? "The chain is intact."
                 : `${verifyResult.failures.length} integrity failures detected.`}
             </p>
             <code>root · {verifyResult.root}</code>
@@ -95,7 +95,7 @@ export default function AuditPage() {
 
       <section className="filter-row">
         <div className="filter-group">
-          <span className="eyebrow">filter by kind</span>
+          <span className="eyebrow">filter by type</span>
           <div className="chips">
             <button
               type="button"
@@ -122,7 +122,7 @@ export default function AuditPage() {
       <section className="explorer">
         <div className="list">
           {filtered.length === 0 ? (
-            <p className="empty">no events match this filter</p>
+            <p className="empty">No events of this type yet.</p>
           ) : (
             <div className="records">
               {filtered.map((event) => {
@@ -186,11 +186,11 @@ export default function AuditPage() {
                   <dd>{new Date(selectedEvent.timestamp_ms).toISOString()}</dd>
                 </div>
               </dl>
-              <p className="eyebrow">raw kind</p>
+              <p className="eyebrow">type</p>
               <pre className="result compact">{JSON.stringify(selectedEvent.kind, null, 2)}</pre>
             </>
           ) : (
-            <p className="empty">select an event to see signed envelope + raw JSON</p>
+            <p className="empty">Select an event to see its signed envelope and raw JSON.</p>
           )}
         </aside>
       </section>

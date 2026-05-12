@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Action = {
@@ -18,7 +18,10 @@ export function CommandPalette() {
   const [selected, setSelected] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const focusOnMount = useCallback((node: HTMLInputElement | null) => {
+    if (node) node.focus();
+  }, []);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -157,11 +160,7 @@ export function CommandPalette() {
   }, [open, close]);
 
   useEffect(() => {
-    if (open) {
-      setSelected(0);
-      const timer = setTimeout(() => inputRef.current?.focus(), 10);
-      return () => clearTimeout(timer);
-    }
+    if (open) setSelected(0);
   }, [open]);
 
   useEffect(() => {
@@ -191,11 +190,11 @@ export function CommandPalette() {
         <div className="palette-input">
           <span aria-hidden>⌘K</span>
           <input
-            ref={inputRef}
+            ref={focusOnMount}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="navigate · '> say hello' · 'grant memory.write' · 'verify'"
+            placeholder="Search or type a command"
             spellCheck={false}
           />
         </div>

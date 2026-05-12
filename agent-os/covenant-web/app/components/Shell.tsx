@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
@@ -30,7 +31,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <aside className="sidebar" aria-label="navigation">
         <Link href="/" className="brand">
           <span className="mark" aria-hidden>
-            ✦
+            <Image src="/logo.png" alt="" width={32} height={32} priority />
           </span>
           <span>
             <strong>COVENANT</strong>
@@ -115,10 +116,15 @@ export function Shell({ children }: { children: ReactNode }) {
           place-items: center;
           width: 32px;
           height: 32px;
-          border: 1px solid var(--border);
           border-radius: 6px;
-          color: var(--dim);
-          font-size: 14px;
+          overflow: hidden;
+          background: #000;
+        }
+
+        .brand .mark :global(img) {
+          display: block;
+          width: 32px;
+          height: 32px;
         }
 
         .brand strong {

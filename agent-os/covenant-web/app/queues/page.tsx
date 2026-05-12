@@ -31,7 +31,7 @@ export default function QueuesPage() {
       <PageHeader
         eyebrow="agent-to-agent"
         title="Queues"
-        subhead="A2A mailbox state: tasks in flight, results waiting to be claimed. Every queued frame is gated by a signed a2a.send.* capability and audited."
+        subhead="Tasks in flight between agents, and results waiting to be claimed. Every message is gated by a signed capability."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -47,7 +47,7 @@ export default function QueuesPage() {
             </div>
           </div>
           {tasks.length === 0 ? (
-            <p className="empty">no queued tasks</p>
+            <p className="empty">No tasks in flight.</p>
           ) : (
             <div className="records">
               {tasks.map((t) => (
@@ -77,7 +77,7 @@ export default function QueuesPage() {
             </div>
           </div>
           {results.length === 0 ? (
-            <p className="empty">no queued results</p>
+            <p className="empty">No results pending.</p>
           ) : (
             <div className="records">
               {results.map((r) => (

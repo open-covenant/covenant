@@ -25,7 +25,7 @@ Covenant sits below agent applications and above the host operating system. It o
   <img src="./assets/demo.gif" alt="Recording of a single intent round trip: ping, dispatch, audit row, hash-chain verify." width="820"/>
 </p>
 
-Build the daemon and CLI, register the sample agent, and dispatch an intent:
+Build the daemon and CLI, register the sample agent, and start the daemon:
 
 ```bash
 git clone https://github.com/open-covenant/covenant && cd covenant
@@ -35,14 +35,29 @@ cd agent-os && cargo build --workspace --exclude covenant-settlement-program
 mkdir -p ~/.covenant/agents
 cp -R ../examples/hello-agent ~/.covenant/agents/hello
 
-# In one terminal — start the daemon
+# Start the daemon
 ./target/debug/covenantd
+```
 
-# In another — dispatch an intent
+Then drive it from either surface — they share the same daemon, audit chain, and capability store.
+
+**CLI**
+
+```bash
+./target/debug/covenant capabilities grant memory.write
+./target/debug/covenant capabilities grant intent.subscribe
 ./target/debug/covenant intent "say hello"
 ```
 
-The intent is routed by `covenantd`, dispatched against a scoped capability, and recorded as an `IntentDispatched` audit row with a hash-chained sidecar entry. See [examples/hello-agent](./examples/hello-agent/) for the full walkthrough and [docs/demo.md](./docs/demo.md) for a transcript of the primitives in action.
+**Operator console** — a Next.js UI for dispatching intents, browsing the audit chain, granting capabilities, and inspecting memory tiers.
+
+```bash
+cd agent-os/covenant-web
+pnpm install --ignore-workspace
+pnpm dev   # http://localhost:3000
+```
+
+The console proxies the daemon's HTTP gateway, injects the operator bearer token server-side, and renders every dispatch as a verifiable trace through the hash-chained audit log. See [examples/hello-agent](./examples/hello-agent/) for the agent walkthrough, [docs/demo.md](./docs/demo.md) for a CLI transcript, and [deploy/README.md](./deploy/README.md) for shipping the console as a public sandbox on Render.
 
 ## Why Covenant
 

@@ -82,7 +82,7 @@ export function auditSummary(event: AuditEvent): string {
       if (kind.matched_agent) {
         return `Intent "${truncate(kind.intent_text, 60)}" routed to agent ${kind.matched_agent}; result hash ${kind.result_hash_hex}.`;
       }
-      return `Intent "${truncate(kind.intent_text, 60)}" had no matching agent; daemon returned the echo-fallback response.`;
+      return `Intent "${truncate(kind.intent_text, 60)}" had no matching agent. Daemon returned the fallback response.`;
     case "capability_check":
       if (kind.passed) {
         return `Permission check passed for ${kind.agent_id}: required ${kind.required_actions.join(", ")}.`;
@@ -91,11 +91,11 @@ export function auditSummary(event: AuditEvent): string {
     case "capability_granted":
       return `${kind.granted_by_display} granted ${kind.action} to ${kind.subject_display}. Signed: ${short(kind.signature_b58, 12)}.`;
     case "intent_ignored":
-      return `Intent dropped at ingress by .covenantignore rule "${kind.matched_pattern}".`;
+      return `Intent dropped by .covenantignore rule "${kind.matched_pattern}".`;
     case "budget_exhausted":
       return `${kind.agent_display} exhausted its credit bucket while running ${truncate(kind.intent_text, 60)}. ${kind.tokens_remaining} remaining of ${kind.requested} requested; refill in ${kind.refill_eta_ms} ms.`;
     case "budget_unseeded":
-      return `${kind.agent_display} attempted dispatch but its budget bucket was never seeded. Dispatched anyway; operator must call register_agent_budgets.`;
+      return `${kind.agent_display} attempted dispatch but no budget has been configured. Dispatched anyway — configure budgets to silence this warning.`;
     case "peer_revoked":
       return `Peer ${kind.peer_display} revoked. Future authenticate frames with token ${kind.token_prefix}... will be rejected.`;
     case "operator_token_rotated":

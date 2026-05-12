@@ -48,7 +48,7 @@ export default function MemoryPage() {
       <PageHeader
         eyebrow="agent state"
         title="Memory"
-        subhead="Three tiers — working, episodic, long-term — each backed by SQLite with embedding hooks, ignore rules, drift reports, and bounded compaction."
+        subhead="Three tiers — working, episodic, and long-term. Agents read and write here under signed capabilities."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -57,7 +57,7 @@ export default function MemoryPage() {
         <article className="metric">
           <span className="eyebrow">working</span>
           <span className="value">{counts.working}</span>
-          <span className="caption">live in current window</span>
+          <span className="caption">active context</span>
         </article>
         <article className="metric">
           <span className="eyebrow">episodic</span>
@@ -72,7 +72,7 @@ export default function MemoryPage() {
         <article className="metric">
           <span className="eyebrow">total</span>
           <span className="value">{records.length}</span>
-          <span className="caption">limit {40}</span>
+          <span className="caption">showing {records.length} of {40}</span>
         </article>
       </section>
 
@@ -91,7 +91,7 @@ export default function MemoryPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="query embeddings — try 'hello agent' or 'capability'"
+              placeholder="Search memory"
             />
             <button type="submit" className="btn primary" disabled={!query || searching}>
               {searching ? "searching" : "search"}
@@ -114,7 +114,7 @@ export default function MemoryPage() {
             <button type="button" className="btn ghost" onClick={() => setHits(null)}>clear</button>
           </div>
           {hits.length === 0 ? (
-            <p className="empty">no matches</p>
+            <p className="empty">No matches.</p>
           ) : (
             <div className="records">
               {hits.map((m) => (
@@ -143,7 +143,7 @@ export default function MemoryPage() {
           </div>
         </div>
         {records.length === 0 ? (
-          <p className="empty">no records in this tier</p>
+          <p className="empty">No records yet.</p>
         ) : (
           <div className="records">
             {records.map((m) => (

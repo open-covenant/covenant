@@ -25,7 +25,7 @@ export default function SettlementPage() {
       <PageHeader
         eyebrow="resource accounting"
         title="Settlement"
-        subhead="Local receipts paired against budget debits. On-chain settlement is scaffolded; today every receipt is local-only with a nullable onchain signature field."
+        subhead="Receipts and debits from agent activity. On-chain settlement is in development; for now, everything stays local."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -34,7 +34,7 @@ export default function SettlementPage() {
         <article className="metric">
           <span className="eyebrow">receipts</span>
           <span className="value">{receipts.length}</span>
-          <span className="caption">{totalCredits} total credits consumed</span>
+          <span className="caption">{totalCredits} credits consumed</span>
         </article>
         <article className="metric">
           <span className="eyebrow">debits</span>
@@ -44,12 +44,12 @@ export default function SettlementPage() {
         <article className="metric">
           <span className="eyebrow">on-chain</span>
           <span className="value">{onChain}</span>
-          <span className="caption">{receipts.length - onChain} pending local-only</span>
+          <span className="caption">{receipts.length - onChain} pending settlement</span>
         </article>
         <article className="metric">
           <span className="eyebrow">window</span>
           <span className="value small">40</span>
-          <span className="caption">latest receipts in view</span>
+          <span className="caption">latest receipts</span>
         </article>
       </section>
 
@@ -64,7 +64,7 @@ export default function SettlementPage() {
             </div>
           </div>
           {debits.length === 0 ? (
-            <p className="empty">no debits in window</p>
+            <p className="empty">No debits yet.</p>
           ) : (
             <div className="records">
               {debits.map((d) => (
@@ -95,7 +95,7 @@ export default function SettlementPage() {
             </div>
           </div>
           {receipts.length === 0 ? (
-            <p className="empty">no receipts in window</p>
+            <p className="empty">No receipts yet.</p>
           ) : (
             <div className="records">
               {receipts.map((r) => (

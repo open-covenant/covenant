@@ -73,7 +73,7 @@ export default function PeersPage() {
       <PageHeader
         eyebrow="identity mesh"
         title="Peers"
-        subhead="The local identity registry. Each peer is an ed25519 pubkey paired with a bearer token. Revocations are tombstoned, not deleted."
+        subhead="Trusted identities on this daemon. Each peer carries a signing key and a bearer token; revocations are preserved, not deleted."
         syncMs={lastSyncMs}
         error={error}
         right={
@@ -103,7 +103,7 @@ export default function PeersPage() {
             <input
               value={prefix}
               onChange={(e) => setPrefix(e.target.value)}
-              placeholder="pubkey prefix"
+              placeholder="filter by public-key prefix"
             />
             <select value={status} onChange={(e) => setStatus(e.target.value as Status)}>
               <option value="">all</option>
@@ -114,12 +114,12 @@ export default function PeersPage() {
         </div>
         <div className="filter-stats">
           <span><strong>{active.length}</strong> live</span>
-          <span><strong>{peers.length - active.length}</strong> revoked in view</span>
+          <span><strong>{peers.length - active.length}</strong> revoked</span>
         </div>
       </section>
 
       {peers.length === 0 ? (
-        <p className="empty">no peers match this filter</p>
+        <p className="empty">No peers match this filter.</p>
       ) : (
         <div className="peer-grid">
           {peers.map((peer) => {
@@ -165,7 +165,7 @@ export default function PeersPage() {
         </div>
       )}
 
-      {truncated && <p className="text-muted text-mono" style={{ marginTop: 12 }}>showing first {peers.length}; narrow with a prefix</p>}
+      {truncated && <p className="text-muted text-mono" style={{ marginTop: 12 }}>Showing first {peers.length}. Narrow with a prefix to see more.</p>}
 
       <style jsx>{`
         .token-card {

@@ -29,9 +29,9 @@ export default function IntentsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="dispatched intents"
+        eyebrow="dispatch history"
         title="Intents"
-        subhead="Every intent the daemon has dispatched. Click into one to see its full trace — capability checks, agent dispatch, memory write, receipt — anchored to the audit chain."
+        subhead="Every intent the daemon has dispatched. Click one to see its full trace."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -48,7 +48,7 @@ export default function IntentsPage() {
 
         {intents.length === 0 ? (
           <p className="empty" style={{ padding: "30px 22px" }}>
-            no dispatches in this window — try {`"`}say hello{`"`} from the overview
+            Nothing here yet. Dispatches will appear in this list as they happen.
           </p>
         ) : (
           <div className="intent-list">

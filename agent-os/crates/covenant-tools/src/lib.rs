@@ -436,6 +436,68 @@ provider = "made-up"
     }
 
     #[test]
+    fn search_section_serde_pins_required_provider_and_api_key_default() {
+        // SearchSection is the [search] block operators write to
+        // secrets.toml to pick the search-tool provider. Mirrors
+        // LlmSection's asymmetric contract: provider is strictly
+        // required (no serde default) while api_key carries
+        // #[serde(default)] so an unkeyed provider (mock) stays valid.
+        //
+        // A refactor that added #[serde(default)] to provider would
+        // silently parse blocks with no provider as provider='',
+        // search_from_config would return None, pick_search would fall
+        // back to MockSearch::stub, and the operator-facing web_search
+        // tool would silently return the canned stub result on every
+        // call — agents would think they're searching the web but be
+        // looking at hard-coded fixtures.
+        let full = r#"
+[search]
+provider = "brave"
+api_key = "BSA-test"
+"#;
+        let cfg: SearchConfig = toml::from_str(full).unwrap();
+        let section = cfg
+            .search
+            .as_ref()
+            .expect("[search] block must surface as SearchSection");
+        assert_eq!(section.provider, "brave");
+        assert_eq!(section.api_key.as_deref(), Some("BSA-test"));
+
+        let minimal = r#"
+[search]
+provider = "mock"
+"#;
+        let cfg: SearchConfig = toml::from_str(minimal).unwrap();
+        let section = cfg.search.as_ref().unwrap();
+        assert_eq!(section.provider, "mock");
+        assert!(
+            section.api_key.is_none(),
+            "SearchSection::api_key must decode as None when omitted; a \
+             refactor that dropped #[serde(default)] would silently fail \
+             parse for operator deployments running on the keyless mock \
+             provider"
+        );
+
+        // Provider is the only strictly-required field; omitting it must
+        // fail parse so a future #[serde(default)] regression on
+        // provider does not silently fall back to MockSearch::stub and
+        // hide every operator misconfiguration.
+        let no_provider = r#"
+[search]
+api_key = "BSA-test"
+"#;
+        assert!(
+            toml::from_str::<SearchConfig>(no_provider).is_err(),
+            "SearchSection::provider must remain strictly required; a \
+             #[serde(default)] regression would silently parse blocks \
+             with no provider as provider='' and pick_search would fall \
+             back to MockSearch::stub — agents would think they're \
+             searching the web but be looking at the canned stub on every \
+             call"
+        );
+    }
+
+    #[test]
     fn pick_search_falls_back_to_mock_when_no_file() {
         let dir = std::env::temp_dir();
         let nope = dir.join("covenant-no-search.toml");

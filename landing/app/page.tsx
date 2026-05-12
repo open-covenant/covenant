@@ -95,11 +95,11 @@ export default function Page() {
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       >
         <Image
-          src="/covenant-logo.svg"
+          src="/logomark.svg"
           alt="covenant"
-          width={90}
-          height={14}
-          className="h-[14px] w-auto opacity-70"
+          width={40}
+          height={40}
+          className="h-auto w-[40px] opacity-70"
         />
         <span>open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
       </footer>

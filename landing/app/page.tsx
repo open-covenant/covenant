@@ -101,7 +101,7 @@ export default function Page() {
           height={15}
           className="h-auto w-[30px] opacity-70"
         />
-        <span>Covenant  ·  open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
+        <span>Covenant  ·  Open infrastructure for agent-native computing  ·  {RELEASE_DATE.toLowerCase()}</span>
       </footer>
     </main>
   );

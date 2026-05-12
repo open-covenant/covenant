@@ -3468,6 +3468,55 @@ mod tests {
     }
 
     #[test]
+    fn optional_non_negative_integer_or_null_pins_absent_null_zero_positive_negative_and_non_integer(
+    ) {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_non_negative_integer_or_null("audit.verify", empty, "x").is_ok(),
+            "absent field must be Ok; the if-let short-circuits before the !is_null && as_u64().is_none() check so unscoped audit/peer/chain queries do not fail at the non-negative-integer-or-null gate",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_non_negative_integer_or_null("audit.verify", explicit_null, "x").is_ok(),
+            "{{\"x\": null}} must be Ok; the !is_null half of the conjunction short-circuits before as_u64, and null is the documented unbounded marker for audit/peer/chain before_ms",
+        );
+
+        let zero = serde_json::json!({ "x": 0u64 });
+        let zero = zero.as_object().unwrap();
+        assert!(
+            optional_non_negative_integer_or_null("audit.verify", zero, "x").is_ok(),
+            "{{\"x\": 0}} must be Ok; this is the documented non-negative contract, not positive — a regression that copied the > 0 check from optional_positive_integer would silently reject before_ms=0 which the audit/chain readers treat as a valid lower-bound or unbounded equivalent",
+        );
+
+        let positive = serde_json::json!({ "x": 1u64 });
+        let positive = positive.as_object().unwrap();
+        assert!(
+            optional_non_negative_integer_or_null("audit.verify", positive, "x").is_ok(),
+            "{{\"x\": 1}} must be Ok; any positive u64 is valid",
+        );
+
+        let negative = serde_json::json!({ "x": -1i64 });
+        let negative = negative.as_object().unwrap();
+        let err =
+            optional_non_negative_integer_or_null("audit.verify", negative, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-negative integer or null")),
+            "{{\"x\": -1}} must produce the 'non-negative integer or null' error via as_u64() returning None on a negative number; got {err:?}. A regression that fell back to as_i64 would silently authorize backward time windows that audit/chain readers either treat as unbounded or as wrap-around large positive values.",
+        );
+
+        let non_int = serde_json::json!({ "x": "oops" });
+        let non_int = non_int.as_object().unwrap();
+        let err = optional_non_negative_integer_or_null("audit.verify", non_int, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-negative integer or null")),
+            "non-integer string must produce the same 'non-negative integer or null' error; got {err:?}. A regression that accepted non-integer values would silently let partially-typed scope objects through the before_ms gate.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

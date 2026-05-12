@@ -4453,6 +4453,107 @@ mod tests {
         }
     }
 
+    #[test]
+    fn response_a2a_queue_serde_pins_two_field_variant() {
+        // Response::A2AQueue is the variant the daemon sends after
+        // Request::A2AQueueState dumps the operator-visible A2A
+        // mailbox state in one payload. It carries tasks:
+        // Vec<A2ATaskQueueEntry> (queued/in-flight entries with lease
+        // metadata) plus results: Vec<A2ATaskResult> (terminal
+        // results not yet pruned). With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the wire
+        // object is exactly three top-level keys: kind='a2_a_queue'
+        // plus the two variant fields. No prior test pins the exact
+        // wire shape, round-trip, or omission rejection of these
+        // required fields at the outer Response level. The inner
+        // A2ATaskQueueEntry and A2ATaskResult shapes are pinned by
+        // covenant-a2a tests; this slice locks the outer Response
+        // variant shape only — empty Vec constructions are sufficient
+        // to catch the slug, key set, and default-attribute
+        // regressions on the outer variant.
+        let event = Response::A2AQueue {
+            tasks: vec![],
+            results: vec![],
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "results", "tasks"],
+            "Response::A2AQueue wire form must be exactly three \
+             top-level keys: 'kind' plus the two variant fields. A \
+             refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'tasks' \
+             and 'results' one level deeper and every CLI consumer \
+             that destructures .tasks or .results would silently \
+             fail — the operator's queue-state dump would read blank \
+             for every snapshot",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_queue")),
+            "Response discriminator slug must be the durable \
+             'a2_a_queue' (rename_all = snake_case splits A2A on \
+             digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies queue-state \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback instead of the queue \
+             snapshot, masking the mailbox state during incident \
+             triage",
+        );
+        assert_eq!(
+            obj.get("tasks")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "Response::A2AQueue::tasks must serialize as an array — \
+             the empty-vec construction is sufficient to lock the \
+             outer variant shape; element-level wire form is \
+             exercised by covenant-a2a tests",
+        );
+        assert_eq!(
+            obj.get("results")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "Response::A2AQueue::results must serialize as an array — \
+             the empty-vec construction is sufficient to lock the \
+             outer variant shape; element-level wire form is \
+             exercised by covenant-a2a tests",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2AQueue must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI queue-snapshot consumer leans on",
+        );
+
+        for required in ["tasks", "results"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::A2AQueue wire form must reject a payload \
+                 missing {required:?}; a stray #[serde(default)] \
+                 would let a malformed row decode with an empty list \
+                 and the CLI would surface a phantom drained mailbox \
+                 — a real fetch failure (truncated frame, partial \
+                 decode error) would be silently reclassified as a \
+                 clean empty state where the operator believes the \
+                 mailbox is drained when in fact the daemon's \
+                 snapshot path produced an error the boundary \
+                 swallowed",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

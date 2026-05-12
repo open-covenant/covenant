@@ -10441,6 +10441,12 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_repair_mode_pins_each_mode_variant() {
+        assert_eq!(memory_repair_mode(MemoryRepairMode::DryRun), "dry_run");
+        assert_eq!(memory_repair_mode(MemoryRepairMode::Apply), "apply");
+    }
+
+    #[test]
     fn memory_repair_id_pins_each_repair_command_variant() {
         let detach_id = Uuid::new_v4();
         let delete_id = Uuid::new_v4();

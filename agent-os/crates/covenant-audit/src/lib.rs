@@ -1455,6 +1455,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_authentication_failed_serde_pins_two_field_variant() {
+        // AuditKind::AuthenticationFailed records every rejected auth
+        // attempt; transport ('ipc' / 'http') is the per-channel
+        // attack-attribution signal a rename or default would break.
+        let kind = AuditKind::AuthenticationFailed {
+            transport: "ipc".into(),
+            reason: "unknown token".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["reason", "transport", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("authentication_failed")),
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["transport", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::AuthenticationFailed wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

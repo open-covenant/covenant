@@ -3046,6 +3046,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_retry_a2a_stale_serde_pins_struct_typed_single_field_variant() {
+        // Request::RetryA2AStale is the operator-controlled
+        // stale-lease scan-and-requeue verb the CLI and HTTP
+        // gateway send to push an A2AAutoRetryPolicy at the daemon.
+        // It pairs with Response::A2AAutoRetried (already pinned).
+        // With #[serde(tag = "kind", rename_all = "snake_case")] on
+        // the Request enum, the wire object is exactly two
+        // top-level keys: kind='retry_a2_a_stale' plus policy. The
+        // A2A snake_case quirk splits the slug into
+        // 'retry_a2_a_stale' — durable documented form, same shape
+        // as the already-pinned send_a2_a_task / post_a2_a_result /
+        // repair_a2_a_task slugs.
+        //
+        // Distinct from the other A2A struct-typed slices in that
+        // the carried field name is 'policy' (not 'request' or
+        // 'task' or 'result'); a refactor that rotated the field
+        // name (e.g., to 'request' for surface parity with the
+        // other A2A struct-typed variants) would silently break
+        // every CLI/HTTP scan caller — the daemon would bind on
+        // policy.* and the wire object would not contain that key.
+        // The exact-keys assertion catches this. The inner
+        // A2AAutoRetryPolicy shape is pinned by covenant-a2a
+        // tests; this slice only locks the outer Request variant
+        // shape.
+        let policy = covenant_a2a::A2AAutoRetryPolicy::default();
+        let event = Request::RetryA2AStale { policy };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "policy"],
+            "Request::RetryA2AStale wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'policy' \
+             field. A refactor that added #[serde(flatten)] to \
+             'policy' would collapse the inner A2AAutoRetryPolicy \
+             fields (enabled, min_lease_age_ms, max_attempts, \
+             max_requeues, scan_limit) into the outer object next \
+             to 'kind' and every CLI/HTTP stale-retry caller that \
+             sends {{\"kind\":\"retry_a2_a_stale\",\"policy\":{{...}}}} \
+             would fail to decode — the nested 'policy' key would \
+             vanish and the daemon's opt-in stale-lease retry verb \
+             would go dark through the supported path. A refactor \
+             that renamed the field to 'request' for surface \
+             parity with RepairA2ATask would also break this \
+             assertion at the same point",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("retry_a2_a_stale")),
+            "Request discriminator slug must be the durable \
+             'retry_a2_a_stale' (rename_all = snake_case splits \
+             the A2A boundary digit/uppercase into 'a2_a' — this \
+             is the documented form, not a typo). A refactor that \
+             'fixes' the slug to 'retry_a2a_stale' would silently \
+             route incoming retry frames to the daemon's catch-all \
+             error branch — every CLI/HTTP stale-retry call fails \
+             and the opt-in retry scheduler stops being exercised \
+             through the supported path",
+        );
+        let policy_value = obj.get("policy").expect("'policy' key must be present");
+        assert!(
+            policy_value.is_object(),
+            "Request::RetryA2AStale::policy must surface as a \
+             nested JSON object — a refactor that promoted the \
+             variant to a tuple (Request::RetryA2AStale(A2AAutoRetryPolicy)) \
+             or that changed the field to a boolean shorthand \
+             (e.g., 'enable on/off') would surface a non-object \
+             here; the daemon's stale-retry dispatch path binds on \
+             the nested-object surface and any other shape \
+             silently breaks every CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RetryA2AStale must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP stale-retry consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("policy");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::RetryA2AStale wire form must reject a \
+             payload missing 'policy'; a stray #[serde(default)] \
+             would let a malformed frame decode with \
+             A2AAutoRetryPolicy::default() and the daemon would \
+             silently run a no-op scan under the disabled default \
+             policy — operators expecting an explicit policy push \
+             would see 'success' with zero scanned leases and \
+             never learn their opt-in policy never reached the \
+             daemon. The missing-field rejection makes the \
+             policy-omission failure mode loud at the IPC boundary",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -2448,6 +2448,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_recent_debits_serde_pins_default_bearing_single_field_variant() {
+        // Request::RecentDebits is the operator-facing aggregate
+        // variant the CLI and HTTP gateway send to enumerate the
+        // most recent N budget-debit events across every agent
+        // the daemon's router knows about. The daemon iterates
+        // router.agents(), calls per-agent recent_debits on each
+        // non-zero-budget card, and returns one flat list sorted
+        // newest-first. limit defaults to default_recent_limit()
+        // (10) via #[serde(default = "default_recent_limit")] so
+        // a stale CLI can omit the field. It pairs with
+        // Response::Debits (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='recent_debits' plus limit. No prior test
+        // pins the exact wire shape, limit numeric serialization,
+        // round-trip, or the default-on-missing decode contract
+        // for this aggregate burn-rate path.
+        let event = Request::RecentDebits { limit: 25 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit"],
+            "Request::RecentDebits wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'limit' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a typed PageOptions would \
+             nest 'limit' one level deeper and every CLI/HTTP \
+             burn-rate probe that sends \
+             {{\"kind\":\"recent_debits\",\"limit\":<n>}} would \
+             fail to decode on the daemon side — the operator's \
+             per-agent burn-rate dashboard goes dark and budget \
+             incidents are missed",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("recent_debits")),
+            "Request discriminator slug must be the durable \
+             'recent_debits'; a slug regression silently routes \
+             incoming debits frames to the daemon's catch-all \
+             error branch — every CLI/HTTP debits probe fails \
+             with a confusing fallback message instead of \
+             Response::Debits",
+        );
+        assert_eq!(
+            obj.get("limit").and_then(serde_json::Value::as_u64),
+            Some(25),
+            "Request::RecentDebits::limit must surface as the \
+             literal numeric page size — the daemon's aggregate \
+             burn-rate path binds on this exact field; a rename \
+             or retype would silently return a different row \
+             count than the operator asked for, distorting CLI \
+             output and HTTP response payload sizes",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RecentDebits must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP burn-rate consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "recent_debits"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::RecentDebits must decode from a payload \
+             missing 'limit' — the #[serde(default)] attribute is \
+             the durable compatibility hinge that lets stale CLIs \
+             continue listing without a rebuild",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::RecentDebits { limit: 10 },
+            "Request::RecentDebits with missing 'limit' must \
+             default to default_recent_limit() = 10 — a refactor \
+             that drops the #[serde(default)] attribute or \
+             repoints it at a helper returning a different \
+             constant silently changes the page size for every \
+             stale CLI in the field; the operator's burn-rate \
+             aggregate returns zero rows when it should return \
+             the documented default page, masking a real \
+             overspend signal behind a phantom zero",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

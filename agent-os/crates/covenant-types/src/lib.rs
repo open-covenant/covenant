@@ -1066,6 +1066,83 @@ mod tests {
     }
 
     #[test]
+    fn settlement_receipt_memory_record_id_skip_empty_pin() {
+        // SettlementReceipt carries an asymmetric serde contract:
+        // memory_record_id rides #[serde(default, skip_serializing_if =
+        // "Option::is_none")] so non-memory receipts (the common case)
+        // stay compact, while the seven other Option chain-metadata
+        // fields (chain, cluster, batch_id, merkle_root, tx_sig, slot,
+        // confirmed_at, onchain_sig) carry #[serde(default)] only and
+        // surface as "field":null when the receipt is unconfirmed —
+        // downstream dashboards filter on field presence to distinguish
+        // unconfirmed (all-null) from confirmed (all-set) receipts.
+        let unconfirmed = SettlementReceipt {
+            id: Uuid::nil(),
+            payer: dummy_id(),
+            resource: ResourceKind::Compute,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 0,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let wire = serde_json::to_value(&unconfirmed).unwrap();
+        let obj = wire.as_object().expect("SettlementReceipt serializes as a JSON object");
+        assert!(
+            !obj.contains_key("memory_record_id"),
+            "memory_record_id=None must be skipped on the wire; a dropped skip_serializing_if inflates every non-memory receipt with an empty correlation field",
+        );
+        for null_field in [
+            "chain",
+            "cluster",
+            "batch_id",
+            "merkle_root",
+            "tx_sig",
+            "slot",
+            "confirmed_at",
+            "onchain_sig",
+        ] {
+            assert_eq!(
+                obj.get(null_field),
+                Some(&serde_json::Value::Null),
+                "{null_field}=None must surface as null on the wire; an unintended skip_serializing_if drops the column for every unconfirmed receipt and breaks dashboards keyed on field presence",
+            );
+        }
+
+        let memory_id = Uuid::new_v4();
+        let memory_receipt = SettlementReceipt {
+            memory_record_id: Some(memory_id),
+            resource: ResourceKind::Memory,
+            ..unconfirmed.clone()
+        };
+        let wire = serde_json::to_value(&memory_receipt).unwrap();
+        assert_eq!(
+            wire.get("memory_record_id").and_then(|v| v.as_str()),
+            Some(memory_id.to_string().as_str()),
+            "memory_record_id=Some(uuid) must surface verbatim on the wire",
+        );
+
+        let legacy: SettlementReceipt = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "payer": serde_json::to_value(dummy_id()).unwrap(),
+            "resource": "compute",
+            "credits_consumed": 1,
+            "settled_at": 0,
+        }))
+        .expect("legacy row that omits memory_record_id and the seven chain-metadata fields must decode");
+        assert_eq!(
+            legacy.memory_record_id, None,
+            "omitted memory_record_id must decode to None via #[serde(default)]; a dropped attribute strands every legacy JSONL row",
+        );
+    }
+
+    #[test]
     fn settlement_receipt_deserializes_pre_chain_metadata_rows() {
         let pubkey = bs58::encode([7u8; 32]).into_string();
         let json = format!(

@@ -6063,6 +6063,21 @@ mod tests {
     }
 
     #[test]
+    fn memory_tier_slug_pins_documented_slugs_and_round_trips_through_parse_tier() {
+        assert_eq!(memory_tier_slug(MemoryTier::Working), "working");
+        assert_eq!(memory_tier_slug(MemoryTier::Episodic), "episodic");
+        assert_eq!(memory_tier_slug(MemoryTier::LongTerm), "longterm");
+
+        for tier in [MemoryTier::Working, MemoryTier::Episodic, MemoryTier::LongTerm] {
+            assert_eq!(
+                parse_tier(memory_tier_slug(tier)).unwrap(),
+                tier,
+                "memory_tier_slug and parse_tier must round-trip; a slug rewording on one side without the other silently breaks JSON envelopes and CLI flags",
+            );
+        }
+    }
+
+    #[test]
     fn parse_tier_accepts_documented_spellings_and_rejects_unknown() {
         assert_eq!(parse_tier("working").unwrap(), MemoryTier::Working);
         assert_eq!(parse_tier("episodic").unwrap(), MemoryTier::Episodic);

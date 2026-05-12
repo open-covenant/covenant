@@ -1068,7 +1068,10 @@ mod tests {
         let cases: [(MemoryRepairAction, &str); 3] = [
             (MemoryRepairAction::DetachParent, "detach_parent"),
             (MemoryRepairAction::DeleteRecord, "delete_record"),
-            (MemoryRepairAction::BackfillProvenance, "backfill_provenance"),
+            (
+                MemoryRepairAction::BackfillProvenance,
+                "backfill_provenance",
+            ),
         ];
         for (variant, slug) in cases {
             let wire = serde_json::to_string(&variant).unwrap();
@@ -1215,9 +1218,18 @@ mod tests {
         // collapses to the dotless `longterm` slug. Audit-grep
         // conventions and downstream metrics pin the canonical form,
         // so changing it would silently split buckets across two slugs.
-        assert_eq!(serde_json::to_string(&MemoryTier::Working).unwrap(), "\"working\"");
-        assert_eq!(serde_json::to_string(&MemoryTier::Episodic).unwrap(), "\"episodic\"");
-        assert_eq!(serde_json::to_string(&MemoryTier::LongTerm).unwrap(), "\"longterm\"");
+        assert_eq!(
+            serde_json::to_string(&MemoryTier::Working).unwrap(),
+            "\"working\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryTier::Episodic).unwrap(),
+            "\"episodic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryTier::LongTerm).unwrap(),
+            "\"longterm\""
+        );
 
         // Canonical deserialize: each lowercase slug round-trips.
         assert_eq!(
@@ -1416,7 +1428,9 @@ mod tests {
             onchain_sig: None,
         };
         let wire = serde_json::to_value(&unconfirmed).unwrap();
-        let obj = wire.as_object().expect("SettlementReceipt serializes as a JSON object");
+        let obj = wire
+            .as_object()
+            .expect("SettlementReceipt serializes as a JSON object");
         assert!(
             !obj.contains_key("memory_record_id"),
             "memory_record_id=None must be skipped on the wire; a dropped skip_serializing_if inflates every non-memory receipt with an empty correlation field",
@@ -1485,6 +1499,84 @@ mod tests {
         assert_eq!(back.memory_record_id, None);
         assert_eq!(back.chain, None);
         assert_eq!(back.tx_sig, None);
+    }
+
+    #[test]
+    fn settlement_receipt_strict_required_fields_reject_on_omission() {
+        // SettlementReceipt is the durable JSONL row every receipt is
+        // persisted as and the wire form for IPC RecentReceipts / HTTP
+        // /receipts. Five strictly required fields with no serde
+        // attributes — id, payer, resource, credits_consumed, settled_at —
+        // anchor the contract every downstream reconciler depends on:
+        // credits_consumed must not default to 0 (zero-bills the agent),
+        // settled_at must not default to 0 (collapses every row to epoch
+        // start and breaks recent-receipts pagination ordering).
+        // settlement_receipt_memory_record_id_skip_empty_pin (line 1392)
+        // pins the asymmetric Option contract; this test pins the
+        // strict-required-fields rejection contract that the existing
+        // tests do not exercise.
+        let memory_id = Uuid::new_v4();
+        let fully_populated = SettlementReceipt {
+            id: Uuid::nil(),
+            payer: dummy_id(),
+            resource: ResourceKind::Memory,
+            memory_record_id: Some(memory_id),
+            credits_consumed: 42,
+            settled_at: 1_700_000_000_000,
+            chain: Some("solana".into()),
+            cluster: Some("devnet".into()),
+            batch_id: Some("batch-1".into()),
+            merkle_root: Some("root".into()),
+            tx_sig: Some("sig".into()),
+            slot: Some(7),
+            confirmed_at: Some(99),
+            onchain_sig: Some("sig".into()),
+        };
+
+        let wire = serde_json::to_value(&fully_populated).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("SettlementReceipt serializes as a JSON object");
+        assert_eq!(
+            obj.len(),
+            14,
+            "fully-populated SettlementReceipt with memory_record_id=Some must surface all 14 keys on the wire; a skip_serializing_if regression on any field would silently shrink the column set and break downstream reconcilers",
+        );
+
+        let back: SettlementReceipt = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, fully_populated,
+            "SettlementReceipt must round-trip through serde_json verbatim — the PartialEq + Eq derive is the contract every reconciler joins on",
+        );
+
+        for required in ["id", "payer", "resource", "credits_consumed", "settled_at"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<SettlementReceipt>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "SettlementReceipt wire form must reject a payload missing {required:?}; a stray #[serde(default)] on a required field would silently let a malformed row decode (credits_consumed=0 zero-bills the agent, settled_at=0 collapses ordering)",
+            );
+        }
+
+        let unconfirmed = SettlementReceipt {
+            memory_record_id: None,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+            ..fully_populated.clone()
+        };
+        let wire = serde_json::to_value(&unconfirmed).unwrap();
+        assert_eq!(
+            wire.as_object().unwrap().len(),
+            13,
+            "unconfirmed SettlementReceipt with memory_record_id=None must surface exactly 13 keys (5 required + 8 null chain-metadata Options; memory_record_id is skipped); a skip_serializing_if on any of the eight chain-metadata Options would silently shrink the unconfirmed wire form below 13 and break dashboards keyed on field presence",
+        );
     }
 
     #[test]
@@ -1808,8 +1900,7 @@ mod tests {
         let obj = wire
             .as_object()
             .expect("MemoryRepairRequest serialises as a JSON object");
-        let keys: std::collections::BTreeSet<&str> =
-            obj.keys().map(String::as_str).collect();
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         let expected: std::collections::BTreeSet<&str> =
             ["mode", "command", "reason"].into_iter().collect();
         assert_eq!(
@@ -1874,8 +1965,7 @@ mod tests {
         let obj = wire
             .as_object()
             .expect("MemoryCompactionRequest serialises as a JSON object");
-        let keys: std::collections::BTreeSet<&str> =
-            obj.keys().map(String::as_str).collect();
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         let expected: std::collections::BTreeSet<&str> =
             ["mode", "policy", "reason"].into_iter().collect();
         assert_eq!(
@@ -1895,12 +1985,10 @@ mod tests {
             .expect("policy must serialise as a nested JSON object");
         let policy_keys: std::collections::BTreeSet<&str> =
             policy_obj.keys().map(String::as_str).collect();
-        let policy_expected: std::collections::BTreeSet<&str> = [
-            "delete_working_before_ms",
-            "detach_stale_parents",
-        ]
-        .into_iter()
-        .collect();
+        let policy_expected: std::collections::BTreeSet<&str> =
+            ["delete_working_before_ms", "detach_stale_parents"]
+                .into_iter()
+                .collect();
         assert_eq!(
             policy_keys, policy_expected,
             "policy nested object must surface only the populated Option \

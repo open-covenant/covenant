@@ -4273,6 +4273,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_a2a_result_opt_serde_pins_single_optional_field_variant() {
+        // Response::A2AResultOpt is the variant the daemon sends
+        // after Request::A2AResult resolves a single A2A task result
+        // lookup — either a hit (Some(result)) or a miss (None). It
+        // carries result: Option<A2ATaskResult> without a
+        // #[serde(skip_serializing_if = "Option::is_none")] attribute,
+        // so the wire form is stable across hit and miss: the two
+        // keys (kind + result) are always emitted, with result=null
+        // on the miss path. This is the durable null-on-wire contract
+        // — a refactor that adds skip_serializing_if would silently
+        // drop the result key on the miss path and every CLI
+        // consumer that destructures .result to switch between hit
+        // and miss would silently treat misses as malformed
+        // responses.
+        //
+        // Per the project rule for Option-only variants, this test
+        // skips an omission walk on the result field: Option<T>
+        // decodes from a missing key as None, so an omission
+        // assertion would be vacuously true and would not catch a
+        // skip_serializing_if regression — the null-on-wire
+        // assertion is the regression catcher. The inner
+        // A2ATaskResult shape is pinned by covenant-a2a tests; this
+        // slice locks the outer Response variant null-on-wire shape
+        // only.
+        let event = Response::A2AResultOpt { result: None };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "result"],
+            "Response::A2AResultOpt wire form must always be exactly \
+             two top-level keys: 'kind' plus 'result' — adding \
+             skip_serializing_if to result would silently drop the \
+             key on the miss path and the wire shape would shrink \
+             from two keys to one, breaking every CLI consumer that \
+             destructures .result to detect hit vs miss",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_result_opt")),
+            "Response discriminator slug must be the durable \
+             'a2_a_result_opt' (rename_all = snake_case splits A2A \
+             on digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies single-result \
+             lookups by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the lookup outcome",
+        );
+        assert_eq!(
+            obj.get("result"),
+            Some(&serde_json::Value::Null),
+            "Response::A2AResultOpt::result must surface as JSON null \
+             on the miss path — this null-on-wire surface is the \
+             durable contract that lets every CLI consumer \
+             destructure .result across hit and miss without a \
+             shape-shift; adding skip_serializing_if would silently \
+             drop this assertion and the miss path would emit only \
+             kind, breaking the contract",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2AResultOpt must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI single-result-lookup consumer leans \
+             on",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

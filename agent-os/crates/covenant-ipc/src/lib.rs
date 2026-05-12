@@ -4025,6 +4025,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_a2a_auto_retried_serde_pins_single_field_variant() {
+        // Response::A2AAutoRetried is the variant the daemon sends
+        // after Request::A2AAutoRetry runs a bounded scan of stale
+        // leases and reports which were requeued versus skipped (and
+        // why). It carries report: A2AAutoRetryReport, the per-pass
+        // evidence the CLI surfaces (policy, considered count,
+        // requeued list, skipped list) so the operator can confirm
+        // the auto-retry scheduler made meaningful progress. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='a2_a_auto_retried' (the rename_all =
+        // snake_case rule splits A2A on the digit/upper boundary
+        // into 'a2_a_...'; the durable wire form matches the sibling
+        // A2ARepaired/A2ACompacted/A2ATaskQueued pins) plus report.
+        // No prior test pins the exact wire shape, round-trip, or
+        // omission rejection of this variant's required field. The
+        // inner A2AAutoRetryReport shape is pinned by covenant-a2a
+        // tests; this slice locks the outer Response variant shape
+        // only — a minimally constructed report is sufficient to
+        // catch the slug, key set, and default-attribute regressions
+        // on the outer variant.
+        let event = Response::A2AAutoRetried {
+            report: A2AAutoRetryReport::new(A2AAutoRetryPolicy::default()),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "report"],
+            "Response::A2AAutoRetried wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'report' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping A2AAutoRetryReport would either inline \
+             its fields next to 'kind' or nest 'report' one level \
+             deeper — either form silently breaks every CLI consumer \
+             that reads .report.considered, .report.requeued, or \
+             .report.skipped",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_auto_retried")),
+            "Response discriminator slug must be the durable \
+             'a2_a_auto_retried' (rename_all = snake_case splits A2A \
+             on digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies auto-retry \
+             outcomes by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the auto-retry report, \
+             masking whether the scheduler made progress",
+        );
+        assert!(
+            obj.get("report")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::A2AAutoRetried::report must serialize as a \
+             nested JSON object — the inner A2AAutoRetryReport shape \
+             is pinned by covenant-a2a tests; this slice only locks \
+             that report appears as one keyed object under the outer \
+             variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2AAutoRetried must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI auto-retry consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("report");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2AAutoRetried wire form must reject a payload \
+             missing 'report'; a stray #[serde(default)] would let a \
+             malformed row decode with a synthetic default \
+             A2AAutoRetryReport and the CLI would surface a phantom \
+             'no progress' state — a real fetch failure (truncated \
+             frame, partial decode error) would be silently \
+             reclassified as a clean apply where the operator \
+             believes the scheduler scanned zero rows when in fact \
+             the daemon's scheduler ran and the response payload was \
+             corrupted",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

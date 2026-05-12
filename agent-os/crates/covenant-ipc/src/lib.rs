@@ -2539,6 +2539,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_send_a2a_task_serde_pins_struct_typed_single_field_variant() {
+        // Request::SendA2ATask is the operator/agent-driven A2A
+        // enqueue verb the CLI and HTTP gateway send to push an
+        // A2ATask onto the daemon's queued mailbox. It pairs with
+        // Response::A2ATaskQueued (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='send_a2_a_task' plus task. The A2A
+        // snake_case quirk splits the slug into 'send_a2_a_task'
+        // — durable documented form. Distinct from the
+        // already-pinned single-field Request variants which carry
+        // primitives (String/u64/usize/Uuid), this slice locks the
+        // struct-typed outer wire shape: the nested A2ATask must
+        // surface as a JSON object under 'task', not flattened
+        // into the parent and not promoted to a tuple variant.
+        // The inner A2ATask shape is pinned by covenant-a2a tests;
+        // this slice only locks the outer Request variant shape.
+        // A refactor that added #[serde(flatten)] to 'task',
+        // dropped the nesting in favour of a tuple variant, or
+        // rotated the field name would silently break every
+        // CLI/HTTP enqueue caller.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::from_u128(0xA2A_5EE_DE_F00D_CAFE_0000_BABE_BEEF),
+            sender: covenant_types::AgentId::new("alice@local", [1u8; 32]),
+            recipient: covenant_types::AgentId::new("bob@local", [2u8; 32]),
+            intent_text: "fetch papers".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let event = Request::SendA2ATask { task: task.clone() };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "task"],
+            "Request::SendA2ATask wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'task' field. \
+             A refactor that added #[serde(flatten)] to 'task' \
+             would collapse the inner A2ATask fields (id, sender, \
+             recipient, intent_text) into the outer object next \
+             to 'kind' and every CLI/HTTP enqueue caller that \
+             sends {{\"kind\":\"send_a2_a_task\",\"task\":{{...}}}} \
+             would fail to decode — the nested 'task' key would \
+             vanish and the daemon's enqueue verb would go dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("send_a2_a_task")),
+            "Request discriminator slug must be the durable \
+             'send_a2_a_task' (rename_all = snake_case splits the \
+             A2A boundary digit/uppercase into 'a2_a' — this is \
+             the documented form, not a typo). A refactor that \
+             'fixes' the slug to 'send_a2a_task' would silently \
+             route incoming enqueue frames to the daemon's \
+             catch-all error branch and every CLI/HTTP A2A send \
+             path would fail",
+        );
+        let task_value = obj.get("task").expect("'task' key must be present");
+        assert!(
+            task_value.is_object(),
+            "Request::SendA2ATask::task must surface as a nested \
+             JSON object — a refactor that promoted the variant \
+             to a tuple (Request::SendA2ATask(A2ATask)) or that \
+             changed the field to a string-encoded payload would \
+             surface a non-object here; the operator's enqueue \
+             path binds on the nested-object surface and any \
+             other shape silently breaks every CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::SendA2ATask must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP A2A-enqueue consumer leans \
+             on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("task");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::SendA2ATask wire form must reject a payload \
+             missing 'task'; a stray #[serde(default)] would let \
+             a malformed frame decode with A2ATask::default() and \
+             the daemon would enqueue a phantom task with empty \
+             id/sender/recipient/intent_text — every audit-row \
+             attribution for the resulting flow would collapse to \
+             a meaningless default subject and the mailbox would \
+             accumulate ghost rows that operator triage could not \
+             reconcile against a real sender",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

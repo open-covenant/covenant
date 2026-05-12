@@ -1180,6 +1180,86 @@ mod tests {
     }
 
     #[test]
+    fn budget_event_snapshot_serde_pins_five_field_variant() {
+        // BudgetEvent::Snapshot is the synthetic checkpoint event
+        // BudgetLedger::compact_older_than appends before pre-cutoff
+        // Debit events are dropped. Replay overwrites the bucket's
+        // state with these fields, so the dropped debits' net effect
+        // is preserved across compaction. Five required fields plus
+        // the snake_case 'snapshot' discriminator: agent (nested
+        // AgentId), capacity (u64), tokens_remaining (u64),
+        // last_refill_ms (u64), at_ms (u64). A refactor that defaulted
+        // tokens_remaining or last_refill_ms would silently corrupt
+        // the post-compaction bucket state at replay; a default on
+        // capacity would zero out the agent's bucket and every
+        // subsequent dispatch would hit BudgetExhausted.
+        let event = BudgetEvent::Snapshot {
+            agent: agent("alice@host"),
+            capacity: 1500,
+            tokens_remaining: 500,
+            last_refill_ms: 12000,
+            at_ms: 12345,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetEvent serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "agent",
+                "at_ms",
+                "capacity",
+                "last_refill_ms",
+                "tokens_remaining",
+                "type",
+            ],
+            "BudgetEvent::Snapshot wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&json!("snapshot")),
+            "BudgetEvent discriminator slug must be snake_case 'snapshot'; a titlecase or kebab-case regression silently strands every prior JSONL synthetic-checkpoint row at replay time and post-compaction bucket state diverges from the durable history",
+        );
+
+        let agent_obj = obj
+            .get("agent")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent must serialize as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "BudgetEvent::Snapshot::agent must surface the AgentId display+pubkey shape; a refactor that flattened or restructured AgentId would break replay's per-agent checkpoint-to-bucket keying",
+        );
+
+        let back: BudgetEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "BudgetEvent::Snapshot must round-trip through serde_json verbatim — the Eq derive is the contract the post-compaction JSONL replay path leans on",
+        );
+
+        for required in [
+            "agent",
+            "capacity",
+            "tokens_remaining",
+            "last_refill_ms",
+            "at_ms",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetEvent>(serde_json::Value::Object(missing)).is_err(),
+                "BudgetEvent::Snapshot wire form must reject a payload missing {required:?}; a stray #[serde(default)] on tokens_remaining or capacity would zero the bucket at replay and every subsequent dispatch would hit BudgetExhausted, masking replay corruption as policy rejection",
+            );
+        }
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

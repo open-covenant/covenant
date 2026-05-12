@@ -1402,4 +1402,109 @@ mod tests {
         assert_eq!(back.chain, None);
         assert_eq!(back.tx_sig, None);
     }
+
+    #[test]
+    fn memory_record_serde_pins_eight_field_wire_form() {
+        // MemoryRecord is the persisted shape for every SQLite-backed
+        // memory row and the wire form for IPC RecentMemory / HTTP /memory
+        // responses. The struct holds eight fields: id, tier, owner, text,
+        // embedding, metadata, created_at are strictly required, and
+        // parent carries #[serde(default)] with NO #[serde(skip_serializing_if)]
+        // so the wire always emits all eight keys and stale CLIs decode
+        // legacy rows that predate the parent column.
+        let id = Uuid::nil();
+        let other = Uuid::new_v4();
+        let record = MemoryRecord {
+            id,
+            tier: MemoryTier::Working,
+            owner: dummy_id(),
+            text: "note".into(),
+            embedding: vec![1.0, 2.0],
+            metadata: serde_json::json!({"k": "v"}),
+            created_at: 1_700_000_000_000,
+            parent: None,
+        };
+
+        let wire = serde_json::to_value(&record).unwrap();
+        let keys: std::collections::BTreeSet<&str> = wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "id",
+            "tier",
+            "owner",
+            "text",
+            "embedding",
+            "metadata",
+            "created_at",
+            "parent",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "MemoryRecord wire form must be exactly eight keys; a skip_serializing_if on parent would silently drop a key for top-level records and break IPC consumers destructuring on the eight-key shape",
+        );
+        assert!(
+            wire.get("parent").unwrap().is_null(),
+            "parent: None must surface as JSON null (no skip_serializing_if on the Option<Uuid> field)",
+        );
+
+        let with_parent = MemoryRecord {
+            parent: Some(other),
+            ..record.clone()
+        };
+        let parent_wire = serde_json::to_value(&with_parent).unwrap();
+        assert_eq!(
+            parent_wire.get("parent").unwrap(),
+            &serde_json::Value::String(other.to_string()),
+            "parent: Some(uuid) must emit the uuid as a JSON string",
+        );
+
+        // Round-trip pins the PartialEq derive contract on the eight fields.
+        let back: MemoryRecord = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, record);
+
+        // Omitting parent must decode as None — the #[serde(default)] path
+        // is what keeps stale CLI readers compatible with new daemon rows
+        // and what lets legacy SQLite rows (written before the parent
+        // column existed) reopen cleanly.
+        let mut without_parent = wire.as_object().unwrap().clone();
+        without_parent.remove("parent");
+        let legacy: MemoryRecord =
+            serde_json::from_value(serde_json::Value::Object(without_parent)).unwrap();
+        assert_eq!(
+            legacy.parent, None,
+            "omitted parent must decode to None via #[serde(default)] — a dropped attribute strands every legacy memory row",
+        );
+
+        // Each strictly-required field must reject when omitted. Walk the
+        // seven required keys explicitly so a refactor that flips one to
+        // optional is loud at the boundary instead of through a confusing
+        // upstream error.
+        for required in [
+            "id",
+            "tier",
+            "owner",
+            "text",
+            "embedding",
+            "metadata",
+            "created_at",
+        ] {
+            let mut missing = wire.as_object().unwrap().clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MemoryRecord>(serde_json::Value::Object(missing)).is_err(),
+                "MemoryRecord wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Cross-binding sanity: tier on a Working record must serialize to
+        // the lowercase slug "working", matching the contract pinned by
+        // memory_tier_serde_pins_canonical_longterm_and_legacy_aliases.
+        assert_eq!(wire.get("tier").unwrap(), &serde_json::json!("working"));
+    }
 }

@@ -3121,6 +3121,84 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_result_recv_serde_pins_two_key_variant() {
+        // MailboxEvent::ResultRecv is the result-dequeue tombstone the
+        // daemon appends to the JSONL mailbox log after recv_result
+        // pops a task result off the result queue. With #[serde(tag =
+        // "type", rename_all = "snake_case")] on the enum, the wire
+        // object is exactly two keys: type='result_recv' plus task_id
+        // (Uuid). Sister variant TaskRecv is now pinned but ResultRecv
+        // has no enum-level wire-form pin. A refactor that flips the
+        // discriminator slug, renames task_id, or adds #[serde(default)]
+        // to task_id would silently strand every prior JSONL ResultRecv
+        // row at replay — the daemon would rebuild with the result
+        // still appearing queued (the original ResultPosted row survives
+        // but its dequeue tombstone is invisible) and the next
+        // recv_result call would double-deliver a result that was
+        // already consumed upstream of the restart.
+        let event = MailboxEvent::ResultRecv {
+            task_id: Uuid::from_u128(11),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["task_id", "type"],
+            "MailboxEvent::ResultRecv wire form must be exactly two keys: \
+             the single variant field plus the 'type' discriminator. A \
+             refactor that renamed task_id without #[serde(rename = ...)] \
+             would silently fail decode on every prior JSONL ResultRecv \
+             row, the result deque would rebuild with the result still \
+             appearing queued, and the next recv_result call would \
+             double-deliver a result that was already consumed upstream \
+             of the daemon restart",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("result_recv")),
+            "MailboxEvent discriminator slug must be snake_case 'result_recv'; \
+             a refactor that removed rename_all = \"snake_case\" or that \
+             collapsed it onto TaskRecv's 'task_recv' slug would silently \
+             strand every prior ResultRecv tombstone at replay and turn a \
+             single result dequeue into a duplicate-delivery bug across \
+             daemon restart",
+        );
+        assert_eq!(
+            obj.get("task_id").and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(11).to_string().as_str()),
+            "MailboxEvent::ResultRecv::task_id must surface as the Uuid's \
+             hyphenated string form; any representation shift breaks the \
+             cross-event join replay uses to match ResultRecv tombstones \
+             against ResultPosted entries by id",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::ResultRecv must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract the \
+             JsonlMailbox::open replay path joins mailbox events against",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("task_id");
+        assert!(
+            serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
+            "MailboxEvent::ResultRecv wire form must reject a payload \
+             missing task_id; a stray #[serde(default)] would let a \
+             malformed row decode with Uuid::nil() and replay would mark \
+             the nil result as consumed — the real result remains queued \
+             and silently double-delivers while the nil entry shadows \
+             every subsequent ResultRecv targeting the nil id",
+        );
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

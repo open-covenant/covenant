@@ -2450,6 +2450,68 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_tiers_pins_absent_non_array_allow_and_all_requested_must_match() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_tiers(empty, &["short"]),
+            "absent 'tiers' field must allow any requested tiers; otherwise unscoped grants reject every tiered write",
+        );
+        assert!(
+            scope_allows_tiers(empty, &[]),
+            "absent 'tiers' field must allow an empty requested set; the absent-key branch is unconditional",
+        );
+
+        let non_array = serde_json::json!({ "tiers": null });
+        let non_array = non_array.as_object().unwrap();
+        assert!(
+            scope_allows_tiers(non_array, &["short"]),
+            "{{\"tiers\": null}} fails the as_array guard so the helper falls through to allow-all; otherwise null markers silently fail every tier check",
+        );
+
+        let bound = serde_json::json!({ "tiers": ["short", "long"] });
+        let bound = bound.as_object().unwrap();
+        assert!(
+            scope_allows_tiers(bound, &["short"]),
+            "scope tiers=[short,long] must allow requested [short]; a single-tier subset must pass",
+        );
+        assert!(
+            scope_allows_tiers(bound, &["long"]),
+            "scope tiers=[short,long] must allow requested [long]; per-tier subset must pass",
+        );
+        assert!(
+            scope_allows_tiers(bound, &["short", "long"]),
+            "scope tiers=[short,long] must allow the exact requested superset",
+        );
+        assert!(
+            !scope_allows_tiers(bound, &["short", "sensitive"]),
+            "scope tiers=[short,long] must NOT allow requested [short,sensitive] because every requested tier must be allowed; a regression that flipped all() to any() would silently leak writes across tiers",
+        );
+
+        let empty_array = serde_json::json!({ "tiers": [] });
+        let empty_array = empty_array.as_object().unwrap();
+        assert!(
+            scope_allows_tiers(empty_array, &[]),
+            "scope tiers=[] must allow an empty requested set; iter().all() over an empty requested set is vacuously true",
+        );
+        assert!(
+            !scope_allows_tiers(empty_array, &["short"]),
+            "scope tiers=[] must reject any non-empty requested set; the empty allowed array authorizes nothing",
+        );
+
+        let mixed_types = serde_json::json!({ "tiers": ["short", 42, "long"] });
+        let mixed_types = mixed_types.as_object().unwrap();
+        assert!(
+            scope_allows_tiers(mixed_types, &["short", "long"]),
+            "scope tiers=[short, 42, long] must drop the non-string entry via filter_map; requested [short, long] is fully covered by the remaining string entries",
+        );
+        assert!(
+            !scope_allows_tiers(mixed_types, &["42"]),
+            "scope tiers=[short, 42, long] must NOT allow requested [\"42\"]; non-string entries must be dropped before comparison so the integer 42 is not silently coerced to the string \"42\"",
+        );
+    }
+
+    #[test]
     fn scope_allows_token_prefix_pins_absent_null_prefix_match_and_strict_none_path() {
         let empty = serde_json::json!({});
         let empty = empty.as_object().unwrap();

@@ -849,6 +849,99 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_outcome_serde_pins_before_after_skip_empty() {
+        // MemoryRepairOutcome is the wire form returned by every daemon,
+        // HTTP, and CLI memory-repair command, and the same shape lands as
+        // an audit row on disk. before and after each carry
+        // #[serde(default, skip_serializing_if = "Option::is_none")] so
+        // dry-run audit rows that did not capture a snapshot stay compact
+        // and stale CLI parsers that read new-daemon rows omitting the
+        // field decode to None instead of failing.
+        let issuer = AgentId {
+            display: "alice@host".into(),
+            pubkey: [3u8; 32],
+        };
+        let record = MemoryRecord {
+            id: Uuid::nil(),
+            tier: MemoryTier::Working,
+            owner: issuer.clone(),
+            text: "captured snapshot".into(),
+            embedding: vec![],
+            metadata: serde_json::json!({}),
+            created_at: 1_700_000_000_000,
+            parent: None,
+        };
+
+        let none_outcome = MemoryRepairOutcome {
+            id: Uuid::nil(),
+            action: MemoryRepairAction::DetachParent,
+            mode: MemoryRepairMode::DryRun,
+            would_change: true,
+            changed: false,
+            before: None,
+            after: None,
+        };
+        let wire = serde_json::to_value(&none_outcome).unwrap();
+        let obj = wire.as_object().expect("wire form must be a JSON object");
+        assert!(
+            !obj.contains_key("before"),
+            "before=None must be skipped on the wire; a dropped skip_serializing_if doubles audit row bytes",
+        );
+        assert!(
+            !obj.contains_key("after"),
+            "after=None must be skipped on the wire; a dropped skip_serializing_if doubles audit row bytes",
+        );
+
+        let some_outcome = MemoryRepairOutcome {
+            id: Uuid::nil(),
+            action: MemoryRepairAction::DetachParent,
+            mode: MemoryRepairMode::Apply,
+            would_change: true,
+            changed: true,
+            before: Some(record.clone()),
+            after: Some(record.clone()),
+        };
+        let wire = serde_json::to_value(&some_outcome).unwrap();
+        let back: MemoryRepairOutcome = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, some_outcome,
+            "Some(record) before/after must serialize and round-trip verbatim",
+        );
+        assert!(
+            wire.get("before").and_then(|v| v.as_object()).is_some(),
+            "Some(record) before must surface as a JSON object on the wire",
+        );
+        assert!(
+            wire.get("after").and_then(|v| v.as_object()).is_some(),
+            "Some(record) after must surface as a JSON object on the wire",
+        );
+
+        let omitted: MemoryRepairOutcome = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "action": "detach_parent",
+            "mode": "apply",
+            "would_change": true,
+            "changed": false,
+        }))
+        .expect("stale CLI wire form that omits before/after must decode");
+        assert_eq!(omitted.before, None);
+        assert_eq!(omitted.after, None);
+
+        let null_form: MemoryRepairOutcome = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "action": "detach_parent",
+            "mode": "apply",
+            "would_change": true,
+            "changed": false,
+            "before": null,
+            "after": null,
+        }))
+        .expect("explicit-null wire form must decode for older daemons that emitted null instead of skipping");
+        assert_eq!(null_form.before, None);
+        assert_eq!(null_form.after, None);
+    }
+
+    #[test]
     fn memory_repair_mode_serde_pins_snake_case_wire_form() {
         // MemoryRepairMode is the dry_run / apply toggle on every
         // MemoryRepairRequest dispatched through daemon, HTTP, and

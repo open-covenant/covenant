@@ -16,7 +16,7 @@
 //!   covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] [--json]
 //!   covenant capabilities revoke <signature-b58> [--json]
 //!   covenant capabilities purge (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant receipts recent [--limit N] [--json]
+//!   covenant receipts recent [--limit N] [--since-ms <epoch_ms>] [--json]
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
@@ -120,7 +120,9 @@ fn print_usage() {
     eprintln!(
         "  covenant memory repair backfill-provenance <id> --reason TEXT --provenance JSON [--apply]"
     );
-    eprintln!("  covenant receipts recent [-n N] [--json]  list recent settlement receipts");
+    eprintln!(
+        "  covenant receipts recent [-n N] [--since-ms <epoch_ms>] [--json]  list recent settlement receipts"
+    );
     eprintln!("  covenant chain status [--json]          show Solana protocol configuration");
     eprintln!(
         "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
@@ -705,7 +707,14 @@ async fn main() -> Result<()> {
                         other => bail!("unexpected response: {other:?}"),
                     };
 
-                    write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RecentReceipts {
+                            limit,
+                            since_ms: None,
+                        },
+                    )
+                    .await?;
                     let receipts = match read_frame::<_, Response>(&mut stream).await? {
                         Response::Receipts { receipts } => receipts,
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -1147,6 +1156,7 @@ async fn main() -> Result<()> {
             }
             let mut limit: usize = 10;
             let mut as_json = false;
+            let mut since_ms: Option<u64> = None;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -1155,18 +1165,23 @@ async fn main() -> Result<()> {
                         let v = args.get(i).context("--limit needs a value")?;
                         limit = v.parse().context("--limit must be an integer")?;
                     }
+                    "--since-ms" => {
+                        i += 1;
+                        let v = args.get(i).context("--since-ms needs a value")?;
+                        since_ms = Some(v.parse().context("--since-ms must be an integer")?);
+                    }
                     "--json" => as_json = true,
                     other => bail!("unknown flag '{other}'"),
                 }
                 i += 1;
             }
-            write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
+            write_frame(&mut stream, &Request::RecentReceipts { limit, since_ms }).await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::Receipts { receipts } => {
                     if as_json {
                         println!(
                             "{}",
-                            serde_json::to_string(&receipt_list_json(limit, &receipts))?
+                            serde_json::to_string(&receipt_list_json(limit, since_ms, &receipts))?
                         );
                     } else if receipts.is_empty() {
                         println!("(no receipts)");
@@ -2526,10 +2541,15 @@ fn resource_name(resource: ResourceKind) -> &'static str {
     }
 }
 
-fn receipt_list_json(limit: usize, receipts: &[SettlementReceipt]) -> serde_json::Value {
+fn receipt_list_json(
+    limit: usize,
+    since_ms: Option<u64>,
+    receipts: &[SettlementReceipt],
+) -> serde_json::Value {
     serde_json::json!({
         "kind": "receipt_list",
         "limit": limit,
+        "since_ms": since_ms,
         "receipts": receipts,
     })
 }
@@ -3398,9 +3418,11 @@ mod tests {
             confirmed_at: None,
             onchain_sig: None,
         };
-        let value = receipt_list_json(10, &[receipt]);
+        let receipts = [receipt];
+        let value = receipt_list_json(10, Some(1_699_999_999_000), &receipts);
         assert_eq!(value["kind"], "receipt_list");
         assert_eq!(value["limit"], 10);
+        assert_eq!(value["since_ms"], 1_699_999_999_000u64);
         assert_eq!(value["receipts"][0]["payer"]["display"], "payer@local");
         assert_eq!(
             value["receipts"][0]["payer"]["pubkey"],
@@ -3413,6 +3435,9 @@ mod tests {
         );
         assert_eq!(value["receipts"][0]["credits_consumed"], 42);
         assert!(value["receipts"][0]["tx_sig"].is_null());
+
+        let unfiltered = receipt_list_json(10, None, &receipts);
+        assert!(unfiltered["since_ms"].is_null());
     }
 
     #[test]

@@ -173,9 +173,15 @@ async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
         other => panic!("unexpected: {other:?}"),
     }
 
-    write_frame(&mut stream, &Request::RecentReceipts { limit: 5 })
-        .await
-        .unwrap();
+    write_frame(
+        &mut stream,
+        &Request::RecentReceipts {
+            limit: 5,
+            since_ms: None,
+        },
+    )
+    .await
+    .unwrap();
     match read_frame::<_, Response>(&mut stream).await.unwrap() {
         Response::Receipts { receipts } => {
             assert_eq!(receipts.len(), 1);

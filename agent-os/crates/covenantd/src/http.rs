@@ -390,6 +390,7 @@ async fn receipts_recent(
             .respond(
                 Request::RecentReceipts {
                     limit: q.limit.unwrap_or(10),
+                    since_ms: q.since_ms,
                 },
                 &peer,
             )

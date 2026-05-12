@@ -947,7 +947,9 @@ impl Server {
             },
             Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
             Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit, peer).await,
-            Request::RecentReceipts { limit } => self.recent_receipts(limit, peer).await,
+            Request::RecentReceipts { limit, since_ms } => {
+                self.recent_receipts(limit, since_ms, peer).await
+            }
             Request::ChainStatus => self.chain_status(),
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
@@ -3442,7 +3444,19 @@ impl Server {
     /// `SettlementReceipt.payer` is set to the authenticated peer in
     /// `dispatch_intent`, so the filter keys directly off the dispatch
     /// attribution. Compared on the 32-byte pubkey.
-    async fn recent_receipts(&self, limit: usize, peer: &AgentId) -> Response {
+    ///
+    /// `since_ms` drops receipts whose `settled_at` is strictly less
+    /// than the threshold. The store read window is expanded to
+    /// `usize::MAX` when a threshold is set so the predicate applies
+    /// before the final `limit` truncation — otherwise a recent burst
+    /// could push older-but-still-in-window receipts out of the slice
+    /// before the filter sees them.
+    async fn recent_receipts(
+        &self,
+        limit: usize,
+        since_ms: Option<u64>,
+        peer: &AgentId,
+    ) -> Response {
         let check = self
             .check_capabilities("chain:receipts".into(), vec!["chain.receipts".into()], peer)
             .await;
@@ -3493,13 +3507,24 @@ impl Server {
                 };
             }
         };
-        match self.settlement.recent(limit).await {
+        let read_limit = if since_ms.is_some() {
+            usize::MAX
+        } else {
+            limit
+        };
+        match self.settlement.recent(read_limit).await {
             Ok(receipts) => {
-                let receipts = receipts
+                let mut filtered: Vec<SettlementReceipt> = receipts
                     .into_iter()
                     .filter(|r| r.payer.pubkey == peer.pubkey)
                     .filter(|r| chain_receipt_allowed(&scopes, r))
+                    .filter(|r| match since_ms {
+                        Some(threshold) => r.settled_at >= threshold,
+                        None => true,
+                    })
                     .collect();
+                let start = filtered.len().saturating_sub(limit);
+                let receipts = filtered.split_off(start);
                 Response::Receipts { receipts }
             }
             Err(e) => Response::Error {
@@ -9432,7 +9457,12 @@ required = {caps:?}
             .await
             .unwrap();
         grant_action(&s, "chain.receipts").await;
-        let resp = s.op_respond(Request::RecentReceipts { limit: 100 }).await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 100,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::Receipts { receipts } => {
                 assert!(
@@ -9446,6 +9476,79 @@ required = {caps:?}
                 assert!(
                     receipts.iter().any(|r| r.credits_consumed == 3),
                     "operator's own receipt should still be visible"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_since_ms_drops_older_receipts_before_limit() {
+        let s = server_with(vec![], "");
+        let mine = s.identity.agent_id();
+        for (ts, credits) in [
+            (1_000u64, 1u64),
+            (2_000, 2),
+            (3_000, 3),
+            (4_000, 4),
+            (5_000, 5),
+        ] {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: mine.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: None,
+                    credits_consumed: credits,
+                    settled_at: ts,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+        grant_action(&s, "chain.receipts").await;
+
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: Some(3_000),
+            })
+            .await;
+        match resp {
+            Response::Receipts { receipts } => {
+                let timestamps: Vec<u64> = receipts.iter().map(|r| r.settled_at).collect();
+                assert!(
+                    timestamps.iter().all(|ts| *ts >= 3_000),
+                    "since_ms must drop receipts below the threshold: timestamps={timestamps:?}",
+                );
+                assert!(
+                    timestamps.contains(&3_000),
+                    "boundary is inclusive at >=, so the receipt at the threshold must survive: timestamps={timestamps:?}",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let narrow = s
+            .op_respond(Request::RecentReceipts {
+                limit: 1,
+                since_ms: Some(2_000),
+            })
+            .await;
+        match narrow {
+            Response::Receipts { receipts } => {
+                let timestamps: Vec<u64> = receipts.iter().map(|r| r.settled_at).collect();
+                assert_eq!(
+                    timestamps,
+                    vec![5_000],
+                    "since_ms applies before limit truncation so the newest in-window receipt survives a tight --limit, not the oldest: receipts={receipts:?}",
                 );
             }
             other => panic!("unexpected: {other:?}"),
@@ -9471,7 +9574,12 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         };
         let me = s.identity.agent_id();
-        let resp = s.op_respond(Request::RecentReceipts { limit: 10 }).await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::Receipts { receipts } => {
                 assert!(!receipts.is_empty(), "operator should see their own rows");
@@ -9494,7 +9602,12 @@ required = {caps:?}
     #[tokio::test]
     async fn recent_receipts_rejects_without_chain_capability() {
         let s = server_with(vec![], "");
-        let resp = s.op_respond(Request::RecentReceipts { limit: 10 }).await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::Error { message } => assert!(message.contains("chain.receipts")),
             other => panic!("unexpected: {other:?}"),
@@ -9513,7 +9626,12 @@ required = {caps:?}
             }),
         )
         .await;
-        let resp = s.op_respond(Request::RecentReceipts { limit: 2 }).await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 2,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::Error { message } => assert!(message.contains("capability scope")),
             other => panic!("expected scope rejection, got {other:?}"),

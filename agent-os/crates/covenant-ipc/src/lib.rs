@@ -113,6 +113,8 @@ pub enum Request {
     RecentReceipts {
         #[serde(default = "default_recent_limit")]
         limit: usize,
+        #[serde(default)]
+        since_ms: Option<u64>,
     },
     ChainStatus,
     FlushReceipts {

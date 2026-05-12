@@ -127,7 +127,15 @@ async fn live_covenantd_chain_verbs_reject_non_operator_without_grant() {
     //     the operator to grant it explicitly.
     {
         let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
-        match req(&mut stream, Request::RecentReceipts { limit: 10 }).await {
+        match req(
+            &mut stream,
+            Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            },
+        )
+        .await
+        {
             Response::Error { message } => assert!(
                 message.contains("chain.receipts"),
                 "missing-grant chain.receipts must reject by capability gate, got {message:?}"

@@ -192,9 +192,15 @@ required = ["tool.web_search"]
         Response::Memories { records } => assert_eq!(records.len(), 1),
         other => panic!("unexpected: {other:?}"),
     }
-    write_frame(&mut stream, &Request::RecentReceipts { limit: 10 })
-        .await
-        .unwrap();
+    write_frame(
+        &mut stream,
+        &Request::RecentReceipts {
+            limit: 10,
+            since_ms: None,
+        },
+    )
+    .await
+    .unwrap();
     let rec: Response = read_frame(&mut stream).await.unwrap();
     match rec {
         Response::Receipts { receipts } => assert_eq!(receipts.len(), 1),

@@ -3850,6 +3850,179 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_list_peers_serde_pins_three_field_variant() {
+        // Request::ListPeers is the operator/CLI verb for the
+        // operator-triage view of the peer registry. It pairs with
+        // Response::PeerList (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly four top-level
+        // keys: kind='list_peers' plus limit plus pubkey_prefix plus
+        // status_filter.
+        //
+        // limit has #[serde(default = "default_recent_limit")]
+        // returning 10. pubkey_prefix is Option<String> with
+        // #[serde(default)] and NO skip_serializing_if. status_filter
+        // is Option<PeerStatusFilter> with #[serde(default)] and NO
+        // skip_serializing_if. Distinct from the just-pinned
+        // RevokePeer three-field variant — ListPeers has NO required
+        // field, all three are default-tolerant, so a stale CLI
+        // omitting any field still decodes. This pins the all-
+        // default-tolerant variant of the three-field shape.
+        //
+        // This slice locks: the exact wire shape (kind, limit,
+        // pubkey_prefix, status_filter), the snake_case discriminator
+        // 'list_peers', limit=10 on the daemon-default path, null-on-
+        // wire for both Option fields on the unfiltered path, the
+        // populated paths (pubkey_prefix string, status_filter='live'
+        // slug), round-trip for both shapes, and three independent
+        // forward-compat checks (omit limit, omit pubkey_prefix, omit
+        // status_filter).
+        let unfiltered = Request::ListPeers {
+            limit: 10,
+            pubkey_prefix: None,
+            status_filter: None,
+        };
+
+        let wire = serde_json::to_value(&unfiltered).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "pubkey_prefix", "status_filter"],
+            "Request::ListPeers wire form must be exactly four \
+             top-level keys: 'kind' plus the three variant fields \
+             ('limit', 'pubkey_prefix', 'status_filter'). A refactor \
+             that added #[serde(skip_serializing_if = \
+             \"Option::is_none\")] to either Option field would \
+             shrink the unfiltered wire form from four keys to three \
+             or two and silently break CLI/HTTP consumers that \
+             switch on key presence to distinguish unfiltered-vs-\
+             filtered triage pages",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("list_peers")),
+            "Request discriminator slug must be the durable \
+             'list_peers'. A refactor that renamed the variant \
+             (e.g., PeersList for surface parity with the response \
+             slug 'peer_list') would shift the slug and the post-\
+             incident operator triage path goes dark through the \
+             supported path",
+        );
+        assert_eq!(
+            obj.get("limit"),
+            Some(&serde_json::json!(10)),
+            "Request::ListPeers::limit must surface as a JSON \
+             number; a refactor that promoted limit to a string or \
+             enum would silently mismatch every CLI/HTTP caller \
+             that sends a numeric usize page size",
+        );
+        assert_eq!(
+            obj.get("pubkey_prefix"),
+            Some(&serde_json::Value::Null),
+            "Request::ListPeers::pubkey_prefix must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+        assert_eq!(
+            obj.get("status_filter"),
+            Some(&serde_json::Value::Null),
+            "Request::ListPeers::status_filter must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the unfiltered wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, unfiltered,
+            "Request::ListPeers (unfiltered) must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract every CLI/HTTP list-peers consumer leans \
+             on",
+        );
+
+        let filtered = Request::ListPeers {
+            limit: 25,
+            pubkey_prefix: Some("5x".into()),
+            status_filter: Some(covenant_peer_auth::PeerStatusFilter::Live),
+        };
+        let filtered_wire = serde_json::to_value(&filtered).unwrap();
+        let filtered_obj = filtered_wire.as_object().unwrap();
+        assert_eq!(
+            filtered_obj.get("pubkey_prefix"),
+            Some(&serde_json::json!("5x")),
+            "populated pubkey_prefix must round-trip as a JSON \
+             string matching the input; the four-key shape stays \
+             stable across unfiltered and filtered",
+        );
+        assert_eq!(
+            filtered_obj
+                .get("status_filter")
+                .and_then(serde_json::Value::as_str),
+            Some("live"),
+            "populated status_filter must round-trip as the durable \
+             lowercase slug 'live' (rename_all = \"snake_case\" on \
+             PeerStatusFilter); the four-key shape stays stable \
+             across unfiltered and filtered",
+        );
+        let filtered_back: Request = serde_json::from_value(filtered_wire.clone()).unwrap();
+        assert_eq!(
+            filtered_back, filtered,
+            "Request::ListPeers (filtered) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_limit = obj.clone();
+        missing_limit.remove("limit");
+        let parsed_no_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_limit)).unwrap();
+        assert_eq!(
+            parsed_no_limit, unfiltered,
+            "Request::ListPeers wire form must accept a payload \
+             missing 'limit' (decodes as 10 via \
+             default_recent_limit); a refactor that dropped the \
+             default would silently break stale CLIs that omit \
+             limit, returning an empty page where operators expect \
+             the latest registry entries",
+        );
+
+        let mut missing_pubkey_prefix = obj.clone();
+        missing_pubkey_prefix.remove("pubkey_prefix");
+        let parsed_no_pubkey_prefix: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_pubkey_prefix)).unwrap();
+        assert_eq!(
+            parsed_no_pubkey_prefix, unfiltered,
+            "Request::ListPeers wire form must accept a payload \
+             missing 'pubkey_prefix' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the prefix filter",
+        );
+
+        let mut missing_status_filter = obj.clone();
+        missing_status_filter.remove("status_filter");
+        let parsed_no_status_filter: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_status_filter)).unwrap();
+        assert_eq!(
+            parsed_no_status_filter, unfiltered,
+            "Request::ListPeers wire form must accept a payload \
+             missing 'status_filter' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             documented forward-compatibility contract — a stale \
+             CLI built before the status filter landed sends frames \
+             without it and the new daemon surfaces both live and \
+             revoked rows",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

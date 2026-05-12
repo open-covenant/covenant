@@ -351,6 +351,7 @@ async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
             Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             },
         )
         .await
@@ -372,6 +373,7 @@ async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
         Request::A2AQueue {
             limit: 10,
             min_lease_age_ms: None,
+            deadline_within_ms: None,
         },
     )
     .await
@@ -619,6 +621,7 @@ async fn live_covenantd_a2a_repair_rejects_peer_mismatched_delegation() {
             Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             },
         )
         .await
@@ -683,6 +686,7 @@ async fn live_covenantd_a2a_repair_rejects_peer_mismatched_delegation() {
             Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             },
         )
         .await

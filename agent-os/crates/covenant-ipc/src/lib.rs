@@ -207,11 +207,22 @@ pub enum Request {
     /// Inspect queued and in-flight A2A tasks plus pending results.
     /// In-flight tasks have been leased to a recipient and will not be
     /// redelivered automatically after restart.
+    ///
+    /// `deadline_within_ms` narrows the visible task set to entries
+    /// whose `task.deadline_ms` is set AND falls within the next N ms
+    /// from the daemon's clock — i.e., urgent or already-past-due
+    /// tasks. Entries without a deadline are dropped so the operator
+    /// can triage by remaining time without scraping the JSON. The
+    /// field is `#[serde(default)]` so a stale CLI built before the
+    /// filter landed sends frames without it; the new daemon parses
+    /// them as `None`, which is the pre-filter behaviour.
     A2AQueue {
         #[serde(default = "default_recent_limit")]
         limit: usize,
         #[serde(default)]
         min_lease_age_ms: Option<u64>,
+        #[serde(default)]
+        deadline_within_ms: Option<u64>,
     },
     /// Manually repair an in-flight A2A lease. The daemon enforces
     /// visibility, capability, and audit rules before delegating to the

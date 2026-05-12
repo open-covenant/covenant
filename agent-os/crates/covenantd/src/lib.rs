@@ -444,6 +444,26 @@ fn a2a_entry_matches_min_lease_age(
         .unwrap_or(false)
 }
 
+/// `--deadline-within-ms <N>` filter. Returns true when `N` is unset
+/// (no filter), otherwise keeps only entries whose `task.deadline_ms`
+/// is `Some(d)` and `d <= now_ms + N`. Tasks without a deadline are
+/// always dropped under an active filter so the operator can triage
+/// by remaining time without scraping the JSON for `deadline_ms !=
+/// null`. Saturating addition keeps an oversized `N` from wrapping.
+fn a2a_entry_matches_deadline_within(
+    entry: &covenant_a2a::A2ATaskQueueEntry,
+    deadline_within_ms: Option<u64>,
+    now_ms: u64,
+) -> bool {
+    let Some(window) = deadline_within_ms else {
+        return true;
+    };
+    let Some(deadline) = entry.task.deadline_ms else {
+        return false;
+    };
+    deadline <= now_ms.saturating_add(window)
+}
+
 /// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
 /// registry entries match the operator's prefix, the daemon returns the
 /// first `PEER_MATCH_LIMIT` summaries plus `truncated: true` so the
@@ -952,7 +972,11 @@ impl Server {
             Request::A2AQueue {
                 limit,
                 min_lease_age_ms,
-            } => self.a2a_queue(limit, min_lease_age_ms, peer).await,
+                deadline_within_ms,
+            } => {
+                self.a2a_queue(limit, min_lease_age_ms, deadline_within_ms, peer)
+                    .await
+            }
             Request::RepairA2ATask { request } => self.repair_a2a_task(request, peer).await,
             Request::RetryA2AStale { policy } => self.retry_a2a_stale(policy, peer).await,
             Request::CompactA2A => self.compact_a2a(peer).await,
@@ -1333,9 +1357,10 @@ impl Server {
         &self,
         limit: usize,
         min_lease_age_ms: Option<u64>,
+        deadline_within_ms: Option<u64>,
         peer: &AgentId,
     ) -> Response {
-        let task_limit = if min_lease_age_ms.is_some() {
+        let task_limit = if min_lease_age_ms.is_some() || deadline_within_ms.is_some() {
             usize::MAX
         } else {
             limit
@@ -1346,6 +1371,9 @@ impl Server {
                 .into_iter()
                 .filter(|entry| a2a_entry_visible_to_peer(entry, peer))
                 .filter(|entry| a2a_entry_matches_min_lease_age(entry, min_lease_age_ms, now_ms))
+                .filter(|entry| {
+                    a2a_entry_matches_deadline_within(entry, deadline_within_ms, now_ms)
+                })
                 .take(limit)
                 .collect(),
             Err(e) => {
@@ -6754,6 +6782,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await;
         match queue {
@@ -6771,6 +6800,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: Some(0),
+                deadline_within_ms: None,
             })
             .await;
         match queue {
@@ -6834,6 +6864,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: Some(u64::MAX),
+                deadline_within_ms: None,
             })
             .await;
         match queue {
@@ -6875,6 +6906,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await;
         match queue {
@@ -6934,6 +6966,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7025,6 +7058,7 @@ required = {caps:?}
                 Request::A2AQueue {
                     limit: 10,
                     min_lease_age_ms: None,
+                    deadline_within_ms: None,
                 },
                 &delegate,
             )
@@ -7074,6 +7108,7 @@ required = {caps:?}
                 Request::A2AQueue {
                     limit: 10,
                     min_lease_age_ms: None,
+                    deadline_within_ms: None,
                 },
                 &delegate,
             )
@@ -7138,6 +7173,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7169,6 +7205,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7239,6 +7276,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7309,6 +7347,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7485,6 +7524,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {
@@ -7557,6 +7597,7 @@ required = {caps:?}
             .op_respond(Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             })
             .await
         {

@@ -31,7 +31,15 @@ covenant a2a status --min-lease-age-ms 300000 --json
 
 HTTP exposes the same discovery-only filter through `GET /a2a/queue?min_lease_age_ms=300000`. IPC callers pass `min_lease_age_ms` on `A2AQueue`.
 
-The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_age_ms`, `tasks`, and `results`. The stale-lease filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
+Operators can also narrow by deadline urgency with `--deadline-within-ms`:
+
+```bash
+covenant a2a status --deadline-within-ms 60000 --json
+```
+
+This keeps only tasks whose `deadline_ms` is set and within at most N ms from the daemon's clock — i.e., already-past-due or about-to-expire tasks. Tasks without a `deadline_ms` are dropped under an active deadline filter so the operator can triage by remaining time without scraping the JSON for `deadline_ms != null`. HTTP and IPC accept the same filter as `deadline_within_ms` on `A2AQueue` and `GET /a2a/queue?deadline_within_ms=60000`. Combining both filters applies them conjunctively.
+
+The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_age_ms`, `deadline_within_ms`, `tasks`, and `results`. The stale-lease filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
 
 ## Result Contract
 

@@ -27,7 +27,7 @@
 //!   covenant audit recent [--limit N] [--json]
 //!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--json]
+//!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a retry-stale [--enable] [--min-lease-age-ms N] [--max-attempts N] [--max-requeues N] [--scan-limit N] [--json]
@@ -146,7 +146,7 @@ fn print_usage() {
         "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant a2a status [-n N] [--min-lease-age-ms N] [--json]  list queued tasks, in-flight leases, and pending results"
+        "  covenant a2a status [-n N] [--min-lease-age-ms N] [--deadline-within-ms N] [--json]  list queued tasks, in-flight leases, and pending results; --deadline-within-ms N keeps only tasks whose deadline_ms is set and within at most N ms from now"
     );
     eprintln!(
         "  covenant a2a requeue <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted [--lease-id UUID]"
@@ -1592,6 +1592,7 @@ async fn main() -> Result<()> {
                 "status" => {
                     let mut limit: usize = 10;
                     let mut min_lease_age_ms: Option<u64> = None;
+                    let mut deadline_within_ms: Option<u64> = None;
                     let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
@@ -1608,6 +1609,15 @@ async fn main() -> Result<()> {
                                     v.parse().context("--min-lease-age-ms must be an integer")?,
                                 );
                             }
+                            "--deadline-within-ms" => {
+                                i += 1;
+                                let v =
+                                    args.get(i).context("--deadline-within-ms needs a value")?;
+                                deadline_within_ms = Some(
+                                    v.parse()
+                                        .context("--deadline-within-ms must be an integer")?,
+                                );
+                            }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
@@ -1618,6 +1628,7 @@ async fn main() -> Result<()> {
                         &Request::A2AQueue {
                             limit,
                             min_lease_age_ms,
+                            deadline_within_ms,
                         },
                     )
                     .await?;
@@ -1629,6 +1640,7 @@ async fn main() -> Result<()> {
                                     serde_json::to_string(&a2a_status_json(
                                         limit,
                                         min_lease_age_ms,
+                                        deadline_within_ms,
                                         &tasks,
                                         &results
                                     ))?
@@ -2765,6 +2777,7 @@ fn flush_receipts_json(
 fn a2a_status_json(
     limit: usize,
     min_lease_age_ms: Option<u64>,
+    deadline_within_ms: Option<u64>,
     tasks: &[A2ATaskQueueEntry],
     results: &[A2ATaskResult],
 ) -> serde_json::Value {
@@ -2772,6 +2785,7 @@ fn a2a_status_json(
         "kind": "a2a_status",
         "limit": limit,
         "min_lease_age_ms": min_lease_age_ms,
+        "deadline_within_ms": deadline_within_ms,
         "tasks": tasks,
         "results": results,
     })
@@ -3875,13 +3889,22 @@ mod tests {
             attempt: 0,
         };
         let result = A2ATaskResult::ok(task_id, vec![]);
-        let value = a2a_status_json(5, Some(300_000), &[entry], &[result]);
+        let value = a2a_status_json(5, Some(300_000), Some(60_000), &[entry], &[result]);
         assert_eq!(value["kind"], "a2a_status");
         assert_eq!(value["limit"], 5);
         assert_eq!(value["min_lease_age_ms"], 300_000);
+        assert_eq!(value["deadline_within_ms"], 60_000);
         assert_eq!(value["tasks"][0]["state"], "queued");
         assert_eq!(value["tasks"][0]["task"]["intent_text"], "status probe");
         assert_eq!(value["results"][0]["status"], "ok");
+    }
+
+    #[test]
+    fn a2a_status_json_omits_deadline_filter_when_inactive() {
+        let value = a2a_status_json(5, None, None, &[], &[]);
+        assert_eq!(value["kind"], "a2a_status");
+        assert!(value["min_lease_age_ms"].is_null());
+        assert!(value["deadline_within_ms"].is_null());
     }
 
     #[test]

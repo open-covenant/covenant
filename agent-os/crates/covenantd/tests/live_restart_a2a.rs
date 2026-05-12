@@ -231,6 +231,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
             Request::A2AQueue {
                 limit: 10,
                 min_lease_age_ms: None,
+                deadline_within_ms: None,
             },
         )
         .await

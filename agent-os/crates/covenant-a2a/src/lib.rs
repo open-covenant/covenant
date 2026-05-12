@@ -1732,6 +1732,65 @@ mod tests {
     }
 
     #[test]
+    fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
+        // Baseline: kind=None, idempotency=None is the legacy shape and
+        // must validate so older senders keep working.
+        assert!(validate_task(&dummy_task()).is_ok());
+
+        // task_kind=Some(empty) → InvalidTask. An all-whitespace kind
+        // must be rejected identically so the check cannot be silently
+        // bypassed by typing spaces into the field.
+        for empty in ["", "   "] {
+            let mut t = dummy_task();
+            t.task_kind = Some(empty.into());
+            let err = validate_task(&t).unwrap_err();
+            match err {
+                A2AError::InvalidTask(message) => assert!(
+                    message.contains("task_kind must not be empty when present"),
+                    "unexpected InvalidTask payload: {message:?}",
+                ),
+                other => panic!("expected InvalidTask, got {other:?}"),
+            }
+        }
+
+        // task_kind=Some(non-empty) validates Ok. A regression that
+        // inverted the trim().is_empty() check would block every
+        // explicit kind metadata send, so pin the accept path too.
+        let mut kind_ok = dummy_task();
+        kind_ok.task_kind = Some("research.lookup".into());
+        assert!(validate_task(&kind_ok).is_ok());
+
+        // idempotency present with empty/whitespace key → InvalidTask.
+        // The check must run regardless of duplicate_safety so an
+        // Unsafe-tagged send with an empty key still fails fast instead
+        // of silently producing zero-byte cache keys in receivers that
+        // later upgrade the tag.
+        for empty in ["", "   "] {
+            for safety in [A2ADuplicateSafety::Idempotent, A2ADuplicateSafety::Unsafe] {
+                let mut t = dummy_task();
+                t.idempotency = Some(A2AIdempotency::new(safety, empty));
+                let err = validate_task(&t).unwrap_err();
+                match err {
+                    A2AError::InvalidTask(message) => assert!(
+                        message.contains("idempotency key must not be empty"),
+                        "unexpected InvalidTask payload: {message:?}",
+                    ),
+                    other => panic!("expected InvalidTask, got {other:?}"),
+                }
+            }
+        }
+
+        // idempotency present with non-empty key → Ok regardless of
+        // duplicate_safety; idempotency_cache_key handles the
+        // Unsafe-vs-Idempotent caching decision separately.
+        for safety in [A2ADuplicateSafety::Idempotent, A2ADuplicateSafety::Unsafe] {
+            let mut t = dummy_task();
+            t.idempotency = Some(A2AIdempotency::new(safety, "k"));
+            assert!(validate_task(&t).is_ok());
+        }
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

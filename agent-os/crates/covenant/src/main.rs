@@ -4061,6 +4061,58 @@ mod tests {
     }
 
     #[test]
+    fn a2a_retry_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "report"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("a2a_retry_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "a2a_retry_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("a2a_auto_retry"));
+            assert!(
+                value["report"].is_object(),
+                "report must be a structured object, not a string blob: {value}",
+            );
+        }
+
+        let policy = A2AAutoRetryPolicy {
+            enabled: true,
+            min_lease_age_ms: 300_000,
+            max_attempts: 3,
+            max_requeues: 1,
+            scan_limit: 100,
+        };
+
+        let mut populated = A2AAutoRetryReport::new(policy.clone());
+        populated.considered = 2;
+        populated.requeued.push(covenant_a2a::A2AAutoRetryRequeued {
+            task_id: uuid::Uuid::nil(),
+            lease_id: uuid::Uuid::nil(),
+            attempt: 1,
+            idempotency_key: "task:key".into(),
+        });
+        populated.skipped.push(covenant_a2a::A2AAutoRetrySkipped {
+            task_id: uuid::Uuid::nil(),
+            reason: covenant_a2a::A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+            attempt: 1,
+            lease_age_ms: Some(300_000),
+        });
+        assert_shape(&a2a_retry_json(&populated));
+
+        let zero = A2AAutoRetryReport::new(policy);
+        assert_shape(&a2a_retry_json(&zero));
+    }
+
+    #[test]
     fn audit_purge_json_renders_stable_shape() {
         let value = audit_purge_json(1_700_000_000_000, 3);
         assert_eq!(value["kind"], "audit_purged");

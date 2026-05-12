@@ -497,7 +497,14 @@ pub async fn recent_receipts(home: &Path, limit: usize) -> Result<ReceiptsFetchO
         }
     }
     let limit = limit.min(RECENT_RECEIPTS_LIMIT_CAP);
-    write_frame(&mut stream, &Request::RecentReceipts { limit }).await?;
+    write_frame(
+        &mut stream,
+        &Request::RecentReceipts {
+            limit,
+            since_ms: None,
+        },
+    )
+    .await?;
     match read_frame::<_, Response>(&mut stream).await? {
         Response::Receipts { receipts } => Ok(ReceiptsFetchOutcome::Fetched { receipts }),
         Response::Error { message } => Ok(ReceiptsFetchOutcome::Failed { message }),

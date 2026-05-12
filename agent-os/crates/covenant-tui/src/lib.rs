@@ -191,6 +191,20 @@ pub const HELP_BINDINGS: &[(&str, &str)] = &[
     ("q", "quit"),
 ];
 
+/// Title rendered above the peers-tail panel. The truncated branch
+/// suffixes "(truncated)" so an operator inspecting a short-result
+/// list can tell the daemon dropped rows past `limit` apart from a
+/// genuinely small peer set. Kept as a `&'static str` so a regression
+/// that drops the truncated marker fails the corresponding unit test
+/// instead of only surfacing under live screenshot review.
+pub fn peers_tail_title(truncated: bool) -> &'static str {
+    if truncated {
+        "peers — q / Esc to dismiss (truncated)"
+    } else {
+        "peers — q / Esc to dismiss"
+    }
+}
+
 /// Top-level TUI state. Screens are added by future slices.
 #[derive(Debug, Default)]
 pub struct App {
@@ -809,6 +823,24 @@ mod tests {
         assert_eq!(app.exit_reason(), None);
         assert_eq!(app.mode(), &Mode::Browsing);
         assert!(app.drafts().is_empty());
+    }
+
+    #[test]
+    fn peers_tail_title_truncated_true_renders_truncated_suffix() {
+        assert_eq!(
+            peers_tail_title(true),
+            "peers — q / Esc to dismiss (truncated)",
+            "the truncated branch must suffix '(truncated)' so an operator can distinguish a dropped-row result from a genuinely short peer set",
+        );
+    }
+
+    #[test]
+    fn peers_tail_title_truncated_false_omits_truncated_suffix() {
+        assert_eq!(
+            peers_tail_title(false),
+            "peers — q / Esc to dismiss",
+            "the non-truncated branch must omit '(truncated)' so the operator does not misread a complete result as a partial one",
+        );
     }
 
     #[test]

@@ -646,11 +646,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App, home: &std::path::Path) {
             truncated,
             error,
         } => {
-            let title = if *truncated {
-                "peers — q / Esc to dismiss (truncated)"
-            } else {
-                "peers — q / Esc to dismiss"
-            };
+            let title = covenant_tui::peers_tail_title(*truncated);
             let header = Paragraph::new(title)
                 .block(Block::default().borders(Borders::ALL).title("covenant"));
             frame.render_widget(header, layout[0]);

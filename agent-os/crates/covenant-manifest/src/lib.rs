@@ -574,6 +574,97 @@ entry = "x.f90"
     }
 
     #[test]
+    fn sandbox_section_serde_pins_three_default_bearing_fields() {
+        // Sandbox is the [sandbox] block in agent.toml with three
+        // fields — required (bool), backend (SandboxBackend),
+        // filesystem (FilesystemPolicy) — backed by a custom Default
+        // impl that returns (false, TrustedLocal, ReadOnlyPackage). The
+        // struct carries #[serde(default)] so omitted fields fall back
+        // to the impl's values.
+        //
+        // A refactor that changed Sandbox::default().required from
+        // false to true would silently require every agent.toml without
+        // an explicit [sandbox] block to satisfy the sandbox-grade-
+        // backend cross-check — but since the default backend is
+        // TrustedLocal, every untouched deployment would fail validation
+        // at manifest load with no migration path.
+        let agent_block = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#;
+
+        // Full override — sandbox.required=true requires a sandbox-grade
+        // backend; pin the matched pair so the validation cross-check
+        // does not fire here.
+        let full = format!(
+            "{agent_block}\n[sandbox]\nrequired = true\nbackend = \"linux-gvisor\"\nfilesystem = \"ephemeral\"\n"
+        );
+        let parsed = Manifest::parse(&full).expect("full sandbox block must parse");
+        assert!(parsed.sandbox.required);
+        assert_eq!(parsed.sandbox.backend, SandboxBackend::LinuxGvisor);
+        assert_eq!(parsed.sandbox.filesystem, FilesystemPolicy::Ephemeral);
+
+        // Section omitted entirely → Default impl values surface.
+        let omitted = Manifest::parse(agent_block).expect("manifest without [sandbox] must parse");
+        assert!(
+            !omitted.sandbox.required,
+            "Sandbox::required default must be false — a refactor to true \
+             would silently require every untouched agent.toml to satisfy \
+             the sandbox-grade backend check, but since the default \
+             backend is TrustedLocal the cross-check fires and every \
+             deployment breaks at manifest load"
+        );
+        assert_eq!(
+            omitted.sandbox.backend,
+            SandboxBackend::TrustedLocal,
+            "Sandbox::backend default must be TrustedLocal — a refactor \
+             to LinuxGvisor would silently route every untouched agent.\
+             toml through the gVisor runner, breaking operator \
+             deployments without a gVisor host"
+        );
+        assert_eq!(
+            omitted.sandbox.filesystem,
+            FilesystemPolicy::ReadOnlyPackage,
+            "Sandbox::filesystem default must be ReadOnlyPackage — a \
+             refactor to Host would silently widen every untouched \
+             agent's filesystem access to the host"
+        );
+
+        // Partial overrides — each field's omission must fall through to
+        // the default WITHOUT disturbing the others. Use safe non-default
+        // combinations that still satisfy the sandbox-grade cross-check
+        // (required=true with default TrustedLocal backend would fail
+        // validation, so we either keep required=false or pair true with
+        // linux-gvisor).
+        let only_filesystem = format!("{agent_block}\n[sandbox]\nfilesystem = \"host\"\n");
+        let parsed = Manifest::parse(&only_filesystem).unwrap();
+        assert!(!parsed.sandbox.required);
+        assert_eq!(parsed.sandbox.backend, SandboxBackend::TrustedLocal);
+        assert_eq!(parsed.sandbox.filesystem, FilesystemPolicy::Host);
+
+        let only_backend = format!("{agent_block}\n[sandbox]\nbackend = \"linux-gvisor\"\n");
+        let parsed = Manifest::parse(&only_backend).unwrap();
+        assert!(!parsed.sandbox.required);
+        assert_eq!(parsed.sandbox.backend, SandboxBackend::LinuxGvisor);
+        assert_eq!(parsed.sandbox.filesystem, FilesystemPolicy::ReadOnlyPackage);
+
+        // required=true requires backend=linux-gvisor per the validation
+        // cross-check; pair them and assert filesystem retains its
+        // default so the contract is locked even when the cross-check
+        // forces backend to be non-default.
+        let required_with_gvisor =
+            format!("{agent_block}\n[sandbox]\nrequired = true\nbackend = \"linux-gvisor\"\n");
+        let parsed = Manifest::parse(&required_with_gvisor).unwrap();
+        assert!(parsed.sandbox.required);
+        assert_eq!(parsed.sandbox.backend, SandboxBackend::LinuxGvisor);
+        assert_eq!(parsed.sandbox.filesystem, FilesystemPolicy::ReadOnlyPackage);
+    }
+
+    #[test]
     fn resources_section_serde_pins_four_default_bearing_fields() {
         // Resources is the [resources] block in agent.toml with four
         // fields — cpu_ms_per_task, memory_mb, disk_mb, network — each

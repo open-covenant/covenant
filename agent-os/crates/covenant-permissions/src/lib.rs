@@ -1985,6 +1985,37 @@ mod tests {
     }
 
     #[test]
+    fn a2a_scope_allows_pins_duplicate_risk_underscore_dash_normalization() {
+        let underscore_scope =
+            serde_json::json!({ "version": 1, "duplicate_risk": "operator_accepted" });
+        let dash_actual = A2aScopeRequest {
+            duplicate_risk: Some("operator-accepted"),
+            ..A2aScopeRequest::default()
+        };
+        assert!(a2a_scope_allows(
+            "a2a.requeue",
+            &underscore_scope,
+            "a2a.requeue",
+            dash_actual
+        )
+        .unwrap());
+
+        let dash_scope =
+            serde_json::json!({ "version": 1, "duplicate_risk": "operator-accepted" });
+        let underscore_actual = A2aScopeRequest {
+            duplicate_risk: Some("operator_accepted"),
+            ..A2aScopeRequest::default()
+        };
+        assert!(a2a_scope_allows(
+            "a2a.requeue",
+            &dash_scope,
+            "a2a.requeue",
+            underscore_actual
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn peer_scope_allows_peer_token_force_and_cutoff_predicates() {
         let peer_pubkey_b58 = bs58::encode([1u8; 32]).into_string();
         let scope = serde_json::json!({

@@ -2642,6 +2642,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_post_a2a_result_serde_pins_struct_typed_single_field_variant() {
+        // Request::PostA2AResult is the agent-driven A2A
+        // result-posting verb the CLI and HTTP gateway send to
+        // push an A2ATaskResult back to the daemon for queue
+        // consumers. It pairs with Response::A2AResultPosted
+        // (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='post_a2_a_result' plus result. The A2A
+        // snake_case quirk splits the slug into 'post_a2_a_result'
+        // — durable documented form. This is the structural pair
+        // to the just-pinned Request::SendA2ATask: same
+        // struct-typed single-field shape, different inner type
+        // (A2ATaskResult instead of A2ATask) and different slug.
+        // The nested result must surface as a JSON object under
+        // 'result', not flattened into the parent. The inner
+        // A2ATaskResult shape is pinned by covenant-a2a tests;
+        // this slice only locks the outer Request variant shape.
+        let task_id = Uuid::from_u128(0xC0DE_F00D_BEEF_CAFE_1234_5678_9ABC_DEF0);
+        let result = covenant_a2a::A2ATaskResult::ok(task_id, vec![]);
+        let event = Request::PostA2AResult {
+            result: result.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "result"],
+            "Request::PostA2AResult wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'result' \
+             field. A refactor that added #[serde(flatten)] to \
+             'result' would collapse the inner A2ATaskResult \
+             fields (task_id, status, content, error_message) \
+             into the outer object next to 'kind' and every \
+             CLI/HTTP result-post caller that sends \
+             {{\"kind\":\"post_a2_a_result\",\"result\":{{...}}}} \
+             would fail to decode — the nested 'result' key would \
+             vanish and the daemon's result-receive verb would go \
+             dark through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("post_a2_a_result")),
+            "Request discriminator slug must be the durable \
+             'post_a2_a_result' (rename_all = snake_case splits \
+             the A2A boundary digit/uppercase into 'a2_a' — this \
+             is the documented form, not a typo). A refactor that \
+             'fixes' the slug to 'post_a2a_result' would silently \
+             route incoming result frames to the daemon's \
+             catch-all error branch — every CLI/HTTP A2A \
+             result-post fails and queued tasks never resolve \
+             through the supported path",
+        );
+        let result_value = obj.get("result").expect("'result' key must be present");
+        assert!(
+            result_value.is_object(),
+            "Request::PostA2AResult::result must surface as a \
+             nested JSON object — a refactor that promoted the \
+             variant to a tuple (Request::PostA2AResult(A2ATaskResult)) \
+             or that changed the field to a string-encoded \
+             payload would surface a non-object here; the \
+             daemon's result-receive path binds on the \
+             nested-object surface and any other shape silently \
+             breaks every CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::PostA2AResult must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP A2A result-post consumer \
+             leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("result");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::PostA2AResult wire form must reject a \
+             payload missing 'result'; a stray #[serde(default)] \
+             would let a malformed frame decode with \
+             A2ATaskResult::default() and the daemon would record \
+             a phantom result with empty task_id/status/content — \
+             every audit-row attribution for the resulting \
+             completion would collapse to a meaningless default \
+             subject and queue consumers may never see the real \
+             result they were waiting on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

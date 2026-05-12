@@ -2087,6 +2087,104 @@ mod tests {
     }
 
     #[test]
+    fn a2a_repair_outcome_serde_pins_four_required_and_result_skip_empty() {
+        // A2ARepairOutcome is the audit row every A2A repair flow
+        // returns. Four strictly required fields — task_id, action,
+        // state, attempt — plus an optional result that carries
+        // #[serde(default, skip_serializing_if = "Option::is_none")].
+        // Dropping skip_serializing_if would emit "result": null on
+        // every queued (not-yet-resolved) repair row and silently
+        // inflate the size of audit dashboards that count rows with a
+        // result. Dropping #[serde(default)] would refuse to decode any
+        // historical row that omitted result. Renaming attempt would
+        // silently bisect the retry-counter column. Pin the shape on
+        // both the None and Some paths, the per-required-field reject
+        // loop, the omitted-result decode, and the cross-binding to the
+        // snake_case action/state slugs already pinned by the sibling
+        // enum tests.
+        let none_outcome = A2ARepairOutcome {
+            task_id: Uuid::nil(),
+            action: A2ARepairAction::Requeued,
+            state: A2ARepairState::Queued,
+            attempt: 1,
+            result: None,
+        };
+
+        let none_wire = serde_json::to_value(&none_outcome).unwrap();
+        let none_obj = none_wire
+            .as_object()
+            .expect("A2ARepairOutcome serialises as a JSON object");
+        let none_keys: std::collections::BTreeSet<&str> =
+            none_obj.keys().map(String::as_str).collect();
+        let four: std::collections::BTreeSet<&str> = ["task_id", "action", "state", "attempt"]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            none_keys, four,
+            "A2ARepairOutcome with result=None must be exactly four keys; \
+             dropping skip_serializing_if would silently emit result: null \
+             on every queued repair row",
+        );
+        assert_eq!(none_obj.get("action"), Some(&serde_json::json!("requeued")));
+        assert_eq!(none_obj.get("state"), Some(&serde_json::json!("queued")));
+
+        let some_outcome = A2ARepairOutcome {
+            task_id: Uuid::nil(),
+            action: A2ARepairAction::Requeued,
+            state: A2ARepairState::Queued,
+            attempt: 1,
+            result: Some(A2ATaskResult {
+                task_id: Uuid::nil(),
+                status: A2ATaskStatus::Error,
+                content: vec![],
+                error_message: Some("boom".into()),
+            }),
+        };
+
+        let some_wire = serde_json::to_value(&some_outcome).unwrap();
+        let some_obj = some_wire.as_object().unwrap();
+        let some_keys: std::collections::BTreeSet<&str> =
+            some_obj.keys().map(String::as_str).collect();
+        let five: std::collections::BTreeSet<&str> =
+            ["task_id", "action", "state", "attempt", "result"]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            some_keys, five,
+            "A2ARepairOutcome with result=Some must surface result on the wire",
+        );
+
+        // Round-trip pins the PartialEq derive contract on both paths.
+        let back_none: A2ARepairOutcome = serde_json::from_value(none_wire.clone()).unwrap();
+        assert_eq!(back_none, none_outcome);
+        let back_some: A2ARepairOutcome = serde_json::from_value(some_wire).unwrap();
+        assert_eq!(back_some, some_outcome);
+
+        // Decoding a payload that omits result must succeed and yield
+        // result=None — the #[serde(default)] path covers historical
+        // rows persisted before the field existed.
+        let omitted: A2ARepairOutcome = serde_json::from_value(serde_json::json!({
+            "task_id": Uuid::nil(),
+            "action": "requeued",
+            "state": "queued",
+            "attempt": 1,
+        }))
+        .unwrap();
+        assert_eq!(omitted.result, None);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["task_id", "action", "state", "attempt"] {
+            let mut missing = none_obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2ARepairOutcome>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2ARepairOutcome wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
+    #[test]
     fn a2a_repair_state_serde_pins_snake_case_wire_form() {
         // A2ARepairState rides next to A2ARepairAction inside every
         // A2ARepairOutcome audit row. ResultPending is load-bearing —

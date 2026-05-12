@@ -2842,6 +2842,110 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_compact_memory_serde_pins_struct_typed_single_field_variant() {
+        // Request::CompactMemory is the operator-controlled memory
+        // retention/compaction verb the CLI and HTTP gateway send
+        // to push a MemoryCompactionRequest at the daemon. It pairs
+        // with Response::MemoryCompacted (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='compact_memory' plus request. The slug has no
+        // A2A quirk because the variant name is CompactMemory (no
+        // digit/uppercase boundary). This is the structural pair
+        // to the just-pinned Request::RepairMemory: same
+        // struct-typed single-field shape and same 'request' field
+        // name, different inner type (MemoryCompactionRequest
+        // instead of MemoryRepairRequest) and a different slug.
+        // The nested request must surface as a JSON object under
+        // 'request', not flattened into the parent and not promoted
+        // to a tuple variant. The inner MemoryCompactionRequest
+        // shape is pinned by covenant-types tests; this slice only
+        // locks the outer Request variant shape.
+        let request = covenant_types::MemoryCompactionRequest {
+            mode: covenant_types::MemoryRepairMode::DryRun,
+            policy: covenant_types::MemoryCompactionPolicy::default(),
+            reason: "test".into(),
+        };
+        let event = Request::CompactMemory {
+            request: request.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "request"],
+            "Request::CompactMemory wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'request' \
+             field. A refactor that added #[serde(flatten)] to \
+             'request' would collapse the inner MemoryCompactionRequest \
+             fields (mode, policy, reason) into the outer object \
+             next to 'kind' and every CLI/HTTP memory-compaction \
+             caller that sends \
+             {{\"kind\":\"compact_memory\",\"request\":{{...}}}} \
+             would fail to decode — the nested 'request' key would \
+             vanish and the daemon's compaction verb would go dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("compact_memory")),
+            "Request discriminator slug must be the durable \
+             'compact_memory' (rename_all = snake_case on a plain \
+             CamelCase name with no digit/uppercase boundary yields \
+             a clean 'compact_memory'). A refactor that renamed \
+             the variant (e.g., MemoryCompact) or removed the \
+             rename_all attribute would shift the slug — incoming \
+             frames would route to the daemon's catch-all error \
+             branch and every CLI/HTTP memory-compaction would \
+             fail through the supported path",
+        );
+        let request_value = obj.get("request").expect("'request' key must be present");
+        assert!(
+            request_value.is_object(),
+            "Request::CompactMemory::request must surface as a \
+             nested JSON object — a refactor that promoted the \
+             variant to a tuple (Request::CompactMemory(MemoryCompactionRequest)) \
+             or that changed the field to a string-encoded payload \
+             would surface a non-object here; the daemon's \
+             compaction dispatch path binds on the nested-object \
+             surface and any other shape silently breaks every \
+             CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::CompactMemory must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP memory-compaction consumer \
+             leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("request");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::CompactMemory wire form must reject a \
+             payload missing 'request'; a stray #[serde(default)] \
+             would let a malformed frame decode with \
+             MemoryCompactionRequest::default() (Default already \
+             exists on MemoryCompactionPolicy, and a future Default \
+             derive on the outer request would silently fire) and \
+             the daemon would execute a phantom compaction with \
+             empty policy targeting no tier and no cutoff — every \
+             audit-row attribution for the resulting compaction \
+             would collapse to a meaningless default subject and \
+             operator-driven retention would silently no-op while \
+             reporting success",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

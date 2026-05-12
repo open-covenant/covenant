@@ -21,6 +21,10 @@ Covenant sits below agent applications and above the host operating system. It o
 
 ## Quick start
 
+<p align="center">
+  <img src="./assets/demo.gif" alt="Recording of a single intent round trip: ping, dispatch, audit row, hash-chain verify." width="820"/>
+</p>
+
 Build the daemon and CLI, register the sample agent, and dispatch an intent:
 
 ```bash

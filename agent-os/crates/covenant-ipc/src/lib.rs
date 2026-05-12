@@ -3149,6 +3149,151 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_purge_memory_serde_pins_two_field_variant() {
+        // Request::PurgeMemory is the operator-driven memory
+        // retention verb the CLI and HTTP gateway send to drop
+        // memory rows strictly older than before_ms, optionally
+        // scoped to a single tier. It pairs with
+        // Response::MemoryPurged (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly three top-level
+        // keys: kind='purge_memory' plus tier plus before_ms.
+        //
+        // tier is Option<MemoryTier> with #[serde(default)] and NO
+        // skip_serializing_if, so the durable wire form keeps tier
+        // on the wire as JSON null when None and as a JSON string
+        // when Some — three keys in both cases. The first
+        // multi-field Request variant pin in this slice family.
+        //
+        // This slice locks: the exact wire shape (kind, tier,
+        // before_ms), the snake_case discriminator 'purge_memory',
+        // tier=null on the miss path, tier='working' on the hit
+        // path (MemoryTier::Working serializes lowercase), round-
+        // trip for both shapes, rejection of a frame missing
+        // before_ms (the required field), and acceptance of a
+        // frame missing tier (the #[serde(default)] decode-as-None
+        // contract). A refactor that added skip_serializing_if on
+        // tier would shrink the miss wire form from three keys to
+        // two and silently break consumers that distinguish
+        // scoped-vs-all purges on key presence.
+        let miss = Request::PurgeMemory {
+            tier: None,
+            before_ms: 0,
+        };
+
+        let wire = serde_json::to_value(&miss).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["before_ms", "kind", "tier"],
+            "Request::PurgeMemory wire form must be exactly three \
+             top-level keys: 'kind' plus the two variant fields \
+             ('tier', 'before_ms'). A refactor that added \
+             #[serde(skip_serializing_if = \"Option::is_none\")] to \
+             tier would shrink the miss-path wire form from three \
+             keys to two and silently break CLI/HTTP consumers that \
+             switch on the tier key's presence to distinguish \
+             scoped-vs-all purges — the operator's CLI silently \
+             reclassifies a scoped purge to all-tiers (or vice \
+             versa) at the wire layer",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("purge_memory")),
+            "Request discriminator slug must be the durable \
+             'purge_memory'. A refactor that renamed the variant \
+             (e.g., MemoryPurge for surface parity with the \
+             internal verb order) would shift the slug — incoming \
+             purge frames route to the daemon's catch-all error \
+             branch and operator-driven retention goes dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("tier"),
+            Some(&serde_json::Value::Null),
+            "Request::PurgeMemory::tier must surface as JSON null \
+             when None (the durable null-on-wire surface, NOT a \
+             missing key); a stray #[serde(skip_serializing_if = \
+             \"Option::is_none\")] would shrink the miss-path wire \
+             form and silently break CLI consumers that switch on \
+             the key's presence to distinguish scoped vs all-tier \
+             purges",
+        );
+        assert_eq!(
+            obj.get("before_ms"),
+            Some(&serde_json::json!(0)),
+            "Request::PurgeMemory::before_ms must surface as a \
+             JSON number; a refactor that promoted before_ms to a \
+             string (e.g., for ISO-8601 timestamps) without a \
+             corresponding bump would silently mismatch every \
+             CLI/HTTP caller that sends a numeric u64 millisecond \
+             cutoff",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, miss,
+            "Request::PurgeMemory (miss) must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP memory-purge consumer leans \
+             on",
+        );
+
+        let hit = Request::PurgeMemory {
+            tier: Some(covenant_types::MemoryTier::Working),
+            before_ms: 1_700_000_000_000,
+        };
+        let hit_wire = serde_json::to_value(&hit).unwrap();
+        let hit_obj = hit_wire.as_object().unwrap();
+        assert_eq!(
+            hit_obj.get("tier").and_then(serde_json::Value::as_str),
+            Some("working"),
+            "populated tier must round-trip as the durable \
+             lowercase MemoryTier slug 'working' (rename_all = \
+             \"lowercase\" on MemoryTier); the three-key shape \
+             stays stable across hit and miss",
+        );
+        let hit_back: Request = serde_json::from_value(hit_wire.clone()).unwrap();
+        assert_eq!(
+            hit_back, hit,
+            "Request::PurgeMemory (hit) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_required = obj.clone();
+        missing_required.remove("before_ms");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing_required)).is_err(),
+            "Request::PurgeMemory wire form must reject a payload \
+             missing 'before_ms'; a stray #[serde(default)] on \
+             before_ms would let a malformed frame decode as \
+             Request::PurgeMemory {{ before_ms: 0 }} and the daemon \
+             would execute a no-op retention against the epoch — \
+             the operator believes their retention ran while no \
+             rows were touched",
+        );
+
+        let mut missing_optional = obj.clone();
+        missing_optional.remove("tier");
+        let parsed: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_optional)).unwrap();
+        assert_eq!(
+            parsed, miss,
+            "Request::PurgeMemory wire form must accept a payload \
+             missing 'tier' (Option<T> with #[serde(default)] \
+             decodes as None); this is the documented forward-\
+             compatibility contract for stale CLIs that predate the \
+             tier filter. A refactor that dropped #[serde(default)] \
+             on tier would silently break every CLI built before \
+             the field was added",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -2539,6 +2539,44 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_scope_allows_pins_per_tier_cutoff_tier_binding() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            !memory_compaction_scope_allows(
+                "memory.compact.apply",
+                &scope,
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: None,
+                    delete_episodic_before_ms: Some(500),
+                    mark_longterm_stale_before_ms: None,
+                    detach_stale_parents: false,
+                }
+            )
+            .unwrap()
+        );
+        assert!(
+            !memory_compaction_scope_allows(
+                "memory.compact.apply",
+                &scope,
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: None,
+                    delete_episodic_before_ms: None,
+                    mark_longterm_stale_before_ms: Some(500),
+                    detach_stale_parents: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn sign_and_verify_round_trip() {
         let issuer = LocalIdentity::generate("authority@local");
         let subject = LocalIdentity::generate("research@local").agent_id();

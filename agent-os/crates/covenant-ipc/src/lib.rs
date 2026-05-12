@@ -1067,7 +1067,9 @@ mod tests {
         // CLI client.
         let info = protocol_info();
         let wire = serde_json::to_value(&info).unwrap();
-        let obj = wire.as_object().expect("ProtocolInfo serializes as a JSON object");
+        let obj = wire
+            .as_object()
+            .expect("ProtocolInfo serializes as a JSON object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(
@@ -1139,7 +1141,10 @@ mod tests {
 
         for required in ["name", "passed", "message"] {
             let mut payload = serde_json::Map::new();
-            payload.insert("name".into(), serde_json::Value::String("hash_chain".into()));
+            payload.insert(
+                "name".into(),
+                serde_json::Value::String("hash_chain".into()),
+            );
             payload.insert("passed".into(), serde_json::Value::Bool(true));
             payload.insert(
                 "message".into(),
@@ -1257,8 +1262,14 @@ mod tests {
 
         for required in ["kind", "message", "repair"] {
             let mut payload = serde_json::Map::new();
-            payload.insert("kind".into(), serde_json::Value::String("memory_drift".into()));
-            payload.insert("message".into(), serde_json::Value::String("missing receipt".into()));
+            payload.insert(
+                "kind".into(),
+                serde_json::Value::String("memory_drift".into()),
+            );
+            payload.insert(
+                "message".into(),
+                serde_json::Value::String("missing receipt".into()),
+            );
             payload.insert(
                 "repair".into(),
                 serde_json::Value::String("covenant memory repair".into()),
@@ -1489,7 +1500,10 @@ mod tests {
 
         for required in ["batch_id", "merkle_root", "receipt_count"] {
             let mut payload = serde_json::Map::new();
-            payload.insert("batch_id".into(), serde_json::Value::String("batch-1".into()));
+            payload.insert(
+                "batch_id".into(),
+                serde_json::Value::String("batch-1".into()),
+            );
             payload.insert(
                 "merkle_root".into(),
                 serde_json::Value::String("00".repeat(32)),
@@ -3110,7 +3124,14 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            vec!["intent_id", "kind", "settlement", "sources", "status", "text"],
+            vec![
+                "intent_id",
+                "kind",
+                "settlement",
+                "sources",
+                "status",
+                "text"
+            ],
             "Response::IntentResult wire form must be exactly six \
              top-level keys: 'kind' plus the five variant fields. A \
              refactor that promoted the variant from struct to \
@@ -5026,7 +5047,9 @@ mod tests {
              masking whether the verifier ran or what it found",
         );
         assert!(
-            obj.get("drift").and_then(serde_json::Value::as_array).is_some(),
+            obj.get("drift")
+                .and_then(serde_json::Value::as_array)
+                .is_some(),
             "Response::VerifyReport::drift must always surface as \
              a JSON array (the durable not-skip-serializing-if \
              surface — the five-key shape stays stable across \
@@ -5172,7 +5195,9 @@ mod tests {
         let hit_wire = serde_json::to_value(&hit).unwrap();
         let hit_obj = hit_wire.as_object().unwrap();
         assert_eq!(
-            hit_obj.get("matched_pattern").and_then(serde_json::Value::as_str),
+            hit_obj
+                .get("matched_pattern")
+                .and_then(serde_json::Value::as_str),
             Some("deploy"),
             "populated matched_pattern must round-trip verbatim on \
              the wire — the four-key shape stays stable across hit \
@@ -5266,7 +5291,8 @@ mod tests {
              registry state during incident triage",
         );
         assert_eq!(
-            obj.get("operator_pubkey_b58").and_then(serde_json::Value::as_str),
+            obj.get("operator_pubkey_b58")
+                .and_then(serde_json::Value::as_str),
             Some(""),
             "Response::PeerList::operator_pubkey_b58 must always \
              surface as a JSON string (the durable \

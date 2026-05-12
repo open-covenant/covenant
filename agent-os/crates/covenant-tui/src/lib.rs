@@ -1800,7 +1800,9 @@ mod tests {
                 truncated: false,
                 ..
             } => {}
-            other => panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}"),
+            other => {
+                panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}")
+            }
         }
         let peer = sample_peer();
         app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {
@@ -1814,7 +1816,10 @@ mod tests {
                 peers,
                 error: None,
             } => {
-                assert!(!truncated, "truncated=false outcome must propagate verbatim");
+                assert!(
+                    !truncated,
+                    "truncated=false outcome must propagate verbatim"
+                );
                 assert_eq!(peers.len(), 1);
                 assert_eq!(peers[0].agent_id.pubkey, peer.agent_id.pubkey);
             }
@@ -1838,7 +1843,9 @@ mod tests {
                 truncated: false,
                 ..
             } => {}
-            other => panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}"),
+            other => {
+                panic!("initial peers-tail state must be loading=true, truncated=false: {other:?}")
+            }
         }
         let peer = sample_peer();
         app.apply_peers_fetch_outcome(PeersFetchOutcome::Fetched {

@@ -1084,7 +1084,8 @@ mod tests {
             "at_ms must surface as a u64 on the wire"
         );
         assert_eq!(
-            obj.get("paired_receipt").and_then(serde_json::Value::as_str),
+            obj.get("paired_receipt")
+                .and_then(serde_json::Value::as_str),
             Some(Uuid::from_u128(0x1234).to_string().as_str()),
             "paired_receipt must surface as the canonical UUID string on the \
              wire — this is the load-bearing key the settlement-receipt join \

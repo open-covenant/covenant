@@ -258,7 +258,9 @@ async fn live_cli_a2a_status_state_filter_narrows_each_state() {
     );
     let queued_only_ids = entry_ids(&queued_only);
     assert!(
-        queued_only_ids.iter().any(|id| id == &queued.id.to_string()),
+        queued_only_ids
+            .iter()
+            .any(|id| id == &queued.id.to_string()),
         "queued task must survive --state queued; got {queued_only_ids:?}",
     );
     assert!(

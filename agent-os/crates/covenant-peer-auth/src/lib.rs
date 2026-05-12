@@ -953,8 +953,7 @@ mod tests {
             let mut payload = full_map.clone();
             payload.remove(required);
             assert!(
-                serde_json::from_value::<PeerSummary>(serde_json::Value::Object(payload))
-                    .is_err(),
+                serde_json::from_value::<PeerSummary>(serde_json::Value::Object(payload)).is_err(),
                 "PeerSummary must reject a wire payload that omits {required}; \
                  a stray #[serde(default)] introduction on a non-Option field \
                  would silently let a malformed redacted view decode"

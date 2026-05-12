@@ -202,9 +202,7 @@ async fn live_http_a2a_queue_state_filter_narrows_each_state_and_rejects_mixed_c
         .expect("queue body");
     let unfiltered_ids = task_ids_in(&unfiltered);
     assert!(
-        unfiltered_ids
-            .iter()
-            .any(|id| id == &queued.id.to_string())
+        unfiltered_ids.iter().any(|id| id == &queued.id.to_string())
             && unfiltered_ids
                 .iter()
                 .any(|id| id == &in_flight.id.to_string()),
@@ -221,7 +219,9 @@ async fn live_http_a2a_queue_state_filter_narrows_each_state_and_rejects_mixed_c
         .expect("queue body");
     let queued_only_ids = task_ids_in(&queued_only);
     assert!(
-        queued_only_ids.iter().any(|id| id == &queued.id.to_string()),
+        queued_only_ids
+            .iter()
+            .any(|id| id == &queued.id.to_string()),
         "state_filter=queued must keep the queued task id: {queued_only_ids:?}",
     );
     assert!(

@@ -286,16 +286,16 @@ pub mod settlement {
         result_hash: [u8; 32],
         receipt_hash: [u8; 32],
     ) -> Result<()> {
-        require!(
-            !ctx.accounts.config.paused,
-            CovenantError::ProtocolPaused
-        );
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
             CovenantError::WrongTaskStatus
         );
         let now = Clock::get()?.unix_timestamp;
-        require!(now <= ctx.accounts.task.deadline, CovenantError::TaskExpired);
+        require!(
+            now <= ctx.accounts.task.deadline,
+            CovenantError::TaskExpired
+        );
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
@@ -324,16 +324,16 @@ pub mod settlement {
     /// time. Pause check matches `release_task` so a paused protocol
     /// halts all escrow movement uniformly.
     pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
-        require!(
-            !ctx.accounts.config.paused,
-            CovenantError::ProtocolPaused
-        );
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
             CovenantError::WrongTaskStatus
         );
         let now = Clock::get()?.unix_timestamp;
-        require!(now > ctx.accounts.task.deadline, CovenantError::TaskNotExpired);
+        require!(
+            now > ctx.accounts.task.deadline,
+            CovenantError::TaskNotExpired
+        );
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];

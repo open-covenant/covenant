@@ -537,7 +537,11 @@ impl SqliteStore {
             return Err(rusqlite::Error::FromSqlConversionFailure(
                 3,
                 rusqlite::types::Type::Text,
-                format!("owner_pubkey decoded to {} bytes, expected 32", pubkey_vec.len()).into(),
+                format!(
+                    "owner_pubkey decoded to {} bytes, expected 32",
+                    pubkey_vec.len()
+                )
+                .into(),
             ));
         }
         let mut pubkey = [0u8; 32];

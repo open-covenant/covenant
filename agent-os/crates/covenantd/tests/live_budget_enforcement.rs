@@ -186,8 +186,8 @@ budget_credits_per_hour = 1
             since_ms: None,
         },
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     let ar: Response = read_frame(&mut stream).await.unwrap();
     let events = match ar {
         Response::AuditEvents { events } => events,

@@ -661,12 +661,7 @@ impl InMemoryMailbox {
     }
 
     fn queued_entry(&self, task: A2ATask) -> A2ATaskQueueEntry {
-        let attempt = self
-            .attempts
-            .lock()
-            .get(&task.id)
-            .copied()
-            .unwrap_or(0);
+        let attempt = self.attempts.lock().get(&task.id).copied().unwrap_or(0);
         A2ATaskQueueEntry {
             attempt,
             ..A2ATaskQueueEntry::queued(task)
@@ -678,21 +673,17 @@ impl InMemoryMailbox {
 impl Mailbox for InMemoryMailbox {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError> {
         validate_task(&task)?;
-        if let Some(cached) = idempotency_cache_key(&task)
-            .and_then(|key| self.result_cache.lock().get(&key).cloned())
+        if let Some(cached) =
+            idempotency_cache_key(&task).and_then(|key| self.result_cache.lock().get(&key).cloned())
         {
             let result = cached.to_result(task.id);
-            self.senders
-                .lock()
-                .insert(task.id, task.sender.clone());
+            self.senders.lock().insert(task.id, task.sender.clone());
             self.attempts.lock().entry(task.id).or_insert(0);
             self.results.lock().push_back(result);
             self.result_notify.notify_one();
             return Ok(());
         }
-        self.senders
-            .lock()
-            .insert(task.id, task.sender.clone());
+        self.senders.lock().insert(task.id, task.sender.clone());
         self.attempts.lock().entry(task.id).or_insert(0);
         self.tasks.lock().push_back(task);
         self.task_notify.notify_one();
@@ -751,13 +742,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn recent_tasks(&self, limit: usize) -> Result<Vec<A2ATask>, A2AError> {
-        Ok(self
-            .tasks
-            .lock()
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect())
+        Ok(self.tasks.lock().iter().take(limit).cloned().collect())
     }
 
     async fn task_queue(&self, limit: usize) -> Result<Vec<A2ATaskQueueEntry>, A2AError> {
@@ -836,13 +821,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn recent_results(&self, limit: usize) -> Result<Vec<A2ATaskResult>, A2AError> {
-        Ok(self
-            .results
-            .lock()
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect())
+        Ok(self.results.lock().iter().take(limit).cloned().collect())
     }
 
     async fn lookup_task_sender(&self, task_id: Uuid) -> Result<Option<AgentId>, A2AError> {
@@ -1174,13 +1153,11 @@ impl Mailbox for JsonlMailbox {
                         attempt,
                     })
                     .await?;
-                    if let Some(t) = self.state.lock().lease_task(
-                        id,
-                        lease_id,
-                        None,
-                        leased_at_ms,
-                        attempt,
-                    ) {
+                    if let Some(t) =
+                        self.state
+                            .lock()
+                            .lease_task(id, lease_id, None, leased_at_ms, attempt)
+                    {
                         return Ok(t);
                     }
                 }
@@ -1246,12 +1223,7 @@ impl Mailbox for JsonlMailbox {
         loop {
             {
                 let _g = self.file_lock.lock().await;
-                let front_id = self
-                    .state
-                    .lock()
-                    .results
-                    .front()
-                    .map(|r| r.task_id);
+                let front_id = self.state.lock().results.front().map(|r| r.task_id);
                 if let Some(id) = front_id {
                     self.append(&MailboxEvent::ResultRecv { task_id: id })
                         .await?;
@@ -2742,7 +2714,12 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            vec!["key", "recipient_pubkey_b58", "sender_pubkey_b58", "task_kind"],
+            vec![
+                "key",
+                "recipient_pubkey_b58",
+                "sender_pubkey_b58",
+                "task_kind"
+            ],
             "A2AIdempotencyCacheKey wire object must contain exactly four \
              documented fields; a skip_serializing_if would silently shift \
              the cache key shape and split cache lookups across two forms \
@@ -2754,7 +2731,12 @@ mod tests {
         assert_eq!(back, key);
 
         // Each strictly-required field must reject when omitted.
-        for required in ["sender_pubkey_b58", "recipient_pubkey_b58", "task_kind", "key"] {
+        for required in [
+            "sender_pubkey_b58",
+            "recipient_pubkey_b58",
+            "task_kind",
+            "key",
+        ] {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
@@ -2836,14 +2818,10 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        let four_keys: std::collections::BTreeSet<&str> = [
-            "task_id",
-            "reason",
-            "attempt",
-            "lease_age_ms",
-        ]
-        .into_iter()
-        .collect();
+        let four_keys: std::collections::BTreeSet<&str> =
+            ["task_id", "reason", "attempt", "lease_age_ms"]
+                .into_iter()
+                .collect();
         assert_eq!(some_keys, four_keys);
         assert_eq!(
             some_wire.get("lease_age_ms").unwrap(),
@@ -2905,16 +2883,11 @@ mod tests {
         let obj = wire
             .as_object()
             .expect("A2AAutoRetryRequeued serialises as a JSON object");
-        let keys: std::collections::BTreeSet<&str> =
-            obj.keys().map(String::as_str).collect();
-        let expected: std::collections::BTreeSet<&str> = [
-            "task_id",
-            "lease_id",
-            "attempt",
-            "idempotency_key",
-        ]
-        .into_iter()
-        .collect();
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["task_id", "lease_id", "attempt", "idempotency_key"]
+                .into_iter()
+                .collect();
         assert_eq!(
             keys, expected,
             "A2AAutoRetryRequeued wire form must be exactly four keys; a \
@@ -3367,7 +3340,9 @@ mod tests {
             );
         }
         assert_eq!(
-            result_obj.get("task_id").and_then(serde_json::Value::as_str),
+            result_obj
+                .get("task_id")
+                .and_then(serde_json::Value::as_str),
             Some(Uuid::from_u128(19).to_string().as_str()),
             "MailboxEvent::ResultPosted::result.task_id must surface as \
              the Uuid's hyphenated string form — replay matches \
@@ -3500,12 +3475,17 @@ mod tests {
              JsonlMailbox::open replay path joins lease events against",
         );
 
-        for required in ["task_id", "lease_id", "leased_to", "leased_at_ms", "attempt"] {
+        for required in [
+            "task_id",
+            "lease_id",
+            "leased_to",
+            "leased_at_ms",
+            "attempt",
+        ] {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
-                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
-                    .is_err(),
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
                 "MailboxEvent::TaskLeased wire form must reject a payload \
                  missing {required:?}; a stray #[serde(default)] on \
                  leased_to would let a malformed row decode with a \
@@ -3614,8 +3594,7 @@ mod tests {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
-                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
-                    .is_err(),
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
                 "MailboxEvent::TaskRequeued wire form must reject a \
                  payload missing {required:?}; a stray #[serde(default)] \
                  on duplicate_risk would let a malformed row decode with \
@@ -3705,7 +3684,9 @@ mod tests {
                 "MailboxEvent::TaskForceErrored::result must serialise as a nested JSON object",
             );
         assert_eq!(
-            result_obj.get("task_id").and_then(serde_json::Value::as_str),
+            result_obj
+                .get("task_id")
+                .and_then(serde_json::Value::as_str),
             Some(Uuid::from_u128(41).to_string().as_str()),
             "MailboxEvent::TaskForceErrored::result.task_id must match \
              the outer task_id — the sender's recv_result joins on this \
@@ -3744,8 +3725,7 @@ mod tests {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
-                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
-                    .is_err(),
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
                 "MailboxEvent::TaskForceErrored wire form must reject a \
                  payload missing {required:?}; a stray #[serde(default)] \
                  on result would let a malformed row decode with \
@@ -3882,8 +3862,7 @@ mod tests {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
-                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
-                    .is_err(),
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
                 "MailboxEvent::IdempotencyResultCached wire form must \
                  reject a payload missing {required:?}; a stray \
                  #[serde(default)] on cache_key would let a malformed \
@@ -4045,8 +4024,7 @@ mod tests {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
-                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
-                    .is_err(),
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing)).is_err(),
                 "MailboxEvent::IdempotencyResultReplayed wire form \
                  must reject a payload missing {required:?}; a stray \
                  #[serde(default)] on task would let a malformed row \
@@ -4414,7 +4392,10 @@ mod tests {
 
         let round_trip: A2ATaskResult =
             serde_json::from_value(serde_json::to_value(&ok).unwrap()).unwrap();
-        assert_eq!(round_trip, ok, "ok result must full-round-trip through serde");
+        assert_eq!(
+            round_trip, ok,
+            "ok result must full-round-trip through serde"
+        );
     }
 
     #[tokio::test]

@@ -81,9 +81,11 @@ fn pubkeys_in(value: &Value) -> Vec<String> {
 }
 
 fn peer_by_pubkey<'a>(value: &'a Value, pubkey_b58: &str) -> Option<&'a Value> {
-    value["peers"].as_array().expect("peers array").iter().find(
-        |peer| peer.pointer("/agent_id/pubkey").and_then(Value::as_str) == Some(pubkey_b58),
-    )
+    value["peers"]
+        .as_array()
+        .expect("peers array")
+        .iter()
+        .find(|peer| peer.pointer("/agent_id/pubkey").and_then(Value::as_str) == Some(pubkey_b58))
 }
 
 #[tokio::test]
@@ -216,9 +218,7 @@ async fn live_http_peers_list_status_filter_narrows_each_side() {
     assert_eq!(revoked["kind"], "peer_list");
     let revoked_pubkeys = pubkeys_in(&revoked);
     assert!(
-        revoked_pubkeys
-            .iter()
-            .any(|pk| pk == &delegate_pubkey_b58),
+        revoked_pubkeys.iter().any(|pk| pk == &delegate_pubkey_b58),
         "status=revoked must surface the revoked delegate row; got pubkeys={revoked_pubkeys:?}",
     );
     assert!(

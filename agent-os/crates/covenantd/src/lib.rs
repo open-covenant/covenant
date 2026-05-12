@@ -1393,14 +1393,13 @@ impl Server {
         state_filter: Option<covenant_a2a::A2ATaskQueueState>,
         peer: &AgentId,
     ) -> Response {
-        let task_limit = if min_lease_age_ms.is_some()
-            || deadline_within_ms.is_some()
-            || state_filter.is_some()
-        {
-            usize::MAX
-        } else {
-            limit
-        };
+        let task_limit =
+            if min_lease_age_ms.is_some() || deadline_within_ms.is_some() || state_filter.is_some()
+            {
+                usize::MAX
+            } else {
+                limit
+            };
         let now_ms = epoch_ms();
         let tasks = match self.mailbox.task_queue(task_limit).await {
             Ok(tasks) => tasks
@@ -2289,12 +2288,7 @@ impl Server {
     /// `AuthenticationFailed` rows have `issuer == identity` (no
     /// authenticated peer at the moment of rejection) and so naturally
     /// remain visible only to the operator.
-    async fn recent_audit(
-        &self,
-        limit: usize,
-        since_ms: Option<u64>,
-        peer: &AgentId,
-    ) -> Response {
+    async fn recent_audit(&self, limit: usize, since_ms: Option<u64>, peer: &AgentId) -> Response {
         let read_limit = if since_ms.is_some() {
             usize::MAX
         } else {
@@ -6352,7 +6346,13 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -6537,7 +6537,13 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -7183,7 +7189,13 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 30, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 30,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -7301,7 +7313,13 @@ required = {caps:?}
         }
 
         match s
-            .respond(Request::RecentAudit { limit: 30, since_ms: None }, &delegate)
+            .respond(
+                Request::RecentAudit {
+                    limit: 30,
+                    since_ms: None,
+                },
+                &delegate,
+            )
             .await
         {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
@@ -7849,7 +7867,13 @@ required = {caps:?}
 
         // Defender-visible: the rejection lands in the audit log even
         // though no capability check happened upstream of the lookup.
-        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => {
                 let logged = events.iter().find_map(|e| match &e.kind {
                     AuditKind::A2AResultRejected { task_id, reason } => {
@@ -8381,7 +8405,13 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 20, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8543,7 +8573,13 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 30, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 30,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8685,7 +8721,13 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8948,7 +8990,12 @@ required = {caps:?}
             arguments: serde_json::json!({ "text": "hi" }),
         })
         .await;
-        let resp = s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await;
+        let resp = s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(
@@ -9069,7 +9116,12 @@ required = {caps:?}
             })
             .await
             .unwrap();
-        let resp = s.op_respond(Request::RecentAudit { limit: 100, since_ms: None }).await;
+        let resp = s
+            .op_respond(Request::RecentAudit {
+                limit: 100,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(
@@ -9153,7 +9205,12 @@ required = {caps:?}
         })
         .await;
         let me = s.identity.agent_id();
-        let resp = s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await;
+        let resp = s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(!events.is_empty(), "operator should see their own rows");
@@ -10672,15 +10729,27 @@ budget_credits_per_hour = {credits}
         );
 
         std::env::set_var("COVENANT_SOLANA_RPC_URL", "https://rpc.example/");
-        std::env::set_var("COVENANT_PROTOCOL_PROGRAM_ID", "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2");
+        std::env::set_var(
+            "COVENANT_PROTOCOL_PROGRAM_ID",
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2",
+        );
         std::env::set_var("COVNT_MINT", "4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E");
         let ready = chain_status_from_env();
-        assert!(ready.ready, "all three required vars set => ready must be true");
+        assert!(
+            ready.ready,
+            "all three required vars set => ready must be true"
+        );
         assert!(ready.missing.is_empty(), "missing must be empty when ready");
         assert_eq!(ready.cluster, "devnet");
         assert_eq!(ready.rpc_url.as_deref(), Some("https://rpc.example/"));
-        assert_eq!(ready.program_id.as_deref(), Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"));
-        assert_eq!(ready.covnt_mint.as_deref(), Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E"));
+        assert_eq!(
+            ready.program_id.as_deref(),
+            Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2")
+        );
+        assert_eq!(
+            ready.covnt_mint.as_deref(),
+            Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E")
+        );
 
         for name in VARS {
             std::env::remove_var(name);
@@ -10688,7 +10757,10 @@ budget_credits_per_hour = {credits}
         std::env::set_var("COVENANT_SOLANA_CLUSTER", "mainnet");
         let cluster_only = chain_status_from_env();
         assert_eq!(cluster_only.cluster, "mainnet");
-        assert!(!cluster_only.ready, "cluster alone is not sufficient for ready");
+        assert!(
+            !cluster_only.ready,
+            "cluster alone is not sufficient for ready"
+        );
         assert_eq!(cluster_only.missing.len(), 3);
 
         for (name, value) in saved {
@@ -10727,8 +10799,7 @@ budget_credits_per_hour = {credits}
         fs::write(&path, b"not_b58_!!!\n").expect("rewrite with garbage");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("restore 0o600 so mode gate passes and decode is what fails");
-        let err_decode =
-            read_operator_token_b58(&path).expect_err("garbage b58 must reject");
+        let err_decode = read_operator_token_b58(&path).expect_err("garbage b58 must reject");
         assert_eq!(
             err_decode.kind(),
             std::io::ErrorKind::InvalidData,
@@ -10743,8 +10814,8 @@ budget_credits_per_hour = {credits}
         fs::write(&path, padded.as_bytes()).expect("rewrite with padded valid b58");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("chmod 0o600 after rewrite");
-        let trimmed =
-            read_operator_token_b58(&path).expect("whitespace-padded valid b58 must round-trip via trim");
+        let trimmed = read_operator_token_b58(&path)
+            .expect("whitespace-padded valid b58 must round-trip via trim");
         assert_eq!(
             trimmed.to_b58(),
             b58,
@@ -10762,11 +10833,13 @@ budget_credits_per_hour = {credits}
         let path = dir.path().join("nested").join("operator.token");
 
         write_operator_token_0600(&path, "8a8a8a8a8a8a8a8a").expect("first write");
-        assert!(path.parent().expect("parent").is_dir(), "parent dir created");
+        assert!(
+            path.parent().expect("parent").is_dir(),
+            "parent dir created"
+        );
         let bytes = fs::read(&path).expect("read after first write");
         assert_eq!(
-            bytes,
-            b"8a8a8a8a8a8a8a8a\n",
+            bytes, b"8a8a8a8a8a8a8a8a\n",
             "first write must produce b58 bytes followed by newline 0x0A"
         );
         let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
@@ -10777,8 +10850,7 @@ budget_credits_per_hour = {credits}
         write_operator_token_0600(&path, "DIFFERENTb58body").expect("second write");
         let bytes2 = fs::read(&path).expect("read after second write");
         assert_eq!(
-            bytes2,
-            b"DIFFERENTb58body\n",
+            bytes2, b"DIFFERENTb58body\n",
             "second write must fully replace the file, no concatenation"
         );
         let mode2 = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
@@ -10797,16 +10869,13 @@ budget_credits_per_hour = {credits}
 
         let p0600 = dir.path().join("tok.0600");
         fs::write(&p0600, b"x").expect("write tok.0600");
-        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o600))
-            .expect("chmod 0o600");
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o600)).expect("chmod 0o600");
         require_operator_token_mode_0600(&p0600).expect("0o600 must pass");
 
-        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o400))
-            .expect("chmod 0o400");
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o400)).expect("chmod 0o400");
         require_operator_token_mode_0600(&p0600).expect("0o400 must pass");
 
-        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o000))
-            .expect("chmod 0o000");
+        fs::set_permissions(&p0600, fs::Permissions::from_mode(0o000)).expect("chmod 0o000");
         require_operator_token_mode_0600(&p0600).expect("0o000 must pass");
 
         fs::set_permissions(&p0600, fs::Permissions::from_mode(0o600))
@@ -10814,10 +10883,8 @@ budget_credits_per_hour = {credits}
 
         let p0640 = dir.path().join("tok.0640");
         fs::write(&p0640, b"x").expect("write tok.0640");
-        fs::set_permissions(&p0640, fs::Permissions::from_mode(0o640))
-            .expect("chmod 0o640");
-        let err640 = require_operator_token_mode_0600(&p0640)
-            .expect_err("0o640 must reject");
+        fs::set_permissions(&p0640, fs::Permissions::from_mode(0o640)).expect("chmod 0o640");
+        let err640 = require_operator_token_mode_0600(&p0640).expect_err("0o640 must reject");
         let msg640 = err640.to_string();
         assert!(
             msg640.contains("mode is") && msg640.contains("expected 0o600"),
@@ -10826,10 +10893,8 @@ budget_credits_per_hour = {credits}
 
         let p0604 = dir.path().join("tok.0604");
         fs::write(&p0604, b"x").expect("write tok.0604");
-        fs::set_permissions(&p0604, fs::Permissions::from_mode(0o604))
-            .expect("chmod 0o604");
-        let err604 = require_operator_token_mode_0600(&p0604)
-            .expect_err("0o604 must reject");
+        fs::set_permissions(&p0604, fs::Permissions::from_mode(0o604)).expect("chmod 0o604");
+        let err604 = require_operator_token_mode_0600(&p0604).expect_err("0o604 must reject");
         let msg604 = err604.to_string();
         assert!(
             msg604.contains("mode is") && msg604.contains("expected 0o600"),
@@ -10898,8 +10963,9 @@ budget_credits_per_hour = {credits}
 
     #[test]
     fn a2a_auto_retry_scheduler_config_from_values_pins_defaults_and_overrides() {
-        let default = a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)
-            .unwrap();
+        let default =
+            a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)
+                .unwrap();
         assert_eq!(default, A2AAutoRetrySchedulerConfig::default());
         assert!(!default.enabled);
         assert!(!default.policy.enabled);
@@ -10914,22 +10980,22 @@ budget_credits_per_hour = {credits}
             "config.policy.enabled must mirror config.enabled"
         );
 
-        let disabled =
-            a2a_auto_retry_scheduler_config_from_values(Some("false"), None, None, None, None, None)
-                .unwrap();
-        assert!(!disabled.enabled);
-        assert!(!disabled.policy.enabled);
-
-        let zero_interval = a2a_auto_retry_scheduler_config_from_values(
+        let disabled = a2a_auto_retry_scheduler_config_from_values(
+            Some("false"),
             None,
-            Some("0"),
             None,
             None,
             None,
             None,
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap();
+        assert!(!disabled.enabled);
+        assert!(!disabled.policy.enabled);
+
+        let zero_interval =
+            a2a_auto_retry_scheduler_config_from_values(None, Some("0"), None, None, None, None)
+                .unwrap_err()
+                .to_string();
         assert!(
             zero_interval.contains("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS must be greater than zero"),
             "expected zero-interval rejection with named-env context, got {zero_interval}"
@@ -10957,7 +11023,9 @@ budget_credits_per_hour = {credits}
     fn runtime_runner_from_config_pins_backend_dispatch() {
         let _: fn() -> covenant_runtime::SubprocessRunner = || covenant_runtime::SubprocessRunner;
         let _: fn(PathBuf, PathBuf, PathBuf) -> covenant_runtime::GvisorRunner =
-            |runsc, rootfs, scratch| covenant_runtime::GvisorRunner::with_paths(runsc, rootfs, scratch);
+            |runsc, rootfs, scratch| {
+                covenant_runtime::GvisorRunner::with_paths(runsc, rootfs, scratch)
+            };
 
         let local_a = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
         let local_b = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
@@ -11041,7 +11109,13 @@ budget_credits_per_hour = {credits}
     fn runtime_runner_config_from_values_pins_backend_matrix() {
         let home = Path::new("/tmp/h");
 
-        for raw in [None, Some(""), Some("   "), Some("trusted-local"), Some(" trusted-local ")] {
+        for raw in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("trusted-local"),
+            Some(" trusted-local "),
+        ] {
             let config = runtime_runner_config_from_values(home, raw, None, None, None).unwrap();
             assert_eq!(
                 config,
@@ -11089,14 +11163,9 @@ budget_credits_per_hour = {credits}
                 .contains("COVENANT_GVISOR_ROOTFS is required"),
             "expected rootfs-required error, got {missing_rootfs}",
         );
-        let empty_rootfs = runtime_runner_config_from_values(
-            home,
-            Some("linux-gvisor"),
-            Some("   "),
-            None,
-            None,
-        )
-        .unwrap_err();
+        let empty_rootfs =
+            runtime_runner_config_from_values(home, Some("linux-gvisor"), Some("   "), None, None)
+                .unwrap_err();
         assert!(
             empty_rootfs
                 .to_string()
@@ -11149,7 +11218,9 @@ budget_credits_per_hour = {credits}
         assert_eq!(parse_env_u64("X", "123").unwrap(), 123);
         assert_eq!(parse_env_u64("X", " 456 ").unwrap(), 456);
         assert_eq!(parse_env_u64("X", "4294967296").unwrap(), 4_294_967_296u64);
-        let err = parse_env_u64("COVENANT_X", "notanint").unwrap_err().to_string();
+        let err = parse_env_u64("COVENANT_X", "notanint")
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("COVENANT_X must be an integer"),
             "expected name-prefixed error context, got {err:?}"
@@ -11206,7 +11277,10 @@ budget_credits_per_hour = {credits}
     fn budget_resume_state_pins_three_keys() {
         let active = budget_resume_state("compute something", "agentA", "active_dispatch");
         assert_eq!(active.len(), 3);
-        assert_eq!(active["intent_text"], serde_json::json!("compute something"));
+        assert_eq!(
+            active["intent_text"],
+            serde_json::json!("compute something")
+        );
         assert_eq!(active["matched_agent"], serde_json::json!("agentA"));
         assert_eq!(active["source"], serde_json::json!("active_dispatch"));
 
@@ -11245,10 +11319,18 @@ budget_credits_per_hour = {credits}
     #[test]
     fn parse_env_bool_pins_accepted_synonyms_and_reject_path() {
         for raw in ["1", "true", "yes", "on", "TRUE", " true ", "Yes", "ON"] {
-            assert_eq!(parse_env_bool(raw).unwrap(), true, "expected true for {raw:?}");
+            assert_eq!(
+                parse_env_bool(raw).unwrap(),
+                true,
+                "expected true for {raw:?}"
+            );
         }
         for raw in ["0", "false", "no", "off", "FALSE", " 0 ", "No", "OFF"] {
-            assert_eq!(parse_env_bool(raw).unwrap(), false, "expected false for {raw:?}");
+            assert_eq!(
+                parse_env_bool(raw).unwrap(),
+                false,
+                "expected false for {raw:?}"
+            );
         }
         for raw in ["teu", "", "2", "maybe"] {
             let err = parse_env_bool(raw).unwrap_err().to_string();
@@ -11268,11 +11350,17 @@ budget_credits_per_hour = {credits}
         );
         assert_eq!(
             memory_read_actions(Some(MemoryTier::Episodic)),
-            vec!["memory.read".to_string(), "memory.read.episodic".to_string()]
+            vec![
+                "memory.read".to_string(),
+                "memory.read.episodic".to_string()
+            ]
         );
         assert_eq!(
             memory_read_actions(Some(MemoryTier::LongTerm)),
-            vec!["memory.read".to_string(), "memory.read.longterm".to_string()]
+            vec![
+                "memory.read".to_string(),
+                "memory.read.longterm".to_string()
+            ]
         );
         assert_eq!(
             memory_read_actions(None),
@@ -11359,10 +11447,7 @@ budget_credits_per_hour = {credits}
         )];
         assert!(!chain_receipt_allowed(&wrong_batch, &receipt));
 
-        let invalid_scope = vec![(
-            "chain.receipts.read".to_string(),
-            serde_json::json!(true),
-        )];
+        let invalid_scope = vec![("chain.receipts.read".to_string(), serde_json::json!(true))];
         assert!(!chain_receipt_allowed(&invalid_scope, &receipt));
 
         assert!(!chain_receipt_allowed(&[], &receipt));
@@ -11460,11 +11545,31 @@ budget_credits_per_hour = {credits}
         let no_deadline = make_entry(None);
         let deadline150 = make_entry(Some(150));
         assert!(a2a_entry_matches_deadline_within(&no_deadline, None, 100));
-        assert!(!a2a_entry_matches_deadline_within(&no_deadline, Some(50), 100));
-        assert!(!a2a_entry_matches_deadline_within(&deadline150, Some(100), 0));
-        assert!(a2a_entry_matches_deadline_within(&deadline150, Some(100), 100));
-        assert!(a2a_entry_matches_deadline_within(&deadline150, Some(50), 100));
-        assert!(!a2a_entry_matches_deadline_within(&deadline150, Some(10), 100));
+        assert!(!a2a_entry_matches_deadline_within(
+            &no_deadline,
+            Some(50),
+            100
+        ));
+        assert!(!a2a_entry_matches_deadline_within(
+            &deadline150,
+            Some(100),
+            0
+        ));
+        assert!(a2a_entry_matches_deadline_within(
+            &deadline150,
+            Some(100),
+            100
+        ));
+        assert!(a2a_entry_matches_deadline_within(
+            &deadline150,
+            Some(50),
+            100
+        ));
+        assert!(!a2a_entry_matches_deadline_within(
+            &deadline150,
+            Some(10),
+            100
+        ));
     }
 
     #[test]
@@ -11560,7 +11665,10 @@ budget_credits_per_hour = {credits}
             message: "stuck".into(),
         };
         assert_eq!(a2a_duplicate_risk(&idempotent), Some("idempotent"));
-        assert_eq!(a2a_duplicate_risk(&operator_accepted), Some("operator_accepted"));
+        assert_eq!(
+            a2a_duplicate_risk(&operator_accepted),
+            Some("operator_accepted")
+        );
         assert_eq!(a2a_duplicate_risk(&force_error), None);
     }
 
@@ -12273,7 +12381,13 @@ budget_credits_per_hour = {credits}
         // issuer == operator. The rejection row's issuer is the
         // daemon identity == operator, so it must appear.
         let resp = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &operator,
+            )
             .await;
         let events = match resp {
             Response::AuditEvents { events } => events,
@@ -12290,7 +12404,13 @@ budget_credits_per_hour = {credits}
         // row — it carries the operator's pubkey, not the foreign
         // peer's. Probing attacker doesn't get to confirm the probe.
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &foreign,
+            )
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,
@@ -12622,7 +12742,13 @@ budget_credits_per_hour = {credits}
         }
 
         let resp_op = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &operator,
+            )
             .await;
         let events_op = match resp_op {
             Response::AuditEvents { events } => events,
@@ -12636,7 +12762,13 @@ budget_credits_per_hour = {credits}
         );
 
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &foreign,
+            )
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,
@@ -13080,7 +13212,13 @@ budget_credits_per_hour = {credits}
             other => panic!("expected Error, got {other:?}"),
         }
         let resp_op = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &operator,
+            )
             .await;
         let events_op = match resp_op {
             Response::AuditEvents { events } => events,
@@ -13094,7 +13232,13 @@ budget_credits_per_hour = {credits}
         );
 
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
+            .respond(
+                Request::RecentAudit {
+                    limit: 50,
+                    since_ms: None,
+                },
+                &foreign,
+            )
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,

@@ -2135,10 +2135,7 @@ mod tests {
             .expect("AuditKind serializes as a JSON object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort();
-        assert_eq!(
-            keys,
-            vec!["claimed_sender_display", "peer_display", "type"]
-        );
+        assert_eq!(keys, vec!["claimed_sender_display", "peer_display", "type"]);
         assert_eq!(
             obj.get("type"),
             Some(&serde_json::json!("a2_a_sender_mismatch")),

@@ -2007,9 +2007,7 @@ mod tests {
             peer_pubkey_b58: None,
             ..A2aScopeRequest::default()
         };
-        assert!(
-            !a2a_scope_allows("a2a.send.peer", &scope, "a2a.send.peer", actual_none).unwrap()
-        );
+        assert!(!a2a_scope_allows("a2a.send.peer", &scope, "a2a.send.peer", actual_none).unwrap());
     }
 
     #[test]
@@ -2030,27 +2028,18 @@ mod tests {
             duplicate_risk: Some("operator-accepted"),
             ..A2aScopeRequest::default()
         };
-        assert!(a2a_scope_allows(
-            "a2a.requeue",
-            &underscore_scope,
-            "a2a.requeue",
-            dash_actual
-        )
-        .unwrap());
+        assert!(
+            a2a_scope_allows("a2a.requeue", &underscore_scope, "a2a.requeue", dash_actual).unwrap()
+        );
 
-        let dash_scope =
-            serde_json::json!({ "version": 1, "duplicate_risk": "operator-accepted" });
+        let dash_scope = serde_json::json!({ "version": 1, "duplicate_risk": "operator-accepted" });
         let underscore_actual = A2aScopeRequest {
             duplicate_risk: Some("operator_accepted"),
             ..A2aScopeRequest::default()
         };
-        assert!(a2a_scope_allows(
-            "a2a.requeue",
-            &dash_scope,
-            "a2a.requeue",
-            underscore_actual
-        )
-        .unwrap());
+        assert!(
+            a2a_scope_allows("a2a.requeue", &dash_scope, "a2a.requeue", underscore_actual).unwrap()
+        );
     }
 
     #[test]
@@ -2176,9 +2165,7 @@ mod tests {
             before_ms: None,
             ..PeerScopeRequest::default()
         };
-        assert!(
-            !peer_scope_allows("peers.purge", &scope, "peers.purge", actual_none).unwrap()
-        );
+        assert!(!peer_scope_allows("peers.purge", &scope, "peers.purge", actual_none).unwrap());
     }
 
     #[test]
@@ -2188,9 +2175,7 @@ mod tests {
             self_target: None,
             ..PeerScopeRequest::default()
         };
-        assert!(
-            !peer_scope_allows("peers.revoke", &scope, "peers.revoke", actual_none).unwrap()
-        );
+        assert!(!peer_scope_allows("peers.revoke", &scope, "peers.revoke", actual_none).unwrap());
     }
 
     #[test]
@@ -2336,9 +2321,7 @@ mod tests {
             "before_ms": 1_000,
             "apply": true
         });
-        assert!(
-            memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_000).unwrap()
-        );
+        assert!(memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_000).unwrap());
         assert!(
             !memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_001).unwrap()
         );
@@ -2613,17 +2596,15 @@ mod tests {
     #[test]
     fn memory_repair_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_unscoped_grants(
     ) {
-        assert!(
-            !memory_repair_scope_allows(
-                "memory",
-                &serde_json::json!([]),
-                "record-1",
-                "working",
-                0,
-                true
-            )
-            .unwrap()
-        );
+        assert!(!memory_repair_scope_allows(
+            "memory",
+            &serde_json::json!([]),
+            "record-1",
+            "working",
+            0,
+            true
+        )
+        .unwrap());
 
         let bound_scope = serde_json::json!({
             "version": 1,
@@ -2632,41 +2613,35 @@ mod tests {
             "before_ms": 1_000,
             "apply": true
         });
-        assert!(
-            !memory_repair_scope_allows(
-                "memory.repair.dry_run",
-                &bound_scope,
-                "record-1",
-                "working",
-                999,
-                true
-            )
-            .unwrap()
-        );
+        assert!(!memory_repair_scope_allows(
+            "memory.repair.dry_run",
+            &bound_scope,
+            "record-1",
+            "working",
+            999,
+            true
+        )
+        .unwrap());
 
         let empty = serde_json::json!({});
-        assert!(
-            memory_repair_scope_allows(
-                "memory.repair.apply",
-                &empty,
-                "any-record",
-                "working",
-                0,
-                true
-            )
-            .unwrap()
-        );
-        assert!(
-            memory_repair_scope_allows(
-                "memory.repair.apply",
-                &empty,
-                "any-record",
-                "longterm",
-                u64::MAX,
-                true
-            )
-            .unwrap()
-        );
+        assert!(memory_repair_scope_allows(
+            "memory.repair.apply",
+            &empty,
+            "any-record",
+            "working",
+            0,
+            true
+        )
+        .unwrap());
+        assert!(memory_repair_scope_allows(
+            "memory.repair.apply",
+            &empty,
+            "any-record",
+            "longterm",
+            u64::MAX,
+            true
+        )
+        .unwrap());
     }
 
     #[test]
@@ -2744,20 +2719,18 @@ mod tests {
     #[test]
     fn memory_compaction_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_unscoped_grants(
     ) {
-        assert!(
-            !memory_compaction_scope_allows(
-                "memory",
-                &serde_json::json!([]),
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: None,
-                    delete_episodic_before_ms: None,
-                    mark_longterm_stale_before_ms: None,
-                    detach_stale_parents: false,
-                }
-            )
-            .unwrap()
-        );
+        assert!(!memory_compaction_scope_allows(
+            "memory",
+            &serde_json::json!([]),
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
 
         let bound_scope = serde_json::json!({
             "version": 1,
@@ -2765,50 +2738,44 @@ mod tests {
             "before_ms": 1_000,
             "apply": true
         });
-        assert!(
-            !memory_compaction_scope_allows(
-                "memory.compact.dry_run",
-                &bound_scope,
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: Some(999),
-                    delete_episodic_before_ms: None,
-                    mark_longterm_stale_before_ms: None,
-                    detach_stale_parents: false,
-                }
-            )
-            .unwrap()
-        );
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.dry_run",
+            &bound_scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: Some(999),
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
 
         let empty = serde_json::json!({});
-        assert!(
-            memory_compaction_scope_allows(
-                "memory.compact.apply",
-                &empty,
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: Some(u64::MAX),
-                    delete_episodic_before_ms: Some(u64::MAX),
-                    mark_longterm_stale_before_ms: Some(u64::MAX),
-                    detach_stale_parents: true,
-                }
-            )
-            .unwrap()
-        );
-        assert!(
-            memory_compaction_scope_allows(
-                "memory.compact.apply",
-                &empty,
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: None,
-                    delete_episodic_before_ms: None,
-                    mark_longterm_stale_before_ms: None,
-                    detach_stale_parents: false,
-                }
-            )
-            .unwrap()
-        );
+        assert!(memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &empty,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: Some(u64::MAX),
+                delete_episodic_before_ms: Some(u64::MAX),
+                mark_longterm_stale_before_ms: Some(u64::MAX),
+                detach_stale_parents: true,
+            }
+        )
+        .unwrap());
+        assert!(memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &empty,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
     }
 
     #[test]
@@ -2836,34 +2803,30 @@ mod tests {
             "before_ms": 1_000,
             "apply": true
         });
-        assert!(
-            !memory_compaction_scope_allows(
-                "memory.compact.apply",
-                &scope,
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: None,
-                    delete_episodic_before_ms: Some(500),
-                    mark_longterm_stale_before_ms: None,
-                    detach_stale_parents: false,
-                }
-            )
-            .unwrap()
-        );
-        assert!(
-            !memory_compaction_scope_allows(
-                "memory.compact.apply",
-                &scope,
-                MemoryCompactionScopeRequest {
-                    apply: true,
-                    delete_working_before_ms: None,
-                    delete_episodic_before_ms: None,
-                    mark_longterm_stale_before_ms: Some(500),
-                    detach_stale_parents: false,
-                }
-            )
-            .unwrap()
-        );
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: Some(500),
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
+        assert!(!memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &scope,
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: Some(500),
+                detach_stale_parents: false,
+            }
+        )
+        .unwrap());
     }
 
     #[test]
@@ -4486,8 +4449,7 @@ mod tests {
 
         let negative = serde_json::json!({ "x": -1i64 });
         let negative = negative.as_object().unwrap();
-        let err =
-            optional_non_negative_integer_or_null("audit.verify", negative, "x").unwrap_err();
+        let err = optional_non_negative_integer_or_null("audit.verify", negative, "x").unwrap_err();
         assert!(
             matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("non-negative integer or null")),
             "{{\"x\": -1}} must produce the 'non-negative integer or null' error via as_u64() returning None on a negative number; got {err:?}. A regression that fell back to as_i64 would silently authorize backward time windows that audit/chain readers either treat as unbounded or as wrap-around large positive values.",
@@ -4537,8 +4499,7 @@ mod tests {
 
         let non_string_entry = serde_json::json!({ "x": [42] });
         let non_string_entry = non_string_entry.as_object().unwrap();
-        let err =
-            optional_string_array("memory.read", non_string_entry, "x", allowed).unwrap_err();
+        let err = optional_string_array("memory.read", non_string_entry, "x", allowed).unwrap_err();
         assert!(
             matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("entries must be strings")),
             "{{\"x\": [42]}} must produce the 'entries must be strings' error via the inner as_str returning None; got {err:?}. A regression that skipped non-string entries would silently let partially-typed memory grants through with mixed-type tier arrays that downstream as_str() reads as missing.",

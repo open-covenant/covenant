@@ -281,9 +281,8 @@ entry = "./tiny"
         ];
         for (slug, expected) in cases {
             let toml_src = format!("runtime = \"{slug}\"");
-            let parsed: Holder = toml::from_str(&toml_src).unwrap_or_else(|err| {
-                panic!("Runtime slug {slug:?} must deserialize, got: {err}")
-            });
+            let parsed: Holder = toml::from_str(&toml_src)
+                .unwrap_or_else(|err| panic!("Runtime slug {slug:?} must deserialize, got: {err}"));
             assert_eq!(parsed.runtime, expected);
         }
 

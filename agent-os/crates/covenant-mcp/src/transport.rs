@@ -393,9 +393,7 @@ impl McpClient for MockMcpClient {
         (self.handler)(method, &params)
     }
     async fn notify(&self, method: &str, params: Value) -> Result<(), McpClientError> {
-        self.notifications
-            .lock()
-            .push((method.to_string(), params));
+        self.notifications.lock().push((method.to_string(), params));
         Ok(())
     }
 }
@@ -510,7 +508,9 @@ mod tests {
             params: Value::Null,
         };
         let wire = serde_json::to_value(&empty).unwrap();
-        let obj = wire.as_object().expect("notification serializes as a JSON object");
+        let obj = wire
+            .as_object()
+            .expect("notification serializes as a JSON object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(
@@ -535,10 +535,9 @@ mod tests {
             "JsonRpcNotification must never serialize an id field",
         );
 
-        let parsed: JsonRpcNotification = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-        )
-        .expect("notification with no params must decode via #[serde(default)]");
+        let parsed: JsonRpcNotification =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+                .expect("notification with no params must decode via #[serde(default)]");
         assert_eq!(parsed.method, "notifications/initialized");
         assert!(parsed.params.is_null());
     }
@@ -589,7 +588,9 @@ mod tests {
             error: None,
         };
         let wire = serde_json::to_value(&ok).unwrap();
-        let obj = wire.as_object().expect("response serializes as a JSON object");
+        let obj = wire
+            .as_object()
+            .expect("response serializes as a JSON object");
         assert!(
             obj.contains_key("result"),
             "ok response must include result on the wire",
@@ -610,7 +611,9 @@ mod tests {
             }),
         };
         let wire = serde_json::to_value(&err).unwrap();
-        let obj = wire.as_object().expect("response serializes as a JSON object");
+        let obj = wire
+            .as_object()
+            .expect("response serializes as a JSON object");
         assert!(
             obj.contains_key("error"),
             "error response must include error on the wire",

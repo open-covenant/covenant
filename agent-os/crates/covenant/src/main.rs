@@ -1541,11 +1541,7 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    write_frame(
-                        &mut stream,
-                        &Request::RecentAudit { limit, since_ms },
-                    )
-                    .await?;
+                    write_frame(&mut stream, &Request::RecentAudit { limit, since_ms }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditEvents { events } => {
                             if as_json {
@@ -3316,7 +3312,9 @@ mod tests {
         ];
 
         fn assert_shape(value: &serde_json::Value) {
-            let object = value.as_object().expect("peer_list_json must return an object");
+            let object = value
+                .as_object()
+                .expect("peer_list_json must return an object");
             let mut keys: Vec<String> = object.keys().cloned().collect();
             keys.sort();
             let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
@@ -3340,10 +3338,7 @@ mod tests {
                 value["matched_count"].is_u64(),
                 "matched_count must serialize as a non-negative integer, not a string-of-integer: {value}",
             );
-            assert!(
-                value["peers"].is_array(),
-                "peers must be an array: {value}",
-            );
+            assert!(value["peers"].is_array(), "peers must be an array: {value}",);
             assert!(
                 value["operator_pubkey_b58"].is_string(),
                 "operator_pubkey_b58 must be a string: {value}",
@@ -3596,9 +3591,7 @@ mod tests {
             "upper-case UUID spelling is what callers paste from RFC 4122 docs and must map to invalid_intent_id",
         );
         assert_eq!(
-            intents_resume_error_code(
-                "pass either <intent-id> or latest, not both"
-            ),
+            intents_resume_error_code("pass either <intent-id> or latest, not both"),
             "conflicting_flags",
         );
         assert_eq!(
@@ -3706,7 +3699,12 @@ mod tests {
             &Some(receipt),
         ));
         assert_shape(&intents_resume_ok_json(
-            "latest", intent_id, "ok", "", &[], &None,
+            "latest",
+            intent_id,
+            "ok",
+            "",
+            &[],
+            &None,
         ));
     }
 
@@ -3907,9 +3905,7 @@ mod tests {
         const EXPECTED_KEYS: &[&str] = &["kind", "status"];
 
         let value = ping_json();
-        let object = value
-            .as_object()
-            .expect("ping_json must return an object");
+        let object = value.as_object().expect("ping_json must return an object");
         let mut keys: Vec<String> = object.keys().cloned().collect();
         keys.sort();
         let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
@@ -4772,9 +4768,9 @@ mod tests {
         const EXPECTED_KEYS: &[&str] = &["mode", "reason", "records"];
 
         fn assert_expected_receipt_changes_shape(value: &serde_json::Value) {
-            let block = value["expected_receipt_changes"]
-                .as_object()
-                .expect("memory_compaction_plan_json expected_receipt_changes field must be an object");
+            let block = value["expected_receipt_changes"].as_object().expect(
+                "memory_compaction_plan_json expected_receipt_changes field must be an object",
+            );
             let mut keys: Vec<String> = block.keys().cloned().collect();
             keys.sort();
             let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
@@ -5112,24 +5108,49 @@ mod tests {
                     .expect("each records[] element must be an object");
                 let mut keys: Vec<String> = object.keys().cloned().collect();
                 keys.sort();
-                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
                 assert_eq!(
                     keys, expected,
                     "memory_receipt_backfill_plan_json records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
                 );
 
-                assert!(record["receipt_id"].is_string(), "records[].receipt_id must be a string uuid: {record}");
-                assert!(record["memory_record_id"].is_string(), "records[].memory_record_id must be a string uuid: {record}");
-                assert!(record["payer_display"].is_string(), "records[].payer_display must be a string: {record}");
-                assert!(record["payer_pubkey"].is_string(), "records[].payer_pubkey must be a base58 string: {record}");
-                assert!(record["memory_owner_display"].is_string(), "records[].memory_owner_display must be a string: {record}");
-                assert!(record["memory_owner_pubkey"].is_string(), "records[].memory_owner_pubkey must be a base58 string: {record}");
+                assert!(
+                    record["receipt_id"].is_string(),
+                    "records[].receipt_id must be a string uuid: {record}"
+                );
+                assert!(
+                    record["memory_record_id"].is_string(),
+                    "records[].memory_record_id must be a string uuid: {record}"
+                );
+                assert!(
+                    record["payer_display"].is_string(),
+                    "records[].payer_display must be a string: {record}"
+                );
+                assert!(
+                    record["payer_pubkey"].is_string(),
+                    "records[].payer_pubkey must be a base58 string: {record}"
+                );
+                assert!(
+                    record["memory_owner_display"].is_string(),
+                    "records[].memory_owner_display must be a string: {record}"
+                );
+                assert!(
+                    record["memory_owner_pubkey"].is_string(),
+                    "records[].memory_owner_pubkey must be a base58 string: {record}"
+                );
                 assert!(
                     record["credits_consumed"].is_u64(),
                     "records[].credits_consumed must be a non-negative integer, not a stringified number: {record}",
                 );
-                assert!(record["status"].is_string(), "records[].status must be a string slug: {record}");
-                assert!(record["reason"].is_string(), "records[].reason must be a string, not a structured object: {record}");
+                assert!(
+                    record["status"].is_string(),
+                    "records[].status must be a string slug: {record}"
+                );
+                assert!(
+                    record["reason"].is_string(),
+                    "records[].reason must be a string, not a structured object: {record}"
+                );
             }
         }
 
@@ -5219,15 +5240,25 @@ mod tests {
                     .expect("each unmatched_legacy_receipts[] element must be an object");
                 let mut keys: Vec<String> = object.keys().cloned().collect();
                 keys.sort();
-                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
                 assert_eq!(
                     keys, expected,
                     "memory_receipt_backfill_plan_json unmatched_legacy_receipts[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
                 );
 
-                assert!(entry["receipt_id"].is_string(), "unmatched_legacy_receipts[].receipt_id must be a string uuid: {entry}");
-                assert!(entry["payer_display"].is_string(), "unmatched_legacy_receipts[].payer_display must be a string: {entry}");
-                assert!(entry["payer_pubkey"].is_string(), "unmatched_legacy_receipts[].payer_pubkey must be a base58 string: {entry}");
+                assert!(
+                    entry["receipt_id"].is_string(),
+                    "unmatched_legacy_receipts[].receipt_id must be a string uuid: {entry}"
+                );
+                assert!(
+                    entry["payer_display"].is_string(),
+                    "unmatched_legacy_receipts[].payer_display must be a string: {entry}"
+                );
+                assert!(
+                    entry["payer_pubkey"].is_string(),
+                    "unmatched_legacy_receipts[].payer_pubkey must be a base58 string: {entry}"
+                );
                 assert!(
                     entry["credits_consumed"].is_u64(),
                     "unmatched_legacy_receipts[].credits_consumed must be a non-negative integer, not a stringified number: {entry}",
@@ -5289,9 +5320,9 @@ mod tests {
         ];
 
         fn assert_unmatched_memory_record_shape(value: &serde_json::Value) {
-            let entries = value["unmatched_memory_records"]
-                .as_array()
-                .expect("memory_receipt_backfill_plan_json unmatched_memory_records field must be an array");
+            let entries = value["unmatched_memory_records"].as_array().expect(
+                "memory_receipt_backfill_plan_json unmatched_memory_records field must be an array",
+            );
             assert!(
                 entries.len() >= 2,
                 "fixture must produce at least two unmatched_memory_records to pin the per-element schema across distinct owners: {value}",
@@ -5302,15 +5333,25 @@ mod tests {
                     .expect("each unmatched_memory_records[] element must be an object");
                 let mut keys: Vec<String> = object.keys().cloned().collect();
                 keys.sort();
-                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
                 assert_eq!(
                     keys, expected,
                     "memory_receipt_backfill_plan_json unmatched_memory_records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
                 );
 
-                assert!(entry["memory_record_id"].is_string(), "unmatched_memory_records[].memory_record_id must be a string uuid: {entry}");
-                assert!(entry["owner_display"].is_string(), "unmatched_memory_records[].owner_display must be a string: {entry}");
-                assert!(entry["owner_pubkey"].is_string(), "unmatched_memory_records[].owner_pubkey must be a base58 string: {entry}");
+                assert!(
+                    entry["memory_record_id"].is_string(),
+                    "unmatched_memory_records[].memory_record_id must be a string uuid: {entry}"
+                );
+                assert!(
+                    entry["owner_display"].is_string(),
+                    "unmatched_memory_records[].owner_display must be a string: {entry}"
+                );
+                assert!(
+                    entry["owner_pubkey"].is_string(),
+                    "unmatched_memory_records[].owner_pubkey must be a base58 string: {entry}"
+                );
                 assert!(
                     entry["tier"].is_string(),
                     "unmatched_memory_records[].tier must be a documented tier slug string, not a structured object: {entry}",
@@ -5481,8 +5522,7 @@ mod tests {
 
     #[test]
     fn ignore_report_json_pins_top_level_schema() {
-        const EXPECTED_KEYS: &[&str] =
-            &["ignored", "kind", "matched_pattern", "rules_loaded"];
+        const EXPECTED_KEYS: &[&str] = &["ignored", "kind", "matched_pattern", "rules_loaded"];
 
         fn assert_shape(value: &serde_json::Value) {
             let object = value
@@ -5824,10 +5864,7 @@ mod tests {
                 value["checks"].is_array(),
                 "checks must be an array: {value}",
             );
-            assert!(
-                value["drift"].is_array(),
-                "drift must be an array: {value}",
-            );
+            assert!(value["drift"].is_array(), "drift must be an array: {value}",);
         }
 
         let checks = vec![VerifyCheck {
@@ -6009,10 +6046,7 @@ mod tests {
                 value["state_filter"].is_string() || value["state_filter"].is_null(),
                 "state_filter must be string-or-null (never integer / array): {value}",
             );
-            assert!(
-                value["tasks"].is_array(),
-                "tasks must be an array: {value}",
-            );
+            assert!(value["tasks"].is_array(), "tasks must be an array: {value}",);
             assert!(
                 value["results"].is_array(),
                 "results must be an array: {value}",
@@ -6068,7 +6102,11 @@ mod tests {
         assert_eq!(memory_tier_slug(MemoryTier::Episodic), "episodic");
         assert_eq!(memory_tier_slug(MemoryTier::LongTerm), "longterm");
 
-        for tier in [MemoryTier::Working, MemoryTier::Episodic, MemoryTier::LongTerm] {
+        for tier in [
+            MemoryTier::Working,
+            MemoryTier::Episodic,
+            MemoryTier::LongTerm,
+        ] {
             assert_eq!(
                 parse_tier(memory_tier_slug(tier)).unwrap(),
                 tier,

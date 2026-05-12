@@ -1491,6 +1491,55 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_budget_unseeded_serde_pins_three_field_variant() {
+        // AuditKind::BudgetUnseeded is the audit row emitted when
+        // dispatch_intent falls into the NoCapacity fail-open arm:
+        // the manifest opted in to budget enforcement but no bucket
+        // was seeded for the agent. Distinct from BudgetExhausted so
+        // /audit consumers can filter operator-misconfig (forgot
+        // register_agent_budgets) vs. policy-rejection without
+        // special-casing sentinel values. A rename, default, or
+        // shared-slug regression would collapse the two arms and
+        // operators would lose the operator-misconfig signal.
+        let kind = AuditKind::BudgetUnseeded {
+            agent_display: "research@agent".into(),
+            intent_id: Uuid::nil(),
+            requested: 100,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent_display", "intent_id", "requested", "type"],
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("budget_unseeded")),
+            "AuditKind discriminator slug must be snake_case 'budget_unseeded'; a titlecase regression or a merge with BudgetExhausted's slug would silently collapse the operator-misconfig vs. policy-rejection split that /audit consumers filter on",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::BudgetUnseeded must round-trip through serde_json verbatim — the PartialEq derive is the contract operator-misconfig diagnosis leans on",
+        );
+
+        for required in ["agent_display", "intent_id", "requested"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::BudgetUnseeded wire form must reject a payload missing {required:?}; a stray #[serde(default)] on agent_display would silently let the row decode with an empty string and break the back-correlation to the agent whose bucket is missing",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_capability_revoke_rejected_serde_pins_two_field_variant() {
         // AuditKind::CapabilityRevokeRejected is the audit row emitted
         // when RevokeCapability is rejected because the authenticated

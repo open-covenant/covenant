@@ -4185,6 +4185,141 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_call_tool_serde_pins_two_field_variant() {
+        // Request::CallTool is the operator/CLI verb for invoking
+        // a named tool via the MCP bridge. It pairs with
+        // Response::ToolResult (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly three top-level
+        // keys: kind='call_tool' plus name plus arguments.
+        //
+        // name is a required String (the tool slug as registered
+        // with the daemon's tool bridge). arguments is
+        // serde_json::Value with #[serde(default)] and NO
+        // skip_serializing_if. The Default impl for serde_json::Value
+        // returns Value::Null, so an unset arguments surfaces as
+        // JSON null on the wire — NOT as an empty object {} and NOT
+        // as an absent key. This is the durable shape MCP tool
+        // servers depend on to distinguish 'no arguments supplied'
+        // from 'empty arguments map supplied'.
+        //
+        // Distinct from the just-pinned GrantCapability three-field
+        // variant — CallTool has a required String plus a default-
+        // bearing Value, which is a new shape: a default-bearing
+        // type whose Default is null-on-wire rather than the
+        // Option<T> null-on-wire surface. This slice pins the
+        // required-plus-default-Value variant of the two-field
+        // shape.
+        //
+        // This slice locks: the exact wire shape (kind, name,
+        // arguments), the snake_case discriminator 'call_tool',
+        // arguments=null on the no-args path, arguments=<object> on
+        // the with-args path, round-trip for both shapes, and
+        // forgiveness for frames omitting arguments (decodes as
+        // Value::Null).
+        let no_args = Request::CallTool {
+            name: "echo".into(),
+            arguments: serde_json::Value::Null,
+        };
+
+        let wire = serde_json::to_value(&no_args).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["arguments", "kind", "name"],
+            "Request::CallTool wire form must be exactly three \
+             top-level keys: 'kind' plus the two variant fields \
+             ('name', 'arguments'). A refactor that added \
+             #[serde(skip_serializing_if)] to arguments would \
+             shrink the no-args wire form from three keys to two \
+             and silently break CLI/HTTP consumers that switch on \
+             the arguments key's presence to distinguish no-args-\
+             from-empty-args invocations",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("call_tool")),
+            "Request discriminator slug must be the durable \
+             'call_tool'. A refactor that renamed the variant \
+             (e.g., InvokeTool, or ToolCall for surface parity \
+             with the tools.call capability slug) would shift the \
+             slug and operator-driven tool invocation goes dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("name"),
+            Some(&serde_json::json!("echo")),
+            "Request::CallTool::name must surface as a JSON string \
+             carrying the tool slug verbatim; a refactor that \
+             promoted name to a typed ToolName newtype without \
+             preserving Serialize-as-String would silently mismatch \
+             every CLI/HTTP caller that sends the slug",
+        );
+        assert_eq!(
+            obj.get("arguments"),
+            Some(&serde_json::Value::Null),
+            "Request::CallTool::arguments must surface as JSON null \
+             when unset (the durable null-on-wire surface — \
+             Value::default() == Value::Null, NOT an empty object \
+             and NOT a missing key); a refactor that changed the \
+             default to Value::Object(Map::new()) or added \
+             skip_serializing_if would silently mismatch MCP tool \
+             servers that distinguish 'no arguments supplied' from \
+             'empty arguments map supplied'",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, no_args,
+            "Request::CallTool (no-args) must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP call-tool consumer leans on",
+        );
+
+        let with_args = Request::CallTool {
+            name: "echo".into(),
+            arguments: serde_json::json!({"text": "hi"}),
+        };
+        let with_args_wire = serde_json::to_value(&with_args).unwrap();
+        let with_args_obj = with_args_wire.as_object().unwrap();
+        assert_eq!(
+            with_args_obj.get("arguments"),
+            Some(&serde_json::json!({"text": "hi"})),
+            "populated arguments must round-trip as the JSON value \
+             the caller supplied verbatim — serde_json::Value keeps \
+             the operator's argument payload opaque to the daemon's \
+             IPC layer and forwards it to the tool server intact; \
+             the three-key shape stays stable across no-args and \
+             with-args",
+        );
+        let with_args_back: Request = serde_json::from_value(with_args_wire.clone()).unwrap();
+        assert_eq!(
+            with_args_back, with_args,
+            "Request::CallTool (with-args) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_arguments = obj.clone();
+        missing_arguments.remove("arguments");
+        let parsed_no_arguments: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_arguments)).unwrap();
+        assert_eq!(
+            parsed_no_arguments, no_args,
+            "Request::CallTool wire form must accept a payload \
+             missing 'arguments' (serde_json::Value with \
+             #[serde(default)] decodes as Value::Null); this is \
+             the forward-compatibility contract for stale CLIs \
+             that predate the arguments field — and the parse-as-\
+             null path is observably equal to an explicit \
+             arguments=null frame",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

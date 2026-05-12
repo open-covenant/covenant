@@ -1135,6 +1135,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_submit_intent_serde_pins_single_field_variant() {
+        // Request::SubmitIntent is the single-field variant the
+        // CLI sends to dispatch an operator-typed intent — it
+        // carries text: String, the raw intent the daemon echoes
+        // into the audit log and routes through the runtime
+        // pipeline. It pairs with Response::IntentResult (already
+        // pinned). With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Request enum, the
+        // wire object is exactly two top-level keys:
+        // kind='submit_intent' plus text. Only an async
+        // round-trip via duplex pipe (request_roundtrip_via_pipe)
+        // exercises this variant, and that test does not assert
+        // any wire-shape invariant. A serde-shape regression on
+        // Request::SubmitIntent silently breaks the operator's
+        // primary CLI entrypoint — every `covenant intents submit`
+        // call ends in an authentication-error fallback or a
+        // missing-field decode error on the daemon side.
+        let event = Request::SubmitIntent {
+            text: "summarise the audit log".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "text"],
+            "Request::SubmitIntent wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'text' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'text' \
+             one level deeper and every operator's `covenant \
+             intents submit` call would fail to decode on the \
+             daemon side — the operator's primary intent-submission \
+             flow would silently start returning Error responses \
+             instead of IntentResult",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("submit_intent")),
+            "Request discriminator slug must be the durable \
+             'submit_intent'; a slug regression silently routes \
+             incoming intent frames to the daemon's catch-all \
+             error branch — every CLI intent submission fails \
+             with a confusing fallback message instead of \
+             IntentResult, leaving the operator's typed prompt \
+             unprocessed",
+        );
+        assert_eq!(
+            obj.get("text").and_then(serde_json::Value::as_str),
+            Some("summarise the audit log"),
+            "Request::SubmitIntent::text must surface as the \
+             literal operator-typed intent string — the daemon's \
+             audit log row and runtime pipeline both bind on this \
+             exact field; a rename or retype would silently \
+             re-route operator prompts to a different verb",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::SubmitIntent must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI intent-submission consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("text");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::SubmitIntent wire form must reject a payload \
+             missing 'text'; a stray #[serde(default)] would let \
+             a malformed frame decode with text=String::new() and \
+             the daemon would dispatch an empty-prompt intent \
+             through the runtime pipeline — every empty-prompt \
+             audit row would falsely attribute to the operator \
+             without the operator having submitted anything",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

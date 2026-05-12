@@ -1203,6 +1203,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn audit_kind_budget_exhausted_serde_pins_six_field_variant() {
+        // AuditKind::BudgetExhausted is the audit row covenantd::Server::
+        // dispatch_intent emits when the matched agent's budget bucket
+        // is exhausted. The row doubles as the resume queue — `covenant
+        // intents resume <intent-id>` re-dispatches from this exact row,
+        // so the six fields (agent_display, intent_id, intent_text,
+        // requested, tokens_remaining, refill_eta_ms) are load-bearing.
+        // A rename or #[serde(default)] regression on intent_text or
+        // intent_id would silently empty the resume queue or re-dispatch
+        // a meaningless intent.
+        let kind = AuditKind::BudgetExhausted {
+            agent_display: "research@agent".into(),
+            intent_id: Uuid::nil(),
+            intent_text: "find papers".into(),
+            requested: 100,
+            tokens_remaining: 5,
+            refill_eta_ms: 3_600_000,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "agent_display",
+                "intent_id",
+                "intent_text",
+                "refill_eta_ms",
+                "requested",
+                "tokens_remaining",
+                "type",
+            ],
+            "AuditKind::BudgetExhausted wire form must be exactly seven keys: the six variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("budget_exhausted")),
+            "AuditKind discriminator slug must be snake_case 'budget_exhausted'; a titlecase or kebab-case regression strands every operator's resume tooling",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::BudgetExhausted must round-trip through serde_json verbatim — the PartialEq derive is the contract resume tooling joins on",
+        );
+
+        for required in [
+            "agent_display",
+            "intent_id",
+            "intent_text",
+            "requested",
+            "tokens_remaining",
+            "refill_eta_ms",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::BudgetExhausted wire form must reject a payload missing {required:?}; a stray #[serde(default)] on intent_text or intent_id would silently let the resume queue re-dispatch a meaningless intent",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

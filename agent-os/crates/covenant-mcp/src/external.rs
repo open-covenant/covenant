@@ -200,6 +200,50 @@ mod tests {
     use super::*;
     use crate::transport::MockMcpClient;
 
+    #[test]
+    fn sanitize_prefix_maps_non_alnum_to_underscore_trims_edges_and_falls_back_to_remote() {
+        assert_eq!(
+            sanitize_prefix("myserver"),
+            "myserver",
+            "alphanumeric prefixes must pass through unchanged; otherwise operator-supplied names get rewritten in ways the tool-allowlist can't anticipate",
+        );
+        assert_eq!(
+            sanitize_prefix("123"),
+            "123",
+            "digit-only prefixes must pass through unchanged so a numeric server label remains a valid tool-name fragment",
+        );
+        assert_eq!(
+            sanitize_prefix("my-server"),
+            "my_server",
+            "documented character map: dash becomes underscore so the result stays inside the tool-name allowed alphabet",
+        );
+        assert_eq!(
+            sanitize_prefix("my.server"),
+            "my_server",
+            "documented character map: dot becomes underscore so dotted hostnames don't collide with the mcp_<prefix>_<name> separator convention",
+        );
+        assert_eq!(
+            sanitize_prefix("  my-server  "),
+            "my_server",
+            "surrounding whitespace must be mapped to underscore then trimmed; otherwise a stray space in operator config leaks into the wire tool name",
+        );
+        assert_eq!(
+            sanitize_prefix(""),
+            "remote",
+            "an empty prefix must fall back to the literal 'remote' so the generated tool name mcp_remote_<name> never collapses to mcp__<name> and silently merges two unconfigured servers",
+        );
+        assert_eq!(
+            sanitize_prefix("..."),
+            "remote",
+            "an all-punctuation prefix becomes all-underscore then trims to empty; the fallback must still kick in or the tool-name shape collapses",
+        );
+        assert_eq!(
+            sanitize_prefix("   "),
+            "remote",
+            "an all-whitespace prefix is equivalent to empty after mapping and trimming; the fallback must apply consistently with the empty-input case",
+        );
+    }
+
     fn happy_handler(method: &str, params: &Value) -> Result<Value, McpClientError> {
         match method {
             "initialize" => Ok(serde_json::json!({

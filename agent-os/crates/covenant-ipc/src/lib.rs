@@ -1970,6 +1970,92 @@ mod tests {
     }
 
     #[test]
+    fn response_a2a_compacted_serde_pins_single_field_variant() {
+        // Response::A2ACompacted is the variant the daemon sends
+        // after A2ACompact removes terminal or orphaned rows from
+        // the local A2A mailbox. It carries dropped: u64 — the row
+        // count the bounded compaction pass dropped, which the CLI
+        // surfaces so the operator can confirm queue hygiene made
+        // progress. With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly two top-level keys: kind='a2_a_compacted' (the
+        // rename_all = snake_case rule splits A2A on the digit/upper
+        // boundary into 'a2_a_...'; the durable wire form matches
+        // the analogous AuditKind::A2A* slugs and the sibling
+        // A2ATaskQueued/A2AResultPosted pins) plus dropped. No prior
+        // test pins the exact wire shape, round-trip, or omission
+        // rejection. A refactor that promoted A2ACompacted from a
+        // struct variant to a newtype variant would nest dropped
+        // one level deeper next to 'kind' and the CLI would read
+        // zero for every compaction; a stray #[serde(default)] on
+        // dropped would let a malformed row decode with 0 and the
+        // operator would believe every compaction is a no-op — the
+        // only progress signal the bounded compactor exposes.
+        let event = Response::A2ACompacted { dropped: 17 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dropped", "kind"],
+            "Response::A2ACompacted wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'dropped' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'dropped' one level deeper and the CLI surface that \
+             confirms compaction progress would silently read zero \
+             — operator triage could not tell whether the bounded \
+             compactor made progress or hit a corruption guard",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_compacted")),
+            "Response discriminator slug must be the durable \
+             'a2_a_compacted' (rename_all = snake_case splits A2A \
+             on digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies compaction \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback instead of confirming the \
+             dropped-row count and masks the only signal the \
+             bounded compactor exposes",
+        );
+        assert_eq!(
+            obj.get("dropped").and_then(serde_json::Value::as_u64),
+            Some(17),
+            "Response::A2ACompacted::dropped must surface as the \
+             u64 row count verbatim — the operator reads this \
+             exact integer to confirm A2A queue hygiene made \
+             progress",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2ACompacted must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI compaction consumer leans on to \
+             render the dropped-row count to the operator",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("dropped");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2ACompacted wire form must reject a payload \
+             missing 'dropped'; a stray #[serde(default)] would let \
+             a malformed row decode with 0 and the CLI would \
+             surface a phantom zero count — every compaction would \
+             look like a no-op to the operator even when many rows \
+             were dropped, breaking the metric operators use to \
+             confirm A2A queue hygiene",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

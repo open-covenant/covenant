@@ -3082,6 +3082,73 @@ mod tests {
         assert!(verify(&back).is_ok());
     }
 
+    #[test]
+    fn signed_capability_signature_serde_pins_base58_and_length_arms() {
+        // SignedCapability::signature carries #[serde(with = "sig_b58")];
+        // every JSONL grant log, IPC capability response, and HTTP grant
+        // surface depends on the exact wire form. A refactor that swaps
+        // base58 for base64/hex invalidates every persisted grant on
+        // reopen; a refactor that drops the 64-byte length check silently
+        // accepts malformed signatures the verifier cannot recompute.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let signed = sign(
+            cap(subject, "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+
+        let wire = serde_json::to_value(&signed).unwrap();
+        let sig_str = wire
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .expect("signature field must be a JSON string named 'signature'; a rename or non-string encoding strands every JSONL grant log");
+        assert!(
+            !sig_str.is_empty(),
+            "serialized signature must be a non-empty base58 string",
+        );
+        let decoded = bs58::decode(sig_str)
+            .into_vec()
+            .expect("signature wire form must be valid base58; a refactor to base64/hex invalidates every persisted grant");
+        assert_eq!(
+            decoded.len(),
+            64,
+            "decoded signature must be exactly 64 bytes; the base58 wire form is the only contract that lets the verifier recompute the ed25519 signature",
+        );
+        assert_eq!(
+            decoded,
+            signed.signature.to_vec(),
+            "decoded signature bytes must equal the in-memory [u8; 64]; an encoding swap would silently corrupt every grant",
+        );
+
+        let short = bs58::encode([0u8; 32]).into_string();
+        let payload_short = serde_json::json!({
+            "capability": serde_json::to_value(&signed.capability).unwrap(),
+            "signature": short,
+        });
+        assert!(
+            serde_json::from_value::<SignedCapability>(payload_short).is_err(),
+            "32-byte signature must be rejected; a dropped length check silently zero-pads malformed grants",
+        );
+
+        let payload_garbage = serde_json::json!({
+            "capability": serde_json::to_value(&signed.capability).unwrap(),
+            "signature": "!!! not base58 !!!",
+        });
+        assert!(
+            serde_json::from_value::<SignedCapability>(payload_garbage).is_err(),
+            "non-base58 signature string must be rejected so the decoder never silently zero-fills invalid grants",
+        );
+
+        let serialized = serde_json::to_string(&signed).unwrap();
+        for byte in signed.signature.iter().take(4) {
+            let escape = format!("\\u{byte:04x}");
+            assert!(
+                !serialized.contains(&escape),
+                "serialized form must not contain raw signature bytes as escapes; the field must be base58-encoded, not raw",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn in_memory_revoke_removes_from_subject_list() {
         let issuer = LocalIdentity::generate("authority@local");

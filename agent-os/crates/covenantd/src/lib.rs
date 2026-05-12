@@ -10381,6 +10381,20 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[test]
+    fn a2a_repair_action_pins_each_repair_command_variant() {
+        let requeue = covenant_a2a::A2ARepairCommand::Requeue {
+            lease_id: Some(Uuid::new_v4()),
+            duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+        };
+        let force_error = covenant_a2a::A2ARepairCommand::ForceError {
+            lease_id: Some(Uuid::new_v4()),
+            message: "stuck on dependency".into(),
+        };
+        assert_eq!(a2a_repair_action(&requeue), "requeue");
+        assert_eq!(a2a_repair_action(&force_error), "force_error");
+    }
+
     /// Wire response rounds tokens_remaining to a powers-of-5 bucket.
     /// Sanity covers the bucket boundaries.
     #[test]

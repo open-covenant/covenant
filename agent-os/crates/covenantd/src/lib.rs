@@ -5019,6 +5019,42 @@ required = {caps:?}
         server_with_ignore(cards, runner_text, IgnoreSet::default())
     }
 
+    #[test]
+    fn parse_env_bool_accepts_documented_spellings_and_rejects_unknown() {
+        for v in ["1", "true", "yes", "on"] {
+            assert!(
+                parse_env_bool(v).unwrap(),
+                "{v:?} is a documented true spelling for COVENANT_* boolean env vars",
+            );
+        }
+        for v in ["0", "false", "no", "off"] {
+            assert!(
+                !parse_env_bool(v).unwrap(),
+                "{v:?} is a documented false spelling for COVENANT_* boolean env vars",
+            );
+        }
+
+        assert!(
+            parse_env_bool(" TRUE ").unwrap(),
+            "case-insensitive parsing with surrounding whitespace must keep env files portable across shells that strip or preserve quoting",
+        );
+        assert!(
+            parse_env_bool("Yes").unwrap(),
+            "mixed-case Yes must parse as true so operators editing env files do not have to memorise lowercase-only spellings",
+        );
+        assert!(
+            !parse_env_bool(" OFF ").unwrap(),
+            "case-insensitive parsing with surrounding whitespace must work for the false branch too, otherwise the trim/lowercase pair silently regresses on one side only",
+        );
+
+        let err = parse_env_bool("truee").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("truee"),
+            "rejection must echo the offending value so an operator typo in COVENANT_* env vars is debuggable from logs alone: {err:?}",
+        );
+    }
+
     fn server_with_ignore(cards: Vec<AgentCard>, runner_text: &str, ignore: IgnoreSet) -> Server {
         Server::new(
             Arc::new(Router::from_cards(cards)),

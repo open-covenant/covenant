@@ -3313,6 +3313,50 @@ mod tests {
     }
 
     #[test]
+    fn optional_string_enum_or_null_pins_absent_null_allowed_unsupported_and_non_string() {
+        let allowed = &["compute", "memory", "tool", "message", "registration"];
+
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_string_enum_or_null("chain.flush", empty, "r", allowed).is_ok(),
+            "absent field must be Ok; the let-else short-circuits before the null, type, and enum checks so unscoped grants do not fail at the resource-enum gate",
+        );
+
+        let explicit_null = serde_json::json!({ "r": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_string_enum_or_null("chain.flush", explicit_null, "r", allowed).is_ok(),
+            "{{\"r\": null}} must be Ok; null is the documented unbounded-resource marker and must short-circuit before the as_str type check, otherwise unbounded chain.resource grants stop authorizing themselves",
+        );
+
+        let allowed_value = serde_json::json!({ "r": "compute" });
+        let allowed_value = allowed_value.as_object().unwrap();
+        assert!(
+            optional_string_enum_or_null("chain.flush", allowed_value, "r", allowed).is_ok(),
+            "{{\"r\": \"compute\"}} must be Ok; an in-list resource string is the gate's intended input and a regression that flipped the contains check would silently reject every documented resource class",
+        );
+
+        let unsupported = serde_json::json!({ "r": "unknown" });
+        let unsupported = unsupported.as_object().unwrap();
+        let err =
+            optional_string_enum_or_null("chain.flush", unsupported, "r", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("unsupported value")),
+            "{{\"r\": \"unknown\"}} must produce the 'unsupported value' error; got {err:?}. A regression that broadened the allowed list to include arbitrary strings would silently authorize unsupported resource classes through chain.resource.",
+        );
+
+        let non_string = serde_json::json!({ "r": 42 });
+        let non_string = non_string.as_object().unwrap();
+        let err =
+            optional_string_enum_or_null("chain.flush", non_string, "r", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("string or null")),
+            "{{\"r\": 42}} must produce the 'string or null' error via as_str() returning None; got {err:?}. This is a distinct error path from the enum-miss arm — a regression that fell through to the contains check on a non-string would either panic or silently bypass the enum gate for partially-typed scope objects.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

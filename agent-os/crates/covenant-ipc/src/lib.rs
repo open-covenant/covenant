@@ -1219,6 +1219,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_authenticate_serde_pins_single_field_variant() {
+        // Request::Authenticate is the mandatory first privileged
+        // frame on every IPC connection — it carries token_b58:
+        // String, the base58-encoded peer token the daemon
+        // resolves through covenant_peer_auth::PeerRegistry to
+        // bind an AgentId to the connection for the lifetime of
+        // the socket. It pairs with Response::Authenticated
+        // (already pinned) on success and
+        // Response::AuthenticationFailed on failure. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='authenticate' plus token_b58. No prior test
+        // pins the exact wire shape or missing-field rejection for
+        // this variant. A serde-shape regression on the handshake
+        // silently breaks every privileged CLI/HTTP entrypoint —
+        // the operator's entire session model collapses.
+        let event = Request::Authenticate {
+            token_b58: "11111111111111111111111111111111".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "token_b58"],
+            "Request::Authenticate wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'token_b58' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would \
+             nest 'token_b58' one level deeper and every \
+             privileged CLI/HTTP client that sends \
+             {{\"kind\":\"authenticate\",\"token_b58\":\"...\"}} \
+             would fail to decode on the daemon side — the \
+             operator's entire session model collapses because \
+             the mandatory first frame is rejected before any \
+             verb runs",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("authenticate")),
+            "Request discriminator slug must be the durable \
+             'authenticate'; a slug regression silently routes \
+             incoming handshake frames to the daemon's catch-all \
+             error branch — every CLI/HTTP handshake fails with \
+             a confusing fallback message instead of \
+             Authenticated/AuthenticationFailed, masking the \
+             real cause of the session-start regression",
+        );
+        assert_eq!(
+            obj.get("token_b58").and_then(serde_json::Value::as_str),
+            Some("11111111111111111111111111111111"),
+            "Request::Authenticate::token_b58 must surface as the \
+             literal base58 peer-token string — the daemon's \
+             peer-registry resolver binds on this exact field; a \
+             rename or retype would silently re-route every \
+             handshake to an unknown-token reject branch",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::Authenticate must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP handshake consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("token_b58");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::Authenticate wire form must reject a payload \
+             missing 'token_b58'; a stray #[serde(default)] would \
+             let a malformed frame decode with \
+             token_b58=String::new() and the daemon would attempt \
+             to resolve the empty string against the peer \
+             registry — operator triage could not distinguish a \
+             real bad-token attempt from a serde-shape regression \
+             in the client, and the AuthenticationFailed audit \
+             row would falsely attribute the failure to the \
+             operator's token rather than the wire-shape break",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

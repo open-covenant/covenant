@@ -31,3 +31,12 @@ network         = "outbound-https-only"
 [settlement]
 budget_credits_per_hour = 0
 priority                = "normal"
+
+[hermes]
+# Documentary: which Hermes tools this agent expects to use. Operators
+# reading the manifest can spot an over-asking agent before granting
+# capabilities. Hermes itself still enforces the global tool allowlist.
+tools_allowed   = ["terminal", "read_file", "web"]
+# `operator-prompt` blocks until an operator answers via the console.
+# Alternatives: "auto-deny" (short-circuit to deny), "auto-once" (accept once).
+approval_policy = "operator-prompt"

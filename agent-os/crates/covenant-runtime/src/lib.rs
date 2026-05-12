@@ -27,7 +27,7 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 mod hermes;
-pub use hermes::HermesRunner;
+pub use hermes::{HermesCapabilities, HermesRunner};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentResult {

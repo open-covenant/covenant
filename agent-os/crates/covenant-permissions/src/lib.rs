@@ -1584,6 +1584,22 @@ mod tests {
     }
 
     #[test]
+    fn validate_chain_scope_rejects_invalid_mint_and_cluster_shapes() {
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "mint": "" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "cluster": "" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "cluster": 42 }),
+        );
+    }
+
+    #[test]
     fn validate_audit_scope_rejects_invalid_before_ms_and_include_integrity_types() {
         assert_invalid_scope(
             "audit.verify",

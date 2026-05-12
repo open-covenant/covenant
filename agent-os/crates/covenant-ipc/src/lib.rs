@@ -1792,6 +1792,93 @@ mod tests {
     }
 
     #[test]
+    fn response_a2a_result_posted_serde_pins_single_field_variant() {
+        // Response::A2AResultPosted is the variant the daemon sends
+        // after PostA2AResult successfully writes a result back to
+        // the originator peer's mailbox. It carries task_id: Uuid —
+        // the id the originator needs so its CLI can correlate the
+        // posted result against the originally sent task. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='a2_a_result_posted' (the rename_all = snake_case
+        // rule splits A2A on the digit/upper boundary into
+        // 'a2_a_...'; the durable wire form matches the analogous
+        // AuditKind::A2A* slugs and the sibling A2ATaskQueued pin)
+        // plus task_id. No prior test pins the exact wire shape,
+        // round-trip, or omission rejection. A refactor that
+        // promoted A2AResultPosted from a struct variant to a
+        // newtype variant would nest task_id one level deeper next
+        // to 'kind' and every CLI consumer that confirms the post
+        // landed against the original task id would silently fail;
+        // a stray #[serde(default)] on task_id would let a
+        // malformed row decode with Uuid::nil() and the originator
+        // side would bind the confirmation to a phantom nil task id.
+        let task_id = Uuid::from_u128(123);
+        let event = Response::A2AResultPosted { task_id };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "task_id"],
+            "Response::A2AResultPosted wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'task_id' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'task_id' \
+             one level deeper and every CLI consumer that confirms \
+             a posted result against the original outbound task id \
+             would silently fail",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_result_posted")),
+            "Response discriminator slug must be the durable \
+             'a2_a_result_posted' (rename_all = snake_case splits A2A \
+             on digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies post-result \
+             outcomes by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the result-posted \
+             confirmation and the signal that the originator's \
+             mailbox accepted the reply is masked",
+        );
+        assert_eq!(
+            obj.get("task_id").and_then(serde_json::Value::as_str),
+            Some(task_id.to_string().as_str()),
+            "Response::A2AResultPosted::task_id must surface as the \
+             Uuid's hyphenated string form — the originator's CLI \
+             correlates this exact representation against the \
+             originally sent task and against subsequent recv_result \
+             lookups",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2AResultPosted must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI consumer that confirms a posted \
+             result leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("task_id");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2AResultPosted wire form must reject a payload \
+             missing 'task_id'; a stray #[serde(default)] would let \
+             a malformed row decode with Uuid::nil() and the \
+             originator's CLI would bind the post confirmation to a \
+             phantom nil task id — operator triage could not match \
+             the confirmation to the original outbound task and the \
+             recv_result loop may surface or skip the wrong reply",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

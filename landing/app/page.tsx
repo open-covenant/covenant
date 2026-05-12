@@ -95,10 +95,10 @@ export default function Page() {
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       >
         <Image
-          src="/logomark.png"
+          src="/logomark.svg"
           alt="covenant"
           width={40}
-          height={40}
+          height={20}
           className="h-auto w-[40px] opacity-70"
         />
         <span>Covenant  ·  open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>

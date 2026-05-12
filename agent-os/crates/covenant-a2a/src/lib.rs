@@ -2857,6 +2857,84 @@ mod tests {
     }
 
     #[test]
+    fn a2a_auto_retry_report_serde_pins_four_field_wire_form() {
+        // A2AAutoRetryReport is the top-level scheduler-scan return
+        // envelope. Four fields: policy (A2AAutoRetryPolicy, the
+        // configuration snapshot), considered (usize), requeued
+        // (Vec<A2AAutoRetryRequeued>, #[serde(default)]), skipped
+        // (Vec<A2AAutoRetrySkipped>, #[serde(default)]). The Vec
+        // defaults are decode-side only — no skip_serializing_if — so
+        // an idle scan (the common case) still emits requeued=[] and
+        // skipped=[] verbatim. A refactor that added
+        // skip_serializing_if = Vec::is_empty would collapse zero-action
+        // rows and split downstream consumers that filter on key
+        // presence.
+        let report = A2AAutoRetryReport::new(A2AAutoRetryPolicy::default());
+
+        let wire = serde_json::to_value(&report).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2AAutoRetryReport serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["policy", "considered", "requeued", "skipped"]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            keys, expected,
+            "A2AAutoRetryReport wire form must be exactly four keys with \
+             empty requeued=[] and skipped=[] still present; a \
+             skip_serializing_if = Vec::is_empty would drop those keys \
+             on idle scans and break audit dashboards that filter on \
+             key presence",
+        );
+        assert_eq!(
+            obj.get("requeued"),
+            Some(&serde_json::json!([])),
+            "empty requeued must surface as [] on the wire",
+        );
+        assert_eq!(
+            obj.get("skipped"),
+            Some(&serde_json::json!([])),
+            "empty skipped must surface as [] on the wire",
+        );
+        // considered must be a JSON number, not a stringified usize —
+        // a Serialize override that emitted a string would silently
+        // break every consumer that does arithmetic on the field.
+        assert!(
+            obj.get("considered").and_then(serde_json::Value::as_u64) == Some(0),
+            "considered must serialise as a JSON number, not a string",
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract.
+        let back: A2AAutoRetryReport = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, report);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["policy", "considered"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AAutoRetryReport>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2AAutoRetryReport wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // #[serde(default)] on requeued and skipped: a historic row
+        // that omits either field must still decode and yield an empty
+        // Vec. Dropping the default would refuse a manually-built
+        // partial payload and break the scheduler-scan replay path.
+        let omitted: A2AAutoRetryReport = serde_json::from_value(serde_json::json!({
+            "policy": A2AAutoRetryPolicy::default(),
+            "considered": 0,
+        }))
+        .unwrap();
+        assert!(omitted.requeued.is_empty());
+        assert!(omitted.skipped.is_empty());
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

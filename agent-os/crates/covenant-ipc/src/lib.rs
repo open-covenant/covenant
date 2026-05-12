@@ -1329,6 +1329,87 @@ mod tests {
     }
 
     #[test]
+    fn response_authentication_failed_serde_pins_single_field_variant() {
+        // Response::AuthenticationFailed is the variant the daemon
+        // sends on every rejected handshake — bad/unknown/revoked
+        // token, malformed first frame — before it closes the
+        // connection. It carries reason: String, the short message
+        // the operator sees in CLI output. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the wire
+        // object is exactly two top-level keys: kind='authentication_failed'
+        // plus reason. The sibling Response::Authenticated pin
+        // already landed; this variant has no test pinning its exact
+        // wire shape, round-trip, or omission rejection. A refactor
+        // that promoted AuthenticationFailed from a struct variant
+        // to a newtype variant would nest reason one level deeper
+        // next to 'kind' and operator triage would see the
+        // failed-auth discriminator but no diagnostic message,
+        // forcing them to consult the daemon's audit log to learn
+        // why the token was rejected.
+        let event = Response::AuthenticationFailed {
+            reason: "unknown token".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "reason"],
+            "Response::AuthenticationFailed wire form must be \
+             exactly two top-level keys: 'kind' plus the single \
+             'reason' field. A refactor that promoted the variant \
+             from struct to newtype wrapping a payload struct would \
+             nest 'reason' one level deeper and every CLI consumer \
+             that destructures on the diagnostic message would \
+             silently drop it — the operator sees a failed-auth \
+             discriminator but cannot tell why",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("authentication_failed")),
+            "Response discriminator slug must be snake_case \
+             'authentication_failed'; a slug regression silently \
+             strands every CLI consumer that classifies handshake \
+             failures by this exact value — the operator's CLI \
+             prints a confusing fallback message and masks the \
+             security-relevant signal that a bad token was rejected",
+        );
+        assert_eq!(
+            obj.get("reason").and_then(serde_json::Value::as_str),
+            Some("unknown token"),
+            "Response::AuthenticationFailed::reason must surface as \
+             the literal diagnostic string — the CLI prints this \
+             verbatim and operator triage greps the audit log for \
+             the matching short message",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::AuthenticationFailed must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI handshake failure consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("reason");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::AuthenticationFailed wire form must reject a \
+             payload missing 'reason'; a stray #[serde(default)] \
+             would let a malformed row decode with reason=String::new() \
+             and the CLI would print an empty diagnostic — the \
+             operator could not distinguish a real auth rejection \
+             from a malformed daemon response and might retry with \
+             the same bad token instead of rotating it",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

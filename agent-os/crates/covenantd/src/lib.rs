@@ -10589,6 +10589,32 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn budget_pause_checkpoint_pins_each_field() {
+        let intent_id = Uuid::new_v4();
+        let agent = AgentId::new("x@local", [7u8; 32]);
+        let resume_state = budget_resume_state("intent", "x", "active_dispatch");
+        let ck = budget_pause_checkpoint(
+            intent_id,
+            agent.clone(),
+            BudgetPauseReason::BudgetExhausted,
+            11,
+            22,
+            33,
+            44,
+            resume_state.clone(),
+        );
+        assert_eq!(ck.version, BudgetPauseCheckpoint::VERSION);
+        assert_eq!(ck.intent_id, intent_id);
+        assert_eq!(ck.agent, agent);
+        assert_eq!(ck.reason, BudgetPauseReason::BudgetExhausted);
+        assert_eq!(ck.requested_credits, 11);
+        assert_eq!(ck.tokens_remaining, 22);
+        assert_eq!(ck.refill_eta_ms, 33);
+        assert_eq!(ck.saved_at_ms, 44);
+        assert_eq!(ck.resume_state, resume_state);
+    }
+
+    #[test]
     fn budget_resume_state_pins_three_keys() {
         let active = budget_resume_state("compute something", "agentA", "active_dispatch");
         assert_eq!(active.len(), 3);

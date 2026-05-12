@@ -3294,6 +3294,141 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_recent_memory_serde_pins_two_field_variant() {
+        // Request::RecentMemory is the operator/CLI verb for paging
+        // the most recent memory records, optionally scoped to a
+        // single tier. It pairs with Response::Memories (already
+        // pinned). With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Request enum, the wire object is
+        // exactly three top-level keys: kind='recent_memory' plus
+        // tier plus limit.
+        //
+        // tier is Option<MemoryTier> with #[serde(default)] and NO
+        // skip_serializing_if. limit has #[serde(default =
+        // "default_recent_limit")] returning 10. Both fields are
+        // default-tolerant, so a stale CLI omitting either field
+        // still decodes — distinct from the just-pinned
+        // PurgeMemory which has a required before_ms field. This
+        // slice pins the all-default-tolerant variant of the
+        // multi-field shape.
+        //
+        // This slice locks: the exact wire shape (kind, tier,
+        // limit), the snake_case discriminator 'recent_memory',
+        // tier=null on the miss path, tier='working' on the hit
+        // path, round-trip for both shapes, acceptance of a frame
+        // missing tier (Option<T> with serde(default)), and
+        // acceptance of a frame missing limit (decodes as 10 via
+        // default_recent_limit).
+        let miss = Request::RecentMemory {
+            tier: None,
+            limit: 10,
+        };
+
+        let wire = serde_json::to_value(&miss).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "tier"],
+            "Request::RecentMemory wire form must be exactly three \
+             top-level keys: 'kind' plus the two variant fields \
+             ('tier', 'limit'). A refactor that added \
+             #[serde(skip_serializing_if = \"Option::is_none\")] to \
+             tier would shrink the miss-path wire form from three \
+             keys to two and silently break CLI/HTTP consumers \
+             that switch on the tier key's presence to distinguish \
+             scoped-vs-all-tier pages",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("recent_memory")),
+            "Request discriminator slug must be the durable \
+             'recent_memory'. A refactor that renamed the variant \
+             (e.g., MemoryRecent for surface parity with the \
+             internal verb order) would shift the slug and \
+             operator-driven memory inspection goes dark through \
+             the supported path",
+        );
+        assert_eq!(
+            obj.get("tier"),
+            Some(&serde_json::Value::Null),
+            "Request::RecentMemory::tier must surface as JSON null \
+             when None (the durable null-on-wire surface, NOT a \
+             missing key); a stray skip_serializing_if would shrink \
+             the miss-path wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+        assert_eq!(
+            obj.get("limit"),
+            Some(&serde_json::json!(10)),
+            "Request::RecentMemory::limit must surface as a JSON \
+             number; a refactor that promoted limit to a string or \
+             enum would silently mismatch every CLI/HTTP caller \
+             that sends a numeric usize page size",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, miss,
+            "Request::RecentMemory (miss) must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP recent-memory consumer leans \
+             on",
+        );
+
+        let hit = Request::RecentMemory {
+            tier: Some(covenant_types::MemoryTier::Working),
+            limit: 25,
+        };
+        let hit_wire = serde_json::to_value(&hit).unwrap();
+        let hit_obj = hit_wire.as_object().unwrap();
+        assert_eq!(
+            hit_obj.get("tier").and_then(serde_json::Value::as_str),
+            Some("working"),
+            "populated tier must round-trip as the durable \
+             lowercase MemoryTier slug 'working' (rename_all = \
+             \"lowercase\" on MemoryTier); the three-key shape \
+             stays stable across hit and miss",
+        );
+        let hit_back: Request = serde_json::from_value(hit_wire.clone()).unwrap();
+        assert_eq!(
+            hit_back, hit,
+            "Request::RecentMemory (hit) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_tier = obj.clone();
+        missing_tier.remove("tier");
+        let parsed_no_tier: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_tier)).unwrap();
+        assert_eq!(
+            parsed_no_tier, miss,
+            "Request::RecentMemory wire form must accept a payload \
+             missing 'tier' (Option<T> with #[serde(default)] \
+             decodes as None); this is the documented forward-\
+             compatibility contract for stale CLIs that predate \
+             the tier filter",
+        );
+
+        let mut missing_limit = obj.clone();
+        missing_limit.remove("limit");
+        let parsed_no_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_limit)).unwrap();
+        assert_eq!(
+            parsed_no_limit, miss,
+            "Request::RecentMemory wire form must accept a payload \
+             missing 'limit' (decodes as 10 via \
+             default_recent_limit); a refactor that dropped the \
+             default would silently break stale CLIs that omit \
+             limit, returning an empty page where operators expect \
+             the latest rows",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -3430,6 +3430,38 @@ mod tests {
     }
 
     #[test]
+    fn peer_revoke_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "outcome"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("peer_revoke_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "peer_revoke_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("peer_revoke"));
+            assert!(
+                value["outcome"].is_object(),
+                "outcome must be a tagged-enum object, not a string blob: {value}",
+            );
+        }
+
+        let p = make_peer(7, "alice@host", false);
+        assert_shape(&peer_revoke_json(&RevokeOutcome::Ambiguous {
+            matches: vec![p],
+            truncated: true,
+        }));
+        assert_shape(&peer_revoke_json(&RevokeOutcome::NotFound));
+    }
+
+    #[test]
     fn intents_resume_json_renders_stable_error_shape() {
         let intent_id = uuid::Uuid::nil();
         let value = intents_resume_error_json(

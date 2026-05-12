@@ -3520,6 +3520,115 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_task_requeued_serde_pins_six_field_variant() {
+        // MailboxEvent::TaskRequeued is the lease-release-and-requeue
+        // repair event the daemon appends to the JSONL mailbox log when
+        // an in-flight lease is requeued (operator-initiated repair or
+        // scheduler auto-retry). With #[serde(tag = "type",
+        // rename_all = "snake_case")] on the enum, the wire object is
+        // exactly seven keys: type='task_requeued' plus task_id (Uuid),
+        // lease_id (Uuid), reason (String), duplicate_risk
+        // (A2ADuplicateRisk enum: idempotent | operator_accepted),
+        // requeued_at_ms (u64), attempt (u32). The duplicate_risk
+        // field is load-bearing for replay — it pins whether the
+        // requeue tolerates a downstream duplicate-delivery race
+        // (idempotent task semantics) or whether the operator
+        // explicitly accepted that risk for an unsafe task. No test
+        // pins the enum-level wire form.
+        let event = MailboxEvent::TaskRequeued {
+            task_id: Uuid::from_u128(31),
+            lease_id: Uuid::from_u128(32),
+            reason: "operator".into(),
+            duplicate_risk: A2ADuplicateRisk::Idempotent,
+            requeued_at_ms: 40_000,
+            attempt: 2,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "attempt",
+                "duplicate_risk",
+                "lease_id",
+                "reason",
+                "requeued_at_ms",
+                "task_id",
+                "type",
+            ],
+            "MailboxEvent::TaskRequeued wire form must be exactly seven \
+             keys: the six variant fields plus the 'type' discriminator. \
+             A refactor that renamed any of task_id, lease_id, reason, \
+             duplicate_risk, requeued_at_ms, or attempt without \
+             #[serde(rename = ...)] would silently fail decode on every \
+             prior JSONL TaskRequeued row, the operator's lease-repair \
+             audit trail would rebuild empty, and the audit log could \
+             no longer attribute the requeue to its operator, reason, \
+             or original lease",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("task_requeued")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'task_requeued'; a slug regression silently strands every \
+             prior JSONL TaskRequeued row at replay, the \
+             in-flight-then-requeue history rebuilds with the lease \
+             still appearing in-flight, and operator audit queries that \
+             grep on the slug return zero hits while requeue-on-requeue \
+             chains lose their original lease provenance",
+        );
+        assert_eq!(
+            obj.get("duplicate_risk"),
+            Some(&serde_json::json!("idempotent")),
+            "MailboxEvent::TaskRequeued::duplicate_risk must surface as \
+             the snake_case 'idempotent' slug; a refactor that flipped \
+             rename_all on A2ADuplicateRisk would turn this into \
+             'Idempotent' or a camelCase variant and every prior JSONL \
+             TaskRequeued row would fail decode at the nested enum — \
+             every requeue audit row would be stranded and downstream \
+             consumers grepping on the slug would return zero hits",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::TaskRequeued must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             the JsonlMailbox::open replay path joins repair events \
+             against",
+        );
+
+        for required in [
+            "task_id",
+            "lease_id",
+            "reason",
+            "duplicate_risk",
+            "requeued_at_ms",
+            "attempt",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MailboxEvent::TaskRequeued wire form must reject a \
+                 payload missing {required:?}; a stray #[serde(default)] \
+                 on duplicate_risk would let a malformed row decode with \
+                 A2ADuplicateRisk::default() and replay would lose the \
+                 distinction between an idempotent-safe requeue and an \
+                 operator-accepted-unsafe requeue — audit dashboards \
+                 counting requeue reasons would silently misclassify \
+                 the row",
+            );
+        }
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

@@ -654,6 +654,35 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_mode_serde_pins_snake_case_wire_form() {
+        // MemoryRepairMode is the dry_run / apply toggle on every
+        // MemoryRepairRequest dispatched through daemon, HTTP, and
+        // CLI repair flows. DryRun is load-bearing — without
+        // rename_all the slug would emit "DryRun" titlecase and the
+        // daemon would reject every operator's intended dry-run plan
+        // with an opaque deserialize error.
+        let cases: [(MemoryRepairMode, &str); 2] = [
+            (MemoryRepairMode::DryRun, "dry_run"),
+            (MemoryRepairMode::Apply, "apply"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: MemoryRepairMode = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<MemoryRepairMode>("\"DryRun\"").is_err(),
+            "titlecase DryRun (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<MemoryRepairMode>("\"dryRun\"").is_err(),
+            "camelCase dryRun must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn memory_tier_serde_pins_canonical_longterm_and_legacy_aliases() {
         // Canonical serialize form: lowercase rename_all + LongTerm
         // collapses to the dotless `longterm` slug. Audit-grep

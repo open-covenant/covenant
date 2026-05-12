@@ -3836,6 +3836,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_audit_integrity_serde_pins_single_field_variant() {
+        // Response::AuditIntegrity is the variant the daemon sends in
+        // response to Request::AuditIntegrity — it carries report:
+        // AuditIntegrityReport, the per-pass integrity evidence the
+        // CLI surfaces (events, anchors, valid, root_hash_hex,
+        // failures) so the operator can confirm the daemon's
+        // hash-chain sidecar matches the audit log. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='audit_integrity' plus report. No prior test
+        // pins the exact wire shape, round-trip, or omission
+        // rejection of this variant's required field. The inner
+        // AuditIntegrityReport shape is pinned by covenant-audit
+        // tests; this slice locks the outer Response variant shape
+        // only — a minimally constructed report is sufficient to
+        // catch the slug, key set, and default-attribute regressions
+        // on the outer variant.
+        let event = Response::AuditIntegrity {
+            report: AuditIntegrityReport {
+                events: 0,
+                anchors: 0,
+                valid: true,
+                root_hash_hex: String::new(),
+                failures: vec![],
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "report"],
+            "Response::AuditIntegrity wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'report' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping AuditIntegrityReport would either \
+             inline its fields next to 'kind' or nest 'report' one \
+             level deeper — either form silently breaks every CLI \
+             consumer that reads .report.valid, .report.root_hash_hex, \
+             or .report.failures",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("audit_integrity")),
+            "Response discriminator slug must be the durable \
+             'audit_integrity'; a slug regression silently strands \
+             every CLI parser that classifies integrity-report \
+             outcomes by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the integrity verdict, \
+             masking whether the audit chain is valid, broken, or \
+             empty",
+        );
+        assert!(
+            obj.get("report")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::AuditIntegrity::report must serialize as a \
+             nested JSON object — the inner AuditIntegrityReport \
+             shape is pinned by covenant-audit tests; this slice only \
+             locks that report appears as one keyed object under the \
+             outer variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::AuditIntegrity must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI integrity-report consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("report");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::AuditIntegrity wire form must reject a payload \
+             missing 'report'; a stray #[serde(default)] would let a \
+             malformed row decode with a synthetic default \
+             AuditIntegrityReport (events=0, anchors=0, valid=false, \
+             empty root_hash_hex, empty failures) and the CLI would \
+             surface a phantom 'no events' state — a real fetch \
+             failure (truncated frame, partial decode error) would be \
+             silently reclassified as a clean empty chain where the \
+             operator believes the audit log holds nothing when the \
+             daemon's chain is in fact populated and the fetch failed",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

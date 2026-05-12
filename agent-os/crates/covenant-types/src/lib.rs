@@ -1604,4 +1604,104 @@ mod tests {
         // snake_case slug "apply", matching memory_repair_mode_serde_pins_snake_case_wire_form.
         assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("apply"));
     }
+
+    #[test]
+    fn budget_pause_checkpoint_serde_pins_strict_required_fields() {
+        // BudgetPauseCheckpoint is the JSONL row JsonlPauseCheckpointStore
+        // writes for every paused intent and reads back on the daemon's
+        // resume-claim path. Eight fields are strictly required; the ninth
+        // (resume_state) carries #[serde(default, skip_serializing_if =
+        // serde_json::Map::is_empty)] — already pinned by
+        // budget_pause_checkpoint_version_pins_one_and_resume_state_skips_empty.
+        // This test stands alone as the strict-required pin so a refactor
+        // that flips one of the eight required fields to optional fails
+        // loud at the boundary instead of silently defaulting on the
+        // resume-claim path.
+        let intent_id = Uuid::new_v4();
+        let mut resume_state = serde_json::Map::new();
+        resume_state.insert("k".into(), serde_json::json!(1));
+        let checkpoint = BudgetPauseCheckpoint {
+            version: BudgetPauseCheckpoint::VERSION,
+            intent_id,
+            agent: dummy_id(),
+            reason: BudgetPauseReason::BudgetExhausted,
+            requested_credits: 50,
+            tokens_remaining: 12,
+            refill_eta_ms: 60_000,
+            saved_at_ms: 1_700_000_000_000,
+            resume_state,
+        };
+
+        let wire = serde_json::to_value(&checkpoint).unwrap();
+        let keys: std::collections::BTreeSet<&str> = wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "version",
+            "intent_id",
+            "agent",
+            "reason",
+            "requested_credits",
+            "tokens_remaining",
+            "refill_eta_ms",
+            "saved_at_ms",
+            "resume_state",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "BudgetPauseCheckpoint fully populated must emit exactly nine keys; a skip_serializing_if on any required field would silently shift the wire shape and break the daemon's resume-claim destructure",
+        );
+
+        // Round-trip pins the PartialEq derive on every field.
+        let back: BudgetPauseCheckpoint = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, checkpoint);
+
+        // Each of the eight strictly-required fields must reject when
+        // omitted. resume_state is excluded from this loop because it
+        // carries #[serde(default)] — its decode-as-empty arm is asserted
+        // separately below.
+        for required in [
+            "version",
+            "intent_id",
+            "agent",
+            "reason",
+            "requested_credits",
+            "tokens_remaining",
+            "refill_eta_ms",
+            "saved_at_ms",
+        ] {
+            let mut missing = wire.as_object().unwrap().clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetPauseCheckpoint>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "BudgetPauseCheckpoint wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // resume_state omitted must decode to an empty map — the
+        // #[serde(default)] arm covering pre-resume_state JSONL rows.
+        // Asserted here for self-containment of this strict-required pin.
+        let mut without_resume = wire.as_object().unwrap().clone();
+        without_resume.remove("resume_state");
+        let pre_resume: BudgetPauseCheckpoint =
+            serde_json::from_value(serde_json::Value::Object(without_resume)).unwrap();
+        assert!(
+            pre_resume.resume_state.is_empty(),
+            "omitted resume_state must decode to an empty Map via #[serde(default)]",
+        );
+
+        // Cross-binding: reason on a BudgetExhausted variant must
+        // serialize to the snake_case slug "budget_exhausted", matching
+        // budget_pause_reason_serde_pins_snake_case_wire_form.
+        assert_eq!(
+            wire.get("reason").unwrap(),
+            &serde_json::json!("budget_exhausted"),
+        );
+    }
 }

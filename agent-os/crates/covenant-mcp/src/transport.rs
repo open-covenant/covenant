@@ -451,6 +451,77 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_response_serde_pins_result_error_mutual_exclusivity() {
+        // JSON-RPC 2.0 requires result and error be mutually exclusive
+        // on the wire. JsonRpcResponse::result and ::error both carry
+        // #[serde(default, skip_serializing_if = "Option::is_none")] so
+        // an ok response emits only result and an error response emits
+        // only error. JsonRpcError::data rides the same skip-empty
+        // contract for the optional error-detail field.
+        let ok = JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id: Some(1),
+            result: Some(serde_json::json!({ "ok": true })),
+            error: None,
+        };
+        let wire = serde_json::to_value(&ok).unwrap();
+        let obj = wire.as_object().expect("response serializes as a JSON object");
+        assert!(
+            obj.contains_key("result"),
+            "ok response must include result on the wire",
+        );
+        assert!(
+            !obj.contains_key("error"),
+            "ok response must omit error on the wire; a dropped skip_serializing_if violates JSON-RPC 2.0 mutual exclusivity and breaks strict MCP clients",
+        );
+
+        let err = JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id: Some(1),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: "method not found".into(),
+                data: None,
+            }),
+        };
+        let wire = serde_json::to_value(&err).unwrap();
+        let obj = wire.as_object().expect("response serializes as a JSON object");
+        assert!(
+            obj.contains_key("error"),
+            "error response must include error on the wire",
+        );
+        assert!(
+            !obj.contains_key("result"),
+            "error response must omit result on the wire; a dropped skip_serializing_if violates JSON-RPC 2.0 mutual exclusivity",
+        );
+
+        let error_obj = obj
+            .get("error")
+            .and_then(|v| v.as_object())
+            .expect("error field must be a JSON object");
+        assert!(
+            !error_obj.contains_key("data"),
+            "JsonRpcError::data=None must be skipped on the wire; a dropped skip_serializing_if surfaces \"data\":null on every error envelope",
+        );
+
+        let round_trip_ok: JsonRpcResponse =
+            serde_json::from_value(serde_json::to_value(&ok).unwrap()).unwrap();
+        assert_eq!(round_trip_ok.id, Some(1));
+        assert!(round_trip_ok.error.is_none());
+        assert_eq!(round_trip_ok.result.unwrap()["ok"], true);
+
+        let round_trip_err: JsonRpcResponse =
+            serde_json::from_value(serde_json::to_value(&err).unwrap()).unwrap();
+        assert_eq!(round_trip_err.id, Some(1));
+        assert!(round_trip_err.result.is_none());
+        let parsed_err = round_trip_err.error.unwrap();
+        assert_eq!(parsed_err.code, -32601);
+        assert_eq!(parsed_err.message, "method not found");
+        assert!(parsed_err.data.is_none());
+    }
+
+    #[test]
     fn transport_closed_error_maps_to_closed() {
         let e = JsonRpcError {
             code: TRANSPORT_CLOSED_CODE,

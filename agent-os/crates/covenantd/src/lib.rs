@@ -10589,6 +10589,21 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn budget_resume_state_pins_three_keys() {
+        let active = budget_resume_state("compute something", "agentA", "active_dispatch");
+        assert_eq!(active.len(), 3);
+        assert_eq!(active["intent_text"], serde_json::json!("compute something"));
+        assert_eq!(active["matched_agent"], serde_json::json!("agentA"));
+        assert_eq!(active["source"], serde_json::json!("active_dispatch"));
+
+        let exhausted = budget_resume_state("other intent", "agentB", "budget_exhausted");
+        assert_eq!(exhausted.len(), 3);
+        assert_eq!(exhausted["intent_text"], serde_json::json!("other intent"));
+        assert_eq!(exhausted["matched_agent"], serde_json::json!("agentB"));
+        assert_eq!(exhausted["source"], serde_json::json!("budget_exhausted"));
+    }
+
+    #[test]
     fn agent_id_for_card_pins_synth_display_and_pubkey_shape() {
         let card = stub_card("agentA", vec![]);
         let id = agent_id_for_card(&card);

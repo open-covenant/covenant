@@ -2983,6 +2983,45 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verify_with_clock_and_trust_root_pins_trust_root_boundary() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let stranger = LocalIdentity::generate("stranger@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), Some(1000)),
+            issuer.signing_key(),
+        );
+
+        // (a) granted_by matches trust_root and capability is unexpired.
+        assert!(verify_with_clock_and_trust_root(&signed, 999, issuer.pubkey_bytes()).is_ok());
+
+        // (b) trust_root mismatch with an otherwise valid capability is
+        // rejected as UntrustedGrantor, not BadSignature or Expired.
+        assert!(matches!(
+            verify_with_clock_and_trust_root(&signed, 999, stranger.pubkey_bytes()),
+            Err(PermissionError::UntrustedGrantor)
+        ));
+
+        // (c) trust_root check happens before signature verification: a
+        // tampered signature from an untrusted grantor must still surface
+        // as UntrustedGrantor (not BadSignature) so the trust-root gate
+        // cannot be masked by a later failure path.
+        let mut tampered = signed.clone();
+        tampered.signature = [0u8; 64];
+        assert!(matches!(
+            verify_with_clock_and_trust_root(&tampered, 999, stranger.pubkey_bytes()),
+            Err(PermissionError::UntrustedGrantor)
+        ));
+
+        // (d) when granted_by matches trust_root, the Expired error from
+        // verify_with_clock still propagates through this wrapper.
+        assert!(matches!(
+            verify_with_clock_and_trust_root(&signed, 1001, issuer.pubkey_bytes()),
+            Err(PermissionError::Expired(1000))
+        ));
+    }
+
     #[tokio::test]
     async fn in_memory_store_filters_by_subject() {
         let issuer = LocalIdentity::generate("authority@local");

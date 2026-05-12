@@ -10396,6 +10396,18 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn settlement_resource_name_pins_each_resource_kind_variant() {
+        assert_eq!(settlement_resource_name(ResourceKind::Compute), "compute");
+        assert_eq!(settlement_resource_name(ResourceKind::Memory), "memory");
+        assert_eq!(settlement_resource_name(ResourceKind::Tool), "tool");
+        assert_eq!(settlement_resource_name(ResourceKind::Message), "message");
+        assert_eq!(
+            settlement_resource_name(ResourceKind::Registration),
+            "registration"
+        );
+    }
+
+    #[test]
     fn memory_tier_name_pins_each_tier_variant() {
         assert_eq!(memory_tier_name(MemoryTier::Working), "working");
         assert_eq!(memory_tier_name(MemoryTier::Episodic), "episodic");

@@ -166,8 +166,16 @@ export type AuditKind =
 export type AuditEvent = {
   id: string;
   timestamp_ms: number;
-  issuer: { display: string; pubkey: number[] };
+  issuer: { display: string; pubkey: string };
   kind: AuditKind;
+};
+
+export type AuditIntegrityReport = {
+  anchors: number;
+  events: number;
+  failures: string[];
+  root_hash_hex: string;
+  valid: boolean;
 };
 
 export type SettlementReceipt = {
@@ -300,6 +308,9 @@ export const api = {
     call<{ kind: "audit_events"; events: AuditEvent[] }>(
       `/audit/recent?limit=${limit}`,
     ),
+
+  verifyAudit: () =>
+    call<{ kind: "audit_integrity"; report: AuditIntegrityReport }>(`/audit/verify`),
 
   recentReceipts: (limit = 20) =>
     call<{ kind: "receipts"; receipts: SettlementReceipt[] }>(

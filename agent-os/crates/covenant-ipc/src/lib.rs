@@ -2223,6 +2223,93 @@ mod tests {
     }
 
     #[test]
+    fn response_capabilities_purged_serde_pins_single_field_variant() {
+        // Response::CapabilitiesPurged is the variant the daemon
+        // sends after PurgeCapabilities removes expired or revoked
+        // signed-capability rows that the caller's authorization
+        // permits. It carries purged: u64 — the count of capability
+        // rows the purge removed, which the CLI surfaces so the
+        // operator can confirm the destructive capability-registry
+        // cleanup took effect. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the
+        // wire object is exactly two top-level keys:
+        // kind='capabilities_purged' plus purged. No prior test
+        // pins the exact wire shape, round-trip, or omission
+        // rejection. A refactor that promoted CapabilitiesPurged
+        // from a struct variant to a newtype variant would nest
+        // purged one level deeper and operator-facing CLIs would
+        // silently read zero; a stray #[serde(default)] on purged
+        // would let a malformed row decode with 0 and the operator
+        // would believe the destructive capability-registry trim
+        // is a no-op even when many rows were removed — risking
+        // duplicate destructive runs against an already-cleared
+        // registry.
+        let event = Response::CapabilitiesPurged { purged: 5 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "purged"],
+            "Response::CapabilitiesPurged wire form must be exactly \
+             two top-level keys: 'kind' plus the single 'purged' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'purged' one level deeper and every CLI consumer that \
+             confirms the capability-registry purge removed rows \
+             would silently read zero — operator triage could not \
+             distinguish a successful destructive trim from a no-op \
+             match",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("capabilities_purged")),
+            "Response discriminator slug must be the durable \
+             'capabilities_purged'; a slug regression silently \
+             strands every CLI parser that classifies \
+             capability-purge outcomes by this exact value — the \
+             operator's CLI prints a confusing fallback instead of \
+             confirming the dropped-row count and masks the \
+             destructive operation's only success signal",
+        );
+        assert_eq!(
+            obj.get("purged").and_then(serde_json::Value::as_u64),
+            Some(5),
+            "Response::CapabilitiesPurged::purged must surface as \
+             the u64 row count verbatim — the operator reads this \
+             exact integer to confirm expired-capability cleanup \
+             advanced",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::CapabilitiesPurged must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI capability-purge consumer leans on \
+             to render the destructive removal count to the \
+             operator",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("purged");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::CapabilitiesPurged wire form must reject a \
+             payload missing 'purged'; a stray #[serde(default)] \
+             would let a malformed row decode with 0 and the CLI \
+             would surface a phantom zero count — the destructive \
+             capability-registry trim would look like a no-op even \
+             when many rows were removed, risking duplicate \
+             destructive runs against an already-cleared registry",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

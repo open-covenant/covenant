@@ -4238,6 +4238,101 @@ mod tests {
     }
 
     #[test]
+    fn a2a_status_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "deadline_within_ms",
+            "kind",
+            "limit",
+            "min_lease_age_ms",
+            "results",
+            "state_filter",
+            "tasks",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("a2a_status_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "a2a_status_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("a2a_status"));
+            assert!(
+                value["limit"].is_u64(),
+                "limit must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["min_lease_age_ms"].is_u64() || value["min_lease_age_ms"].is_null(),
+                "min_lease_age_ms must be u64-or-null (never a string-of-integer): {value}",
+            );
+            assert!(
+                value["deadline_within_ms"].is_u64() || value["deadline_within_ms"].is_null(),
+                "deadline_within_ms must be u64-or-null (never a string-of-integer): {value}",
+            );
+            assert!(
+                value["state_filter"].is_string() || value["state_filter"].is_null(),
+                "state_filter must be string-or-null (never integer / array): {value}",
+            );
+            assert!(
+                value["tasks"].is_array(),
+                "tasks must be an array: {value}",
+            );
+            assert!(
+                value["results"].is_array(),
+                "results must be an array: {value}",
+            );
+        }
+
+        let sender = AgentId::new("sender@local", [1u8; 32]);
+        let recipient = AgentId::new("recipient@local", [2u8; 32]);
+        let task_id = uuid::Uuid::nil();
+        let task = A2ATask {
+            id: task_id,
+            sender,
+            recipient,
+            intent_text: "status probe".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let entry = A2ATaskQueueEntry {
+            state: A2ATaskQueueState::Queued,
+            task,
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let result = A2ATaskResult::ok(task_id, vec![]);
+
+        assert_shape(&a2a_status_json(
+            5,
+            Some(300_000),
+            Some(60_000),
+            Some(A2ATaskQueueState::InFlight),
+            &[entry.clone()],
+            &[result.clone()],
+        ));
+        assert_shape(&a2a_status_json(
+            5,
+            Some(300_000),
+            Some(60_000),
+            Some(A2ATaskQueueState::Queued),
+            &[],
+            &[],
+        ));
+        assert_shape(&a2a_status_json(5, None, None, None, &[entry], &[result]));
+        assert_shape(&a2a_status_json(5, None, None, None, &[], &[]));
+    }
+
+    #[test]
     fn parse_a2a_queue_state_accepts_both_spellings() {
         assert_eq!(
             parse_a2a_queue_state("queued").unwrap(),

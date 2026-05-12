@@ -5243,6 +5243,77 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_backfill_plan_json_pins_unmatched_memory_records_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "memory_record_id",
+            "owner_display",
+            "owner_pubkey",
+            "reason",
+            "tier",
+        ];
+
+        fn assert_unmatched_memory_record_shape(value: &serde_json::Value) {
+            let entries = value["unmatched_memory_records"]
+                .as_array()
+                .expect("memory_receipt_backfill_plan_json unmatched_memory_records field must be an array");
+            assert!(
+                entries.len() >= 2,
+                "fixture must produce at least two unmatched_memory_records to pin the per-element schema across distinct owners: {value}",
+            );
+            for entry in entries {
+                let object = entry
+                    .as_object()
+                    .expect("each unmatched_memory_records[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json unmatched_memory_records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(entry["memory_record_id"].is_string(), "unmatched_memory_records[].memory_record_id must be a string uuid: {entry}");
+                assert!(entry["owner_display"].is_string(), "unmatched_memory_records[].owner_display must be a string: {entry}");
+                assert!(entry["owner_pubkey"].is_string(), "unmatched_memory_records[].owner_pubkey must be a base58 string: {entry}");
+                assert!(
+                    entry["tier"].is_string(),
+                    "unmatched_memory_records[].tier must be a documented tier slug string, not a structured object: {entry}",
+                );
+                assert!(entry["reason"].is_string(), "unmatched_memory_records[].reason must be a string, not a structured object: {entry}");
+            }
+        }
+
+        let owner_a = AgentId::new("owner-a@local", [30u8; 32]);
+        let owner_b = AgentId::new("owner-b@local", [31u8; 32]);
+        let memory_a = MemoryRecord {
+            id: uuid::Uuid::from_u128(401),
+            tier: MemoryTier::Working,
+            owner: owner_a,
+            text: "memory a".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let memory_b = MemoryRecord {
+            id: uuid::Uuid::from_u128(402),
+            tier: MemoryTier::LongTerm,
+            owner: owner_b,
+            text: "memory b".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+
+        assert_unmatched_memory_record_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory_a, memory_b],
+            &[],
+        ));
+    }
+
+    #[test]
     fn memory_read_json_renders_stable_shape() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let record = MemoryRecord {

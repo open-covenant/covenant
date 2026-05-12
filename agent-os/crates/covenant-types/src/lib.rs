@@ -1767,4 +1767,83 @@ mod tests {
         // "apply" (memory_repair_mode_serde_pins_snake_case_wire_form).
         assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("apply"));
     }
+
+    #[test]
+    fn memory_compaction_request_serde_pins_three_required_fields() {
+        // MemoryCompactionRequest is the envelope every daemon, HTTP,
+        // and CLI memory-compaction command consumes. Three strictly
+        // required fields with no serde attributes: mode, policy, reason.
+        // The inner MemoryCompactionPolicy itself uses
+        // #[serde(default, skip_serializing_if)] on its Options, so the
+        // policy wire shape varies with population; the envelope shape
+        // does not.
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::DryRun,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(123),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "vacuum".into(),
+        };
+
+        let wire = serde_json::to_value(&request).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MemoryCompactionRequest serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> =
+            obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["mode", "policy", "reason"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "MemoryCompactionRequest wire form must be exactly three \
+             top-level keys; a flatten on policy would leak the inner \
+             policy fields and a skip_serializing_if on reason would drop \
+             audit attribution",
+        );
+
+        // policy must remain nested with the populated field present and
+        // the non-default bool surfaced; the three None Options stay
+        // dropped (already pinned by memory_compaction_policy_is_empty_pins_four_field_contract).
+        let policy_obj = wire
+            .get("policy")
+            .and_then(serde_json::Value::as_object)
+            .expect("policy must serialise as a nested JSON object");
+        let policy_keys: std::collections::BTreeSet<&str> =
+            policy_obj.keys().map(String::as_str).collect();
+        let policy_expected: std::collections::BTreeSet<&str> = [
+            "delete_working_before_ms",
+            "detach_stale_parents",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            policy_keys, policy_expected,
+            "policy nested object must surface only the populated Option \
+             (delete_working_before_ms) and the always-present bool \
+             (detach_stale_parents); the other three None Options must \
+             stay out of the wire via skip_serializing_if",
+        );
+
+        // Round-trip pins the PartialEq derive contract.
+        let back: MemoryCompactionRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, request);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["mode", "policy", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MemoryCompactionRequest>(serde_json::Value::Object(
+                    missing,
+                ))
+                .is_err(),
+                "MemoryCompactionRequest wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Cross-binding: mode on a DryRun request must serialise to the
+        // snake_case slug "dry_run" (memory_repair_mode_serde_pins_snake_case_wire_form).
+        assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("dry_run"));
+    }
 }

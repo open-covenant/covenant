@@ -2116,6 +2116,22 @@ mod tests {
     }
 
     #[test]
+    fn peer_scope_allows_pins_before_ms_equal_boundary_accepted() {
+        let scope = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        let equal = PeerScopeRequest {
+            before_ms: Some(1_000),
+            ..PeerScopeRequest::default()
+        };
+        assert!(peer_scope_allows("peers.purge", &scope, "peers.purge", equal).unwrap());
+
+        let beyond = PeerScopeRequest {
+            before_ms: Some(1_001),
+            ..PeerScopeRequest::default()
+        };
+        assert!(!peer_scope_allows("peers.purge", &scope, "peers.purge", beyond).unwrap());
+    }
+
+    #[test]
     fn chain_scope_allows_limit_environment_and_receipt_predicates() {
         let payer = bs58::encode([9u8; 32]).into_string();
         let scope = serde_json::json!({

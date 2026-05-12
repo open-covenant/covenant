@@ -979,6 +979,95 @@ mod tests {
     }
 
     #[test]
+    fn peer_entry_serde_pins_three_required_fields() {
+        // PeerEntry is the persisted registry record (the JSONL row
+        // JsonlPeerRegistry writes), distinct from PeerSummary which is
+        // the redacted wire form crossing IPC/HTTP. Three strictly
+        // required fields: token (PeerToken — the secret), agent_id, and
+        // registered_at. No serde attributes; every field is required on
+        // both sides. The token wire form is the full base58 of the
+        // 32-byte secret, NOT the 6-char redacted prefix that
+        // PeerSummary::token_prefix carries — collapsing the two shapes
+        // would leak the secret-carrying capability.
+        let token = PeerToken::from_bytes([7u8; 32]);
+        let agent_id = AgentId::new("alice@host", [0u8; 32]);
+        let entry = PeerEntry {
+            token,
+            agent_id: agent_id.clone(),
+            registered_at: 1_700_000_000_000,
+        };
+
+        let wire = serde_json::to_value(&entry).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("PeerEntry serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent_id", "registered_at", "token"],
+            "PeerEntry wire object must contain exactly the three documented \
+             fields; a skip_serializing_if on token would silently drop the \
+             secret column for an all-zero default and break the registry \
+             reload path; a rename of token would silently fail decode on \
+             every persisted JSONL row and lock out previously authenticated \
+             peers"
+        );
+
+        let token_wire = obj
+            .get("token")
+            .and_then(serde_json::Value::as_str)
+            .expect("PeerEntry::token must serialise as a JSON string");
+        // The base58 form of 32 bytes is 43 or 44 chars (44 for
+        // high-leading bytes, 43 when the most significant byte is small
+        // — the [7u8; 32] fixture lands at the typical 44-char form).
+        // Whichever it is, it must NOT collapse to the 6-char PeerSummary
+        // token_prefix view.
+        let len = token_wire.chars().count();
+        assert!(
+            len == 43 || len == 44,
+            "PeerEntry::token wire form must be the full base58 of the 32-byte \
+             secret (43 or 44 chars), got {len} chars — collapsing to the \
+             6-char PeerSummary::token_prefix would mean the registry could \
+             no longer authenticate peers because the prefix cannot \
+             reconstruct the full token"
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract on every
+        // field; PeerToken's PartialEq uses constant-time comparison.
+        let back: PeerEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, entry);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["token", "agent_id", "registered_at"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<PeerEntry>(serde_json::Value::Object(missing)).is_err(),
+                "PeerEntry wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Cross-binding: the PeerSummary derived from this PeerEntry must
+        // carry the 6-char prefix of the PeerEntry's full token. The
+        // PeerSummary::token_prefix is the redaction view and the
+        // PeerEntry::token is the secret; the prefix MUST be a substring
+        // of the full token wire form, pinning that PeerSummary's
+        // redaction is derived from PeerEntry's full token rather than
+        // recomputed from a stale source.
+        let summary = summary_from(&entry, None);
+        assert_eq!(summary.token_prefix.chars().count(), 6);
+        assert!(
+            token_wire.starts_with(summary.token_prefix.as_str()),
+            "PeerSummary::token_prefix must be the first 6 chars of \
+             PeerEntry::token base58 — got summary prefix {:?} not a prefix \
+             of PeerEntry token wire {:?}",
+            summary.token_prefix,
+            token_wire,
+        );
+    }
+
+    #[test]
     fn summary_from_pins_token_prefix_redaction_and_field_mapping() {
         let (token, entry) = entry("alice@host");
         let full_b58 = token.to_b58();

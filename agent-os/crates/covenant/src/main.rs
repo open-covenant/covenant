@@ -5160,6 +5160,89 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_backfill_plan_json_pins_unmatched_legacy_receipts_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "credits_consumed",
+            "payer_display",
+            "payer_pubkey",
+            "reason",
+            "receipt_id",
+        ];
+
+        fn assert_unmatched_legacy_receipt_shape(value: &serde_json::Value) {
+            let entries = value["unmatched_legacy_receipts"]
+                .as_array()
+                .expect("memory_receipt_backfill_plan_json unmatched_legacy_receipts field must be an array");
+            assert!(
+                entries.len() >= 2,
+                "fixture must produce at least two unmatched_legacy_receipts to pin the per-element schema across distinct payers: {value}",
+            );
+            for entry in entries {
+                let object = entry
+                    .as_object()
+                    .expect("each unmatched_legacy_receipts[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json unmatched_legacy_receipts[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(entry["receipt_id"].is_string(), "unmatched_legacy_receipts[].receipt_id must be a string uuid: {entry}");
+                assert!(entry["payer_display"].is_string(), "unmatched_legacy_receipts[].payer_display must be a string: {entry}");
+                assert!(entry["payer_pubkey"].is_string(), "unmatched_legacy_receipts[].payer_pubkey must be a base58 string: {entry}");
+                assert!(
+                    entry["credits_consumed"].is_u64(),
+                    "unmatched_legacy_receipts[].credits_consumed must be a non-negative integer, not a stringified number: {entry}",
+                );
+                assert!(entry["reason"].is_string(), "unmatched_legacy_receipts[].reason must be a string, not a structured object: {entry}");
+            }
+        }
+
+        let payer_a = AgentId::new("payer-a@local", [20u8; 32]);
+        let payer_b = AgentId::new("payer-b@local", [21u8; 32]);
+        let receipt_a = SettlementReceipt {
+            id: uuid::Uuid::from_u128(301),
+            payer: payer_a,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 11,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let receipt_b = SettlementReceipt {
+            id: uuid::Uuid::from_u128(302),
+            payer: payer_b,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 13,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_unmatched_legacy_receipt_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[],
+            &[receipt_a, receipt_b],
+        ));
+    }
+
+    #[test]
     fn memory_read_json_renders_stable_shape() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let record = MemoryRecord {

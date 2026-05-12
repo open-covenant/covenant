@@ -1963,6 +1963,107 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_verify_serde_pins_default_bearing_single_field_variant() {
+        // Request::Verify is the operator-driven
+        // local-audit-chain verifier the CLI and HTTP gateway
+        // send to recompute hash-chain integrity over the most
+        // recent N audit rows. window defaults to
+        // default_verify_window() (100) via
+        // #[serde(default = "default_verify_window")] so a stale
+        // CLI can omit the field. It pairs with
+        // Response::VerifyReport (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='verify' plus window. No prior test pins the
+        // exact wire shape, window numeric serialization,
+        // round-trip, or the default-on-missing decode contract
+        // for this variant. The defaulting helper is
+        // default_verify_window (returns 100), distinct from
+        // default_recent_limit (returns 10) used by
+        // FlushReceipts/ReceiptBatches — a refactor that
+        // consolidated default helpers could silently shrink the
+        // verifier window by a 10x factor without a single error
+        // surface.
+        let event = Request::Verify { window: 250 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "window"],
+            "Request::Verify wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'window' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a typed VerifyOptions \
+             would nest 'window' one level deeper and every \
+             CLI/HTTP verifier probe that sends \
+             {{\"kind\":\"verify\",\"window\":<n>}} would fail to \
+             decode on the daemon side — the audit-chain \
+             integrity verifier surface goes dark and the \
+             operator cannot inspect drift through the supported \
+             path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("verify")),
+            "Request discriminator slug must be the durable \
+             'verify'; a slug regression silently routes \
+             incoming verifier frames to the daemon's catch-all \
+             error branch — every CLI/HTTP verifier probe fails \
+             with a confusing fallback message instead of \
+             VerifyReport, and the operator cannot recompute the \
+             audit hash chain through the supported path",
+        );
+        assert_eq!(
+            obj.get("window").and_then(serde_json::Value::as_u64),
+            Some(250),
+            "Request::Verify::window must surface as the literal \
+             numeric window — the daemon's verifier path binds on \
+             this exact field to cap the recomputed hash-chain \
+             slice; a rename or retype would silently emit a \
+             different verification depth than the operator \
+             requested, missing drift evidence at the tail of the \
+             chain",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::Verify must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI/HTTP audit-verifier consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "verify"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::Verify must decode from a payload missing \
+             'window' — the #[serde(default = \"default_verify_window\")] \
+             attribute is the durable compatibility hinge that \
+             lets stale CLIs continue verifying without a rebuild",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::Verify { window: 100 },
+            "Request::Verify with missing 'window' must default to \
+             default_verify_window() = 100 — distinct from \
+             default_recent_limit() = 10 used by FlushReceipts \
+             and ReceiptBatches. A refactor that consolidated \
+             #[serde(default = \"default_verify_window\")] to \
+             #[serde(default)] (zero) or to \
+             #[serde(default = \"default_recent_limit\")] (10) \
+             would silently shrink the verifier window by a 10x \
+             or larger factor relative to the operator's \
+             expectation, miss drift evidence at the tail of the \
+             chain, and break stale-CLI compatibility without a \
+             single error surface",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

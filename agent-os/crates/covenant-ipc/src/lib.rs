@@ -783,6 +783,138 @@ mod tests {
     }
 
     #[test]
+    fn receipt_batch_summary_serde_pins_default_not_skip_and_required_fields() {
+        // ReceiptBatchSummary lives inside Response::ReceiptBatchFlushed
+        // and Response::ReceiptBatches; every CLI `receipts flush` /
+        // `receipts batches` output and HTTP `/receipts/batches` consumer
+        // deserialises it. The struct documents the on-chain confirmation
+        // boundary — batch_id / merkle_root / receipt_count are local-
+        // evidence required fields, while tx_sig and slot reflect the
+        // Solana confirmation state.
+        //
+        // Both Option fields carry `#[serde(default)]` but NOT
+        // `#[serde(skip_serializing_if = "Option::is_none")]`, an
+        // asymmetric contract:
+        //
+        // * Serialize: `None` surfaces as JSON `null` — the five-key wire
+        //   shape stays stable across local-only and confirmed states so
+        //   destructuring CLI/HTTP consumers never see a missing key.
+        // * Deserialize: a missing `tx_sig` / `slot` decodes as `None`,
+        //   so a stale CLI built before flush evidence existed (or a
+        //   newer CLI talking to an older daemon that does not emit the
+        //   keys) stays forward-compatible.
+        //
+        // A refactor that adds `skip_serializing_if` would silently
+        // drop the keys on the local-only path; a refactor that drops
+        // `#[serde(default)]` would break stale CLIs at decode time.
+
+        let unconfirmed = ReceiptBatchSummary {
+            batch_id: "batch-1".into(),
+            merkle_root: "00".repeat(32),
+            receipt_count: 7,
+            tx_sig: None,
+            slot: None,
+        };
+        let wire = serde_json::to_value(&unconfirmed).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("ReceiptBatchSummary serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["batch_id", "merkle_root", "receipt_count", "slot", "tx_sig"],
+            "ReceiptBatchSummary wire object must always carry the five \
+             documented keys — adding skip_serializing_if to tx_sig or \
+             slot would silently break callers that destructure the shape"
+        );
+        assert_eq!(
+            obj.get("tx_sig"),
+            Some(&serde_json::Value::Null),
+            "None tx_sig must surface as JSON null on the wire so the \
+             five-key shape stays stable across confirmation states"
+        );
+        assert_eq!(
+            obj.get("slot"),
+            Some(&serde_json::Value::Null),
+            "None slot must surface as JSON null on the wire so the \
+             five-key shape stays stable across confirmation states"
+        );
+
+        let confirmed = ReceiptBatchSummary {
+            batch_id: "batch-1".into(),
+            merkle_root: "00".repeat(32),
+            receipt_count: 7,
+            tx_sig: Some("sig123".into()),
+            slot: Some(42),
+        };
+        let wire = serde_json::to_value(&confirmed).unwrap();
+        let obj = wire.as_object().unwrap();
+        assert_eq!(
+            obj.get("tx_sig").and_then(serde_json::Value::as_str),
+            Some("sig123"),
+            "populated tx_sig must round-trip verbatim on the wire"
+        );
+        assert_eq!(
+            obj.get("slot").and_then(serde_json::Value::as_u64),
+            Some(42),
+            "populated slot must round-trip verbatim on the wire"
+        );
+
+        let forward_compat = serde_json::json!({
+            "batch_id": "batch-1",
+            "merkle_root": "00".repeat(32),
+            "receipt_count": 7,
+        });
+        let decoded: ReceiptBatchSummary = serde_json::from_value(forward_compat).unwrap();
+        assert_eq!(
+            decoded.tx_sig, None,
+            "ReceiptBatchSummary with tx_sig omitted must decode as None; \
+             dropping #[serde(default)] would break stale CLIs built before \
+             the flush evidence fields landed"
+        );
+        assert_eq!(
+            decoded.slot, None,
+            "ReceiptBatchSummary with slot omitted must decode as None; \
+             dropping #[serde(default)] would break stale CLIs built before \
+             the flush evidence fields landed"
+        );
+
+        for required in ["batch_id", "merkle_root", "receipt_count"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("batch_id".into(), serde_json::Value::String("batch-1".into()));
+            payload.insert(
+                "merkle_root".into(),
+                serde_json::Value::String("00".repeat(32)),
+            );
+            payload.insert(
+                "receipt_count".into(),
+                serde_json::Value::Number(serde_json::Number::from(7u64)),
+            );
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<ReceiptBatchSummary>(serde_json::Value::Object(payload))
+                    .is_err(),
+                "ReceiptBatchSummary must reject a wire payload that omits \
+                 {required}; a stray #[serde(default)] introduction would let \
+                 a malformed flush evidence frame decode at the IPC boundary"
+            );
+        }
+
+        let too_large = serde_json::json!({
+            "batch_id": "batch-1",
+            "merkle_root": "00".repeat(32),
+            "receipt_count": u64::from(u32::MAX) + 1,
+        });
+        assert!(
+            serde_json::from_value::<ReceiptBatchSummary>(too_large).is_err(),
+            "receipt_count must remain a u32 on the wire; a refactor that \
+             widens it to u64 would silently change the wire type contract \
+             every batch-rendering consumer depends on"
+        );
+    }
+
+    #[test]
     fn v1_response_fixtures_replay_against_current_parser() {
         let mut fixture_count = 0;
 

@@ -1788,6 +1788,35 @@ mod tests {
     }
 
     #[test]
+    fn a2a_duplicate_risk_serde_pins_snake_case_wire_form() {
+        // A2ADuplicateRisk rides on every A2ARepairCommand::Requeue and
+        // lands in the daemon's repair audit row. OperatorAccepted is
+        // load-bearing — it records that a human operator explicitly
+        // authorized requeueing a non-idempotent task. The rename_all
+        // default would emit "OperatorAccepted" titlecase and silently
+        // bisect operator-acceptance audit rows.
+        let cases: [(A2ADuplicateRisk, &str); 2] = [
+            (A2ADuplicateRisk::Idempotent, "idempotent"),
+            (A2ADuplicateRisk::OperatorAccepted, "operator_accepted"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ADuplicateRisk = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<A2ADuplicateRisk>("\"OperatorAccepted\"").is_err(),
+            "titlecase OperatorAccepted (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<A2ADuplicateRisk>("\"operatorAccepted\"").is_err(),
+            "camelCase operatorAccepted must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

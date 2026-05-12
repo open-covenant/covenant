@@ -646,6 +646,88 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_error_serde_pins_two_required_and_data_skip_empty() {
+        // JsonRpcError is the per-error payload riding inside
+        // JsonRpcResponse::error. Three fields: code (i64, the
+        // JSON-RPC 2.0 numeric error code), message (String), and
+        // data (Option<Value>, #[serde(default, skip_serializing_if =
+        // "Option::is_none")]). The mutual-exclusivity test above
+        // exercises the data=None arm indirectly via the response
+        // envelope; pin the standalone envelope key set on both None
+        // and Some paths, and the data=None forward-compat decode.
+        // The code-as-signed-JSON-number arm cross-binds to
+        // transport_closed_error_maps_to_closed, which routes on
+        // code == -32099 as i64.
+        let none = JsonRpcError {
+            code: -32601,
+            message: "method not found".into(),
+            data: None,
+        };
+        let none_wire = serde_json::to_value(&none).unwrap();
+        let none_obj = none_wire
+            .as_object()
+            .expect("JsonRpcError serializes as a JSON object");
+        let none_keys: std::collections::BTreeSet<&str> =
+            none_obj.keys().map(String::as_str).collect();
+        let two: std::collections::BTreeSet<&str> = ["code", "message"].into_iter().collect();
+        assert_eq!(
+            none_keys, two,
+            "data=None JsonRpcError wire form must be exactly two keys; a \
+             dropped skip_serializing_if surfaces data: null on every error \
+             envelope and splits operator dashboards filtering on field presence",
+        );
+        // Cross-binding: code must surface as a signed JSON number so
+        // the McpClientError::Closed routing on code == -32099 holds.
+        assert_eq!(
+            none_obj.get("code").and_then(serde_json::Value::as_i64),
+            Some(-32601),
+            "code must surface as a signed JSON number, not a string",
+        );
+
+        let some = JsonRpcError {
+            code: -32602,
+            message: "invalid params".into(),
+            data: Some(serde_json::json!({ "field": "x" })),
+        };
+        let some_wire = serde_json::to_value(&some).unwrap();
+        let some_obj = some_wire.as_object().unwrap();
+        let some_keys: std::collections::BTreeSet<&str> =
+            some_obj.keys().map(String::as_str).collect();
+        let three: std::collections::BTreeSet<&str> =
+            ["code", "message", "data"].into_iter().collect();
+        assert_eq!(
+            some_keys, three,
+            "data=Some JsonRpcError wire form must be exactly three keys",
+        );
+        assert_eq!(
+            some_obj.get("data"),
+            Some(&serde_json::json!({ "field": "x" })),
+        );
+
+        // Each strictly-required field must reject when omitted. data
+        // is optional and exercised below.
+        for required in ["code", "message"] {
+            let mut missing = none_obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<JsonRpcError>(serde_json::Value::Object(missing)).is_err(),
+                "JsonRpcError wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // #[serde(default)] on data: a payload that omits data must
+        // still decode and yield None. A refactor that drops the
+        // default would refuse minimal error envelopes from older or
+        // strict-shape JSON-RPC 2.0 servers.
+        let omitted: JsonRpcError = serde_json::from_value(serde_json::json!({
+            "code": -32601,
+            "message": "x",
+        }))
+        .unwrap();
+        assert!(omitted.data.is_none());
+    }
+
+    #[test]
     fn transport_closed_error_maps_to_closed() {
         let e = JsonRpcError {
             code: TRANSPORT_CLOSED_CODE,

@@ -197,6 +197,58 @@ mod tests {
     }
 
     #[test]
+    fn tool_spec_serde_pins_camel_case_round_trip() {
+        // ToolSpec is the public MCP wire shape advertised by every
+        // ToolRegistry::list_specs response. The inputSchema field
+        // name is load-bearing — spec-compliant external MCP servers
+        // (and the stdio JSON-RPC transport) key on inputSchema, not
+        // input_schema. A dropped rename_all = camelCase attribute
+        // would silently switch the wire form to input_schema and
+        // break every external transport, while leaving the in-process
+        // ToolRegistry path working because Rust types still match.
+        let spec = ToolSpec {
+            name: "echo".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+        let wire = serde_json::json!({
+            "name": "echo",
+            "description": "d",
+            "inputSchema": {"type": "object"},
+        });
+        assert_eq!(serde_json::to_value(&spec).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<ToolSpec>(wire.clone()).unwrap(),
+            spec,
+        );
+
+        // The snake_case wire form must be rejected so a dropped
+        // rename_all attribute fails loud at the boundary instead of
+        // silently swapping the published field name.
+        assert!(
+            serde_json::from_value::<ToolSpec>(serde_json::json!({
+                "name": "echo",
+                "description": "d",
+                "input_schema": {"type": "object"},
+            }))
+            .is_err(),
+            "snake_case input_schema must be rejected so the rename_all camelCase whitelist stays tight",
+        );
+
+        // Missing the required inputSchema field must fail so a future
+        // refactor that drops the field forces an explicit migration
+        // decision instead of silently accepting an empty Value.
+        assert!(
+            serde_json::from_value::<ToolSpec>(serde_json::json!({
+                "name": "echo",
+                "description": "d",
+            }))
+            .is_err(),
+            "missing inputSchema must be rejected so the required field cannot silently disappear",
+        );
+    }
+
+    #[test]
     fn content_variants_serialise_with_type_tag() {
         let t = Content::text("hi");
         let json = serde_json::to_string(&t).unwrap();

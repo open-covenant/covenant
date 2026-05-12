@@ -574,6 +574,76 @@ entry = "x.f90"
     }
 
     #[test]
+    fn agent_section_serde_pins_five_required_fields() {
+        // The [agent] block in every agent.toml carries five fields
+        // declared without serde defaults: id, name, version, runtime,
+        // entry. toml::from_str must reject any block that omits one;
+        // otherwise a refactor adding #[serde(default)] anywhere would
+        // silently let malformed manifests parse with empty strings —
+        // agent.id="" would bypass rejects_empty_id at the parse layer
+        // (which only fires on the validation path), agent.entry=""
+        // would let SubprocessRunner spawn `Command::new("")` at intent
+        // dispatch, agent.runtime would default-pick a variant breaking
+        // the router/runtime contract at boot. The existing validation
+        // tests catch malformed values; this test pins the prior
+        // contract that an *omitted* field is a parse error, not a
+        // soft-defaulted value.
+        const ID_VAL: &str = "x";
+        const NAME_VAL: &str = "x";
+        const VERSION_VAL: &str = "0.0.1";
+        const RUNTIME_VAL: &str = "node";
+        const ENTRY_VAL: &str = "x.js";
+
+        let full = format!(
+            "[agent]\nid = \"{ID_VAL}\"\nname = \"{NAME_VAL}\"\nversion = \"{VERSION_VAL}\"\nruntime = \"{RUNTIME_VAL}\"\nentry = \"{ENTRY_VAL}\"\n"
+        );
+        let parsed = Manifest::parse(&full).expect("full agent block must parse");
+        assert_eq!(parsed.agent.id, ID_VAL);
+        assert_eq!(parsed.agent.name, NAME_VAL);
+        assert_eq!(parsed.agent.version, VERSION_VAL);
+        assert_eq!(parsed.agent.runtime, Runtime::Node);
+        assert_eq!(parsed.agent.entry, ENTRY_VAL);
+
+        let cases: [(&str, &str); 5] = [
+            (
+                "id",
+                "[agent]\nname = \"x\"\nversion = \"0.0.1\"\nruntime = \"node\"\nentry = \"x.js\"\n",
+            ),
+            (
+                "name",
+                "[agent]\nid = \"x\"\nversion = \"0.0.1\"\nruntime = \"node\"\nentry = \"x.js\"\n",
+            ),
+            (
+                "version",
+                "[agent]\nid = \"x\"\nname = \"x\"\nruntime = \"node\"\nentry = \"x.js\"\n",
+            ),
+            (
+                "runtime",
+                "[agent]\nid = \"x\"\nname = \"x\"\nversion = \"0.0.1\"\nentry = \"x.js\"\n",
+            ),
+            (
+                "entry",
+                "[agent]\nid = \"x\"\nname = \"x\"\nversion = \"0.0.1\"\nruntime = \"node\"\n",
+            ),
+        ];
+
+        for (missing_field, toml_src) in cases {
+            match Manifest::parse(toml_src) {
+                Err(ManifestError::Parse(_)) => {}
+                other => panic!(
+                    "omitting agent.{missing_field} must fail with \
+                     ManifestError::Parse — a refactor that added \
+                     #[serde(default)] to agent.{missing_field} would \
+                     silently parse the malformed manifest with an \
+                     empty-string field and downstream router/runtime \
+                     paths would key on '' or `Command::new('')`; got \
+                     {other:?}",
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn parses_via_fromstr_trait() {
         let m: Manifest = MINIMAL.parse().unwrap();
         assert_eq!(m.agent.id, "tiny");

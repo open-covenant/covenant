@@ -1491,6 +1491,51 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_operator_token_rotation_rejected_serde_pins_two_field_variant() {
+        // AuditKind::OperatorTokenRotationRejected is the daemon-as-
+        // issuer probe row emitted when RotateOperatorToken is rejected
+        // because the authenticated peer's pubkey doesn't match the
+        // operator identity. peer_pubkey_b58 is the unforgeable
+        // identifier — peer_display is wire-supplied and an attacker
+        // could register any display against any pubkey, so collapsing
+        // pubkey_b58 with #[serde(default)] would leave only the
+        // wire-controlled display and erase the probe-attribution
+        // signal that becomes load-bearing at Phase-1 multi-peer.
+        let kind = AuditKind::OperatorTokenRotationRejected {
+            peer_display: "guest@local".into(),
+            peer_pubkey_b58: "guestPubkeyB58".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["peer_display", "peer_pubkey_b58", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("operator_token_rotation_rejected")),
+            "AuditKind discriminator slug must be snake_case 'operator_token_rotation_rejected'; a titlecase or kebab-case regression silently strands every prior rotation-rejection probe row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::OperatorTokenRotationRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract Phase-1 multi-peer probe triage will lean on",
+        );
+
+        for required in ["peer_display", "peer_pubkey_b58"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::OperatorTokenRotationRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on peer_pubkey_b58 would leave only the wire-controlled peer_display and erase the unforgeable probe-attribution signal",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_operator_token_rotated_serde_pins_three_field_variant() {
         // AuditKind::OperatorTokenRotated records every operator
         // bootstrap-token rotation. Token bytes never enter the audit

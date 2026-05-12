@@ -3380,6 +3380,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_protocol_info_serde_pins_single_field_variant() {
+        // Response::ProtocolInfo is the variant the daemon sends in
+        // response to Request::ProtocolInfo — it carries info:
+        // ProtocolInfo, the struct containing the daemon's protocol
+        // name, current version, and supported version range that
+        // every CLI uses to pick the correct wire dialect. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='protocol_info' plus info. The inner
+        // ProtocolInfo struct shape is already pinned by
+        // protocol_info_serde_pins_required_fields_and_rejected_renames
+        // and protocol_info_matches_v1_fixture; this slice locks the
+        // outer Response variant shape only — that info appears as a
+        // nested object, that the discriminator slug is the durable
+        // 'protocol_info', and that the variant rejects a payload
+        // missing 'info'. A refactor that promoted the variant from
+        // struct to newtype wrapping ProtocolInfo would either
+        // inline its fields next to kind or nest one level deeper;
+        // either form would silently break every CLI consumer that
+        // reads .info.protocol.
+        let event = Response::ProtocolInfo {
+            info: protocol_info(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["info", "kind"],
+            "Response::ProtocolInfo wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'info' field. A \
+             refactor that promoted the variant from struct to \
+             newtype wrapping ProtocolInfo would either inline \
+             ProtocolInfo's fields next to 'kind' or nest 'info' \
+             one level deeper — either form silently breaks every \
+             CLI consumer that reads .info.protocol",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("protocol_info")),
+            "Response discriminator slug must be the durable \
+             'protocol_info'; a slug regression silently strands \
+             every CLI parser that branches on kind=protocol_info — \
+             clients fall through to a generic-error branch and \
+             either reject the response or fail-open with a default \
+             dialect, masking a real protocol mismatch",
+        );
+        assert!(
+            obj.get("info")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::ProtocolInfo::info must serialize as a nested \
+             JSON object — the inner ProtocolInfo shape is pinned by \
+             sibling tests; this slice only locks that info appears \
+             as one keyed object under the outer variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ProtocolInfo must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI version-probe consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("info");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::ProtocolInfo wire form must reject a payload \
+             missing 'info'; a stray #[serde(default)] would let a \
+             malformed row decode with a default ProtocolInfo and \
+             the CLI would commit to an incorrect protocol dialect \
+             — a real fetch failure (truncated frame, partial \
+             decode error) would be silently reclassified as a \
+             clean version-probe and downstream calls would fail in \
+             confusing ways",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

@@ -420,6 +420,56 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_notification_serde_pins_no_id_and_skip_empty_params() {
+        // JsonRpcNotification differs from JsonRpcRequest by carrying no
+        // id field at all — the server treats a notification as
+        // fire-and-forget. params rides #[serde(default,
+        // skip_serializing_if = "Value::is_null")] so a no-params
+        // notification stays compact on the wire. A refactor that adds
+        // an id field would silently misroute notifications as requests
+        // expecting a response; a refactor that drops or swaps the
+        // skip-null predicate would silently inflate every notification
+        // frame.
+        let empty = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: "notifications/initialized".into(),
+            params: Value::Null,
+        };
+        let wire = serde_json::to_value(&empty).unwrap();
+        let obj = wire.as_object().expect("notification serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["jsonrpc", "method"],
+            "no-params notification wire object must contain exactly jsonrpc and method; an unexpected id field or non-skipped params silently changes the wire shape every MCP server consumes",
+        );
+
+        let populated = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: "notifications/progress".into(),
+            params: serde_json::json!({ "step": 1 }),
+        };
+        let wire = serde_json::to_value(&populated).unwrap();
+        assert_eq!(
+            wire.get("params"),
+            Some(&serde_json::json!({ "step": 1 })),
+            "non-null params must surface verbatim; a skip predicate other than Value::is_null silently drops populated payloads",
+        );
+        assert!(
+            wire.as_object().unwrap().keys().all(|k| k != "id"),
+            "JsonRpcNotification must never serialize an id field",
+        );
+
+        let parsed: JsonRpcNotification = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        )
+        .expect("notification with no params must decode via #[serde(default)]");
+        assert_eq!(parsed.method, "notifications/initialized");
+        assert!(parsed.params.is_null());
+    }
+
+    #[test]
     fn json_rpc_response_with_error_parses() {
         let s = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#;
         let r: JsonRpcResponse = serde_json::from_str(s).unwrap();

@@ -2176,6 +2176,16 @@ mod tests {
     }
 
     #[test]
+    fn chain_scope_allows_pins_optional_string_actual_none_accepted() {
+        let scope = serde_json::json!({ "version": 1, "resource": "compute" });
+        let actual_none = ChainScopeRequest {
+            resource: None,
+            ..ChainScopeRequest::default()
+        };
+        assert!(chain_scope_allows("chain.flush", &scope, "chain.flush", actual_none).unwrap());
+    }
+
+    #[test]
     fn memory_purge_scope_allows_tier_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

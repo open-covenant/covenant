@@ -3409,6 +3409,117 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_task_leased_serde_pins_five_field_variant() {
+        // MailboxEvent::TaskLeased is the lease-issued event the daemon
+        // appends to the JSONL mailbox log when a task transitions from
+        // queued to in-flight (via try_recv_task_for). With
+        // #[serde(tag = "type", rename_all = "snake_case")] on the
+        // enum, the wire object is exactly six keys: type='task_leased'
+        // plus task_id (Uuid), lease_id (Uuid), leased_to (nested
+        // AgentId display+pubkey), leased_at_ms (u64), attempt (u32).
+        // The in-flight lease map this rebuilds at replay is what
+        // makes A2A delivery exactly-once across daemon restart — if
+        // TaskLeased wire form drifts, recovered leases lose either
+        // their owner identity (capability checks degrade) or their
+        // identity-bound lease_id (repair commands can't target the
+        // right entry). No test pins the enum-level wire form.
+        let event = MailboxEvent::TaskLeased {
+            task_id: Uuid::from_u128(21),
+            lease_id: Uuid::from_u128(22),
+            leased_to: dummy_agent("worker@local"),
+            leased_at_ms: 30_000,
+            attempt: 1,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "attempt",
+                "lease_id",
+                "leased_at_ms",
+                "leased_to",
+                "task_id",
+                "type",
+            ],
+            "MailboxEvent::TaskLeased wire form must be exactly six keys: \
+             the five variant fields plus the 'type' discriminator. A \
+             refactor that renamed any of task_id, lease_id, leased_to, \
+             leased_at_ms, or attempt without #[serde(rename = ...)] \
+             would silently fail decode on every prior JSONL TaskLeased \
+             row, the in-flight map would empty at replay, and active \
+             operator repair commands targeting a leased task by \
+             lease_id would silently no-op against the orphaned entry",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("task_leased")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'task_leased'; a slug regression silently strands every \
+             prior JSONL TaskLeased row at replay and the in-flight map \
+             rebuilds empty — every in-flight task appears reclaimable \
+             and the next try_recv_task_for caller silently re-leases an \
+             already-leased task, double-dispatching the work",
+        );
+
+        let leased_to_obj = obj
+            .get("leased_to")
+            .and_then(serde_json::Value::as_object)
+            .expect("MailboxEvent::TaskLeased::leased_to must serialise as a nested JSON object");
+        let mut leased_keys: Vec<&str> = leased_to_obj.keys().map(String::as_str).collect();
+        leased_keys.sort();
+        assert_eq!(
+            leased_keys,
+            vec!["display", "pubkey"],
+            "MailboxEvent::TaskLeased::leased_to must surface the AgentId \
+             display+pubkey shape; a refactor that flattened or \
+             restructured AgentId would break the cross-type contract \
+             between mailbox replay and capability subject resolution — \
+             leased_to would lose its display+pubkey binding and \
+             capability checks for the leased worker would silently \
+             degrade to display-only matching, exposing the lease \
+             attribution to display-collision attacks",
+        );
+        assert_eq!(
+            leased_to_obj
+                .get("display")
+                .and_then(serde_json::Value::as_str),
+            Some("worker@local"),
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::TaskLeased must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract the \
+             JsonlMailbox::open replay path joins lease events against",
+        );
+
+        for required in ["task_id", "lease_id", "leased_to", "leased_at_ms", "attempt"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MailboxEvent::TaskLeased wire form must reject a payload \
+                 missing {required:?}; a stray #[serde(default)] on \
+                 leased_to would let a malformed row decode with a \
+                 zero-value AgentId and replay would bind the lease to a \
+                 synthetic empty-display identity — the \
+                 a2a.respond.<sender> capability check would lose its \
+                 registry mapping for the lease and the response path \
+                 would silently drop the result when the worker posted \
+                 back to the nil sender",
+            );
+        }
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

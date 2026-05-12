@@ -1490,6 +1490,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_a2a_result_rejected_serde_pins_two_field_variant() {
+        // AuditKind::A2AResultRejected is the audit row emitted when
+        // PostA2AResult is rejected upstream of any capability check
+        // — e.g. the supplied task_id was never dispatched through this
+        // daemon. Stronger compromise indicator than a missing-cap
+        // rejection: no honest agent generates a nonexistent task_id.
+        // task_id is the durable correlation handle back to the
+        // originating dispatch — a rename or #[serde(default)] would let
+        // a malformed row decode with Uuid::nil() and mask the real
+        // upstream-compromise event behind a generic nil-uuid row.
+        let kind = AuditKind::A2AResultRejected {
+            task_id: Uuid::nil(),
+            reason: "unknown task".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["reason", "task_id", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("a2_a_result_rejected")),
+            "AuditKind discriminator slug must be 'a2_a_result_rejected' — serde's rename_all = snake_case splits the 'A2A' prefix on each digit/uppercase boundary, producing 'a2_a_…'. This is the durable wire form every persisted A2AResultRejected audit row uses; a refactor that 'fixed' the slug to 'a2a_result_rejected' would silently strand every prior upstream-compromise audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::A2AResultRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract the upstream-compromise audit correlation leans on",
+        );
+
+        for required in ["task_id", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::A2AResultRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on task_id would silently let the row decode with Uuid::nil() and mask a real upstream-compromise event behind a generic nil-uuid row",
+            );
+        }
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

@@ -4168,6 +4168,58 @@ mod tests {
     }
 
     #[test]
+    fn verify_report_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["checks", "drift", "kind", "orphans_total", "window"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("verify_report_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "verify_report_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("verify_report"));
+            assert!(
+                value["window"].is_u64(),
+                "window must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["orphans_total"].is_u64(),
+                "orphans_total must serialize as a non-negative integer, not a string-of-integer: {value}",
+            );
+            assert!(
+                value["checks"].is_array(),
+                "checks must be an array: {value}",
+            );
+            assert!(
+                value["drift"].is_array(),
+                "drift must be an array: {value}",
+            );
+        }
+
+        let checks = vec![VerifyCheck {
+            name: "memory audit".into(),
+            passed: false,
+            message: "1 orphan".into(),
+        }];
+        let drift = vec![VerifyDrift {
+            kind: "memory_without_audit".into(),
+            id: Some("record-1".into()),
+            message: "memory record has no matching audit row".into(),
+            repair: "inspect before deleting".into(),
+        }];
+
+        assert_shape(&verify_report_json(100, &checks, &drift, 1));
+        assert_shape(&verify_report_json(100, &[], &[], 0));
+    }
+
+    #[test]
     fn flush_receipts_json_renders_stable_shape() {
         let batch = ReceiptBatchSummary {
             batch_id: "batch-1".into(),

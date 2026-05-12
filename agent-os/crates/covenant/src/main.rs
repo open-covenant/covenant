@@ -4726,6 +4726,43 @@ mod tests {
     }
 
     #[test]
+    fn ignore_report_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] =
+            &["ignored", "kind", "matched_pattern", "rules_loaded"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("ignore_report_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "ignore_report_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("ignore_report"));
+            assert!(
+                value["ignored"].is_boolean(),
+                "ignored must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert!(
+                value["matched_pattern"].is_string() || value["matched_pattern"].is_null(),
+                "matched_pattern must be a string when matched and null when unmatched: {value}",
+            );
+            assert!(
+                value["rules_loaded"].is_u64(),
+                "rules_loaded must be a non-negative integer, not a string: {value}",
+            );
+        }
+
+        assert_shape(&ignore_report_json(true, Some("*.pem"), 2));
+        assert_shape(&ignore_report_json(false, None, 0));
+    }
+
+    #[test]
     fn tool_list_json_renders_stable_shape() {
         let spec = ToolSpec {
             name: "echo".into(),

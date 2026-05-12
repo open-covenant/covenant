@@ -1636,6 +1636,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_a2a_scope_rejects_invalid_task_id_and_lease_id_shapes() {
+        assert_invalid_scope(
+            "a2a.requeue",
+            serde_json::json!({ "version": 1, "task_id": 42 }),
+        );
+        assert_invalid_scope(
+            "a2a.requeue",
+            serde_json::json!({ "version": 1, "lease_id": 42 }),
+        );
+    }
+
+    #[test]
     fn tool_call_scope_allows_unscoped_grants() {
         assert!(tool_call_scope_allows(
             "tool.call.echo",

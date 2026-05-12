@@ -2772,6 +2772,84 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_optional_bool_pins_absent_null_bool_match_and_none_strict_deny() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_optional_bool(empty, "x", Some(true)),
+            "absent field must allow actual=Some(true); the absent-key branch is unconditional and matches the rest of the scope_allows_optional_* family",
+        );
+        assert!(
+            scope_allows_optional_bool(empty, "x", Some(false)),
+            "absent field must allow actual=Some(false); the absent-key branch is unconditional and cannot bias toward true",
+        );
+        assert!(
+            scope_allows_optional_bool(empty, "x", None),
+            "absent field must allow actual=None; otherwise unscoped grants reject every request whose optional bool is omitted",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_optional_bool(explicit_null, "x", Some(true)),
+            "{{\"x\": null}} is the documented unbounded marker and must allow actual=Some(true)",
+        );
+        assert!(
+            scope_allows_optional_bool(explicit_null, "x", Some(false)),
+            "{{\"x\": null}} must allow actual=Some(false) too; the null arm is unconditional on the bool side",
+        );
+        assert!(
+            scope_allows_optional_bool(explicit_null, "x", None),
+            "{{\"x\": null}} must allow actual=None as well; a regression that demanded actual=Some(_) under the null arm would silently reject the documented unbounded marker",
+        );
+
+        let bound_true = serde_json::json!({ "x": true });
+        let bound_true = bound_true.as_object().unwrap();
+        assert!(
+            scope_allows_optional_bool(bound_true, "x", Some(true)),
+            "scope {{\"x\": true}} must allow actual=Some(true); otherwise the equality check silently denies its own pinned value",
+        );
+        assert!(
+            !scope_allows_optional_bool(bound_true, "x", Some(false)),
+            "scope {{\"x\": true}} must NOT allow actual=Some(false); a regression that degraded the equality to one-way would silently authorize the opposite bool",
+        );
+        assert!(
+            !scope_allows_optional_bool(bound_true, "x", None),
+            "scope {{\"x\": true}} must NOT allow actual=None; the unwrap_or(false) branch is the strict-deny that distinguishes optional_bool from optional_string, and a regression to unwrap_or(true) would silently authorize unspecified bool requests through bool-bound scopes",
+        );
+
+        let bound_false = serde_json::json!({ "x": false });
+        let bound_false = bound_false.as_object().unwrap();
+        assert!(
+            scope_allows_optional_bool(bound_false, "x", Some(false)),
+            "scope {{\"x\": false}} must allow actual=Some(false); otherwise dry-run-only style bool gates never authorize their own pinned value",
+        );
+        assert!(
+            !scope_allows_optional_bool(bound_false, "x", Some(true)),
+            "scope {{\"x\": false}} must NOT allow actual=Some(true); a regression here would silently let a false-bound grant authorize the opposite bool",
+        );
+        assert!(
+            !scope_allows_optional_bool(bound_false, "x", None),
+            "scope {{\"x\": false}} must NOT allow actual=None; the strict-deny on actual=None is symmetric across both bound bools and protects boolean gates where 'not specified' is not the same as 'allowed'",
+        );
+
+        let non_bool = serde_json::json!({ "x": "oops" });
+        let non_bool = non_bool.as_object().unwrap();
+        assert!(
+            !scope_allows_optional_bool(non_bool, "x", Some(true)),
+            "a non-bool scope value compares via value.as_bool()==None which never equals Some(true), so the helper must strict-deny; a regression that treated malformed scope objects as allow-all would silently authorize bool-gated operations through string-typed scope fields",
+        );
+        assert!(
+            !scope_allows_optional_bool(non_bool, "x", Some(false)),
+            "a non-bool scope value must strict-deny actual=Some(false) too; value.as_bool() returns None which never equals Some(false), and the deny path is symmetric across both bools",
+        );
+        assert!(
+            !scope_allows_optional_bool(non_bool, "x", None),
+            "a non-bool scope value with actual=None must strict-deny via the .map(...).unwrap_or(false) branch; this is the path where actual=None never enters the closure and the unwrap_or(false) fires regardless of the scope value's type",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

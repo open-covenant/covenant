@@ -1023,6 +1023,38 @@ mod tests {
         assert_eq!(cosine(&[1.0], &[1.0, 2.0]), 0.0);
     }
 
+    #[test]
+    fn cosine_zero_norm_returns_zero_and_anti_parallel_returns_minus_one() {
+        // The docstring promises 0.0 for any degenerate input (mismatched
+        // length, zero norm, empty). cosine_basics covers length-mismatch
+        // and empty; this pin closes the zero-norm arm in both
+        // orientations and asserts the result is a finite 0.0, not NaN —
+        // a regression that dropped the `na == 0.0 || nb == 0.0` guard
+        // would silently NaN every search rank that compares against an
+        // all-zero embedding.
+        let both_zero = cosine(&[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]);
+        assert_eq!(both_zero, 0.0);
+        assert!(!both_zero.is_nan());
+
+        let lhs_zero = cosine(&[0.0, 0.0, 0.0], &[1.0, 0.0, 0.0]);
+        assert_eq!(lhs_zero, 0.0);
+        assert!(!lhs_zero.is_nan());
+
+        let rhs_zero = cosine(&[1.0, 0.0, 0.0], &[0.0, 0.0, 0.0]);
+        assert_eq!(rhs_zero, 0.0);
+        assert!(!rhs_zero.is_nan());
+
+        // Anti-parallel unit vectors must score -1.0, not +1.0. A vectorised
+        // rewrite that mishandles negative components (e.g. taking |x*y| in
+        // the dot product) would silently invert the similarity ordering of
+        // every embedding with a sign-bearing dimension.
+        let anti_parallel = cosine(&[1.0, 0.0], &[-1.0, 0.0]);
+        assert!(
+            (anti_parallel - (-1.0)).abs() < 1e-6,
+            "anti-parallel must be ~-1.0, got {anti_parallel}",
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_search_returns_closest_first() {
         let s = InMemoryStore::new();

@@ -2522,6 +2522,23 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_scope_allows_pins_validate_scope_version_error_propagation() {
+        let err = memory_compaction_scope_allows(
+            "memory.compact.apply",
+            &serde_json::json!({ "version": 0 }),
+            MemoryCompactionScopeRequest {
+                apply: true,
+                delete_working_before_ms: None,
+                delete_episodic_before_ms: None,
+                mark_longterm_stale_before_ms: None,
+                detach_stale_parents: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
     fn sign_and_verify_round_trip() {
         let issuer = LocalIdentity::generate("authority@local");
         let subject = LocalIdentity::generate("research@local").agent_id();

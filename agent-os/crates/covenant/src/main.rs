@@ -3958,6 +3958,49 @@ mod tests {
     }
 
     #[test]
+    fn audit_verify_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "report"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("audit_verify_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "audit_verify_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("audit_integrity"));
+            assert!(
+                value["report"].is_object(),
+                "report must be a structured object, not a string blob: {value}",
+            );
+        }
+
+        let valid = AuditIntegrityReport {
+            events: 2,
+            anchors: 2,
+            valid: true,
+            root_hash_hex: "ab".repeat(32),
+            failures: vec![],
+        };
+        let invalid = AuditIntegrityReport {
+            events: 5,
+            anchors: 4,
+            valid: false,
+            root_hash_hex: "cd".repeat(32),
+            failures: vec!["chain hash mismatch at event 3".into()],
+        };
+
+        assert_shape(&audit_verify_json(&valid));
+        assert_shape(&audit_verify_json(&invalid));
+    }
+
+    #[test]
     fn memory_purge_json_renders_stable_shape() {
         let value = memory_purge_json(Some(MemoryTier::Working), 1_700_000_000_000, 3);
         assert_eq!(value["kind"], "memory_purged");

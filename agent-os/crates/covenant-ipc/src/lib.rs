@@ -129,6 +129,13 @@ pub enum Request {
         tier: Option<MemoryTier>,
         #[serde(default = "default_recent_limit")]
         limit: usize,
+        /// Optional cosine-similarity floor in `[0.0, 1.0]`. When set,
+        /// records whose score is strictly less than the threshold are
+        /// dropped before the `limit` truncation. `#[serde(default)]`
+        /// keeps stale CLIs working — a missing field reads as `None`,
+        /// which is the pre-filter behaviour.
+        #[serde(default)]
+        min_relevance: Option<f32>,
     },
     PurgeMemory {
         #[serde(default)]

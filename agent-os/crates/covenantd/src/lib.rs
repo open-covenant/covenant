@@ -945,8 +945,14 @@ impl Server {
             Request::RevokeCapability { signature_b58 } => {
                 self.revoke_capability(signature_b58, peer).await
             }
-            Request::SearchMemory { query, tier, limit } => {
-                self.search_memory(query, tier, limit, peer).await
+            Request::SearchMemory {
+                query,
+                tier,
+                limit,
+                min_relevance,
+            } => {
+                self.search_memory(query, tier, limit, min_relevance, peer)
+                    .await
             }
             Request::PurgeMemory { tier, before_ms } => {
                 self.purge_memory(tier, before_ms, peer).await
@@ -3668,6 +3674,7 @@ impl Server {
         query: String,
         tier: Option<MemoryTier>,
         limit: usize,
+        min_relevance: Option<f32>,
         peer: &AgentId,
     ) -> Response {
         let actions = memory_read_actions(tier);
@@ -3729,7 +3736,11 @@ impl Server {
                 };
             }
         };
-        match self.memory.search_similar(q_emb, tier, limit).await {
+        match self
+            .memory
+            .search_similar(q_emb, tier, limit, min_relevance)
+            .await
+        {
             Ok(records) => Response::Memories {
                 records: records
                     .into_iter()
@@ -9155,6 +9166,7 @@ required = {caps:?}
                 query: "note".into(),
                 tier: None,
                 limit: 10,
+                min_relevance: None,
             })
             .await;
         match resp {

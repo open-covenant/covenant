@@ -278,6 +278,7 @@ struct SearchParams {
     q: String,
     tier: Option<MemoryTier>,
     limit: Option<usize>,
+    min_relevance: Option<f32>,
 }
 
 async fn memory_search(
@@ -292,6 +293,7 @@ async fn memory_search(
                     query: q.q,
                     tier: q.tier,
                     limit: q.limit.unwrap_or(10),
+                    min_relevance: q.min_relevance,
                 },
                 &peer,
             )

@@ -4,7 +4,7 @@
 //!   covenant ping [--json]
 //!   covenant intent [--json] <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
-//!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--json]
+//!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--min-relevance F] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
@@ -101,7 +101,7 @@ fn print_usage() {
         "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
     );
     eprintln!(
-        "  covenant memory search <query> [--tier T] [-n N] [--json]  semantic search via embeddings"
+        "  covenant memory search <query> [--tier T] [-n N] [--min-relevance F] [--json]  semantic search via embeddings; --min-relevance F drops records whose cosine score is below F (range [0.0, 1.0]) before the limit is applied"
     );
     eprintln!(
         "  covenant memory purge [--tier T] (--before-ms M | --older-than-ms D) [--json]  delete records older than ms epoch / D ms ago"
@@ -185,6 +185,7 @@ struct MemoryReadJsonArgs {
     tier: Option<MemoryTier>,
     limit: usize,
     query: Option<String>,
+    min_relevance: Option<f32>,
 }
 
 async fn resolve_intents_resume_intent_id(
@@ -240,6 +241,7 @@ async fn print_memory_response(
                         args.tier,
                         args.limit,
                         args.query.as_deref(),
+                        args.min_relevance,
                         &records
                     ))?
                 );
@@ -494,6 +496,7 @@ async fn main() -> Result<()> {
                             tier,
                             limit,
                             query: None,
+                            min_relevance: None,
                         }),
                     )
                     .await?;
@@ -799,6 +802,7 @@ async fn main() -> Result<()> {
                     }
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
+                    let mut min_relevance: Option<f32> = None;
                     let mut as_json = false;
                     let mut query_parts: Vec<String> = Vec::new();
                     let mut i = 2;
@@ -813,6 +817,19 @@ async fn main() -> Result<()> {
                                 i += 1;
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
+                            }
+                            "--min-relevance" => {
+                                i += 1;
+                                let v = args.get(i).context("--min-relevance needs a value")?;
+                                let parsed: f32 = v
+                                    .parse()
+                                    .context("--min-relevance must be a float in [0.0, 1.0]")?;
+                                if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+                                    bail!(
+                                        "--min-relevance must be a finite float in [0.0, 1.0]; got {v:?}"
+                                    );
+                                }
+                                min_relevance = Some(parsed);
                             }
                             "--json" => as_json = true,
                             other => query_parts.push(other.to_string()),
@@ -829,6 +846,7 @@ async fn main() -> Result<()> {
                             query: query.clone(),
                             tier,
                             limit,
+                            min_relevance,
                         },
                     )
                     .await?;
@@ -839,6 +857,7 @@ async fn main() -> Result<()> {
                             tier,
                             limit,
                             query: Some(query),
+                            min_relevance,
                         }),
                     )
                     .await?;
@@ -2686,6 +2705,7 @@ fn memory_read_json(
     tier: Option<MemoryTier>,
     limit: usize,
     query: Option<&str>,
+    min_relevance: Option<f32>,
     records: &[MemoryRecord],
 ) -> serde_json::Value {
     serde_json::json!({
@@ -2694,6 +2714,7 @@ fn memory_read_json(
         "tier": tier.map(memory_tier_slug),
         "limit": limit,
         "query": query,
+        "min_relevance": min_relevance,
         "records": records,
     })
 }
@@ -3708,6 +3729,7 @@ mod tests {
             Some(MemoryTier::Working),
             5,
             Some("memory read"),
+            Some(0.6),
             &[record],
         );
 
@@ -3716,13 +3738,18 @@ mod tests {
         assert_eq!(value["tier"], "working");
         assert_eq!(value["limit"], 5);
         assert_eq!(value["query"], "memory read");
+        assert!(
+            (value["min_relevance"].as_f64().unwrap() - 0.6).abs() < 1e-6,
+            "min_relevance must round-trip the supplied threshold",
+        );
         assert_eq!(value["records"][0]["text"], "memory read fixture");
         assert_eq!(value["records"][0]["tier"], "working");
         assert_eq!(value["records"][0]["owner"]["display"], owner.display);
 
-        let recent = memory_read_json("recent", None, 3, None, &[]);
+        let recent = memory_read_json("recent", None, 3, None, None, &[]);
         assert!(recent["tier"].is_null());
         assert!(recent["query"].is_null());
+        assert!(recent["min_relevance"].is_null());
         assert_eq!(recent["records"].as_array().unwrap().len(), 0);
     }
 

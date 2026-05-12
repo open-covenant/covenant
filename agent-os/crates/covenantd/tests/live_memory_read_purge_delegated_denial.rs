@@ -157,6 +157,7 @@ async fn live_covenantd_memory_read_and_purge_reject_non_operator_without_grant(
                 query: "covenant".into(),
                 tier: None,
                 limit: 10,
+                min_relevance: None,
             },
         )
         .await

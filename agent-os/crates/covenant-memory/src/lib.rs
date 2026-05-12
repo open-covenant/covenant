@@ -61,13 +61,18 @@ pub trait MemoryStore: Send + Sync {
     /// Score every record's `embedding` against `query_embedding` via cosine
     /// similarity and return the top `limit`, optionally filtered by tier.
     /// Records with empty embeddings get score 0 and are returned last (or
-    /// dropped, depending on the impl). v0 does an in-process linear scan;
-    /// LanceDB / sqlite-vec arrive later.
+    /// dropped, depending on the impl). `min_relevance` is an optional
+    /// threshold in `[0.0, 1.0]`: when set, records whose cosine score is
+    /// strictly less than the threshold are dropped before the `limit`
+    /// truncation, so a high threshold can yield fewer rows than `limit`
+    /// even when the unfiltered set is larger. v0 does an in-process
+    /// linear scan; LanceDB / sqlite-vec arrive later.
     async fn search_similar(
         &self,
         query_embedding: Vec<f32>,
         tier: Option<MemoryTier>,
         limit: usize,
+        min_relevance: Option<f32>,
     ) -> Result<Vec<MemoryRecord>, MemoryError>;
     /// Purge records whose `created_at` is strictly older than `before_ms`,
     /// optionally restricted to a tier. Returns the count deleted. Closes
@@ -405,16 +410,18 @@ impl MemoryStore for InMemoryStore {
         query_embedding: Vec<f32>,
         tier: Option<MemoryTier>,
         limit: usize,
+        min_relevance: Option<f32>,
     ) -> Result<Vec<MemoryRecord>, MemoryError> {
         let g = self
             .records
             .lock()
             .map_err(|e| MemoryError::Worker(e.to_string()))?;
+        let floor = min_relevance.unwrap_or(0.0).max(0.0);
         let mut scored: Vec<(f32, MemoryRecord)> = g
             .iter()
             .filter(|r| tier.is_none_or(|t| r.tier == t))
             .map(|r| (cosine(&query_embedding, &r.embedding), r.clone()))
-            .filter(|(s, _)| *s > 0.0)
+            .filter(|(s, _)| *s > 0.0 && *s >= floor)
             .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         Ok(scored.into_iter().take(limit).map(|(_, r)| r).collect())
@@ -686,8 +693,10 @@ impl MemoryStore for SqliteStore {
         query_embedding: Vec<f32>,
         tier: Option<MemoryTier>,
         limit: usize,
+        min_relevance: Option<f32>,
     ) -> Result<Vec<MemoryRecord>, MemoryError> {
         let conn = self.conn.clone();
+        let floor = min_relevance.unwrap_or(0.0).max(0.0);
         task::spawn_blocking(move || -> Result<Vec<MemoryRecord>, MemoryError> {
             let g = conn
                 .lock()
@@ -711,7 +720,7 @@ impl MemoryStore for SqliteStore {
             for r in rows {
                 let r = r?;
                 let s = cosine(&query_embedding, &r.embedding);
-                if s > 0.0 {
+                if s > 0.0 && s >= floor {
                     scored.push((s, r));
                 }
             }
@@ -863,11 +872,45 @@ mod tests {
         s.put(b).await.unwrap();
         s.put(c).await.unwrap();
         let hits = s
-            .search_similar(vec![1.0, 0.0, 0.0], None, 2)
+            .search_similar(vec![1.0, 0.0, 0.0], None, 2, None)
             .await
             .unwrap();
         assert_eq!(hits[0].text, "alpha");
         assert_eq!(hits[1].text, "gamma");
+    }
+
+    #[tokio::test]
+    async fn in_memory_search_min_relevance_drops_below_threshold() {
+        let s = InMemoryStore::new();
+        let mut close = record(Uuid::new_v4(), MemoryTier::Working, "close", 1);
+        close.embedding = vec![1.0, 0.0, 0.0];
+        let mut far = record(Uuid::new_v4(), MemoryTier::Working, "far", 2);
+        far.embedding = vec![0.1, 1.0, 0.0];
+        s.put(close).await.unwrap();
+        s.put(far).await.unwrap();
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, Some(0.5))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "min_relevance 0.5 must drop far record");
+        assert_eq!(hits[0].text, "close");
+    }
+
+    #[tokio::test]
+    async fn sqlite_search_min_relevance_drops_below_threshold() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let mut close = record(Uuid::new_v4(), MemoryTier::Working, "close", 1);
+        close.embedding = vec![1.0, 0.0, 0.0];
+        let mut far = record(Uuid::new_v4(), MemoryTier::Working, "far", 2);
+        far.embedding = vec![0.1, 1.0, 0.0];
+        s.put(close).await.unwrap();
+        s.put(far).await.unwrap();
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, Some(0.5))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "min_relevance 0.5 must drop far record");
+        assert_eq!(hits[0].text, "close");
     }
 
     #[tokio::test]
@@ -880,7 +923,7 @@ mod tests {
         s.put(w).await.unwrap();
         s.put(e).await.unwrap();
         let hits = s
-            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 5)
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 5, None)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);

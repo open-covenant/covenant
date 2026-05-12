@@ -1660,6 +1660,14 @@ mod tests {
     }
 
     #[test]
+    fn validate_tool_scope_rejects_tool_mismatch_with_action_suffix() {
+        assert_invalid_scope(
+            "tool.call.echo",
+            serde_json::json!({ "version": 1, "tool": "search" }),
+        );
+    }
+
+    #[test]
     fn tool_call_scope_allows_unscoped_grants() {
         assert!(tool_call_scope_allows(
             "tool.call.echo",

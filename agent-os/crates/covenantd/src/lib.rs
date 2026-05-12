@@ -10590,6 +10590,59 @@ budget_credits_per_hour = {credits}
 
     #[cfg(unix)]
     #[test]
+    fn read_operator_token_b58_pins_mode_trim_and_decode() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("operator.token");
+
+        let original = PeerToken::generate();
+        let b58 = original.to_b58();
+        write_operator_token_0600(&path, &b58).expect("write valid token");
+
+        let round_trip = read_operator_token_b58(&path).expect("read valid token");
+        assert_eq!(round_trip.to_b58(), b58, "round-trip b58 must match");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("chmod 0o644 to force mode reject");
+        let err_mode = read_operator_token_b58(&path).expect_err("0o644 must reject");
+        assert_eq!(
+            err_mode.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "mode-reject must forward PermissionDenied from require_operator_token_mode_0600, got {err_mode:?}"
+        );
+
+        fs::write(&path, b"not_b58_!!!\n").expect("rewrite with garbage");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("restore 0o600 so mode gate passes and decode is what fails");
+        let err_decode =
+            read_operator_token_b58(&path).expect_err("garbage b58 must reject");
+        assert_eq!(
+            err_decode.kind(),
+            std::io::ErrorKind::InvalidData,
+            "decode-reject must surface as InvalidData, got {err_decode:?}"
+        );
+        assert!(
+            err_decode.to_string().contains("decode token"),
+            "decode error must mention 'decode token', got {err_decode}"
+        );
+
+        let padded = format!("   {b58}\n\n");
+        fs::write(&path, padded.as_bytes()).expect("rewrite with padded valid b58");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("chmod 0o600 after rewrite");
+        let trimmed =
+            read_operator_token_b58(&path).expect("whitespace-padded valid b58 must round-trip via trim");
+        assert_eq!(
+            trimmed.to_b58(),
+            b58,
+            "trim contract must let padded b58 decode to the original token"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn write_operator_token_0600_pins_create_mode_and_overwrite() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;

@@ -10589,6 +10589,15 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn token_b58_prefix_pins_first_six_chars() {
+        let token = PeerToken::from_bytes([1u8; 32]);
+        let prefix = token_b58_prefix(&token);
+        let full = token.to_b58();
+        assert_eq!(prefix.chars().count(), 6);
+        assert_eq!(prefix, full.chars().take(6).collect::<String>());
+    }
+
+    #[test]
     fn parse_env_bool_pins_accepted_synonyms_and_reject_path() {
         for raw in ["1", "true", "yes", "on", "TRUE", " true ", "Yes", "ON"] {
             assert_eq!(parse_env_bool(raw).unwrap(), true, "expected true for {raw:?}");

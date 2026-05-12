@@ -2450,6 +2450,53 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_apply_pins_absent_key_bool_match_and_non_bool_fallthrough() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_apply(empty, true),
+            "absent 'apply' field must default to allow for apply=true; otherwise unscoped grants silently reject destructive apply operations",
+        );
+        assert!(
+            scope_allows_apply(empty, false),
+            "absent 'apply' field must default to allow for apply=false; defaulting to deny would silently reject every dry-run dispatch through an unscoped grant",
+        );
+
+        let apply_true = serde_json::json!({ "apply": true });
+        let apply_true = apply_true.as_object().unwrap();
+        assert!(
+            scope_allows_apply(apply_true, true),
+            "scope {{\"apply\": true}} must allow apply=true; otherwise the explicit allow scope contradicts the requested apply",
+        );
+        assert!(
+            !scope_allows_apply(apply_true, false),
+            "scope {{\"apply\": true}} must NOT allow apply=false; otherwise the equality check silently degrades to a one-way OR and apply=true grants authorize dry-runs they were not asked about",
+        );
+
+        let apply_false = serde_json::json!({ "apply": false });
+        let apply_false = apply_false.as_object().unwrap();
+        assert!(
+            scope_allows_apply(apply_false, false),
+            "scope {{\"apply\": false}} must allow apply=false so dry-run-only grants work",
+        );
+        assert!(
+            !scope_allows_apply(apply_false, true),
+            "scope {{\"apply\": false}} must NOT allow apply=true; a regression here would silently let a dry-run grant authorize a destructive apply",
+        );
+
+        let non_bool = serde_json::json!({ "apply": "yes" });
+        let non_bool = non_bool.as_object().unwrap();
+        assert!(
+            scope_allows_apply(non_bool, true),
+            "a non-bool 'apply' field must fall through to allow for apply=true so partially-typed scope objects match the rest of the scope_allows_* family",
+        );
+        assert!(
+            scope_allows_apply(non_bool, false),
+            "a non-bool 'apply' field must fall through to allow for apply=false; flipping this to deny would diverge from scope_allows_record_id and break operator-supplied non-strict scope objects",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

@@ -3044,6 +3044,72 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_duplicate_risk_pins_absent_null_canonicalization_and_strict_none_path() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_duplicate_risk(empty, Some("at-least-once")),
+            "absent 'duplicate_risk' field must allow any Some(_); unscoped grants have no duplicate-risk gate",
+        );
+        assert!(
+            scope_allows_duplicate_risk(empty, None),
+            "absent 'duplicate_risk' field must allow actual=None; the absent-key branch is unconditional",
+        );
+
+        let explicit_null = serde_json::json!({ "duplicate_risk": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_duplicate_risk(explicit_null, Some("at-least-once")),
+            "{{\"duplicate_risk\": null}} is the documented unbounded marker and must allow any Some(_)",
+        );
+        assert!(
+            scope_allows_duplicate_risk(explicit_null, None),
+            "{{\"duplicate_risk\": null}} must allow actual=None; the null arm is unconditional and short-circuits before the let-else strict-deny",
+        );
+
+        let hyphen = serde_json::json!({ "duplicate_risk": "at-least-once" });
+        let hyphen = hyphen.as_object().unwrap();
+        assert!(
+            scope_allows_duplicate_risk(hyphen, Some("at-least-once")),
+            "scope duplicate_risk=\"at-least-once\" must allow actual=Some(\"at-least-once\"); otherwise the canonicalization silently rejects its own pinned value",
+        );
+        assert!(
+            scope_allows_duplicate_risk(hyphen, Some("at_least_once")),
+            "scope duplicate_risk=\"at-least-once\" must allow actual=Some(\"at_least_once\"); underscore and hyphen are documented interchangeable forms, so a regression that dropped .replace('_','-') would silently reject operator-supplied underscore forms against wire hyphen forms",
+        );
+        assert!(
+            !scope_allows_duplicate_risk(hyphen, Some("idempotent")),
+            "scope duplicate_risk=\"at-least-once\" must NOT allow actual=Some(\"idempotent\"); the equality is strict (post-canonicalization) and a regression here would silently authorize unrelated risk classes",
+        );
+        assert!(
+            !scope_allows_duplicate_risk(hyphen, None),
+            "scope duplicate_risk=\"at-least-once\" must NOT allow actual=None; the let-else strict-deny on actual=None protects the duplicate-risk gate from unspecified-risk requests, and flipping it to allow would leak through the a2a duplicate gate",
+        );
+
+        let underscore = serde_json::json!({ "duplicate_risk": "at_least_once" });
+        let underscore = underscore.as_object().unwrap();
+        assert!(
+            scope_allows_duplicate_risk(underscore, Some("at-least-once")),
+            "scope duplicate_risk=\"at_least_once\" must allow actual=Some(\"at-least-once\"); the canonicalization is symmetric across both sides of the comparison, so an operator-supplied underscore form authorizes a wire hyphen form",
+        );
+        assert!(
+            scope_allows_duplicate_risk(underscore, Some("at_least_once")),
+            "scope duplicate_risk=\"at_least_once\" must allow actual=Some(\"at_least_once\"); the canonicalized form matches itself",
+        );
+
+        let non_string = serde_json::json!({ "duplicate_risk": 42 });
+        let non_string = non_string.as_object().unwrap();
+        assert!(
+            !scope_allows_duplicate_risk(non_string, Some("at-least-once")),
+            "a non-string 'duplicate_risk' must strict-deny Some(_); value.as_str() returns None and the .unwrap_or(false) fires, so a regression that allowed Some(_) through a malformed scope would silently authorize any duplicate_risk",
+        );
+        assert!(
+            !scope_allows_duplicate_risk(non_string, None),
+            "a non-string 'duplicate_risk' with actual=None must strict-deny via the let-else; the let-else fires before the as_str() check, so actual=None denies regardless of the scope value's type",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

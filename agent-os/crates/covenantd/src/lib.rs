@@ -10980,6 +10980,64 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn runtime_runner_config_from_env_pins_env_to_arg_mapping() {
+        use std::sync::Mutex;
+
+        static RUNTIME_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = RUNTIME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let names = [
+            "COVENANT_RUNTIME_BACKEND",
+            "COVENANT_GVISOR_ROOTFS",
+            "COVENANT_RUNSC",
+            "COVENANT_GVISOR_SCRATCH",
+        ];
+        let saved: Vec<Option<String>> = names.iter().map(|n| std::env::var(n).ok()).collect();
+        for name in &names {
+            std::env::remove_var(name);
+        }
+
+        let home = Path::new("/tmp/runtime-env-pin");
+        let defaults = runtime_runner_config_from_env(home).unwrap();
+        assert_eq!(defaults, RuntimeRunnerConfig::TrustedLocal);
+
+        std::env::set_var("COVENANT_RUNTIME_BACKEND", "linux-gvisor");
+        std::env::set_var("COVENANT_GVISOR_ROOTFS", "/rfs");
+        std::env::set_var("COVENANT_RUNSC", "/usr/bin/runsc");
+        std::env::set_var("COVENANT_GVISOR_SCRATCH", "/scratch");
+
+        let full = runtime_runner_config_from_env(home).unwrap();
+        assert_eq!(
+            full,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("/usr/bin/runsc"),
+                rootfs: PathBuf::from("/rfs"),
+                scratch_root: PathBuf::from("/scratch"),
+            },
+            "each env var must land in its named field",
+        );
+
+        std::env::remove_var("COVENANT_GVISOR_SCRATCH");
+        let scratch_default = runtime_runner_config_from_env(home).unwrap();
+        assert_eq!(
+            scratch_default,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("/usr/bin/runsc"),
+                rootfs: PathBuf::from("/rfs"),
+                scratch_root: home.join("runtime").join("gvisor"),
+            },
+            "scratch_root must fall back to <home>/runtime/gvisor",
+        );
+
+        for (name, value) in names.iter().zip(saved.iter()) {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
     fn runtime_runner_config_from_values_pins_backend_matrix() {
         let home = Path::new("/tmp/h");
 

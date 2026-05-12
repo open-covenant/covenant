@@ -1791,6 +1791,78 @@ mod tests {
     }
 
     #[test]
+    fn validate_repair_request_pins_reason_and_force_error_message_arms() {
+        let task_id = Uuid::new_v4();
+        let requeue = || A2ARepairCommand::Requeue {
+            lease_id: None,
+            duplicate_risk: A2ADuplicateRisk::Idempotent,
+        };
+        let force_error = |message: &str| A2ARepairCommand::ForceError {
+            lease_id: None,
+            message: message.into(),
+        };
+
+        // Requeue with non-empty reason validates Ok. Pin the accept
+        // path so an inverted reason check is loud.
+        assert!(validate_repair_request(&A2ARepairRequest {
+            task_id,
+            command: requeue(),
+            reason: "operator-initiated".into(),
+        })
+        .is_ok());
+
+        // Empty/whitespace reason rejects with the documented message
+        // for both Requeue and ForceError so the reason field cannot
+        // silently widen across the two variants.
+        for reason in ["", "   "] {
+            for command in [requeue(), force_error("network reset")] {
+                let err = validate_repair_request(&A2ARepairRequest {
+                    task_id,
+                    command,
+                    reason: reason.into(),
+                })
+                .unwrap_err();
+                match err {
+                    A2AError::InvalidRepair(message) => assert!(
+                        message.contains("reason must not be empty"),
+                        "unexpected InvalidRepair payload: {message:?}",
+                    ),
+                    other => panic!("expected InvalidRepair, got {other:?}"),
+                }
+            }
+        }
+
+        // ForceError with empty/whitespace message rejects even when
+        // reason is otherwise valid. The message check only fires for
+        // ForceError; Requeue does not carry a message field.
+        for message in ["", "   "] {
+            let err = validate_repair_request(&A2ARepairRequest {
+                task_id,
+                command: force_error(message),
+                reason: "operator-initiated".into(),
+            })
+            .unwrap_err();
+            match err {
+                A2AError::InvalidRepair(payload) => assert!(
+                    payload.contains("force_error message must not be empty"),
+                    "unexpected InvalidRepair payload: {payload:?}",
+                ),
+                other => panic!("expected InvalidRepair, got {other:?}"),
+            }
+        }
+
+        // ForceError with non-empty message validates Ok when reason
+        // is also non-empty. Confirms the accept path on the variant
+        // that carries the extra field.
+        assert!(validate_repair_request(&A2ARepairRequest {
+            task_id,
+            command: force_error("upstream returned 502"),
+            reason: "operator-initiated".into(),
+        })
+        .is_ok());
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

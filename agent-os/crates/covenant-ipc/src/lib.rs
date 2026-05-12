@@ -1009,6 +1009,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_compact_a2a_serde_pins_unit_variant() {
+        // Request::CompactA2A is the unit variant the CLI and HTTP
+        // gateway send to trigger operator-driven A2A queue
+        // compaction — it pairs with Response::A2ACompacted
+        // (already pinned) which carries the per-pass compaction
+        // outcome the operator inspects to confirm rows were
+        // dropped. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Request enum, the wire
+        // form is exactly one top-level key:
+        // kind='compact_a2_a' — rename_all snake_case splits A2A
+        // on digit/upper boundaries, matching the durable a2_a
+        // slug rule for A2A* variants (project memory:
+        // serde_snake_case_a2a_quirk). No prior test pins the
+        // exact wire shape or round-trip of this variant.
+        // Compaction is the only operator-driven hand on the
+        // on-disk A2A event log size; a slug regression silently
+        // strands the request and the operator sees the daemon's
+        // catch-all Error response while the log keeps growing.
+        let event = Request::CompactA2A;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::CompactA2A wire form must be exactly one \
+             top-level key: 'kind'. A refactor that promoted the \
+             variant from unit to struct or newtype would add a \
+             second top-level key and every CLI/HTTP compaction \
+             trigger that sends {{\"kind\":\"compact_a2_a\"}} \
+             alone would fail to decode on the daemon side — the \
+             operator would stop compacting silently, the on-disk \
+             A2A event log would keep growing, and rotation costs \
+             would creep up without an explicit failure surface",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("compact_a2_a")),
+            "Request discriminator slug must be the durable \
+             'compact_a2_a' (rename_all = snake_case splits A2A on \
+             digit/upper boundaries); a slug regression silently \
+             routes incoming compaction frames to the daemon's \
+             catch-all error branch — every CLI/HTTP compaction \
+             probe fails with a confusing fallback message instead \
+             of the A2ACompacted outcome, masking real compaction \
+             wiring breakage during incident triage",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::CompactA2A must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every operator-driven A2A compaction \
+             consumer leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

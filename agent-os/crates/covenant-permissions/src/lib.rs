@@ -2229,6 +2229,51 @@ mod tests {
     }
 
     #[test]
+    fn memory_write_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_explicit_null_before_ms(
+    ) {
+        assert!(!memory_write_scope_allows(
+            "memory",
+            &serde_json::json!([]),
+            "record-1",
+            "working",
+            0
+        )
+        .unwrap());
+
+        let bound_scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "apply": true
+        });
+        assert!(
+            !memory_write_scope_allows("memory.read", &bound_scope, "record-1", "working", 0)
+                .unwrap()
+        );
+
+        let explicit_null = serde_json::json!({
+            "version": 1,
+            "apply": true,
+            "before_ms": null,
+        });
+        assert!(memory_write_scope_allows(
+            "memory.write",
+            &explicit_null,
+            "record-1",
+            "working",
+            0
+        )
+        .unwrap());
+        assert!(memory_write_scope_allows(
+            "memory.write",
+            &explicit_null,
+            "record-1",
+            "working",
+            u64::MAX
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn memory_repair_scope_allows_record_tier_and_mode() {
         let scope = serde_json::json!({
             "version": 1,

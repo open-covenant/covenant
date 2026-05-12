@@ -1247,6 +1247,88 @@ mod tests {
     }
 
     #[test]
+    fn response_authenticated_serde_pins_single_field_variant() {
+        // Response::Authenticated is the variant the daemon sends
+        // after a successful Request::Authenticate handshake — it
+        // carries display: String so the caller can confirm the
+        // AgentId.display the daemon bound to the connection. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='authenticated' plus display. No prior test pins
+        // the exact wire shape, round-trip, or omission rejection
+        // for this variant — only the
+        // v1_response_fixtures_replay_against_current_parser test
+        // covers any handshake response indirectly. A refactor that
+        // promoted Authenticated from a struct variant to a newtype
+        // variant wrapping a payload struct would nest display one
+        // level deeper next to 'kind' and the CLI could not extract
+        // the bound identity; a slug regression would silently strand
+        // every consumer that classifies handshakes by 'authenticated'.
+        let event = Response::Authenticated {
+            display: "operator@local".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["display", "kind"],
+            "Response::Authenticated wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'display' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'display' \
+             one level deeper and every CLI consumer that \
+             destructures on the bound identity would silently fail \
+             to confirm which AgentId the daemon resolved their \
+             token to",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("authenticated")),
+            "Response discriminator slug must be snake_case \
+             'authenticated'; a slug regression silently strands \
+             every CLI consumer that classifies handshakes by this \
+             exact value — the operator's connection appears to \
+             succeed but downstream verbs fall through to \
+             AuthenticationFailed branches because the CLI cannot \
+             recognise the auth-success class",
+        );
+        assert_eq!(
+            obj.get("display").and_then(serde_json::Value::as_str),
+            Some("operator@local"),
+            "Response::Authenticated::display must surface as the \
+             literal AgentId display string — operator triage scripts \
+             grep this exact field to confirm which identity the \
+             daemon bound on the connection",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::Authenticated must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI handshake consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("display");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::Authenticated wire form must reject a payload \
+             missing 'display'; a stray #[serde(default)] would let \
+             a malformed row decode with display=String::new() and \
+             the CLI would bind the connection to an empty identity \
+             — every subsequent verb would appear to authenticate \
+             against an empty AgentId and operator triage could not \
+             map the connection back to a real peer registry row",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

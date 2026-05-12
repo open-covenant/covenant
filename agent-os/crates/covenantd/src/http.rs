@@ -377,6 +377,7 @@ struct LimitParams {
     min_lease_age_ms: Option<u64>,
     deadline_within_ms: Option<u64>,
     state_filter: Option<covenant_a2a::A2ATaskQueueState>,
+    since_ms: Option<u64>,
 }
 
 async fn receipts_recent(
@@ -480,6 +481,7 @@ async fn audit_recent(
             .respond(
                 Request::RecentAudit {
                     limit: q.limit.unwrap_or(20),
+                    since_ms: q.since_ms,
                 },
                 &peer,
             )

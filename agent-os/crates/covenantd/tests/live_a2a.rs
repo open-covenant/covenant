@@ -391,7 +391,7 @@ async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
         other => panic!("expected A2AQueue, got {other:?}"),
     }
 
-    match req(&mut stream, Request::RecentAudit { limit: 50 }).await {
+    match req(&mut stream, Request::RecentAudit { limit: 50, since_ms: None }).await {
         Response::AuditEvents { events } => {
             assert!(events.iter().any(|event| {
                 matches!(
@@ -706,7 +706,7 @@ async fn live_covenantd_a2a_repair_rejects_peer_mismatched_delegation() {
             other => panic!("queue lookup after denial failed: {other:?}"),
         }
 
-        match req(&mut stream, Request::RecentAudit { limit: 50 }).await {
+        match req(&mut stream, Request::RecentAudit { limit: 50, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,

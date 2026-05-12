@@ -179,9 +179,19 @@ pub enum Request {
         #[serde(default)]
         arguments: serde_json::Value,
     },
+    /// Recent audit events scoped to the calling peer's pubkey.
+    ///
+    /// `since_ms` narrows the result to entries with `timestamp_ms >=
+    /// since_ms`. The filter runs before `limit` is applied so a recent
+    /// burst cannot push older-but-still-in-window events out of the
+    /// truncation slice. The field is `#[serde(default)]` so a stale CLI
+    /// built before the filter landed sends frames without it; the new
+    /// daemon parses them as `None`, which is the pre-filter behaviour.
     RecentAudit {
         #[serde(default = "default_recent_limit")]
         limit: usize,
+        #[serde(default)]
+        since_ms: Option<u64>,
     },
     VerifyAuditIntegrity,
     /// Drop audit events strictly older than `before_ms`. Operator-driven

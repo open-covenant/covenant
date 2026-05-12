@@ -155,7 +155,15 @@ async fn live_covenantd_memory_write_rejects_non_operator_intent_dispatch() {
     //     extra grant.
     {
         let mut stream = authenticated_stream(&sock, &delegate_token_b58).await;
-        let events = match req(&mut stream, Request::RecentAudit { limit: 50 }).await {
+        let events = match req(
+            &mut stream,
+            Request::RecentAudit {
+                limit: 50,
+                since_ms: None,
+            },
+        )
+        .await
+        {
             Response::AuditEvents { events } => events,
             other => panic!("delegate recent_audit failed: {other:?}"),
         };

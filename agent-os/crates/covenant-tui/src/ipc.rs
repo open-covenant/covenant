@@ -383,7 +383,14 @@ pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome
         }
     }
     let limit = limit.min(RECENT_AUDIT_LIMIT_CAP);
-    write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
+    write_frame(
+        &mut stream,
+        &Request::RecentAudit {
+            limit,
+            since_ms: None,
+        },
+    )
+    .await?;
     match read_frame::<_, Response>(&mut stream).await? {
         Response::AuditEvents { events } => Ok(AuditFetchOutcome::Fetched { events }),
         Response::Error { message } => Ok(AuditFetchOutcome::Failed { message }),

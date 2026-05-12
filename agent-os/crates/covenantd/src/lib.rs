@@ -978,7 +978,9 @@ impl Server {
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
-            Request::RecentAudit { limit } => self.recent_audit(limit, peer).await,
+            Request::RecentAudit { limit, since_ms } => {
+                self.recent_audit(limit, since_ms, peer).await
+            }
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
@@ -2285,13 +2287,29 @@ impl Server {
     /// `AuthenticationFailed` rows have `issuer == identity` (no
     /// authenticated peer at the moment of rejection) and so naturally
     /// remain visible only to the operator.
-    async fn recent_audit(&self, limit: usize, peer: &AgentId) -> Response {
-        match self.audit.recent(limit).await {
+    async fn recent_audit(
+        &self,
+        limit: usize,
+        since_ms: Option<u64>,
+        peer: &AgentId,
+    ) -> Response {
+        let read_limit = if since_ms.is_some() {
+            usize::MAX
+        } else {
+            limit
+        };
+        match self.audit.recent(read_limit).await {
             Ok(events) => {
-                let events = events
+                let mut filtered: Vec<AuditEvent> = events
                     .into_iter()
                     .filter(|e| e.issuer.pubkey == peer.pubkey)
+                    .filter(|e| match since_ms {
+                        Some(threshold) => e.timestamp_ms >= threshold,
+                        None => true,
+                    })
                     .collect();
+                let start = filtered.len().saturating_sub(limit);
+                let events = filtered.split_off(start);
                 Response::AuditEvents { events }
             }
             Err(e) => Response::Error {
@@ -6273,7 +6291,7 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -6458,7 +6476,7 @@ required = {caps:?}
             other => panic!("unexpected: {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -7104,7 +7122,7 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 30 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 30, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -7222,7 +7240,7 @@ required = {caps:?}
         }
 
         match s
-            .respond(Request::RecentAudit { limit: 30 }, &delegate)
+            .respond(Request::RecentAudit { limit: 30, since_ms: None }, &delegate)
             .await
         {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
@@ -7770,7 +7788,7 @@ required = {caps:?}
 
         // Defender-visible: the rejection lands in the audit log even
         // though no capability check happened upstream of the lookup.
-        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
             Response::AuditEvents { events } => {
                 let logged = events.iter().find_map(|e| match &e.kind {
                     AuditKind::A2AResultRejected { task_id, reason } => {
@@ -8302,7 +8320,7 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 20 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 20, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8464,7 +8482,7 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 30 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 30, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8606,7 +8624,7 @@ required = {caps:?}
             other => panic!("expected Error, got {other:?}"),
         }
 
-        match s.op_respond(Request::RecentAudit { limit: 10 }).await {
+        match s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await {
             Response::AuditEvents { events } => assert!(events.iter().any(|event| {
                 matches!(
                     &event.kind,
@@ -8869,7 +8887,7 @@ required = {caps:?}
             arguments: serde_json::json!({ "text": "hi" }),
         })
         .await;
-        let resp = s.op_respond(Request::RecentAudit { limit: 10 }).await;
+        let resp = s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(
@@ -8883,6 +8901,71 @@ required = {caps:?}
                         .iter()
                         .any(|e| matches!(e.kind, AuditKind::CapabilityCheck { .. })),
                     "expected a CapabilityCheck event from the tool dispatch"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_audit_since_ms_drops_older_events_before_limit() {
+        let s = server_with(vec![], "");
+        let mine = s.identity.agent_id();
+        for ts in [1_000u64, 2_000, 3_000, 4_000, 5_000] {
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: ts,
+                    issuer: mine.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: Uuid::new_v4(),
+                        intent_text: format!("row@{ts}"),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(b""),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        let resp = s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: Some(3_000),
+            })
+            .await;
+        match resp {
+            Response::AuditEvents { events } => {
+                let timestamps: Vec<u64> = events.iter().map(|e| e.timestamp_ms).collect();
+                assert!(
+                    timestamps.iter().all(|ts| *ts >= 3_000),
+                    "since_ms must drop rows below the threshold: timestamps={timestamps:?}",
+                );
+                assert!(
+                    timestamps.contains(&3_000),
+                    "boundary is inclusive at >=, so the row at the threshold must survive: timestamps={timestamps:?}",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let narrow = s
+            .op_respond(Request::RecentAudit {
+                limit: 1,
+                since_ms: Some(2_000),
+            })
+            .await;
+        match narrow {
+            Response::AuditEvents { events } => {
+                assert_eq!(
+                    events.len(),
+                    1,
+                    "limit must still cap the response after the filter",
+                );
+                assert_eq!(
+                    events[0].timestamp_ms, 5_000,
+                    "since_ms applies before limit truncation so the newest in-window row survives a tight --limit, not the oldest: events={events:?}",
                 );
             }
             other => panic!("unexpected: {other:?}"),
@@ -8925,7 +9008,7 @@ required = {caps:?}
             })
             .await
             .unwrap();
-        let resp = s.op_respond(Request::RecentAudit { limit: 100 }).await;
+        let resp = s.op_respond(Request::RecentAudit { limit: 100, since_ms: None }).await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(
@@ -9009,7 +9092,7 @@ required = {caps:?}
         })
         .await;
         let me = s.identity.agent_id();
-        let resp = s.op_respond(Request::RecentAudit { limit: 10 }).await;
+        let resp = s.op_respond(Request::RecentAudit { limit: 10, since_ms: None }).await;
         match resp {
             Response::AuditEvents { events } => {
                 assert!(!events.is_empty(), "operator should see their own rows");
@@ -10853,7 +10936,7 @@ budget_credits_per_hour = {credits}
         // issuer == operator. The rejection row's issuer is the
         // daemon identity == operator, so it must appear.
         let resp = s
-            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
             .await;
         let events = match resp {
             Response::AuditEvents { events } => events,
@@ -10870,7 +10953,7 @@ budget_credits_per_hour = {credits}
         // row — it carries the operator's pubkey, not the foreign
         // peer's. Probing attacker doesn't get to confirm the probe.
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,
@@ -11202,7 +11285,7 @@ budget_credits_per_hour = {credits}
         }
 
         let resp_op = s
-            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
             .await;
         let events_op = match resp_op {
             Response::AuditEvents { events } => events,
@@ -11216,7 +11299,7 @@ budget_credits_per_hour = {credits}
         );
 
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,
@@ -11660,7 +11743,7 @@ budget_credits_per_hour = {credits}
             other => panic!("expected Error, got {other:?}"),
         }
         let resp_op = s
-            .respond(Request::RecentAudit { limit: 50 }, &operator)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &operator)
             .await;
         let events_op = match resp_op {
             Response::AuditEvents { events } => events,
@@ -11674,7 +11757,7 @@ budget_credits_per_hour = {credits}
         );
 
         let resp_foreign = s
-            .respond(Request::RecentAudit { limit: 50 }, &foreign)
+            .respond(Request::RecentAudit { limit: 50, since_ms: None }, &foreign)
             .await;
         let events_foreign = match resp_foreign {
             Response::AuditEvents { events } => events,

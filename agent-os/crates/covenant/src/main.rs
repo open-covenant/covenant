@@ -24,7 +24,7 @@
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
-//!   covenant audit recent [--limit N] [--json]
+//!   covenant audit recent [--limit N] [--since-ms <epoch_ms>] [--json]
 //!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]
@@ -131,7 +131,7 @@ fn print_usage() {
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
     eprintln!(
-        "  covenant audit recent [-n N] [--json]   list recent audit events as JSONL or one JSON envelope"
+        "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied"
     );
     eprintln!("  covenant audit verify [--json]         verify local audit hash-chain sidecar");
     eprintln!(
@@ -198,7 +198,14 @@ async fn resolve_intents_resume_intent_id(
             bail!("covenant intents resume: pass either <intent-id> or latest, not both");
         }
         let limit = 200;
-        write_frame(stream, &Request::RecentAudit { limit }).await?;
+        write_frame(
+            stream,
+            &Request::RecentAudit {
+                limit,
+                since_ms: None,
+            },
+        )
+        .await?;
         let events = match read_frame::<_, Response>(stream).await? {
             Response::AuditEvents { events } => events,
             Response::Error { message } => bail!("daemon error: {message}"),
@@ -1498,6 +1505,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "recent" => {
                     let mut limit: usize = 50;
+                    let mut since_ms: Option<u64> = None;
                     let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
@@ -1507,18 +1515,30 @@ async fn main() -> Result<()> {
                                 let v = args.get(i).context("--limit needs a value")?;
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
+                            "--since-ms" => {
+                                i += 1;
+                                let v = args.get(i).context("--since-ms needs a value")?;
+                                since_ms =
+                                    Some(v.parse().context("--since-ms must be an integer")?);
+                            }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
                     }
-                    write_frame(&mut stream, &Request::RecentAudit { limit }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RecentAudit { limit, since_ms },
+                    )
+                    .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditEvents { events } => {
                             if as_json {
                                 println!(
                                     "{}",
-                                    serde_json::to_string(&audit_recent_json(limit, &events))?
+                                    serde_json::to_string(&audit_recent_json(
+                                        limit, since_ms, &events
+                                    ))?
                                 );
                             } else {
                                 // Default JSONL mirrors `audit/events.jsonl`, so tail/grep/jq
@@ -2590,10 +2610,15 @@ fn audit_purge_json(before_ms: u64, purged: u64) -> serde_json::Value {
     })
 }
 
-fn audit_recent_json(limit: usize, events: &[AuditEvent]) -> serde_json::Value {
+fn audit_recent_json(
+    limit: usize,
+    since_ms: Option<u64>,
+    events: &[AuditEvent],
+) -> serde_json::Value {
     serde_json::json!({
         "kind": "audit_recent",
         "limit": limit,
+        "since_ms": since_ms,
         "events": events,
     })
 }
@@ -3528,15 +3553,17 @@ mod tests {
             },
         };
 
-        let value = audit_recent_json(5, &[event]);
+        let value = audit_recent_json(5, Some(1_699_999_999_000), &[event]);
         assert_eq!(value["kind"], "audit_recent");
         assert_eq!(value["limit"], 5);
+        assert_eq!(value["since_ms"], 1_699_999_999_000u64);
         assert_eq!(value["events"][0]["timestamp_ms"], 1_700_000_000_000u64);
         assert_eq!(value["events"][0]["kind"]["type"], "capability_granted");
         assert_eq!(value["events"][0]["kind"]["action"], "tool.call.echo");
 
-        let empty = audit_recent_json(5, &[]);
+        let empty = audit_recent_json(5, None, &[]);
         assert_eq!(empty["events"].as_array().unwrap().len(), 0);
+        assert!(empty["since_ms"].is_null());
     }
 
     #[test]

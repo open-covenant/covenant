@@ -179,7 +179,13 @@ budget_credits_per_hour = 1
 
     // Audit feed must include a BudgetExhausted row with the exact
     // rejected text — this is the row `intents resume` uses.
-    write_frame(&mut stream, &Request::RecentAudit { limit: 50 })
+    write_frame(
+        &mut stream,
+        &Request::RecentAudit {
+            limit: 50,
+            since_ms: None,
+        },
+    )
         .await
         .unwrap();
     let ar: Response = read_frame(&mut stream).await.unwrap();

@@ -1997,6 +1997,16 @@ mod tests {
     }
 
     #[test]
+    fn a2a_scope_allows_pins_duplicate_risk_actual_none_with_bound_scope_rejected() {
+        let scope = serde_json::json!({ "version": 1, "duplicate_risk": "idempotent" });
+        let actual_none = A2aScopeRequest {
+            duplicate_risk: None,
+            ..A2aScopeRequest::default()
+        };
+        assert!(!a2a_scope_allows("a2a.requeue", &scope, "a2a.requeue", actual_none).unwrap());
+    }
+
+    #[test]
     fn a2a_scope_allows_pins_duplicate_risk_underscore_dash_normalization() {
         let underscore_scope =
             serde_json::json!({ "version": 1, "duplicate_risk": "operator_accepted" });

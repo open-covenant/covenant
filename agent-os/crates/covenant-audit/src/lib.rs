@@ -1323,6 +1323,76 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_memory_compaction_applied_serde_pins_six_field_variant() {
+        // AuditKind::MemoryCompactionApplied is the audit row
+        // covenantd::Server emits when an operator runs bounded memory
+        // compaction. The row records ids only; memory text and
+        // before/after payloads stay out of the audit stream. Six
+        // required fields: mode (String), changed (bool), reason
+        // (String), deleted (Vec<Uuid>), stale_marked (Vec<Uuid>),
+        // parents_detached (Vec<Uuid>). A #[serde(default)] regression
+        // on any of the three id lists would let a malformed row
+        // decode with empty Vec<Uuid> and erase which memory ids were
+        // touched; a default on `changed` would mask the
+        // compaction-mutation-vs-no-op triage signal.
+        let kind = AuditKind::MemoryCompactionApplied {
+            mode: "apply".into(),
+            changed: true,
+            reason: "operator-bounded compaction".into(),
+            deleted: vec![Uuid::nil()],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "changed",
+                "deleted",
+                "mode",
+                "parents_detached",
+                "reason",
+                "stale_marked",
+                "type",
+            ],
+            "AuditKind::MemoryCompactionApplied wire form must be exactly seven keys: the six variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("memory_compaction_applied")),
+            "AuditKind discriminator slug must be snake_case 'memory_compaction_applied'; a titlecase or kebab-case regression silently strands every prior memory-compaction audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::MemoryCompactionApplied must round-trip through serde_json verbatim — the PartialEq derive is the contract memory-compaction audit triage joins on",
+        );
+
+        for required in [
+            "mode",
+            "changed",
+            "reason",
+            "deleted",
+            "stale_marked",
+            "parents_detached",
+        ] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::MemoryCompactionApplied wire form must reject a payload missing {required:?}; a stray #[serde(default)] on any of the three Vec<Uuid> id lists would let a malformed row decode with empty lists and erase which memory ids were touched, and a default on changed would mask the compaction-mutation-vs-no-op triage signal",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_budget_exhausted_serde_pins_six_field_variant() {
         // AuditKind::BudgetExhausted is the audit row covenantd::Server::
         // dispatch_intent emits when the matched agent's budget bucket

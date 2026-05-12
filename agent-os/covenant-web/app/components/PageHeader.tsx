@@ -29,7 +29,7 @@ export function PageHeader({
         {syncMs != null || error ? (
           <span className={`sync-pill ${error ? "error" : "ok"}`}>
             <span className="dot" />
-            {error ? "disconnected" : `synced ${relTime(syncMs ?? Date.now())}`}
+            {error ? "disconnected" : syncMs != null ? `synced ${relTime(syncMs)}` : "syncing"}
           </span>
         ) : null}
         {right}

@@ -160,10 +160,12 @@ export function CommandPalette() {
   }, [open, close]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) setSelected(0);
   }, [open]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelected(0);
   }, [query]);
 

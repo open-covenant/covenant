@@ -1704,4 +1704,67 @@ mod tests {
             &serde_json::json!("budget_exhausted"),
         );
     }
+
+    #[test]
+    fn memory_repair_request_serde_pins_three_required_fields() {
+        // MemoryRepairRequest is the request envelope every daemon, HTTP,
+        // and CLI memory-repair command dispatches through. Three
+        // strictly required fields with no serde attributes: mode,
+        // command (the tagged enum already pinned), reason. A
+        // skip_serializing_if on reason would silently produce
+        // no-attribution audit rows; a flatten on command would leak the
+        // inner action discriminator to the envelope shape.
+        let request = MemoryRepairRequest {
+            mode: MemoryRepairMode::Apply,
+            command: MemoryRepairCommand::DeleteRecord { id: Uuid::nil() },
+            reason: "because".into(),
+        };
+
+        let wire = serde_json::to_value(&request).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MemoryRepairRequest serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> =
+            obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["mode", "command", "reason"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "MemoryRepairRequest wire form must be exactly three top-level \
+             keys; a flatten on command would leak the inner action \
+             discriminator and a skip_serializing_if on reason would drop \
+             audit attribution",
+        );
+
+        let command_obj = wire
+            .get("command")
+            .and_then(serde_json::Value::as_object)
+            .expect("command must serialise as a nested JSON object");
+        assert_eq!(
+            command_obj.get("action"),
+            Some(&serde_json::json!("delete_record")),
+            "MemoryRepairCommand discriminator must remain nested under \
+             the command field, tagged \"action\" with snake_case slug \
+             — cross-binding to memory_repair_command_serde_pins_each_snake_case_action_slug",
+        );
+
+        // Round-trip pins the PartialEq derive contract.
+        let back: MemoryRepairRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, request);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["mode", "command", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MemoryRepairRequest>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MemoryRepairRequest wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Cross-binding: mode on an Apply request must serialise to
+        // "apply" (memory_repair_mode_serde_pins_snake_case_wire_form).
+        assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("apply"));
+    }
 }

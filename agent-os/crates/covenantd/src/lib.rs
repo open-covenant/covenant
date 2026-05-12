@@ -10589,6 +10589,63 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_auto_retry_scheduler_config_from_values_pins_defaults_and_overrides() {
+        let default = a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)
+            .unwrap();
+        assert_eq!(default, A2AAutoRetrySchedulerConfig::default());
+        assert!(!default.enabled);
+        assert!(!default.policy.enabled);
+        assert_eq!(default.interval_ms, 60_000);
+
+        let enabled =
+            a2a_auto_retry_scheduler_config_from_values(Some("true"), None, None, None, None, None)
+                .unwrap();
+        assert!(enabled.enabled);
+        assert!(
+            enabled.policy.enabled,
+            "config.policy.enabled must mirror config.enabled"
+        );
+
+        let disabled =
+            a2a_auto_retry_scheduler_config_from_values(Some("false"), None, None, None, None, None)
+                .unwrap();
+        assert!(!disabled.enabled);
+        assert!(!disabled.policy.enabled);
+
+        let zero_interval = a2a_auto_retry_scheduler_config_from_values(
+            None,
+            Some("0"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            zero_interval.contains("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS must be greater than zero"),
+            "expected zero-interval rejection with named-env context, got {zero_interval}"
+        );
+
+        let full = a2a_auto_retry_scheduler_config_from_values(
+            Some("true"),
+            Some("1000"),
+            Some("500"),
+            Some("7"),
+            Some("3"),
+            Some("50"),
+        )
+        .unwrap();
+        assert!(full.enabled);
+        assert!(full.policy.enabled);
+        assert_eq!(full.interval_ms, 1000);
+        assert_eq!(full.policy.min_lease_age_ms, 500);
+        assert_eq!(full.policy.max_attempts, 7);
+        assert_eq!(full.policy.max_requeues, 3);
+        assert_eq!(full.policy.scan_limit, 50);
+    }
+
+    #[test]
     fn runtime_runner_from_config_pins_backend_dispatch() {
         let _: fn() -> covenant_runtime::SubprocessRunner = || covenant_runtime::SubprocessRunner;
         let _: fn(PathBuf, PathBuf, PathBuf) -> covenant_runtime::GvisorRunner =

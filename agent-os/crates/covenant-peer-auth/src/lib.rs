@@ -1015,6 +1015,84 @@ mod tests {
     }
 
     #[test]
+    fn revoke_outcome_serde_pins_each_snake_case_type_slug() {
+        // RevokeOutcome is the tagged enum returned by
+        // PeerRegistry::revoke_by_token_prefix and serialized over IPC,
+        // HTTP, and CLI for every `covenant peers revoke` invocation.
+        // The tag name "type" and rename_all = snake_case attribute are
+        // both load-bearing — a refactor that drops rename_all would
+        // silently emit Revoked/AlreadyRevoked/... titlecase slugs and
+        // break every CLI parser keyed on the documented snake_case
+        // outcome JSON; a refactor that changes the tag from "type" to
+        // any other name would silently fail every JSON consumer of
+        // `covenant peers revoke --json`. The self_revoke_forbidden
+        // slug is the only CLI signal that an operator's revoke attempt
+        // fat-fingered against their own bootstrap row.
+        let summary = PeerSummary {
+            agent_id: dummy_agent("alice@host"),
+            token_prefix: "abcdef".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: None,
+        };
+
+        let cases: [(RevokeOutcome, &str); 5] = [
+            (RevokeOutcome::Revoked(summary.clone()), "revoked"),
+            (
+                RevokeOutcome::AlreadyRevoked(summary.clone()),
+                "already_revoked",
+            ),
+            (RevokeOutcome::NotFound, "not_found"),
+            (
+                RevokeOutcome::Ambiguous {
+                    matches: vec![],
+                    truncated: false,
+                },
+                "ambiguous",
+            ),
+            (
+                RevokeOutcome::SelfRevokeForbidden(summary.clone()),
+                "self_revoke_forbidden",
+            ),
+        ];
+        for (variant, expected_slug) in cases {
+            let wire = serde_json::to_value(&variant).unwrap();
+            assert_eq!(
+                wire.get("type").and_then(|v| v.as_str()),
+                Some(expected_slug),
+                "{variant:?} must serialize with type={expected_slug:?}; a rename_all or tag drop strands CLI consumers",
+            );
+            let back: RevokeOutcome = serde_json::from_value(wire.clone())
+                .unwrap_or_else(|err| panic!("{variant:?} must round-trip, got: {err}"));
+            assert_eq!(back, variant);
+        }
+
+        // Dropping rename_all would surface variant names verbatim
+        // (Revoked); the snake_case whitelist must reject that form
+        // so the regression fails loud at parse time.
+        assert!(
+            serde_json::from_value::<RevokeOutcome>(serde_json::json!({"type": "Revoked"}))
+                .is_err(),
+            "titlecase type slug (the rename_all default) must be rejected",
+        );
+
+        // Switching the tag from "type" to any other name would silently
+        // break every CLI consumer. Pin the tag name so a refactor that
+        // drops tag = "type" fails loud at the boundary.
+        assert!(
+            serde_json::from_value::<RevokeOutcome>(serde_json::json!({"kind": "not_found"}))
+                .is_err(),
+            "wrong discriminator name (kind) must be rejected",
+        );
+
+        // kebab-case must also fail — the contract is snake_case only.
+        assert!(
+            serde_json::from_value::<RevokeOutcome>(serde_json::json!({"type": "not-found"}))
+                .is_err(),
+            "kebab-case type slug must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn token_round_trips_through_base58() {
         let t = PeerToken::generate();
         let s = t.to_b58();

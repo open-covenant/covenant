@@ -4919,6 +4919,73 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_backfill_plan_json_pins_refusal_object_schema() {
+        const EXPECTED_KEYS: &[&str] = &["apply_supported", "reason"];
+
+        fn assert_refusal_shape(value: &serde_json::Value) {
+            let refusal = value["refusal"]
+                .as_object()
+                .expect("memory_receipt_backfill_plan_json refusal field must be an object");
+            let mut keys: Vec<String> = refusal.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_receipt_backfill_plan_json refusal object keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["refusal"]["apply_supported"].is_boolean(),
+                "refusal.apply_supported must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert_eq!(
+                value["refusal"]["apply_supported"].as_bool(),
+                Some(false),
+                "refusal.apply_supported must be false until receipt backfill mutation lands: {value}",
+            );
+            assert!(
+                value["refusal"]["reason"].is_string(),
+                "refusal.reason must be a string, not a structured object: {value}",
+            );
+        }
+
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let memory = MemoryRecord {
+            id: uuid::Uuid::from_u128(10),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(20),
+            payer: owner,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_refusal_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory],
+            &[receipt],
+        ));
+        assert_refusal_shape(&memory_receipt_backfill_plan_json(0, &[], &[]));
+    }
+
+    #[test]
     fn memory_read_json_renders_stable_shape() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let record = MemoryRecord {

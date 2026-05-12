@@ -3929,6 +3929,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_a2a_repaired_serde_pins_single_field_variant() {
+        // Response::A2ARepaired is the variant the daemon sends after
+        // Request::A2ARepair runs a per-task repair against the A2A
+        // mailbox — requeuing a stale leased task or force-erroring a
+        // stuck one — and reports the per-task outcome. It carries
+        // outcome: A2ARepairOutcome, the struct the CLI surfaces
+        // (task_id, action, state, attempt, optional result snapshot)
+        // so the operator can confirm exactly which task was touched
+        // and the resulting state. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the wire
+        // object is exactly two top-level keys: kind='a2_a_repaired'
+        // (the rename_all = snake_case rule splits A2A on the
+        // digit/upper boundary into 'a2_a_...'; the durable wire form
+        // matches the sibling A2ACompacted/A2ATaskQueued/
+        // A2AResultPosted pins) plus outcome. No prior test pins the
+        // exact wire shape, round-trip, or omission rejection of this
+        // variant's required field. The inner A2ARepairOutcome shape
+        // is pinned by covenant-a2a tests; this slice locks the outer
+        // Response variant shape only — a minimally constructed
+        // outcome is sufficient to catch the slug, key set, and
+        // default-attribute regressions on the outer variant.
+        let event = Response::A2ARepaired {
+            outcome: A2ARepairOutcome {
+                task_id: Uuid::nil(),
+                action: covenant_a2a::A2ARepairAction::Requeued,
+                state: covenant_a2a::A2ARepairState::Queued,
+                attempt: 0,
+                result: None,
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "outcome"],
+            "Response::A2ARepaired wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'outcome' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping A2ARepairOutcome would either inline \
+             its fields next to 'kind' or nest 'outcome' one level \
+             deeper — either form silently breaks every CLI consumer \
+             that reads .outcome.task_id, .outcome.action, or \
+             .outcome.state",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_repaired")),
+            "Response discriminator slug must be the durable \
+             'a2_a_repaired' (rename_all = snake_case splits A2A on \
+             digit/upper boundaries); a slug regression silently \
+             strands every CLI parser that classifies A2A-repair \
+             outcomes by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the repair outcome, \
+             masking whether the task was requeued or force-errored",
+        );
+        assert!(
+            obj.get("outcome")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::A2ARepaired::outcome must serialize as a \
+             nested JSON object — the inner A2ARepairOutcome shape \
+             is pinned by covenant-a2a tests; this slice only locks \
+             that outcome appears as one keyed object under the outer \
+             variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2ARepaired must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI A2A-repair consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("outcome");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2ARepaired wire form must reject a payload \
+             missing 'outcome'; a stray #[serde(default)] would let a \
+             malformed row decode with a synthetic default \
+             A2ARepairOutcome and the CLI would surface a phantom \
+             no-op state — a real fetch failure (truncated frame, \
+             partial decode error) would be silently reclassified as \
+             a clean apply where the operator believes the repair \
+             touched nothing when in fact the daemon's repair path \
+             produced an error the boundary swallowed",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

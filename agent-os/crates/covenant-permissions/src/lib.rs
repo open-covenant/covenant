@@ -2921,6 +2921,62 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_optional_limit_pins_absent_none_allow_and_present_compare() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_optional_limit(empty, None),
+            "absent 'limit' field must allow actual=None; the absent-key branch is unconditional and matches the rest of the scope_allows_* family",
+        );
+        assert!(
+            scope_allows_optional_limit(empty, Some(0)),
+            "absent 'limit' field must allow actual=Some(0); the absent-key branch cannot gate on the magnitude",
+        );
+        assert!(
+            scope_allows_optional_limit(empty, Some(usize::MAX)),
+            "absent 'limit' field must allow actual=Some(usize::MAX); otherwise unscoped grants silently reject large-limit requests through an absent gate",
+        );
+
+        let bounded = serde_json::json!({ "limit": 10u64 });
+        let bounded = bounded.as_object().unwrap();
+        assert!(
+            scope_allows_optional_limit(bounded, None),
+            "scope {{\"limit\": 10}} must allow actual=None; the .map(...).unwrap_or(true) branch is the documented divergence from optional_bool/optional_before_ms — limit treats 'not specified' as allowed under a bound, and a regression to unwrap_or(false) would silently reject unspecified-limit requests",
+        );
+        assert!(
+            scope_allows_optional_limit(bounded, Some(0)),
+            "scope {{\"limit\": 10}} must allow actual=Some(0); the comparison is inclusive on the low end",
+        );
+        assert!(
+            scope_allows_optional_limit(bounded, Some(9)),
+            "scope {{\"limit\": 10}} must allow actual=Some(9); below the scoped maximum",
+        );
+        assert!(
+            scope_allows_optional_limit(bounded, Some(10)),
+            "scope {{\"limit\": 10}} must allow actual=Some(10); the <= comparison must include equality, otherwise boundary-bound limits silently fail",
+        );
+        assert!(
+            !scope_allows_optional_limit(bounded, Some(11)),
+            "scope {{\"limit\": 10}} must NOT allow actual=Some(11); a regression that flipped <= to >= or used the wrong direction would silently authorize wider limits",
+        );
+
+        let malformed = serde_json::json!({ "limit": "oops" });
+        let malformed = malformed.as_object().unwrap();
+        assert!(
+            scope_allows_optional_limit(malformed, None),
+            "a non-u64 'limit' with actual=None must allow via .map(...).unwrap_or(true); the malformed-scope path is documented to allow on actual=None so unspecified-limit reads keep working even through partially-typed scope objects",
+        );
+        assert!(
+            scope_allows_optional_limit(malformed, Some(0)),
+            "a non-u64 'limit' must collapse the threshold to zero via unwrap_or(0); zero is still <= 0 so only the strict-zero request is allowed on the present-with-Some side",
+        );
+        assert!(
+            !scope_allows_optional_limit(malformed, Some(1)),
+            "a non-u64 'limit' must reject actual=Some(1) via the zero-fallback; relaxing this to unwrap_or(u64::MAX) would silently authorize arbitrarily large limits through a malformed scope object",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

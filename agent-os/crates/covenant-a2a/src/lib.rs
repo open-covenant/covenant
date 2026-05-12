@@ -2483,6 +2483,70 @@ mod tests {
         assert_eq!(r.error_message.as_deref(), Some("no agent matched"));
     }
 
+    #[test]
+    fn a2a_task_result_serde_pins_content_default_and_error_message_skip_empty() {
+        // A2ATaskResult is the wire form every recipient agent emits on
+        // send_result; it crosses IPC, HTTP, and JSONL mailbox boundaries.
+        // content rides #[serde(default)] only — empty content stays on
+        // the wire as "content":[] so CLI consumers can distinguish
+        // a populated-but-empty result from a parse error. error_message
+        // rides #[serde(default, skip_serializing_if = "Option::is_none")]
+        // so ok results emit a compact row without the field, while
+        // Some(msg) surfaces verbatim. Stale senders that omit content
+        // must still decode to an empty Vec, and explicit-null wire
+        // payloads from older daemons must decode to None.
+        let task_id = Uuid::new_v4();
+
+        let ok = A2ATaskResult::ok(task_id, vec![]);
+        let wire = serde_json::to_value(&ok).unwrap();
+        assert_eq!(
+            wire.get("content"),
+            Some(&serde_json::Value::Array(vec![])),
+            "empty content must surface as [] on the wire; a stray skip_serializing_if would break CLI consumers grepping on field presence",
+        );
+        let obj = wire.as_object().expect("wire form must be a JSON object");
+        assert!(
+            !obj.contains_key("error_message"),
+            "error_message=None must be skipped on the ok wire row; a dropped skip_serializing_if emits \"error_message\":null on every success",
+        );
+
+        let err = A2ATaskResult::error(task_id, "boom");
+        let wire = serde_json::to_value(&err).unwrap();
+        assert_eq!(
+            wire.get("error_message").and_then(|v| v.as_str()),
+            Some("boom"),
+            "Some(message) must surface verbatim on the error wire row",
+        );
+
+        let omitted: A2ATaskResult = serde_json::from_value(serde_json::json!({
+            "task_id": task_id,
+            "status": "ok",
+        }))
+        .expect("stale sender wire form that omits content/error_message must decode");
+        assert_eq!(
+            omitted.content,
+            Vec::<Content>::new(),
+            "omitted content must decode to an empty Vec via #[serde(default)]",
+        );
+        assert_eq!(
+            omitted.error_message, None,
+            "omitted error_message must decode to None via #[serde(default)]",
+        );
+
+        let null_form: A2ATaskResult = serde_json::from_value(serde_json::json!({
+            "task_id": task_id,
+            "status": "ok",
+            "content": [],
+            "error_message": null,
+        }))
+        .expect("explicit-null error_message wire form must decode for older daemons");
+        assert_eq!(null_form.error_message, None);
+
+        let round_trip: A2ATaskResult =
+            serde_json::from_value(serde_json::to_value(&ok).unwrap()).unwrap();
+        assert_eq!(round_trip, ok, "ok result must full-round-trip through serde");
+    }
+
     #[tokio::test]
     async fn in_memory_mailbox_round_trips_a_task() {
         let m = InMemoryMailbox::new();

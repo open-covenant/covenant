@@ -10589,6 +10589,24 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn parse_env_bool_pins_accepted_synonyms_and_reject_path() {
+        for raw in ["1", "true", "yes", "on", "TRUE", " true ", "Yes", "ON"] {
+            assert_eq!(parse_env_bool(raw).unwrap(), true, "expected true for {raw:?}");
+        }
+        for raw in ["0", "false", "no", "off", "FALSE", " 0 ", "No", "OFF"] {
+            assert_eq!(parse_env_bool(raw).unwrap(), false, "expected false for {raw:?}");
+        }
+        for raw in ["teu", "", "2", "maybe"] {
+            let err = parse_env_bool(raw).unwrap_err().to_string();
+            let needle = raw.trim().to_ascii_lowercase();
+            assert!(
+                err.contains(&needle),
+                "expected error for {raw:?} to mention {needle:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn memory_read_actions_pins_each_tier_and_none() {
         assert_eq!(
             memory_read_actions(Some(MemoryTier::Working)),

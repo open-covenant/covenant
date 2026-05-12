@@ -1585,6 +1585,72 @@ mod tests {
     }
 
     #[test]
+    fn auto_retry_policy_serde_pins_empty_object_matches_default() {
+        // Each A2AAutoRetryPolicy field carries a serde default: enabled rides
+        // bool::default()=false via #[serde(default)], and the other four ride
+        // module-local default_auto_retry_* functions via
+        // #[serde(default = "..."]). The Default impl threads through the same
+        // functions, so the contract is that decoding {} matches
+        // A2AAutoRetryPolicy::default(). A refactor that swaps the
+        // #[serde(default)] on enabled to a true-returning function, or
+        // repoints/drops any of the four function-backed defaults, would
+        // silently change retry behavior for every persisted config that
+        // omits a field.
+        let from_empty: A2AAutoRetryPolicy = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            from_empty,
+            A2AAutoRetryPolicy::default(),
+            "empty JSON object must round-trip to A2AAutoRetryPolicy::default(); a refactor of the serde defaults silently changes legacy config behavior"
+        );
+
+        let partial: A2AAutoRetryPolicy = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert!(
+            partial.enabled,
+            "partial decode must keep set fields verbatim"
+        );
+        assert_eq!(
+            partial.min_lease_age_ms, 300_000,
+            "min_lease_age_ms serde default must equal default_auto_retry_min_lease_age_ms() = 300_000"
+        );
+        assert_eq!(
+            partial.max_attempts, 3,
+            "max_attempts serde default must equal default_auto_retry_max_attempts() = 3"
+        );
+        assert_eq!(
+            partial.max_requeues, 1,
+            "max_requeues serde default must equal default_auto_retry_max_requeues() = 1"
+        );
+        assert_eq!(
+            partial.scan_limit, 100,
+            "scan_limit serde default must equal default_auto_retry_scan_limit() = 100"
+        );
+
+        let canonical = A2AAutoRetryPolicy::default();
+        let round_trip: A2AAutoRetryPolicy =
+            serde_json::from_value(serde_json::to_value(canonical).unwrap()).unwrap();
+        assert_eq!(
+            round_trip, canonical,
+            "Default policy must full-round-trip through serde without drift"
+        );
+
+        let explicit: A2AAutoRetryPolicy = serde_json::from_str(
+            r#"{"enabled": true, "min_lease_age_ms": 1, "max_attempts": 2, "max_requeues": 3, "scan_limit": 4}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            explicit,
+            A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 1,
+                max_attempts: 2,
+                max_requeues: 3,
+                scan_limit: 4,
+            },
+            "explicit fields must decode verbatim; serde defaults must not shadow set values"
+        );
+    }
+
+    #[test]
     fn auto_retry_evaluates_only_old_idempotent_in_flight_tasks() {
         let mut task = dummy_task();
         task.idempotency = Some(A2AIdempotency::new(

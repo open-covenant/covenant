@@ -2739,6 +2739,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_repair_memory_serde_pins_struct_typed_single_field_variant() {
+        // Request::RepairMemory is the operator-controlled memory
+        // drift repair verb the CLI and HTTP gateway send to push a
+        // MemoryRepairRequest at the daemon. It pairs with
+        // Response::MemoryRepaired (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='repair_memory' plus request. The slug has no
+        // A2A quirk because the variant name is RepairMemory (no
+        // digit/uppercase boundary), unlike the just-pinned
+        // SendA2ATask/PostA2AResult pair whose slugs split into
+        // 'send_a2_a_task' / 'post_a2_a_result'. This is the
+        // structural sibling: same struct-typed single-field shape,
+        // different inner type (MemoryRepairRequest instead of
+        // A2ATask/A2ATaskResult) and a clean snake_case slug. The
+        // nested request must surface as a JSON object under
+        // 'request', not flattened into the parent and not promoted
+        // to a tuple variant. The inner MemoryRepairRequest shape
+        // is pinned by covenant-types tests; this slice only locks
+        // the outer Request variant shape. A refactor that added
+        // #[serde(flatten)] to 'request', dropped the nesting in
+        // favour of a tuple variant, or rotated the field name
+        // would silently break every CLI/HTTP memory-repair caller.
+        let request = covenant_types::MemoryRepairRequest {
+            mode: covenant_types::MemoryRepairMode::DryRun,
+            command: covenant_types::MemoryRepairCommand::DeleteRecord { id: Uuid::nil() },
+            reason: "test".into(),
+        };
+        let event = Request::RepairMemory {
+            request: request.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "request"],
+            "Request::RepairMemory wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'request' \
+             field. A refactor that added #[serde(flatten)] to \
+             'request' would collapse the inner MemoryRepairRequest \
+             fields (mode, command, reason) into the outer object \
+             next to 'kind' and every CLI/HTTP memory-repair caller \
+             that sends {{\"kind\":\"repair_memory\",\"request\":{{...}}}} \
+             would fail to decode — the nested 'request' key would \
+             vanish and the daemon's repair verb would go dark \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("repair_memory")),
+            "Request discriminator slug must be the durable \
+             'repair_memory' (rename_all = snake_case on a plain \
+             CamelCase name with no digit/uppercase boundary yields \
+             a clean 'repair_memory'). A refactor that renamed the \
+             variant (e.g., MemoryRepair) or removed the \
+             rename_all attribute would shift the slug — incoming \
+             frames would route to the daemon's catch-all error \
+             branch and every CLI/HTTP memory-repair would fail \
+             through the supported path",
+        );
+        let request_value = obj.get("request").expect("'request' key must be present");
+        assert!(
+            request_value.is_object(),
+            "Request::RepairMemory::request must surface as a \
+             nested JSON object — a refactor that promoted the \
+             variant to a tuple (Request::RepairMemory(MemoryRepairRequest)) \
+             or that changed the field to a string-encoded payload \
+             would surface a non-object here; the daemon's repair \
+             dispatch path binds on the nested-object surface and \
+             any other shape silently breaks every CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RepairMemory must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP memory-repair consumer leans \
+             on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("request");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::RepairMemory wire form must reject a payload \
+             missing 'request'; a stray #[serde(default)] (paired \
+             with a future Default on MemoryRepairRequest) would \
+             let a malformed frame decode with a phantom repair \
+             targeting a default record id and mode — every \
+             audit-row attribution for the resulting repair would \
+             collapse to a meaningless default subject and operator \
+             drift remediation would silently mis-fire against the \
+             wrong record",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

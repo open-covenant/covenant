@@ -2438,6 +2438,76 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_unscoped_grants(
+    ) {
+        assert!(
+            !memory_compaction_scope_allows(
+                "memory",
+                &serde_json::json!([]),
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: None,
+                    delete_episodic_before_ms: None,
+                    mark_longterm_stale_before_ms: None,
+                    detach_stale_parents: false,
+                }
+            )
+            .unwrap()
+        );
+
+        let bound_scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working", "episodic"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            !memory_compaction_scope_allows(
+                "memory.compact.dry_run",
+                &bound_scope,
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: Some(999),
+                    delete_episodic_before_ms: None,
+                    mark_longterm_stale_before_ms: None,
+                    detach_stale_parents: false,
+                }
+            )
+            .unwrap()
+        );
+
+        let empty = serde_json::json!({});
+        assert!(
+            memory_compaction_scope_allows(
+                "memory.compact.apply",
+                &empty,
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: Some(u64::MAX),
+                    delete_episodic_before_ms: Some(u64::MAX),
+                    mark_longterm_stale_before_ms: Some(u64::MAX),
+                    detach_stale_parents: true,
+                }
+            )
+            .unwrap()
+        );
+        assert!(
+            memory_compaction_scope_allows(
+                "memory.compact.apply",
+                &empty,
+                MemoryCompactionScopeRequest {
+                    apply: true,
+                    delete_working_before_ms: None,
+                    delete_episodic_before_ms: None,
+                    mark_longterm_stale_before_ms: None,
+                    detach_stale_parents: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn sign_and_verify_round_trip() {
         let issuer = LocalIdentity::generate("authority@local");
         let subject = LocalIdentity::generate("research@local").agent_id();

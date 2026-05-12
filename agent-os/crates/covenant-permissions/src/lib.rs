@@ -1584,6 +1584,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_peer_scope_rejects_invalid_self_and_before_ms_shapes() {
+        assert_invalid_scope(
+            "peers.revoke",
+            serde_json::json!({ "version": 1, "self": "yes" }),
+        );
+        assert_invalid_scope(
+            "peers.revoke",
+            serde_json::json!({ "version": 1, "before_ms": -1 }),
+        );
+    }
+
+    #[test]
     fn validate_chain_scope_rejects_invalid_mint_and_cluster_shapes() {
         assert_invalid_scope(
             "chain.flush",

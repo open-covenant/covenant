@@ -544,6 +544,124 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_command_serde_pins_each_snake_case_action_slug() {
+        // MemoryRepairCommand carries #[serde(tag = "action", rename_all =
+        // "snake_case")] and rides inside every MemoryRepairRequest
+        // dispatched through daemon, HTTP, and CLI repair flows. The
+        // discriminator name "action" is load-bearing — a refactor to
+        // the serde default tag "type" would silently break every
+        // CLI-built repair payload still keying on action. The
+        // rename_all attribute is similarly load-bearing — its drop
+        // would emit titlecase variants in the wire JSON while sibling
+        // MemoryRepairAction (already pinned) kept its snake_case
+        // slugs, splitting repair audit consumers across two forms.
+        // Pin both the tag name and the per-variant snake_case slug,
+        // exercising the #[serde(default, skip_serializing_if =
+        // "Option::is_none")] expected_parent field on both arms.
+        let detach_id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let delete_id = Uuid::new_v4();
+        let backfill_id = Uuid::new_v4();
+
+        let detach_no_parent = MemoryRepairCommand::DetachParent {
+            id: detach_id,
+            expected_parent: None,
+        };
+        let detach_no_parent_wire = serde_json::json!({
+            "action": "detach_parent",
+            "id": detach_id,
+        });
+        assert_eq!(
+            serde_json::to_value(&detach_no_parent).unwrap(),
+            detach_no_parent_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<MemoryRepairCommand>(detach_no_parent_wire).unwrap(),
+            detach_no_parent,
+        );
+
+        let detach_with_parent = MemoryRepairCommand::DetachParent {
+            id: detach_id,
+            expected_parent: Some(parent),
+        };
+        let detach_with_parent_wire = serde_json::json!({
+            "action": "detach_parent",
+            "id": detach_id,
+            "expected_parent": parent,
+        });
+        assert_eq!(
+            serde_json::to_value(&detach_with_parent).unwrap(),
+            detach_with_parent_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<MemoryRepairCommand>(detach_with_parent_wire).unwrap(),
+            detach_with_parent,
+        );
+
+        let delete = MemoryRepairCommand::DeleteRecord { id: delete_id };
+        let delete_wire = serde_json::json!({
+            "action": "delete_record",
+            "id": delete_id,
+        });
+        assert_eq!(serde_json::to_value(&delete).unwrap(), delete_wire);
+        assert_eq!(
+            serde_json::from_value::<MemoryRepairCommand>(delete_wire).unwrap(),
+            delete,
+        );
+
+        let backfill = MemoryRepairCommand::BackfillProvenance {
+            id: backfill_id,
+            provenance: serde_json::json!({"source": "manual"}),
+        };
+        let backfill_wire = serde_json::json!({
+            "action": "backfill_provenance",
+            "id": backfill_id,
+            "provenance": {"source": "manual"},
+        });
+        assert_eq!(serde_json::to_value(&backfill).unwrap(), backfill_wire);
+        assert_eq!(
+            serde_json::from_value::<MemoryRepairCommand>(backfill_wire).unwrap(),
+            backfill,
+        );
+
+        // Dropping rename_all would surface variant names verbatim
+        // (DetachParent); the snake_case whitelist must reject that
+        // form so the regression fails loud.
+        assert!(
+            serde_json::from_value::<MemoryRepairCommand>(serde_json::json!({
+                "action": "DetachParent",
+                "id": detach_id,
+            }))
+            .is_err(),
+            "titlecase action slug (the rename_all default) must be rejected",
+        );
+
+        // Switching the tag from "action" to the serde default "type"
+        // would silently break every CLI repair payload. Pin the tag
+        // name so a refactor that drops tag = "action" fails loud at
+        // the boundary instead of through a confusing upstream error.
+        assert!(
+            serde_json::from_value::<MemoryRepairCommand>(serde_json::json!({
+                "type": "detach_parent",
+                "id": detach_id,
+            }))
+            .is_err(),
+            "wrong discriminator name (serde default 'type') must be rejected",
+        );
+
+        // kebab-case must also fail — the contract is snake_case only,
+        // not "any non-titlecase form".
+        assert!(
+            serde_json::from_value::<MemoryRepairCommand>(serde_json::json!({
+                "action": "delete-record",
+                "id": delete_id,
+            }))
+            .is_err(),
+            "kebab-case action slug must be rejected",
+        );
+    }
+
+    #[test]
     fn priority_serde_pins_lowercase_wire_form_and_default() {
         // Priority::Normal must remain the Default arm. Moving #[default]
         // to Low or High would silently shift every default-priority

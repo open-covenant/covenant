@@ -101,7 +101,7 @@ export default function Page() {
           height={40}
           className="h-auto w-[40px] opacity-70"
         />
-        <span>open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
+        <span>Covenant  ·  open agent-native operating layer  ·  {RELEASE_DATE.toLowerCase()}</span>
       </footer>
     </main>
   );

@@ -4348,6 +4348,111 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_receipt_batch_flushed_serde_pins_two_field_variant() {
+        // Response::ReceiptBatchFlushed is the variant the daemon
+        // sends after Request::FlushReceiptBatch anchors a batch of
+        // local receipts into a single on-chain Merkle root. It
+        // carries batch: ReceiptBatchSummary (batch_id, merkle_root,
+        // receipt_count, tx_sig, slot) plus receipts_updated: u64
+        // (the count of local receipts re-correlated to the new
+        // batch). With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly three top-level keys: kind='receipt_batch_flushed'
+        // plus the two variant fields. No prior test pins the exact
+        // wire shape, round-trip, or omission rejection of these
+        // required fields at the outer Response level. The inner
+        // ReceiptBatchSummary shape is pinned by
+        // receipt_batch_summary_serde_pins_default_not_skip_and_required_fields;
+        // this slice locks the outer Response variant shape only.
+        let event = Response::ReceiptBatchFlushed {
+            batch: ReceiptBatchSummary {
+                batch_id: "batch-1".into(),
+                merkle_root: "00".repeat(32),
+                receipt_count: 0,
+                tx_sig: None,
+                slot: None,
+            },
+            receipts_updated: 0,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["batch", "kind", "receipts_updated"],
+            "Response::ReceiptBatchFlushed wire form must be exactly \
+             three top-level keys: 'kind' plus the two variant \
+             fields. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'batch' and 'receipts_updated' one level deeper and \
+             every CLI consumer that destructures .batch.merkle_root \
+             or .receipts_updated would silently fail — the \
+             operator's flush confirmation would read blank for every \
+             anchor pass",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("receipt_batch_flushed")),
+            "Response discriminator slug must be the durable \
+             'receipt_batch_flushed'; a slug regression silently \
+             strands every CLI parser that classifies flush outcomes \
+             by this exact value — the operator's CLI prints a \
+             confusing fallback instead of the flush evidence, \
+             masking whether the daemon anchored a batch and how \
+             many receipts were re-correlated",
+        );
+        assert!(
+            obj.get("batch")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::ReceiptBatchFlushed::batch must serialize as a \
+             nested JSON object — the inner ReceiptBatchSummary shape \
+             is pinned by sibling tests; this slice only locks that \
+             batch appears as one keyed object under the outer \
+             variant",
+        );
+        assert_eq!(
+            obj.get("receipts_updated")
+                .and_then(serde_json::Value::as_u64),
+            Some(0),
+            "Response::ReceiptBatchFlushed::receipts_updated must \
+             surface as the u64 row count verbatim — the operator \
+             reads this exact integer to confirm how many local \
+             receipts were re-correlated to the new on-chain anchor",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ReceiptBatchFlushed must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI flush-confirmation consumer leans on",
+        );
+
+        for required in ["batch", "receipts_updated"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::ReceiptBatchFlushed wire form must reject \
+                 a payload missing {required:?}; a stray \
+                 #[serde(default)] on receipts_updated would let a \
+                 malformed row decode with receipts_updated=0 and \
+                 the CLI would surface a phantom 'no anchor progress' \
+                 state — a default on batch would let a malformed \
+                 row decode with a synthetic empty batch and the \
+                 operator would believe no anchor evidence exists \
+                 when in fact the daemon's flush path produced an \
+                 error the boundary swallowed",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

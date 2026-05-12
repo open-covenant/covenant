@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { PixelReveal } from "./PixelReveal";
 
 const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ?#@$%&*+-=/<>";
 
@@ -509,6 +510,18 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
 export function HeroMesh({ src }: { src: string }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+      <div
+        aria-hidden
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+        style={{
+          zIndex: 0,
+          width: "min(95vw, 130vh)",
+          aspectRatio: "1168 / 784",
+          maxHeight: "85vh",
+        }}
+      >
+        <PixelReveal src={src} stagger={720} fadeDur={280} />
+      </div>
       <MeshCanvas backgroundImageSrc={src} />
       <div
         aria-hidden

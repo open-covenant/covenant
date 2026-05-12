@@ -5,7 +5,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20134416.svg)](https://doi.org/10.5281/zenodo.20134416)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](./rust-toolchain.toml)
 
-> A capability-based operating layer for long-running autonomous software engineering agents.
+> Open infrastructure for agent-native computing.
 
 <p align="center">
   <img src="./assets/architecture.png" alt="Covenant architecture: clients reach covenantd over CLI / IPC / HTTP / MCP / A2A; the daemon dispatches through eight primitives over a cross-cutting audit layer running on an unprivileged Linux/macOS host." width="900"/>

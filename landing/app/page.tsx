@@ -2,7 +2,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { HeroMesh } from "./HeroMesh";
 import { MobileMenu } from "./MobileMenu";
-import { PixelReveal } from "./PixelReveal";
 import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "./_brand";
 
 const RELEASE_DATE = "ALPHA TARGET: 13.05.2026";
@@ -81,11 +80,6 @@ export default function Page() {
         </a>
       </nav>
 
-      <section className="relative z-10 flex h-full flex-col items-center justify-center px-4 text-center">
-        <div className="pointer-events-none h-[min(80vh,90vw)] w-[min(80vh,90vw)] max-w-none">
-          <PixelReveal src="/hero-bg.jpg" stagger={720} fadeDur={280} />
-        </div>
-      </section>
 
       <p className="absolute left-1/2 top-[80%] z-10 -translate-x-1/2 px-4 text-[12px] tracking-[0.4em] text-neutral-400 sm:text-[14px]">
         {RELEASE_DATE}

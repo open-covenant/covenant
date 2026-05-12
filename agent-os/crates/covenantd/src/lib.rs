@@ -1768,7 +1768,7 @@ impl Server {
                 }
             }
         }
-        all.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+        all.sort_by_key(|d| std::cmp::Reverse(d.at_ms));
         all.truncate(limit);
         Response::Debits { debits: all }
     }
@@ -11319,16 +11319,14 @@ budget_credits_per_hour = {credits}
     #[test]
     fn parse_env_bool_pins_accepted_synonyms_and_reject_path() {
         for raw in ["1", "true", "yes", "on", "TRUE", " true ", "Yes", "ON"] {
-            assert_eq!(
+            assert!(
                 parse_env_bool(raw).unwrap(),
-                true,
                 "expected true for {raw:?}"
             );
         }
         for raw in ["0", "false", "no", "off", "FALSE", " 0 ", "No", "OFF"] {
-            assert_eq!(
-                parse_env_bool(raw).unwrap(),
-                false,
+            assert!(
+                !parse_env_bool(raw).unwrap(),
                 "expected false for {raw:?}"
             );
         }

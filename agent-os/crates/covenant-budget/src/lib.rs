@@ -1020,7 +1020,7 @@ mod tests {
         // receipt.
 
         let mut pubkey = [0u8; 32];
-        for (i, b) in b"alice@host".iter().take(32).enumerate() {
+        for (i, b) in b"alice@host".iter().enumerate() {
             pubkey[i] = *b;
         }
         let debit = BudgetDebit {

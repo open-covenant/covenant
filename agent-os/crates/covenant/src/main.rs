@@ -4357,7 +4357,7 @@ mod tests {
             scan_limit: 100,
         };
 
-        let mut populated = A2AAutoRetryReport::new(policy.clone());
+        let mut populated = A2AAutoRetryReport::new(policy);
         populated.considered = 2;
         populated.requeued.push(covenant_a2a::A2AAutoRetryRequeued {
             task_id: uuid::Uuid::nil(),
@@ -6081,8 +6081,8 @@ mod tests {
             Some(300_000),
             Some(60_000),
             Some(A2ATaskQueueState::InFlight),
-            &[entry.clone()],
-            &[result.clone()],
+            std::slice::from_ref(&entry),
+            std::slice::from_ref(&result),
         ));
         assert_shape(&a2a_status_json(
             5,

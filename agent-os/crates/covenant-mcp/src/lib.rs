@@ -299,6 +299,54 @@ mod tests {
         assert!(json.contains("\"isError\":true"));
     }
 
+    #[test]
+    fn tool_call_result_serde_pins_camel_case_round_trip() {
+        // ToolCallResult is the public MCP wire shape returned by every
+        // tools/call invocation. The isError field name is load-bearing
+        // — spec-compliant external MCP servers (and the stdio JSON-RPC
+        // transport) key on isError, not is_error. A dropped rename_all
+        // = camelCase attribute would silently switch the wire form to
+        // is_error and break every external transport that does NOT go
+        // through the external::parse_tool_call_result alias path
+        // (parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap
+        // pins the alias path separately). Pin the full round-trip on
+        // the canonical struct so the two surfaces stay distinct.
+        let ok = ToolCallResult::ok(vec![Content::text("hi")]);
+        let ok_wire = serde_json::json!({
+            "content": [{"type": "text", "text": "hi"}],
+            "isError": false,
+        });
+        assert_eq!(serde_json::to_value(&ok).unwrap(), ok_wire);
+        assert_eq!(
+            serde_json::from_value::<ToolCallResult>(ok_wire.clone()).unwrap(),
+            ok,
+        );
+
+        let err = ToolCallResult::error("nope");
+        let err_wire = serde_json::json!({
+            "content": [{"type": "text", "text": "nope"}],
+            "isError": true,
+        });
+        assert_eq!(serde_json::to_value(&err).unwrap(), err_wire);
+        assert_eq!(
+            serde_json::from_value::<ToolCallResult>(err_wire.clone()).unwrap(),
+            err,
+        );
+
+        // The snake_case wire form must be rejected on the canonical
+        // struct — the is_error alias on the parse_tool_call_result
+        // path is a separate, intentional compatibility surface and
+        // must not bleed into direct ToolCallResult deserialization.
+        assert!(
+            serde_json::from_value::<ToolCallResult>(serde_json::json!({
+                "content": [],
+                "is_error": false,
+            }))
+            .is_err(),
+            "snake_case is_error must be rejected on the canonical struct so a dropped rename_all attribute fails loud (the parse_tool_call_result alias path stays separate)",
+        );
+    }
+
     #[tokio::test]
     async fn registry_lists_tools_sorted_by_name() {
         let reg = ToolRegistry::from_tools(vec![Arc::new(EchoTool), Arc::new(native::ClockTool)]);

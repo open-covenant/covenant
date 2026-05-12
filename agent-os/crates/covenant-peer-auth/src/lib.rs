@@ -847,6 +847,57 @@ mod tests {
     }
 
     #[test]
+    fn summary_matches_pins_none_empty_and_pubkey_prefix_branches() {
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        pk[1] = 42;
+        let agent = AgentId::new("alice@host", pk);
+        let pubkey_b58 = agent.pubkey_base58();
+        let summary = PeerSummary {
+            agent_id: agent,
+            token_prefix: "abcdef".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: None,
+        };
+
+        assert!(
+            summary_matches(&summary, None),
+            "None means no filter and must pass every summary",
+        );
+        assert!(
+            summary_matches(&summary, Some("")),
+            "empty-string prefix must also be treated as no filter; \
+             dropping this arm silently breaks empty-prefix listing queries",
+        );
+
+        let head_3: String = pubkey_b58.chars().take(3).collect();
+        assert!(
+            summary_matches(&summary, Some(&head_3)),
+            "a known pubkey-base58 prefix must match",
+        );
+        assert!(
+            summary_matches(&summary, Some(&pubkey_b58)),
+            "the full pubkey base58 must match (longest prefix)",
+        );
+
+        assert!(
+            !summary_matches(&summary, Some("alice")),
+            "the filter must compare against pubkey_base58, not the human-readable display; \
+             swapping fields would silently match the wrong peer set",
+        );
+        assert!(
+            !summary_matches(&summary, Some("zzz")),
+            "an unrelated prefix must not match",
+        );
+
+        let tail_3: String = pubkey_b58.chars().rev().take(3).collect();
+        assert!(
+            !summary_matches(&summary, Some(&tail_3)),
+            "the suffix of the pubkey must not match; the contract is starts_with, not contains/ends_with",
+        );
+    }
+
+    #[test]
     fn summary_passes_status_pins_all_three_filters_against_live_and_revoked_summaries() {
         let live = PeerSummary {
             agent_id: dummy_agent("live@host"),

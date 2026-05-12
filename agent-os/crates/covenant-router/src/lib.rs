@@ -128,6 +128,7 @@ fn capability_keywords(cap: &str) -> &'static [&'static str] {
         "memory.write" => &["remember", "save", "note", "store", "log"],
         "memory.read" => &["recall", "what did", "previous", "earlier"],
         "intent.delegate" => &["assign", "delegate", "ask another", "route to"],
+        "intent.subscribe" => &["hello", "hi", "echo", "ping", "test"],
         _ => &[],
     }
 }
@@ -248,6 +249,7 @@ required = {caps:?}
             ("memory.write", "remember"),
             ("memory.read", "recall"),
             ("intent.delegate", "delegate"),
+            ("intent.subscribe", "hello"),
         ] {
             let kws = capability_keywords(cap);
             assert!(

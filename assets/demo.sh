@@ -47,7 +47,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 # Out-of-frame setup so the GIF stays on the round trip itself.
-"$BIN/covenant" capabilities grant memory.write >/dev/null 2>&1
+"$BIN/covenant" capabilities grant memory.write    >/dev/null 2>&1
+"$BIN/covenant" capabilities grant intent.subscribe >/dev/null 2>&1
 
 clear
 sleep 0.4

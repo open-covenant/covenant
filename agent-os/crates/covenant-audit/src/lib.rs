@@ -1116,6 +1116,93 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_intent_dispatched_serde_pins_five_field_variant() {
+        // AuditKind::IntentDispatched is the load-bearing audit variant
+        // emitted on every successful dispatch through
+        // covenantd::Server::dispatch_intent. Five fields:
+        //
+        // * intent_id: Uuid — strictly required
+        // * intent_text: String — strictly required
+        // * matched_agent: Option<String> — no #[serde(default)] and no
+        //   #[serde(skip_serializing_if)], so the wire must always emit
+        //   the key (None as JSON null)
+        // * result_hash_hex: String — strictly required
+        // * status: String — strictly required
+        //
+        // audit_event_serde_pins_four_required_fields uses
+        // CapabilityCheck only; this test pins the IntentDispatched
+        // wire form directly so a refactor that flipped result_hash_hex
+        // to #[serde(default)] (chain_hash absorbs an empty string and
+        // the verifier passes) or renamed any field would fail loud
+        // instead of producing a silently-broken audit row.
+        let kind = AuditKind::IntentDispatched {
+            intent_id: Uuid::nil(),
+            intent_text: "hi".into(),
+            matched_agent: Some("a@b".into()),
+            result_hash_hex: "deadbeef".into(),
+            status: "ok".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "intent_id",
+                "intent_text",
+                "matched_agent",
+                "result_hash_hex",
+                "status",
+                "type",
+            ],
+            "AuditKind::IntentDispatched wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("intent_dispatched")),
+            "AuditKind discriminator slug must be snake_case 'intent_dispatched'; a titlecase or kebab-case regression would silently break every prior audit row",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::IntentDispatched must round-trip through serde_json verbatim — the PartialEq derive is the contract audit replay leans on",
+        );
+
+        for required in ["intent_id", "intent_text", "result_hash_hex", "status"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::IntentDispatched wire form must reject a payload missing {required:?}; a stray #[serde(default)] on a required field would silently let a malformed audit row decode and the chain_hash verifier would accept tampered state",
+            );
+        }
+
+        let none_matched = AuditKind::IntentDispatched {
+            intent_id: Uuid::nil(),
+            intent_text: "hi".into(),
+            matched_agent: None,
+            result_hash_hex: "deadbeef".into(),
+            status: "no_match".into(),
+        };
+        let wire = serde_json::to_value(&none_matched).unwrap();
+        assert_eq!(
+            wire.get("matched_agent"),
+            Some(&serde_json::Value::Null),
+            "matched_agent: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across matched and unmatched dispatch rows",
+        );
+        assert_eq!(
+            wire.as_object().unwrap().len(),
+            6,
+            "AuditKind::IntentDispatched with matched_agent=None must still surface six keys on the wire; a skip_serializing_if regression would silently shrink the wire form for unmatched intents",
+        );
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

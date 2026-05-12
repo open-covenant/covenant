@@ -742,6 +742,83 @@ mod tests {
     }
 
     #[test]
+    fn budget_pause_checkpoint_version_pins_one_and_resume_state_skips_empty() {
+        // BudgetPauseCheckpoint::VERSION is the on-disk schema version
+        // validated by covenant_budget::validate_pause_checkpoint. A
+        // refactor that bumps the const without writing a migration
+        // silently strands every previously persisted checkpoint —
+        // operators see "cannot resume" errors instead of a clear
+        // migration prompt. Pin the const to its concrete value here
+        // so any version bump must update this test in the same change
+        // and prompt the migration question.
+        assert_eq!(
+            BudgetPauseCheckpoint::VERSION,
+            1,
+            "BudgetPauseCheckpoint::VERSION must remain 1 until a migration is written; a silent bump strands every persisted v1 checkpoint",
+        );
+
+        let base = BudgetPauseCheckpoint {
+            version: BudgetPauseCheckpoint::VERSION,
+            intent_id: Uuid::nil(),
+            agent: dummy_id(),
+            reason: BudgetPauseReason::BudgetExhausted,
+            requested_credits: 1,
+            tokens_remaining: 0,
+            refill_eta_ms: 0,
+            saved_at_ms: 0,
+            resume_state: serde_json::Map::new(),
+        };
+
+        // skip_serializing_if = is_empty must drop the resume_state key
+        // when the map is empty; otherwise the on-disk JSONL log grows
+        // every checkpoint with a redundant "resume_state":{} and any
+        // tooling that grep-matches on the field starts spuriously
+        // matching empty rows.
+        let empty_wire = serde_json::to_value(&base).unwrap();
+        let keys: Vec<&str> = empty_wire
+            .as_object()
+            .expect("checkpoint must serialize to a JSON object")
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        assert!(
+            !keys.contains(&"resume_state"),
+            "empty resume_state must be skipped on serialize so on-disk JSONL stays compact; got keys: {keys:?}",
+        );
+
+        // Populating resume_state must surface the key with the
+        // inserted value — the skip predicate is empty-only, not "drop
+        // resume_state always".
+        let mut populated = base.clone();
+        populated
+            .resume_state
+            .insert("k".into(), serde_json::Value::String("v".into()));
+        let populated_wire = serde_json::to_value(&populated).unwrap();
+        assert_eq!(
+            populated_wire
+                .as_object()
+                .and_then(|o| o.get("resume_state"))
+                .and_then(|v| v.as_object())
+                .and_then(|m| m.get("k"))
+                .and_then(|v| v.as_str()),
+            Some("v"),
+            "non-empty resume_state must serialize with the inserted entries; otherwise the skip predicate is hiding live state",
+        );
+
+        // #[serde(default)] on resume_state must let a JSONL row that
+        // omits the field (e.g. a row written before resume_state was
+        // added) decode without error. Round-trip the no-resume_state
+        // wire form through serde_json to pin the decode path.
+        let no_resume_state = serde_json::to_string(&base).unwrap();
+        let back: BudgetPauseCheckpoint = serde_json::from_str(&no_resume_state).unwrap();
+        assert!(
+            back.resume_state.is_empty(),
+            "checkpoint decoded from a payload that omits resume_state must have an empty map; the #[serde(default)] arm must remain in place",
+        );
+        assert_eq!(back.version, BudgetPauseCheckpoint::VERSION);
+    }
+
+    #[test]
     fn memory_repair_action_serde_pins_snake_case_wire_form() {
         // MemoryRepairAction is the action discriminator on every
         // MemoryRepairOutcome audit row emitted by daemon, HTTP, and

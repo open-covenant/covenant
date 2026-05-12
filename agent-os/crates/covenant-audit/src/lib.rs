@@ -1582,6 +1582,59 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_peer_self_revoke_blocked_serde_pins_three_field_variant() {
+        // AuditKind::PeerSelfRevokeBlocked records the operator's own
+        // RevokePeer call rejected by SelfRevokeForbidden because
+        // `force` was false. Operator is both the issuer and the
+        // audience — distinct from OperatorPeerRevokeRejected which
+        // records a non-operator's probe under the daemon-issuer
+        // audience. peer_display and peer_pubkey_b58 describe the
+        // operator's own identity here; token_prefix is the 6-char
+        // base58 redaction PeerRevoked and OperatorTokenRotated use —
+        // full token bytes never enter the audit log. A rename or
+        // default on peer_pubkey_b58 erases the unforgeable
+        // operator-identity binding; a refactor that swapped
+        // token_prefix for full token bytes converts the audit-row
+        // leak into operator bootstrap-token theft.
+        let kind = AuditKind::PeerSelfRevokeBlocked {
+            peer_display: "user@local".into(),
+            peer_pubkey_b58: "operatorPubkeyB58".into(),
+            token_prefix: "abcdef".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["peer_display", "peer_pubkey_b58", "token_prefix", "type"],
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("peer_self_revoke_blocked")),
+            "AuditKind discriminator slug must be snake_case 'peer_self_revoke_blocked'; a titlecase or kebab-case regression silently strands every prior self-revoke-block audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::PeerSelfRevokeBlocked must round-trip through serde_json verbatim — the PartialEq derive is the contract self-fat-finger audit triage joins on",
+        );
+
+        for required in ["peer_display", "peer_pubkey_b58", "token_prefix"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::PeerSelfRevokeBlocked wire form must reject a payload missing {required:?}; a stray #[serde(default)] on peer_pubkey_b58 would erase the unforgeable operator-identity binding, and on token_prefix would mask the durable redacted-token correlation",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_operator_peers_list_rejected_serde_pins_two_field_variant() {
         // AuditKind::OperatorPeersListRejected is the daemon-as-issuer
         // probe row emitted when ListPeers is rejected because the

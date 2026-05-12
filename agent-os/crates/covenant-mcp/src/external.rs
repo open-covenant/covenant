@@ -299,6 +299,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap(
+    ) {
+        let r = parse_tool_call_result(serde_json::json!({})).expect(
+            "an empty object must decode to an Ok ToolCallResult so MCP servers that omit content do not error out",
+        );
+        assert!(
+            r.content.is_empty(),
+            "missing content field must default to an empty Vec<Content>; otherwise a spec-compliant server that returns only is_error is silently rejected",
+        );
+        assert!(
+            !r.is_error,
+            "missing is_error field must default to false; otherwise every spec-compliant tools/call success would be treated as an error",
+        );
+
+        let r = parse_tool_call_result(serde_json::json!({ "isError": true }))
+            .expect("the camelCase isError wire field must decode without error");
+        assert!(
+            r.is_error,
+            "the isError serde alias must map onto is_error; otherwise every MCP-spec error result silently looks like a success because the wire form is camelCase",
+        );
+
+        let r = parse_tool_call_result(serde_json::json!({
+            "content": [ { "type": "text", "text": "hello" } ],
+            "isError": false
+        }))
+        .expect("a payload with text content must decode");
+        assert_eq!(
+            r.content,
+            vec![Content::text("hello")],
+            "text content must round-trip through parse_tool_call_result; otherwise tool output is silently dropped or mistyped",
+        );
+        assert!(
+            !r.is_error,
+            "isError=false must keep is_error=false; the alias must not invert the value",
+        );
+
+        let err = parse_tool_call_result(serde_json::json!("not an object"))
+            .expect_err("a non-object payload must not decode as a ToolCallResult");
+        match err {
+            ToolError::Failed(msg) => assert!(
+                msg.starts_with("bad tools/call result: "),
+                "the error message must begin with the documented prefix so operators can grep for upstream wire failures; got: {msg}",
+            ),
+            other => panic!(
+                "expected ToolError::Failed for a malformed wire payload, got: {other:?}"
+            ),
+        }
+    }
+
     fn happy_handler(method: &str, params: &Value) -> Result<Value, McpClientError> {
         match method {
             "initialize" => Ok(serde_json::json!({

@@ -3573,6 +3573,42 @@ mod tests {
     }
 
     #[test]
+    fn intents_resume_error_code_pins_documented_arms() {
+        assert_eq!(
+            intents_resume_error_code(
+                "intents.resume failed: no BudgetExhausted audit row found before now"
+            ),
+            "no_budget_exhausted_row",
+            "wrapping prose around the no-budget-exhausted phrase must still resolve to the typed slug",
+        );
+        assert_eq!(
+            intents_resume_error_code("missing <intent-id>"),
+            "missing_intent_id",
+        );
+        assert_eq!(
+            intents_resume_error_code("intent-id must be a uuid"),
+            "invalid_intent_id",
+            "lower-case uuid spelling is the parser's wording and must map to invalid_intent_id",
+        );
+        assert_eq!(
+            intents_resume_error_code("intent-id must be a UUID"),
+            "invalid_intent_id",
+            "upper-case UUID spelling is what callers paste from RFC 4122 docs and must map to invalid_intent_id",
+        );
+        assert_eq!(
+            intents_resume_error_code(
+                "pass either <intent-id> or latest, not both"
+            ),
+            "conflicting_flags",
+        );
+        assert_eq!(
+            intents_resume_error_code("daemon connection refused"),
+            "error",
+            "an unrelated message must fall through to the catch-all slug, not a typed code",
+        );
+    }
+
+    #[test]
     fn intents_resume_json_renders_stable_ok_shape() {
         let intent_id = uuid::Uuid::nil();
         let value = intents_resume_ok_json(

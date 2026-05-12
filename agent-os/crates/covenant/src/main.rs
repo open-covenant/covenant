@@ -3961,6 +3961,34 @@ mod tests {
     }
 
     #[test]
+    fn peers_rotate_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "token_b58"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("peers_rotate_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "peers_rotate_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("peer_token_rotated"));
+            assert!(
+                value["token_b58"].is_string(),
+                "token_b58 must be a string, not bytes or a structured object: {value}",
+            );
+        }
+
+        assert_shape(&peers_rotate_json("tokenb58"));
+        assert_shape(&peers_rotate_json(""));
+    }
+
+    #[test]
     fn a2a_compact_json_renders_stable_shape() {
         let value = a2a_compact_json(3);
         assert_eq!(value["kind"], "a2a_compacted");

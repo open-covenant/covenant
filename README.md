@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20134416.svg)](https://doi.org/10.5281/zenodo.20134416)
 
 > Agent- and blockchain-native operating layer for governed autonomous systems.
 
@@ -122,6 +123,25 @@ Covenant advances open infrastructure for:
 - resumable task ownership across interruptions;
 - policy-aware tool use and sandboxed execution;
 - audit-root attestations, public provenance, and agent coordination economics.
+
+## Citing
+
+If you use Covenant in academic work or reference the design in a paper, please cite the whitepaper:
+
+> Wasque, A. (2026). *Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents*. Zenodo. https://doi.org/10.5281/zenodo.20134416
+
+```bibtex
+@misc{wasque2026covenant,
+  author    = {Wasque, Achille},
+  title     = {Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20134416},
+  url       = {https://doi.org/10.5281/zenodo.20134416}
+}
+```
+
+A copy of the PDF lives at [opencovenant.org/paper.pdf](https://opencovenant.org/paper.pdf); the LaTeX source is under [`paper/arxiv/`](./paper/arxiv/).
 
 ## Contributing
 

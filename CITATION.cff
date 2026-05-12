@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use Covenant in research, please cite the whitepaper below."
+type: software
+title: "Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents"
+authors:
+  - family-names: Wasque
+    given-names: Achille
+    email: aw@opencovenant.org
+    affiliation: "The Covenant Project"
+repository-code: "https://github.com/open-covenant/covenant"
+url: "https://opencovenant.org"
+license: Apache-2.0
+preferred-citation:
+  type: article
+  title: "Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents"
+  authors:
+    - family-names: Wasque
+      given-names: Achille
+      affiliation: "The Covenant Project"
+  year: 2026
+  month: 5
+  doi: "10.5281/zenodo.20134416"
+  url: "https://doi.org/10.5281/zenodo.20134416"
+  publisher:
+    name: Zenodo

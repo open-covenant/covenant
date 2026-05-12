@@ -773,6 +773,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_list_tools_serde_pins_unit_variant() {
+        // Request::ListTools is the unit variant the CLI sends
+        // after Authenticate to dump the daemon's registered-tool
+        // inventory — it pairs with Response::ToolList (already
+        // pinned) which surfaces the Vec<ToolSpec> the operator's
+        // CLI renders for `tools list`. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Request enum, the
+        // wire form is exactly one top-level key:
+        // kind='list_tools'. No prior test pins the exact wire
+        // shape or round-trip of this variant. The tool-list
+        // probe is what the operator runs to confirm the MCP
+        // transport surface is what they expect before calling a
+        // tool; a slug regression silently strands the probe and
+        // the operator's CLI prints an authentication-error
+        // fallback where the real failure is a serde-shape
+        // regression.
+        let event = Request::ListTools;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::ListTools wire form must be exactly one \
+             top-level key: 'kind'. A refactor that promoted the \
+             variant from unit to struct or newtype would add a \
+             second top-level key and every CLI tool-inventory \
+             probe that sends {{\"kind\":\"list_tools\"}} alone \
+             would fail to decode on the daemon side — the \
+             operator's tool-discovery flow would silently start \
+             returning Error responses instead of ToolList",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("list_tools")),
+            "Request discriminator slug must be the durable \
+             'list_tools'; a slug regression silently routes \
+             incoming tool-inventory frames to the daemon's \
+             catch-all error branch — every CLI tool-list probe \
+             fails with a confusing fallback message instead of \
+             the registered-tools inventory, masking transport \
+             wiring gaps during incident triage",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::ListTools must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI tool-inventory consumer leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -1679,6 +1679,19 @@ mod tests {
     }
 
     #[test]
+    fn audit_purge_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_explicit_null_before_ms(
+    ) {
+        assert!(!audit_purge_scope_allows("audit", &serde_json::json!([]), 1_000).unwrap());
+
+        let bound_scope = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        assert!(!audit_purge_scope_allows("audit.verify", &bound_scope, 1_000).unwrap());
+
+        let explicit_null = serde_json::json!({ "version": 1, "before_ms": null });
+        assert!(audit_purge_scope_allows("audit.purge", &explicit_null, 0).unwrap());
+        assert!(audit_purge_scope_allows("audit.purge", &explicit_null, u64::MAX).unwrap());
+    }
+
+    #[test]
     fn capabilities_purge_scope_allows_unscoped_grants() {
         assert!(capabilities_purge_scope_allows(
             "capabilities.purge",

@@ -1708,6 +1708,90 @@ mod tests {
     }
 
     #[test]
+    fn response_a2a_task_queued_serde_pins_single_field_variant() {
+        // Response::A2ATaskQueued is the variant the daemon sends
+        // after SendA2ATask successfully enqueues a task on the
+        // recipient's mailbox. It carries task_id: Uuid — the id the
+        // CLI needs to correlate subsequent recv_result or repair
+        // verbs to the queued task. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the wire
+        // object is exactly two top-level keys: kind='a2_a_task_queued'
+        // (the rename_all = snake_case rule splits A2A on the
+        // digit/upper boundary into 'a2_a_...'; the durable wire form
+        // matches the analogous AuditKind::A2A* slugs) plus task_id.
+        // No prior test pins the exact wire shape,
+        // round-trip, or omission rejection. A refactor that
+        // promoted A2ATaskQueued from a struct variant to a newtype
+        // variant would nest task_id one level deeper next to 'kind'
+        // and the CLI could no longer follow the task through the
+        // mailbox lifecycle; a stray #[serde(default)] on task_id
+        // would let a malformed row decode with Uuid::nil() and
+        // every subsequent recv_result or repair verb would correlate
+        // against a phantom nil id.
+        let task_id = Uuid::from_u128(91);
+        let event = Response::A2ATaskQueued { task_id };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "task_id"],
+            "Response::A2ATaskQueued wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'task_id' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'task_id' \
+             one level deeper and every CLI consumer that correlates \
+             subsequent recv_result or repair verbs against the \
+             queued task id would silently fail",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_task_queued")),
+            "Response discriminator slug must be the durable \
+             'a2_a_task_queued' (rename_all = snake_case splits A2A \
+             on digit/upper boundaries); a slug regression silently strands \
+             every CLI parser that classifies enqueue outcomes by \
+             this exact value — the operator's CLI prints a \
+             confusing fallback instead of the queued-task \
+             confirmation and the recipient's mailbox acceptance is \
+             masked",
+        );
+        assert_eq!(
+            obj.get("task_id").and_then(serde_json::Value::as_str),
+            Some(task_id.to_string().as_str()),
+            "Response::A2ATaskQueued::task_id must surface as the \
+             Uuid's hyphenated string form — operator triage \
+             correlates this exact representation with subsequent \
+             recv_result, recv_task, and repair verbs",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2ATaskQueued must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI A2A enqueue consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("task_id");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2ATaskQueued wire form must reject a payload \
+             missing 'task_id'; a stray #[serde(default)] would let \
+             a malformed row decode with Uuid::nil() and the CLI \
+             would correlate every subsequent recv_result or repair \
+             verb against a phantom nil task id — operator triage \
+             could not find the task in the mailbox queue and a \
+             lease force-error could land against the wrong id",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

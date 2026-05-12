@@ -10589,6 +10589,48 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_visible_to_peer_pins_each_visibility_path() {
+        let sender = AgentId::new("sender@local", [1u8; 32]);
+        let recipient = AgentId::new("recipient@local", [2u8; 32]);
+        let lessee = AgentId::new("lessee@local", [3u8; 32]);
+        let outsider = AgentId::new("outsider@local", [9u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: sender.clone(),
+            recipient: recipient.clone(),
+            intent_text: "anything".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let queued = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::Queued,
+            task: task.clone(),
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let in_flight = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::new_v4()),
+            leased_to: Some(lessee.clone()),
+            leased_at_ms: Some(0),
+            attempt: 1,
+        };
+        assert!(a2a_entry_visible_to_peer(&queued, &sender));
+        assert!(a2a_entry_visible_to_peer(&queued, &recipient));
+        assert!(!a2a_entry_visible_to_peer(&queued, &lessee));
+        assert!(!a2a_entry_visible_to_peer(&queued, &outsider));
+        assert!(a2a_entry_visible_to_peer(&in_flight, &sender));
+        assert!(a2a_entry_visible_to_peer(&in_flight, &recipient));
+        assert!(a2a_entry_visible_to_peer(&in_flight, &lessee));
+        assert!(!a2a_entry_visible_to_peer(&in_flight, &outsider));
+    }
+
+    #[test]
     fn a2a_duplicate_risk_pins_each_arm() {
         let idempotent = covenant_a2a::A2ARepairCommand::Requeue {
             lease_id: Some(Uuid::new_v4()),

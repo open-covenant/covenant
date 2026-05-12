@@ -987,6 +987,34 @@ mod tests {
     }
 
     #[test]
+    fn peer_status_filter_serde_pins_snake_case_wire_form() {
+        // PeerStatusFilter is carried by Request::ListPeers.status_filter
+        // and bound to the CLI --live/--revoked flags. Without rename_all
+        // the variants would emit Live/Revoked titlecase and every
+        // status-filtered ListPeers request would deserialize-fail at
+        // the daemon, leaving operators with an unhelpful error.
+        let cases: [(PeerStatusFilter, &str); 2] = [
+            (PeerStatusFilter::Live, "live"),
+            (PeerStatusFilter::Revoked, "revoked"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: PeerStatusFilter = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<PeerStatusFilter>("\"Live\"").is_err(),
+            "titlecase Live (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<PeerStatusFilter>("\"LIVE\"").is_err(),
+            "uppercase LIVE must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn token_round_trips_through_base58() {
         let t = PeerToken::generate();
         let s = t.to_b58();

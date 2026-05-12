@@ -3761,6 +3761,145 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_event_idempotency_result_cached_serde_pins_nested_wire_form() {
+        // MailboxEvent::IdempotencyResultCached is the JSONL mailbox
+        // replay event the daemon appends when a task completes and
+        // its result is cached against the task's A2AIdempotency cache
+        // key — the subsequent duplicate-send for the same
+        // sender/recipient/task_kind/key tuple is served from this
+        // cache rather than re-dispatched. With #[serde(tag = "type",
+        // rename_all = "snake_case")] on the enum, the wire object is
+        // exactly three top-level keys: type='idempotency_result_cached'
+        // plus cache_key (nested A2AIdempotencyCacheKey:
+        // sender_pubkey_b58, recipient_pubkey_b58, task_kind, key) plus
+        // result (nested A2AIdempotencyCachedResult: source_task_id,
+        // status, content with #[serde(default)], error_message under
+        // skip_if_none). a2a_idempotency_cached_result_serde_pins_four_field_wire_form
+        // and a2a_idempotency_cache_key_serde_pins_four_required_fields
+        // cover the inner payloads, but no test pins the enum-level
+        // struct-variant wrapper. A refactor that promoted
+        // IdempotencyResultCached from a struct variant to a newtype
+        // variant would silently flatten one of the nested types next
+        // to 'type' on the wire and every prior JSONL row would fail
+        // decode at replay — the result cache rebuilds empty across
+        // daemon restart and every duplicate-send re-dispatches the
+        // task instead of replaying its cached result, breaking the
+        // idempotency guarantee for repeat senders.
+        let cache_key = A2AIdempotencyCacheKey {
+            sender_pubkey_b58: "sender_pk".into(),
+            recipient_pubkey_b58: "recipient_pk".into(),
+            task_kind: "research.lookup".into(),
+            key: "job-1".into(),
+        };
+        let result = A2AIdempotencyCachedResult {
+            source_task_id: Uuid::from_u128(51),
+            status: A2ATaskStatus::Ok,
+            content: Vec::new(),
+            error_message: None,
+        };
+        let event = MailboxEvent::IdempotencyResultCached {
+            cache_key: cache_key.clone(),
+            result: result.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MailboxEvent serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["cache_key", "result", "type"],
+            "MailboxEvent::IdempotencyResultCached wire form must be \
+             exactly three top-level keys: 'type' plus the two nested \
+             fields. A refactor that promoted the variant from struct \
+             to newtype would flatten one of the nested objects next to \
+             'type' and every prior JSONL row that nests under \
+             cache_key+result would silently fail decode at replay — \
+             the result cache would rebuild empty across daemon restart \
+             and every duplicate-send would re-dispatch the task \
+             instead of replaying its cached result",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("idempotency_result_cached")),
+            "MailboxEvent discriminator slug must be snake_case \
+             'idempotency_result_cached'; a slug regression silently \
+             strands every prior JSONL row at replay, the result cache \
+             rebuilds empty, and the daemon silently re-executes \
+             duplicate-sends instead of replaying the cached result — \
+             exposing the worker to repeated work and the sender to \
+             inconsistent results when the second execution diverges \
+             from the first",
+        );
+
+        let cache_key_obj = obj
+            .get("cache_key")
+            .and_then(serde_json::Value::as_object)
+            .expect("cache_key must serialise as a nested JSON object");
+        for required in [
+            "sender_pubkey_b58",
+            "recipient_pubkey_b58",
+            "task_kind",
+            "key",
+        ] {
+            assert!(
+                cache_key_obj.contains_key(required),
+                "cache_key must surface {required:?} at the nested \
+                 level; the cache lookup tuple is what makes the \
+                 idempotency guarantee load-bearing — a missing field \
+                 silently widens or narrows the match and a stranger's \
+                 cached result can leak to a different sender",
+            );
+        }
+
+        let result_obj = obj
+            .get("result")
+            .and_then(serde_json::Value::as_object)
+            .expect("result must serialise as a nested JSON object");
+        assert_eq!(
+            result_obj
+                .get("source_task_id")
+                .and_then(serde_json::Value::as_str),
+            Some(Uuid::from_u128(51).to_string().as_str()),
+            "result.source_task_id must surface as the Uuid's \
+             hyphenated string form — the cached result's provenance \
+             back to the originating task is the audit trail operators \
+             use to reconstruct cache hits",
+        );
+
+        let back: MailboxEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "MailboxEvent::IdempotencyResultCached must round-trip \
+             through serde_json verbatim — the PartialEq derive is the \
+             contract the JsonlMailbox::open replay path joins cache \
+             events against",
+        );
+
+        for required in ["cache_key", "result"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MailboxEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MailboxEvent::IdempotencyResultCached wire form must \
+                 reject a payload missing {required:?}; a stray \
+                 #[serde(default)] on cache_key would let a malformed \
+                 row decode with A2AIdempotencyCacheKey::default() and \
+                 replay would bind the cached result to the all-empty \
+                 tuple — a future legitimate sender whose key matches \
+                 the empty-default tuple would silently receive a \
+                 stranger's cached result, while a default on result \
+                 would cache a synthetic nil-task A2AIdempotencyCachedResult \
+                 against the original cache_key and every subsequent \
+                 duplicate-send for that key would replay the zero-result",
+            );
+        }
+    }
+
+    #[test]
     fn validate_task_pins_task_kind_and_idempotency_key_emptiness_arms() {
         // Baseline: kind=None, idempotency=None is the legacy shape and
         // must validate so older senders keep working.

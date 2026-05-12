@@ -1268,6 +1268,61 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_memory_repair_applied_serde_pins_five_field_variant() {
+        // AuditKind::MemoryRepairApplied is the audit row covenantd::Server
+        // emits when an operator completes a memory repair request. The
+        // full before/after record shape is returned to the caller
+        // through the repair response; the audit row keeps the durable
+        // who/what/why envelope without duplicating memory text into the
+        // audit log. Five required fields: memory_id (Uuid), action
+        // (String), mode (String), changed (bool), reason (String). A
+        // refactor that #[serde(default)]-ed memory_id would let a
+        // malformed row decode with Uuid::nil() and erase the unforgeable
+        // target identifier; a default on changed would mask the
+        // mutation-vs-no-op triage signal that distinguishes a repair
+        // that actually edited from one that found nothing to change.
+        let kind = AuditKind::MemoryRepairApplied {
+            memory_id: Uuid::nil(),
+            action: "rebind".into(),
+            mode: "apply".into(),
+            changed: true,
+            reason: "operator-corrected receipt".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "changed", "memory_id", "mode", "reason", "type"],
+            "AuditKind::MemoryRepairApplied wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("memory_repair_applied")),
+            "AuditKind discriminator slug must be snake_case 'memory_repair_applied'; a titlecase or kebab-case regression silently strands every prior memory-repair audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::MemoryRepairApplied must round-trip through serde_json verbatim — the PartialEq derive is the contract memory-repair audit triage joins on",
+        );
+
+        for required in ["memory_id", "action", "mode", "changed", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::MemoryRepairApplied wire form must reject a payload missing {required:?}; a stray #[serde(default)] on memory_id would let a malformed row decode with Uuid::nil() and erase the unforgeable target identifier, and a default on changed would mask the mutation-vs-no-op triage signal",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_budget_exhausted_serde_pins_six_field_variant() {
         // AuditKind::BudgetExhausted is the audit row covenantd::Server::
         // dispatch_intent emits when the matched agent's budget bucket

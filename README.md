@@ -21,11 +21,9 @@ Covenant sits below agent applications and above the host operating system. It o
 
 ## Quick start
 
-<p align="center">
-  <img src="./assets/demo.gif" alt="Recording of a single intent round trip: ping, dispatch, audit row, hash-chain verify." width="820"/>
-</p>
+> Try it without installing — **[sandbox.opencovenant.org](https://sandbox.opencovenant.org)**. Public operator console wired to a live daemon, state resets every 12 hours.
 
-Build the daemon and CLI, register the sample agent, and start the daemon:
+To run it locally, build the daemon and CLI, register the sample agent, and start the daemon:
 
 ```bash
 git clone https://github.com/open-covenant/covenant && cd covenant

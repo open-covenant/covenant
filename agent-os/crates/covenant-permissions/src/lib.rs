@@ -2218,6 +2218,16 @@ mod tests {
     }
 
     #[test]
+    fn chain_scope_allows_pins_limit_actual_none_with_bound_scope_accepted() {
+        let scope = serde_json::json!({ "version": 1, "limit": 10 });
+        let actual_none = ChainScopeRequest {
+            limit: None,
+            ..ChainScopeRequest::default()
+        };
+        assert!(chain_scope_allows("chain.flush", &scope, "chain.flush", actual_none).unwrap());
+    }
+
+    #[test]
     fn memory_purge_scope_allows_tier_and_cutoff() {
         let scope = serde_json::json!({
             "version": 1,

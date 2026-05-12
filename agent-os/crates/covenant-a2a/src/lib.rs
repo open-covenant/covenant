@@ -1845,6 +1845,35 @@ mod tests {
     }
 
     #[test]
+    fn a2a_duplicate_safety_serde_pins_snake_case_wire_form() {
+        // A2ADuplicateSafety is the auto-retry policy gate — the
+        // scheduler skips any task whose duplicate_safety is not
+        // Idempotent (auto_retry_rejects_unsafe_or_exhausted_tasks).
+        // Without rename_all the slugs would emit titlecase and the
+        // receiver-side idempotency cache would deserialize-fail on
+        // every persisted record after a daemon restart.
+        let cases: [(A2ADuplicateSafety, &str); 2] = [
+            (A2ADuplicateSafety::Unsafe, "unsafe"),
+            (A2ADuplicateSafety::Idempotent, "idempotent"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ADuplicateSafety = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<A2ADuplicateSafety>("\"Unsafe\"").is_err(),
+            "titlecase Unsafe (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<A2ADuplicateSafety>("\"UNSAFE\"").is_err(),
+            "uppercase UNSAFE must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

@@ -1665,6 +1665,49 @@ mod tests {
     }
 
     #[test]
+    fn a2a_auto_retry_skip_reason_as_str_pins_each_variant_slug() {
+        // The slugs flow into covenantd::record_a2a_auto_retry_scheduler_scan
+        // as keys in a BTreeMap<String, u64> of skipped-by-reason counters,
+        // and from there into audit rows and downstream dashboards. A
+        // renamed or swapped slug splits the same bucket across two names
+        // silently. Pin every variant explicitly so adding a new variant
+        // forces the author to extend this array AND the as_str() arm.
+        let cases: [(A2AAutoRetrySkipReason, &str); 9] = [
+            (A2AAutoRetrySkipReason::Disabled, "disabled"),
+            (A2AAutoRetrySkipReason::NotInFlight, "not_in_flight"),
+            (A2AAutoRetrySkipReason::MissingLease, "missing_lease"),
+            (A2AAutoRetrySkipReason::LeaseTooYoung, "lease_too_young"),
+            (
+                A2AAutoRetrySkipReason::MissingIdempotency,
+                "missing_idempotency",
+            ),
+            (
+                A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+                "unsafe_duplicate_safety",
+            ),
+            (
+                A2AAutoRetrySkipReason::MaxAttemptsReached,
+                "max_attempts_reached",
+            ),
+            (A2AAutoRetrySkipReason::LimitReached, "limit_reached"),
+            (
+                A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+                "capability_scope_mismatch",
+            ),
+        ];
+        for (reason, expected) in cases {
+            assert_eq!(
+                reason.as_str(),
+                expected,
+                "{reason:?} must keep its documented slug; if this fires after \
+                 renaming a variant, update the BTreeMap consumers in \
+                 covenantd::record_a2a_auto_retry_scheduler_scan and any \
+                 downstream dashboards before changing the slug",
+            );
+        }
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

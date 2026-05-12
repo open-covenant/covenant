@@ -1665,6 +1665,30 @@ mod tests {
     }
 
     #[test]
+    fn a2a_task_status_serde_pins_snake_case_wire_form() {
+        // A2ATaskStatus rides inside A2ATaskResult and the receiver-side
+        // A2AIdempotencyCachedResult JSON. Both are persisted across
+        // daemon restarts, so a slug rename without a migration would
+        // silently fail to deserialize every previously cached result.
+        let cases: [(A2ATaskStatus, &str); 3] = [
+            (A2ATaskStatus::Ok, "ok"),
+            (A2ATaskStatus::Error, "error"),
+            (A2ATaskStatus::Partial, "partial"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ATaskStatus = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        // The snake_case whitelist must reject other casings so a future
+        // permissive arm cannot silently absorb mis-cased upstream JSON.
+        assert!(serde_json::from_str::<A2ATaskStatus>("\"Ok\"").is_err());
+        assert!(serde_json::from_str::<A2ATaskStatus>("\"error-partial\"").is_err());
+    }
+
+    #[test]
     fn a2a_auto_retry_skip_reason_as_str_pins_each_variant_slug() {
         // The slugs flow into covenantd::record_a2a_auto_retry_scheduler_scan
         // as keys in a BTreeMap<String, u64> of skipped-by-reason counters,

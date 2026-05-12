@@ -10396,6 +10396,13 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_tier_name_pins_each_tier_variant() {
+        assert_eq!(memory_tier_name(MemoryTier::Working), "working");
+        assert_eq!(memory_tier_name(MemoryTier::Episodic), "episodic");
+        assert_eq!(memory_tier_name(MemoryTier::LongTerm), "longterm");
+    }
+
+    #[test]
     fn memory_repair_action_pins_each_repair_command_variant() {
         let detach = MemoryRepairCommand::DetachParent {
             id: Uuid::new_v4(),

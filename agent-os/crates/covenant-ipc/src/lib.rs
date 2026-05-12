@@ -4676,6 +4676,124 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_ignore_report_serde_pins_three_field_variant() {
+        // Response::IgnoreReport is the variant the daemon sends
+        // after Request::IgnoreCheck classifies an intent string
+        // against the loaded ignore rules. It carries
+        // ignored: bool (whether the intent matched a rule),
+        // matched_pattern: Option<String> (the rule body,
+        // populated only on hit), and rules_loaded: usize (total
+        // rule count, for confirming the ruleset surface is what
+        // the operator expects). With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the
+        // wire object is exactly four top-level keys:
+        // kind='ignore_report' plus the three variant fields.
+        // matched_pattern has no #[serde(skip_serializing_if)]
+        // attribute, so the wire form is stable across hit and
+        // miss: matched_pattern surfaces as JSON null when None
+        // and as a JSON string when Some. No prior test pins the
+        // exact wire shape, round-trip, or omission rejection of
+        // these fields at the outer Response level. This slice
+        // locks the outer Response variant shape and the durable
+        // null-on-wire contract for matched_pattern only.
+        let miss = Response::IgnoreReport {
+            ignored: false,
+            matched_pattern: None,
+            rules_loaded: 0,
+        };
+
+        let wire = serde_json::to_value(&miss).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["ignored", "kind", "matched_pattern", "rules_loaded"],
+            "Response::IgnoreReport wire form must be exactly four \
+             top-level keys: 'kind' plus the three variant fields. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest the \
+             fields one level deeper and every CLI consumer that \
+             destructures .ignored or .matched_pattern would \
+             silently fail — the operator's `ignore check` output \
+             would read blank for every intent even when the \
+             daemon's ruleset matched the row",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("ignore_report")),
+            "Response discriminator slug must be the durable \
+             'ignore_report'; a slug regression silently strands \
+             every CLI parser that classifies ignore-check \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback instead of the ignore \
+             classification, masking whether the intent was \
+             suppressed",
+        );
+        assert_eq!(
+            obj.get("matched_pattern"),
+            Some(&serde_json::Value::Null),
+            "Response::IgnoreReport::matched_pattern must surface \
+             as JSON null when None (the durable null-on-wire \
+             surface, NOT a missing key); a stray \
+             #[serde(skip_serializing_if = \"Option::is_none\")] \
+             would shrink the miss-path wire form from four keys \
+             to three and silently break CLI consumers that switch \
+             on the key's presence to distinguish hit vs miss",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, miss,
+            "Response::IgnoreReport (miss) must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI ignore-check consumer leans on",
+        );
+
+        let hit = Response::IgnoreReport {
+            ignored: true,
+            matched_pattern: Some("deploy".into()),
+            rules_loaded: 1,
+        };
+        let hit_wire = serde_json::to_value(&hit).unwrap();
+        let hit_obj = hit_wire.as_object().unwrap();
+        assert_eq!(
+            hit_obj.get("matched_pattern").and_then(serde_json::Value::as_str),
+            Some("deploy"),
+            "populated matched_pattern must round-trip verbatim on \
+             the wire — the four-key shape stays stable across hit \
+             and miss",
+        );
+        let hit_back: Response = serde_json::from_value(hit_wire.clone()).unwrap();
+        assert_eq!(
+            hit_back, hit,
+            "Response::IgnoreReport (hit) must round-trip through \
+             serde_json verbatim",
+        );
+
+        for required in ["ignored", "rules_loaded"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::IgnoreReport wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] would let a malformed row decode \
+                 with a synthetic default and the CLI would surface \
+                 a phantom 'clean state with empty ruleset' — a \
+                 real fetch failure (truncated frame, partial \
+                 decode error) would be silently reclassified as a \
+                 no-match outcome where the operator believes the \
+                 intent is safe to dispatch when in fact the \
+                 daemon's classifier produced an error the boundary \
+                 swallowed",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

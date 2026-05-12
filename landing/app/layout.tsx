@@ -40,8 +40,8 @@ export default function RootLayout({
         <link
           rel="preload"
           as="image"
-          href="/hero-bg.avif"
-          type="image/avif"
+          href="/hero-bg.jpg"
+          type="image/jpeg"
           fetchPriority="high"
         />
       </head>

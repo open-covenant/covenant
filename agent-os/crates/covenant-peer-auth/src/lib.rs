@@ -978,6 +978,132 @@ mod tests {
     }
 
     #[test]
+    fn peer_token_serde_pins_base58_and_length_arms() {
+        // PeerToken is the 32-byte opaque peer secret persisted to
+        // peers/registry.jsonl through PeerEntry and re-rotated through
+        // PeerEvent::Registered/Revoked. It ships a custom Serialize/
+        // Deserialize that maps the [u8; 32] to a base58 JSON string and
+        // a custom Debug that redacts to a 6-char base58 prefix.
+        //
+        // peer_entry_serde_pins_three_required_fields exercises the full
+        // token wire form through a PeerEntry round-trip and the 43/44-
+        // char length sanity, but no test pins PeerToken's wire shape in
+        // isolation, the 32-byte length check on decode, the rejection
+        // of non-base58 strings, or the rejection of a derive-Serialize
+        // regression that surfaced the token as a JSON array of 32
+        // numbers. Parallels signed_capability_signature_serde_pins_base58_and_length_arms.
+        let token = PeerToken::from_bytes([7u8; 32]);
+
+        let wire = serde_json::to_value(token).unwrap();
+        let token_str = wire.as_str().expect(
+            "PeerToken must serialise as a JSON string (custom Serialize \
+             impl); a refactor that dropped the impl in favour of derived \
+             Serialize on the inner [u8; 32] would emit a JSON array of 32 \
+             numbers, brick every JSONL peer-registry row, and silently \
+             lock out every authenticated peer on operator restart",
+        );
+        let expected_b58 = bs58::encode([7u8; 32]).into_string();
+        assert_eq!(
+            token_str, expected_b58,
+            "PeerToken wire form must equal bs58::encode(token_bytes); a \
+             refactor to base64 or hex would invalidate every persisted \
+             registry row on operator restart"
+        );
+        let len = token_str.chars().count();
+        assert!(
+            len == 43 || len == 44,
+            "PeerToken wire form must be the full 43-or-44-char base58 of \
+             the 32-byte secret, got {len} chars — a collapse to the \
+             6-char PeerSummary::token_prefix would mean the registry \
+             could no longer authenticate peers because the prefix cannot \
+             reconstruct the full token"
+        );
+
+        let serialised = serde_json::to_string(&token).unwrap();
+        assert!(
+            !serialised.contains("[7,7"),
+            "serialised PeerToken must not contain a raw [u8; 32] byte \
+             array; the contract is bs58 string encoding, not derived \
+             array Serialize"
+        );
+
+        let back: PeerToken = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, token,
+            "PeerToken must round-trip through serde_json verbatim — the \
+             PartialEq impl is constant-time and the contract every \
+             registry resolve/revoke path leans on"
+        );
+
+        let too_short = serde_json::Value::String(bs58::encode([0u8; 31]).into_string());
+        assert!(
+            serde_json::from_value::<PeerToken>(too_short).is_err(),
+            "31-byte token wire form must be rejected; a dropped length \
+             check would silently zero-pad to 32 bytes, alias against a \
+             different token in the registry's constant-time PartialEq, \
+             and authenticate the wrong peer"
+        );
+
+        let too_long = serde_json::Value::String(bs58::encode([0u8; 33]).into_string());
+        assert!(
+            serde_json::from_value::<PeerToken>(too_long).is_err(),
+            "33-byte token wire form must be rejected so a future \
+             length-permissive deserializer cannot silently accept padded \
+             tokens that alias against shorter live entries"
+        );
+
+        let garbage = serde_json::Value::String("!!! not base58 !!!".into());
+        assert!(
+            serde_json::from_value::<PeerToken>(garbage).is_err(),
+            "non-base58 string must be rejected so the decoder never \
+             silently zero-fills an invalid registry row"
+        );
+
+        let array_form = serde_json::json!([
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7,
+        ]);
+        assert!(
+            serde_json::from_value::<PeerToken>(array_form).is_err(),
+            "JSON array of 32 numbers must be rejected — the custom \
+             deserializer is string-based; accepting the array form would \
+             silently absorb payloads emitted by a regressed derive-\
+             Serialize refactor and let the two encodings diverge in the \
+             wild"
+        );
+
+        let debug = format!("{token:?}");
+        assert!(
+            debug.starts_with("PeerToken("),
+            "PeerToken Debug must wrap its redacted view in the type \
+             name; a refactor that collapsed Debug onto the inner array \
+             would dump 32 secret bytes into every audit/log line"
+        );
+        assert!(
+            debug.contains('…'),
+            "PeerToken Debug must redact the secret with an ellipsis; \
+             dropping the redaction marker would let secret bytes leak \
+             through every Debug formatter consumer"
+        );
+        assert!(
+            !debug.contains(token_str),
+            "PeerToken Debug output must NOT contain the full base58 wire \
+             form; collapsing the two shapes would leak the secret in \
+             every audit/log line that formatted a registry row, defeating \
+             the redaction contract PeerSummary::token_prefix anchors"
+        );
+        let prefix = &token_str[..6];
+        assert!(
+            debug.contains(prefix),
+            "PeerToken Debug must include the 6-char base58 prefix so \
+             operator grep across audit logs and the wire form lines up — \
+             a regression that swapped the prefix source (e.g., a hash of \
+             the bytes instead of the base58) would break the peer-revoke \
+             cross-reference"
+        );
+    }
+
+    #[test]
     fn peer_entry_serde_pins_three_required_fields() {
         // PeerEntry is the persisted registry record (the JSONL row
         // JsonlPeerRegistry writes), distinct from PeerSummary which is

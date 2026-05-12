@@ -595,4 +595,50 @@ mod tests {
         assert_eq!(memory_write_credits(1025), 2);
         assert_eq!(memory_write_credits(2_500), 3);
     }
+
+    #[test]
+    fn hex32_pins_lowercase_fixed_width_and_byte_order() {
+        // All-zero input → 64 ASCII '0' chars. Pins the high-nibble
+        // emission: a regression that skipped the high nibble of
+        // zero-prefixed bytes would shrink the output below 64 chars.
+        let zeros = hex32([0u8; 32]);
+        assert_eq!(zeros, "0".repeat(64));
+
+        // All-0xff input → 64 lowercase 'f' chars. Pins the lowercase
+        // invariant against a {:X} regression and confirms the width
+        // matches the upper byte boundary.
+        let ones = hex32([0xff_u8; 32]);
+        assert_eq!(ones, "f".repeat(64));
+
+        // Determinism: repeated calls produce byte-identical output so
+        // batch_id and merkle_root remain stable across the pipeline.
+        let mut sample = [0u8; 32];
+        for (i, slot) in sample.iter_mut().enumerate() {
+            *slot = i as u8;
+        }
+        assert_eq!(hex32(sample), hex32(sample));
+
+        // Known-byte-pattern reference. A byte-order or nibble-swap
+        // regression on 0..32 would diverge from this exact string.
+        let reference = "000102030405060708090a0b0c0d0e0f\
+             101112131415161718191a1b1c1d1e1f";
+        assert_eq!(hex32(sample), reference);
+
+        // Lowercase invariant across an arbitrary mix; a {:X} regression
+        // would surface here even on inputs that include digits both
+        // above and below 0x0a.
+        let mixed = [
+            0x00, 0x0a, 0x10, 0xa0, 0xab, 0xcd, 0xef, 0xff, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
+            0xde, 0xf0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0xfa, 0xfb,
+        ];
+        let encoded = hex32(mixed);
+        assert_eq!(encoded.chars().count(), 64);
+        assert!(
+            encoded
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "hex32 must emit lowercase hex only; got {encoded}",
+        );
+    }
 }

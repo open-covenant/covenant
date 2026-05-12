@@ -2440,6 +2440,108 @@ mod tests {
     }
 
     #[test]
+    fn a2a_idempotency_cached_result_serde_pins_four_field_wire_form() {
+        // A2AIdempotencyCachedResult is the receiver-side cache value
+        // for duplicate-safe A2A sends; it pairs with the already-pinned
+        // A2AIdempotencyCacheKey. The struct rides JSON both in the
+        // in-memory result_cache HashMap and in the persisted
+        // result_cache field of the receiver's PersistentA2AState — so
+        // a daemon restart re-decodes whatever shape was last written.
+        // Four fields: source_task_id (Uuid, required), status
+        // (A2ATaskStatus, required), content (Vec<Content>,
+        // #[serde(default)] so historic rows decode), error_message
+        // (Option<String>, #[serde(default, skip_serializing_if =
+        // "Option::is_none")]). Pin all three load-bearing arms.
+        let none_value = A2AIdempotencyCachedResult {
+            source_task_id: Uuid::nil(),
+            status: A2ATaskStatus::Ok,
+            content: vec![],
+            error_message: None,
+        };
+
+        let none_wire = serde_json::to_value(&none_value).unwrap();
+        let none_obj = none_wire
+            .as_object()
+            .expect("A2AIdempotencyCachedResult serialises as a JSON object");
+        let none_keys: std::collections::BTreeSet<&str> =
+            none_obj.keys().map(String::as_str).collect();
+        let three: std::collections::BTreeSet<&str> = ["source_task_id", "status", "content"]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            none_keys, three,
+            "A2AIdempotencyCachedResult with error_message=None must be \
+             exactly three keys: error_message is skip_serializing_if = \
+             Option::is_none and content always surfaces even when empty",
+        );
+        assert_eq!(
+            none_obj.get("content"),
+            Some(&serde_json::json!([])),
+            "content must surface as an empty array even when empty — \
+             a skip_serializing_if = Vec::is_empty refactor would silently \
+             drop the key and split downstream consumers that grep on key \
+             presence",
+        );
+        // Cross-bind to a2a_task_status_serde_pins_snake_case_wire_form.
+        assert_eq!(none_obj.get("status"), Some(&serde_json::json!("ok")));
+
+        let some_value = A2AIdempotencyCachedResult {
+            source_task_id: Uuid::nil(),
+            status: A2ATaskStatus::Error,
+            content: vec![],
+            error_message: Some("boom".into()),
+        };
+        let some_wire = serde_json::to_value(&some_value).unwrap();
+        let some_obj = some_wire.as_object().unwrap();
+        let some_keys: std::collections::BTreeSet<&str> =
+            some_obj.keys().map(String::as_str).collect();
+        let four: std::collections::BTreeSet<&str> =
+            ["source_task_id", "status", "content", "error_message"]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            some_keys, four,
+            "A2AIdempotencyCachedResult with error_message=Some must \
+             surface error_message on the wire",
+        );
+        assert_eq!(some_obj.get("status"), Some(&serde_json::json!("error")));
+
+        // Round-trip pins the PartialEq derive contract on both paths.
+        let back_none: A2AIdempotencyCachedResult =
+            serde_json::from_value(none_wire.clone()).unwrap();
+        assert_eq!(back_none, none_value);
+        let back_some: A2AIdempotencyCachedResult = serde_json::from_value(some_wire).unwrap();
+        assert_eq!(back_some, some_value);
+
+        // Both strictly-required fields must reject when omitted. The
+        // optional content + error_message paths are exercised below.
+        for required in ["source_task_id", "status"] {
+            let mut missing = none_obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AIdempotencyCachedResult>(serde_json::Value::Object(
+                    missing
+                ))
+                .is_err(),
+                "A2AIdempotencyCachedResult wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // #[serde(default)] on content: a historic row that omits the
+        // field must still decode and yield an empty Vec. Removing the
+        // attribute would refuse every such row on daemon restart and
+        // take the receiver-side cache out at once.
+        let omitted_content: A2AIdempotencyCachedResult =
+            serde_json::from_value(serde_json::json!({
+                "source_task_id": Uuid::nil(),
+                "status": "ok",
+            }))
+            .unwrap();
+        assert_eq!(omitted_content.content, vec![]);
+        assert_eq!(omitted_content.error_message, None);
+    }
+
+    #[test]
     fn a2a_idempotency_cache_key_serde_pins_four_required_fields() {
         // A2AIdempotencyCacheKey is the receiver-side cache key for
         // duplicate-safe A2A sends — the keyed struct A2AIdempotencyCachedResult

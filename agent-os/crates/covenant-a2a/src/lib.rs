@@ -2373,6 +2373,73 @@ mod tests {
     }
 
     #[test]
+    fn a2a_idempotency_serde_pins_two_required_fields() {
+        // A2AIdempotency is the per-task duplicate-safety envelope
+        // embedded in A2ATask.idempotency (Option<A2AIdempotency>). Two
+        // required fields with no serde attributes: duplicate_safety
+        // (A2ADuplicateSafety, cross-bound to the snake_case enum pin)
+        // and key (String, the value the receiver hashes into
+        // A2AIdempotencyCacheKey.key). A rename of either field, or a
+        // skip_serializing_if = String::is_empty on key, silently
+        // bisects duplicate-safe sends across two shapes on daemon
+        // reopen and re-runs side-effectful task bodies.
+        let idemp = A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "k");
+
+        let wire = serde_json::to_value(&idemp).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2AIdempotency serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["duplicate_safety", "key"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "A2AIdempotency wire form must be exactly two keys; a \
+             skip_serializing_if on either field would silently shift \
+             the envelope and break duplicate-safe receiver-side cache \
+             lookups",
+        );
+        // Cross-bind to a2a_duplicate_safety_serde_pins_snake_case_wire_form.
+        assert_eq!(
+            obj.get("duplicate_safety"),
+            Some(&serde_json::json!("idempotent")),
+        );
+
+        // Round-trip pins the PartialEq + Eq derive contract.
+        let back: A2AIdempotency = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, idemp);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["duplicate_safety", "key"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2AIdempotency>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2AIdempotency wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Empty key must still surface on the wire — pinning that
+        // String::is_empty is NOT skipped. An operator who supplies an
+        // empty key needs the audit row to surface that, not silently
+        // drop the column. The receiver's duplicate-safe lookup will
+        // refuse the cached short-circuit for an empty key (see
+        // evaluate_auto_retry's MissingIdempotency arm), but the
+        // request envelope still has to carry it for the audit.
+        let empty = A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "");
+        let empty_wire = serde_json::to_value(&empty).unwrap();
+        let empty_obj = empty_wire.as_object().unwrap();
+        assert!(
+            empty_obj.contains_key("key"),
+            "empty key must remain present on the wire — a \
+             skip_serializing_if = String::is_empty would silently \
+             drop the audit column for the malformed-request path",
+        );
+        assert_eq!(empty_obj.get("key").unwrap(), &serde_json::json!(""));
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

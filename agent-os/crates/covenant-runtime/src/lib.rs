@@ -449,6 +449,35 @@ mod tests {
     use tempfile::tempdir;
     use uuid::Uuid;
 
+    #[test]
+    fn workspace_entry_strips_one_leading_dot_slash_and_prepends_workspace_prefix() {
+        assert_eq!(
+            workspace_entry("./foo"),
+            "/workspace/foo",
+            "the documented manifest form ./foo must map cleanly to /workspace/foo so the OCI rootfs mount and the entry path agree",
+        );
+        assert_eq!(
+            workspace_entry("foo"),
+            "/workspace/foo",
+            "an entry without a leading dot-slash must be a no-op for the strip arm; otherwise no-prefix manifests silently land on a different path than dot-slash ones",
+        );
+        assert_eq!(
+            workspace_entry("nested/bin"),
+            "/workspace/nested/bin",
+            "multi-segment entries must be preserved verbatim under /workspace/; flattening them would break agents that ship a nested binary layout",
+        );
+        assert_eq!(
+            workspace_entry("./"),
+            "/workspace/",
+            "a bare dot-slash must reduce to /workspace/ so the strip arm does not panic on the smallest legal dot-slash prefix",
+        );
+        assert_eq!(
+            workspace_entry("././foo"),
+            "/workspace/./foo",
+            "the strip is intentionally non-recursive: a future refactor that loops the strip would silently rewrite manifests that embed a leading dot-slash sequence",
+        );
+    }
+
     fn dummy_intent() -> Intent {
         Intent {
             id: Uuid::nil(),

@@ -479,6 +479,53 @@ mod tests {
     }
 
     #[test]
+    fn agent_result_serde_pins_required_text_and_default_sources() {
+        // AgentResult is the JSONL line every external agent process
+        // emits on stdout. `text` has no #[serde(default)] so an agent
+        // that omits it must surface MalformedStdout, not silently
+        // produce an empty-string result. `sources` has #[serde(default)]
+        // so agents that have not been updated to emit sources still
+        // decode against the documented backwards-compatibility surface.
+        let no_sources: AgentResult = serde_json::from_str("{\"text\":\"hi\"}").expect(
+            "AgentResult missing the sources field must decode via #[serde(default)] to an empty Vec; dropping the default would silently break agents that have not been updated to emit sources",
+        );
+        assert_eq!(no_sources.text, "hi");
+        assert!(
+            no_sources.sources.is_empty(),
+            "sources must default to an empty Vec; otherwise a missing sources field deserializes to something other than the documented empty-list contract",
+        );
+
+        let populated: AgentResult =
+            serde_json::from_str("{\"text\":\"hi\",\"sources\":[\"a\",\"b\"]}").unwrap();
+        assert_eq!(populated.text, "hi");
+        assert_eq!(populated.sources, vec!["a".to_string(), "b".to_string()]);
+
+        // Missing the required text field must fail loud so a refactor
+        // that adds #[serde(default)] to text (silently producing an
+        // empty-string result for misbehaving agents) is rejected here.
+        assert!(
+            serde_json::from_str::<AgentResult>("{\"sources\":[]}").is_err(),
+            "AgentResult without a text field must fail to decode; otherwise an agent that omits text silently writes an empty result into the daemon",
+        );
+
+        // The struct has no skip_serializing_if on sources, so an
+        // empty sources Vec MUST appear in the serialized output as an
+        // empty array. A refactor that adds skip_serializing_if would
+        // change the on-wire shape and break any consumer that grep
+        // matches on the sources field — pin the explicit presence.
+        let empty = AgentResult {
+            text: "hi".into(),
+            sources: vec![],
+        };
+        let wire = serde_json::to_value(&empty).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"text": "hi", "sources": []}),
+            "empty sources must serialize as an explicit empty array; a future skip_serializing_if would silently drop the key",
+        );
+    }
+
+    #[test]
     fn parse_result_pins_first_non_empty_line_fallback_and_malformed_stdout() {
         let leading_blank =
             b"\n{\"text\":\"hello\",\"sources\":[]}\nthen garbage that must be ignored\n";

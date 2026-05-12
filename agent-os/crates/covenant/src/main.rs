@@ -6083,6 +6083,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_duplicate_risk_accepts_documented_spellings_and_rejects_unknown() {
+        assert_eq!(
+            parse_duplicate_risk("idempotent").unwrap(),
+            A2ADuplicateRisk::Idempotent,
+        );
+        assert_eq!(
+            parse_duplicate_risk("operator-accepted").unwrap(),
+            A2ADuplicateRisk::OperatorAccepted,
+        );
+        assert_eq!(
+            parse_duplicate_risk("operator_accepted").unwrap(),
+            A2ADuplicateRisk::OperatorAccepted,
+        );
+
+        let err = parse_duplicate_risk("safe").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown duplicate risk"),
+            "rejection must include the typed prefix so the CLI surface is recognisable: {err:?}",
+        );
+        assert!(
+            msg.contains("safe"),
+            "rejection must echo the offending value so a typo is debuggable: {err:?}",
+        );
+    }
+
+    #[test]
     fn parse_a2a_queue_state_accepts_both_spellings() {
         assert_eq!(
             parse_a2a_queue_state("queued").unwrap(),

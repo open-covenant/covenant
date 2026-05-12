@@ -198,11 +198,18 @@ pub fn runtime_runner_composite(
     hermes: Option<&HermesGatewayConfig>,
 ) -> Arc<dyn Runner> {
     let local_runner = runtime_runner_from_config(local);
-    let hermes_runner: Option<Arc<dyn Runner>> = hermes.map(|cfg| {
-        Arc::new(covenant_runtime::HermesRunner::new(
-            cfg.base_url.clone(),
-            cfg.api_key.clone(),
-        )) as Arc<dyn Runner>
+    let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(|cfg| {
+        match covenant_runtime::HermesRunner::new(cfg.base_url.clone(), cfg.api_key.clone()) {
+            Ok(r) => Some(Arc::new(r) as Arc<dyn Runner>),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    base_url = %cfg.base_url,
+                    "hermes runner init failed (TLS or client config) — hermes runtime disabled",
+                );
+                None
+            }
+        }
     });
     Arc::new(covenant_runtime::CompositeRunner::new(
         local_runner,

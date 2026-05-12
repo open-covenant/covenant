@@ -55,16 +55,23 @@ impl HermesRunner {
     /// token; pass `None` only when the gateway is bound to loopback with
     /// no `API_SERVER_KEY` configured (Hermes permits unauthenticated
     /// loopback in that case).
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Self {
+    ///
+    /// Returns an error if reqwest fails to build its TLS-enabled
+    /// client (typically a misconfigured system trust store). Boot
+    /// callers should log the error and disable the Hermes runtime
+    /// rather than panic.
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("build reqwest client");
-        Self {
+            .build()?;
+        Ok(Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key,
             http,
-        }
+        })
     }
 
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
@@ -197,11 +204,17 @@ impl Runner for HermesRunner {
         // we don't need any further events.
         sse_handle.abort();
         // Drain accumulated events regardless of success or failure so an
-        // operator can audit a failed run end-to-end.
-        let drained = events
-            .lock()
-            .map(|mut v| std::mem::take(&mut *v))
-            .unwrap_or_default();
+        // operator can audit a failed run end-to-end. A poisoned mutex
+        // means the SSE parser panicked inside the lock — recover what
+        // we can from the poison payload and warn so the operator knows
+        // the trace may be incomplete.
+        let drained = match events.lock() {
+            Ok(mut v) => std::mem::take(&mut *v),
+            Err(poisoned) => {
+                warn!(%run_id, "hermes event lock poisoned — runtime trace may be incomplete");
+                std::mem::take(&mut *poisoned.into_inner())
+            }
+        };
 
         match outcome {
             Ok(RunOutcome::Completed { output }) => Ok(AgentResult {
@@ -308,8 +321,14 @@ impl HermesRunner {
                     };
                     buffer.drain(..advance);
                     if let Some(trace) = parse_sse_frame(&frame) {
-                        if let Ok(mut v) = sink.lock() {
-                            v.push(trace);
+                        match sink.lock() {
+                            Ok(mut v) => v.push(trace),
+                            Err(poisoned) => {
+                                // Already poisoned — push anyway. The
+                                // main thread will surface the lock
+                                // state via its own match arm above.
+                                poisoned.into_inner().push(trace);
+                            }
                         }
                     }
                 }
@@ -424,7 +443,7 @@ fn map_hermes_event(value: &Value) -> Option<RuntimeTrace> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            resolved: value.get("resolved").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            resolved: value.get("resolved").and_then(|v| v.as_u64()).unwrap_or(0),
         }),
         // message.delta / reasoning.available / run.completed / run.failed
         // are observed elsewhere (status poll for terminal states; deltas

@@ -1491,6 +1491,51 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_capability_revoke_rejected_serde_pins_two_field_variant() {
+        // AuditKind::CapabilityRevokeRejected is the audit row emitted
+        // when RevokeCapability is rejected because the authenticated
+        // peer is not the subject of the capability they asked to
+        // revoke. Enforces the subject-ownership invariant on the
+        // revoking peer's pubkey, closing the cross-peer-revoke gap.
+        // signature_b58 is the durable correlation back to the
+        // SignedCapability the rejecting peer attempted to tombstone —
+        // a rename or #[serde(default)] would mask a real cross-peer-
+        // revoke probe behind a generic empty-signature row.
+        let kind = AuditKind::CapabilityRevokeRejected {
+            signature_b58: "deadbeef".into(),
+            reason: "not subject".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["reason", "signature_b58", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_revoke_rejected")),
+            "AuditKind discriminator slug must be snake_case 'capability_revoke_rejected'; a titlecase or kebab-case regression silently strands every prior cross-peer-revoke probe row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::CapabilityRevokeRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract the cross-peer-revoke audit correlation leans on",
+        );
+
+        for required in ["signature_b58", "reason"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityRevokeRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on signature_b58 would silently let the row decode with an empty signature and mask a real cross-peer-revoke probe behind a generic empty-signature row",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_a2a_recipient_rejected_serde_pins_three_field_variant() {
         // AuditKind::A2ARecipientRejected is the audit row emitted when
         // SendA2ATask is rejected because the recipient peer has not

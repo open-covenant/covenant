@@ -4554,6 +4554,128 @@ mod tests {
         }
     }
 
+    #[test]
+    fn response_verify_report_serde_pins_four_field_variant() {
+        // Response::VerifyReport is the variant the daemon sends
+        // after Request::Verify runs the bounded local audit-chain
+        // verifier and reports per-check results plus any drift
+        // rows the verifier surfaced. It carries window: usize
+        // (rows scanned), checks: Vec<VerifyCheck> (per-check
+        // pass/fail evidence), drift: Vec<VerifyDrift> annotated
+        // with #[serde(default)] (rows the verifier flagged as
+        // drifted from expected state — the field is serde(default)
+        // WITHOUT skip_serializing_if so the wire form stays stable
+        // across drift/no-drift states), and orphans_total: u64
+        // (count of rows the verifier could not bind to a parent).
+        // With #[serde(tag = "kind", rename_all = "snake_case")] on
+        // the Response enum, the wire object is exactly five
+        // top-level keys: kind='verify_report' plus the four
+        // variant fields. No prior test pins the exact wire shape,
+        // round-trip, or the asymmetric serde(default)-not-skip
+        // contract on `drift` at the outer Response level. The
+        // inner VerifyCheck/VerifyDrift shapes are pinned by
+        // sibling tests; this slice locks the outer variant shape
+        // only — empty Vec constructions are sufficient to catch
+        // the slug, key set, and default-attribute regressions on
+        // the outer variant.
+        let event = Response::VerifyReport {
+            window: 0,
+            checks: vec![],
+            drift: vec![],
+            orphans_total: 0,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["checks", "drift", "kind", "orphans_total", "window"],
+            "Response::VerifyReport wire form must be exactly five \
+             top-level keys: 'kind' plus the four variant fields. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest the \
+             fields one level deeper and every CLI consumer that \
+             destructures .checks or .drift would silently fail — \
+             the operator's audit verify confirmation would read \
+             blank for every pass even when the daemon ran the \
+             verifier against populated rows",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("verify_report")),
+            "Response discriminator slug must be the durable \
+             'verify_report'; a slug regression silently strands \
+             every CLI parser that classifies verify outcomes by \
+             this exact value — the operator's CLI prints a \
+             confusing fallback instead of the verify report, \
+             masking whether the verifier ran or what it found",
+        );
+        assert!(
+            obj.get("drift").and_then(serde_json::Value::as_array).is_some(),
+            "Response::VerifyReport::drift must always surface as \
+             a JSON array (the durable not-skip-serializing-if \
+             surface — the five-key shape stays stable across \
+             drift/no-drift states); a stray \
+             #[serde(skip_serializing_if = \"Vec::is_empty\")] on \
+             drift would shrink the wire shape and silently break \
+             CLI consumers that switch on the key's presence to \
+             distinguish clean-pass from no-drift-this-window",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::VerifyReport must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI verify-report consumer leans on",
+        );
+
+        for required in ["window", "checks", "orphans_total"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::VerifyReport wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] would let a malformed row decode \
+                 with a synthetic default and the CLI would surface \
+                 a phantom 'verifier ran clean' state — a real \
+                 fetch failure (truncated frame, partial decode \
+                 error) would be silently reclassified where the \
+                 operator believes the audit-chain is clean when in \
+                 fact the daemon's verify path produced an error \
+                 the boundary swallowed",
+            );
+        }
+
+        let forward_compat = serde_json::json!({
+            "kind": "verify_report",
+            "window": 0,
+            "checks": [],
+            "orphans_total": 0,
+        });
+        let decoded: Response = serde_json::from_value(forward_compat).unwrap();
+        assert_eq!(
+            decoded,
+            Response::VerifyReport {
+                window: 0,
+                checks: vec![],
+                drift: vec![],
+                orphans_total: 0,
+            },
+            "Response::VerifyReport with drift omitted must decode \
+             as an empty Vec; dropping #[serde(default)] from drift \
+             would break stale CLIs built before the drift field \
+             landed (or a newer CLI talking to an older daemon \
+             that omits the key) by surfacing a confusing serde \
+             error instead of degrading cleanly",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

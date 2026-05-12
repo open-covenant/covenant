@@ -755,6 +755,118 @@ provider = "made-up"
         assert!(provider_from_config(&cfg).is_none());
     }
 
+    #[test]
+    fn llm_section_serde_pins_required_provider_and_option_defaults() {
+        // LlmSection is the [llm] block operators write to secrets.toml
+        // to pick the chat provider. The contract is asymmetric: provider
+        // is strictly required (no serde default) while api_key, model,
+        // and endpoint each carry #[serde(default)] so a stale or minimal
+        // secrets.toml stays forward-compatible.
+        //
+        // The existing tests cover provider-selection paths but not the
+        // strict-required-provider contract: a refactor that added
+        // #[serde(default)] to provider would silently parse blocks with
+        // no provider as provider='', provider_from_config would land on
+        // the unknown-provider arm and return None, and pick_provider
+        // would fall back to MockProvider — operator-facing LLM workflows
+        // would silently use the stub instead of the configured provider.
+        let full = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+model = "claude-haiku-4-5"
+endpoint = "https://api.example/v1"
+"#;
+        let cfg: ProviderConfig = toml::from_str(full).unwrap();
+        let llm = cfg
+            .llm
+            .as_ref()
+            .expect("[llm] block must surface as LlmSection");
+        assert_eq!(llm.provider, "anthropic");
+        assert_eq!(llm.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(llm.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(llm.endpoint.as_deref(), Some("https://api.example/v1"));
+
+        let minimal = r#"
+[llm]
+provider = "ollama"
+"#;
+        let cfg: ProviderConfig = toml::from_str(minimal).unwrap();
+        let llm = cfg.llm.as_ref().unwrap();
+        assert_eq!(llm.provider, "ollama");
+        assert!(
+            llm.api_key.is_none(),
+            "LlmSection::api_key must decode as None when omitted; a \
+             refactor that dropped #[serde(default)] would silently fail \
+             parse for every operator deployment running on the default \
+             Ollama endpoint with no api key"
+        );
+        assert!(
+            llm.model.is_none(),
+            "LlmSection::model must decode as None when omitted"
+        );
+        assert!(
+            llm.endpoint.is_none(),
+            "LlmSection::endpoint must decode as None when omitted"
+        );
+
+        // Each Option field's omission must be tolerated independently —
+        // operators write partial blocks all the time (model only,
+        // endpoint only, etc.). Pin each in isolation so a refactor that
+        // dropped the default on one but not the others would fail loud
+        // on the specific arm rather than silently masquerading as a
+        // generic parse error.
+        let no_api_key = r#"
+[llm]
+provider = "ollama"
+model = "llama3.1"
+endpoint = "http://localhost:11434"
+"#;
+        let cfg: ProviderConfig = toml::from_str(no_api_key).unwrap();
+        let llm = cfg.llm.as_ref().unwrap();
+        assert!(llm.api_key.is_none());
+        assert_eq!(llm.model.as_deref(), Some("llama3.1"));
+        assert_eq!(llm.endpoint.as_deref(), Some("http://localhost:11434"));
+
+        let no_model = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk"
+endpoint = "https://api.example"
+"#;
+        let cfg: ProviderConfig = toml::from_str(no_model).unwrap();
+        let llm = cfg.llm.as_ref().unwrap();
+        assert!(llm.model.is_none());
+
+        let no_endpoint = r#"
+[llm]
+provider = "openai"
+api_key = "sk"
+model = "gpt-4o-mini"
+"#;
+        let cfg: ProviderConfig = toml::from_str(no_endpoint).unwrap();
+        let llm = cfg.llm.as_ref().unwrap();
+        assert!(llm.endpoint.is_none());
+
+        // Provider is the only strictly-required field; omitting it must
+        // fail parse so a future #[serde(default)] regression on provider
+        // does not silently let a misconfigured secrets.toml fall back to
+        // the mock provider.
+        let no_provider = r#"
+[llm]
+api_key = "sk"
+model = "x"
+"#;
+        assert!(
+            toml::from_str::<ProviderConfig>(no_provider).is_err(),
+            "LlmSection::provider must remain strictly required; a \
+             #[serde(default)] regression would silently parse blocks with \
+             no provider as provider='' and pick_provider would fall back \
+             to MockProvider — operator-facing LLM workflows would silently \
+             use the stub instead of the configured provider"
+        );
+    }
+
     #[tokio::test]
     async fn pick_provider_with_no_config_returns_some_provider() {
         // No file → either ollama (if local), or mock fallback. Either way,

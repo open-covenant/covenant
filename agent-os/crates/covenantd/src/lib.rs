@@ -10590,6 +10590,41 @@ budget_credits_per_hour = {credits}
 
     #[cfg(unix)]
     #[test]
+    fn write_operator_token_0600_pins_create_mode_and_overwrite() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("nested").join("operator.token");
+
+        write_operator_token_0600(&path, "8a8a8a8a8a8a8a8a").expect("first write");
+        assert!(path.parent().expect("parent").is_dir(), "parent dir created");
+        let bytes = fs::read(&path).expect("read after first write");
+        assert_eq!(
+            bytes,
+            b"8a8a8a8a8a8a8a8a\n",
+            "first write must produce b58 bytes followed by newline 0x0A"
+        );
+        let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode must be 0o600 after write");
+        require_operator_token_mode_0600(&path)
+            .expect("mode-0600 reader gate must accept after first write");
+
+        write_operator_token_0600(&path, "DIFFERENTb58body").expect("second write");
+        let bytes2 = fs::read(&path).expect("read after second write");
+        assert_eq!(
+            bytes2,
+            b"DIFFERENTb58body\n",
+            "second write must fully replace the file, no concatenation"
+        );
+        let mode2 = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode2, 0o600, "mode must be 0o600 after overwrite");
+        require_operator_token_mode_0600(&path)
+            .expect("mode-0600 reader gate must accept after overwrite");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn require_operator_token_mode_0600_pins_accept_reject_paths() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;

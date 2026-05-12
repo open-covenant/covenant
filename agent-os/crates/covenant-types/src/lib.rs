@@ -512,6 +512,38 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_command_id_and_action_pin_each_variant() {
+        let detach_id = Uuid::new_v4();
+        let other_parent = Uuid::new_v4();
+        let delete_id = Uuid::new_v4();
+        let backfill_id = Uuid::new_v4();
+
+        let detach = MemoryRepairCommand::DetachParent {
+            id: detach_id,
+            expected_parent: Some(other_parent),
+        };
+        let delete = MemoryRepairCommand::DeleteRecord { id: delete_id };
+        let backfill = MemoryRepairCommand::BackfillProvenance {
+            id: backfill_id,
+            provenance: serde_json::json!({"source": "manual"}),
+        };
+
+        // id() returns the target record id, NOT expected_parent or any
+        // other nested Uuid. Pin the binding so a refactor that swapped
+        // id with expected_parent for DetachParent is loud.
+        assert_eq!(detach.id(), detach_id);
+        assert_eq!(delete.id(), delete_id);
+        assert_eq!(backfill.id(), backfill_id);
+
+        // action() maps each variant to its MemoryRepairAction
+        // discriminator. Pin the variant→action correspondence so a
+        // refactor that mis-labeled one arm cannot land silently.
+        assert_eq!(detach.action(), MemoryRepairAction::DetachParent);
+        assert_eq!(delete.action(), MemoryRepairAction::DeleteRecord);
+        assert_eq!(backfill.action(), MemoryRepairAction::BackfillProvenance);
+    }
+
+    #[test]
     fn settlement_receipt_deserializes_pre_chain_metadata_rows() {
         let pubkey = bs58::encode([7u8; 32]).into_string();
         let json = format!(

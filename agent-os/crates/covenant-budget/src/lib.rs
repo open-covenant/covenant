@@ -1332,6 +1332,74 @@ mod tests {
     }
 
     #[test]
+    fn budget_checkpoint_event_resume_claimed_serde_pins_three_field_variant() {
+        // BudgetCheckpointEvent::ResumeClaimed is the single-use
+        // resume-claim event the daemon appends to the budget-
+        // checkpoint JSONL log when `covenant intents resume
+        // <intent-id>` successfully re-dispatches a paused intent.
+        // The event is the tombstone that turns a PauseSaved
+        // checkpoint into a consumed claim — replay reads PauseSaved
+        // + ResumeClaimed pairs and skips the resume verb if the
+        // claim is already present. Three required fields plus the
+        // snake_case 'resume_claimed' discriminator: intent_id (Uuid),
+        // agent (nested AgentId), resumed_at_ms (u64). A refactor
+        // that defaulted intent_id would let a malformed row decode
+        // with Uuid::nil() and replay would silently treat every
+        // nil-intent-id PauseSaved as already-claimed, masking real
+        // resume attempts.
+        let event = BudgetCheckpointEvent::ResumeClaimed {
+            intent_id: Uuid::from_u128(1),
+            agent: agent("alice@host"),
+            resumed_at_ms: 5_000,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetCheckpointEvent serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent", "intent_id", "resumed_at_ms", "type"],
+            "BudgetCheckpointEvent::ResumeClaimed wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&json!("resume_claimed")),
+            "BudgetCheckpointEvent discriminator slug must be snake_case 'resume_claimed'; a titlecase or kebab-case regression silently strands every prior JSONL consumed-claim tombstone at replay and replay reconstructs the checkpoint state from PauseSaved rows alone — operator dashboards double-count consumed resumes",
+        );
+
+        let agent_obj = obj
+            .get("agent")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent must serialize as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "BudgetCheckpointEvent::ResumeClaimed::agent must surface the AgentId display+pubkey shape; a refactor that flattened or restructured AgentId would break replay's per-agent consumed-claim keying and single-use resume semantics would silently degrade to cross-agent confusion",
+        );
+
+        let back: BudgetCheckpointEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "BudgetCheckpointEvent::ResumeClaimed must round-trip through serde_json verbatim — the PartialEq derive is the contract the checkpoint replay path joins consumed claims against",
+        );
+
+        for required in ["intent_id", "agent", "resumed_at_ms"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetCheckpointEvent>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "BudgetCheckpointEvent::ResumeClaimed wire form must reject a payload missing {required:?}; a stray #[serde(default)] on intent_id would let a malformed row decode with Uuid::nil() and replay would silently treat every nil-intent-id PauseSaved as already-claimed, suppressing real resume verbs for the same agent",
+            );
+        }
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

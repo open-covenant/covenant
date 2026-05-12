@@ -2225,6 +2225,22 @@ mod tests {
     }
 
     #[test]
+    fn memory_purge_scope_allows_pins_before_ms_equal_boundary_accepted() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_000).unwrap()
+        );
+        assert!(
+            !memory_purge_scope_allows("memory.purge", &scope, Some("working"), 1_001).unwrap()
+        );
+    }
+
+    #[test]
     fn memory_read_scope_allows_tier_mode_and_record_filters() {
         let scope = serde_json::json!({
             "version": 1,

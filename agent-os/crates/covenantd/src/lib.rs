@@ -10396,6 +10396,22 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_repair_action_pins_each_repair_command_variant() {
+        let detach = MemoryRepairCommand::DetachParent {
+            id: Uuid::new_v4(),
+            expected_parent: Some(Uuid::new_v4()),
+        };
+        let delete = MemoryRepairCommand::DeleteRecord { id: Uuid::new_v4() };
+        let backfill = MemoryRepairCommand::BackfillProvenance {
+            id: Uuid::new_v4(),
+            provenance: serde_json::json!({"source": "audit-row"}),
+        };
+        assert_eq!(memory_repair_action(&detach), "detach_parent");
+        assert_eq!(memory_repair_action(&delete), "delete_record");
+        assert_eq!(memory_repair_action(&backfill), "backfill_provenance");
+    }
+
+    #[test]
     fn a2a_duplicate_risk_pins_each_arm() {
         let idempotent = covenant_a2a::A2ARepairCommand::Requeue {
             lease_id: Some(Uuid::new_v4()),

@@ -262,6 +262,21 @@ entry = "./tiny"
 "#;
 
     #[test]
+    fn sandbox_backend_is_sandbox_grade_pins_each_variant() {
+        for backend in [SandboxBackend::TrustedLocal, SandboxBackend::LinuxGvisor] {
+            let expected = match backend {
+                SandboxBackend::TrustedLocal => false,
+                SandboxBackend::LinuxGvisor => true,
+            };
+            assert_eq!(
+                backend.is_sandbox_grade(),
+                expected,
+                "{backend:?} must keep its documented sandbox-grade classification; if this fires after adding a new variant, classify it explicitly here AND in is_sandbox_grade so manifests with sandbox.required=true do not silently run on a non-sandbox backend",
+            );
+        }
+    }
+
+    #[test]
     fn parses_full_spec_example() {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.agent.id, "research");

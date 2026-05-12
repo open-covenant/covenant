@@ -3659,6 +3659,31 @@ mod tests {
     }
 
     #[test]
+    fn ping_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "status"];
+
+        let value = ping_json();
+        let object = value
+            .as_object()
+            .expect("ping_json must return an object");
+        let mut keys: Vec<String> = object.keys().cloned().collect();
+        keys.sort();
+        let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+        assert_eq!(
+            keys, expected,
+            "ping_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+        );
+
+        assert!(value["kind"].is_string(), "kind must be a string: {value}");
+        assert_eq!(value["kind"].as_str(), Some("daemon_ping"));
+        assert!(
+            value["status"].is_string(),
+            "status must be a string, not a non-string serialization: {value}",
+        );
+        assert_eq!(value["status"].as_str(), Some("ok"));
+    }
+
+    #[test]
     fn capability_list_json_renders_stable_shape() {
         let subject = AgentId::new("subject@local", [1u8; 32]);
         let granted_by = AgentId::new("issuer@local", [2u8; 32]);

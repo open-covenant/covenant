@@ -4316,6 +4316,45 @@ mod tests {
     }
 
     #[test]
+    fn tool_list_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "tools"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("tool_list_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "tool_list_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("tool_list"));
+            assert!(
+                value["tools"].is_array(),
+                "tools must be an array of tool specs, not a string blob: {value}",
+            );
+        }
+
+        let spec = ToolSpec {
+            name: "echo".into(),
+            description: "Echo text".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" }
+                }
+            }),
+        };
+
+        assert_shape(&tool_list_json(&[spec]));
+        assert_shape(&tool_list_json(&[]));
+    }
+
+    #[test]
     fn tool_result_json_renders_stable_shape() {
         let content = vec![
             covenant_mcp::Content::Text {

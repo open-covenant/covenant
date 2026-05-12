@@ -2450,6 +2450,61 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_string_pins_absent_null_exact_match_and_non_string_path() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_string(empty, "x", Some("foo")),
+            "absent field must allow any Some(_); otherwise unscoped grants reject every string-bearing request",
+        );
+        assert!(
+            scope_allows_string(empty, "x", None),
+            "absent field must allow actual=None; the absent-key branch must be unconditional, matching the rest of the scope_allows_* family",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_string(explicit_null, "x", Some("foo")),
+            "{{\"x\": null}} is the documented unbounded marker and must allow any Some(_)",
+        );
+        assert!(
+            scope_allows_string(explicit_null, "x", None),
+            "{{\"x\": null}} must allow actual=None as well; the null arm is unconditional",
+        );
+
+        let bound = serde_json::json!({ "x": "foo" });
+        let bound = bound.as_object().unwrap();
+        assert!(
+            scope_allows_string(bound, "x", Some("foo")),
+            "scope {{\"x\": \"foo\"}} must allow actual=Some(\"foo\") on exact match",
+        );
+        assert!(
+            !scope_allows_string(bound, "x", Some("foobar")),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=Some(\"foobar\"); the equality is strict, not starts_with",
+        );
+        assert!(
+            !scope_allows_string(bound, "x", Some("")),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=Some(\"\"); empty does not equal a bound non-empty value",
+        );
+        assert!(
+            !scope_allows_string(bound, "x", None),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=None; Option<&str> equality means Some(_) and None never match",
+        );
+
+        let non_string = serde_json::json!({ "x": 42 });
+        let non_string = non_string.as_object().unwrap();
+        assert!(
+            scope_allows_string(non_string, "x", None),
+            "a non-string scope value compares via value.as_str()==None which equals actual=None; this is the documented None-vs-None equality edge",
+        );
+        assert!(
+            !scope_allows_string(non_string, "x", Some("foo")),
+            "a non-string scope value must reject any Some(_) since None != Some(_) under Option equality; a regression that returned true here would silently authorize every string under a malformed scope object",
+        );
+    }
+
+    #[test]
     fn scope_allows_before_ms_pins_absent_null_present_compare_and_zero_fallback() {
         let empty = serde_json::json!({});
         let empty = empty.as_object().unwrap();

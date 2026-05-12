@@ -1184,6 +1184,83 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_outcome_strict_required_fields_reject_on_omission() {
+        // MemoryRepairOutcome is the wire form every daemon, HTTP, and CLI
+        // memory-repair command returns, and the shape the
+        // MemoryRepairApplied audit row destructures. Five strictly
+        // required fields with no serde attributes: id, action, mode,
+        // would_change, changed. The would_change/changed boolean pair
+        // carries the load-bearing dry-run-vs-apply distinction every
+        // audit consumer relies on — a #[serde(default)] regression on
+        // either would silently collapse that distinction.
+        // memory_repair_outcome_serde_pins_before_after_skip_empty (line
+        // 1091) pins the before/after skip-empty contract; this test
+        // pins the strict-required-fields rejection contract that the
+        // existing test does not exercise.
+        let id = Uuid::new_v4();
+        let compact = MemoryRepairOutcome {
+            id,
+            action: MemoryRepairAction::DetachParent,
+            mode: MemoryRepairMode::DryRun,
+            would_change: true,
+            changed: false,
+            before: None,
+            after: None,
+        };
+
+        let wire = serde_json::to_value(&compact).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("MemoryRepairOutcome serializes as a JSON object");
+        assert_eq!(
+            obj.len(),
+            5,
+            "MemoryRepairOutcome with before=None and after=None must surface exactly five keys on the wire (the skip-empty pair is dropped); a refactor that dropped skip_serializing_if from before or after would inflate every dry-run row",
+        );
+
+        for required in ["id", "action", "mode", "would_change", "changed"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MemoryRepairOutcome>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "MemoryRepairOutcome wire form must reject a payload missing {required:?}; a stray #[serde(default)] on a required field would silently let a malformed audit row decode (would_change/changed defaulted to false collapses the dry-run-vs-apply distinction)",
+            );
+        }
+
+        let record = MemoryRecord {
+            id: Uuid::nil(),
+            tier: MemoryTier::Working,
+            owner: dummy_id(),
+            text: "captured".into(),
+            embedding: vec![],
+            metadata: serde_json::json!({}),
+            created_at: 1_700_000_000_000,
+            parent: None,
+        };
+        let populated = MemoryRepairOutcome {
+            id,
+            action: MemoryRepairAction::DetachParent,
+            mode: MemoryRepairMode::Apply,
+            would_change: true,
+            changed: true,
+            before: Some(record.clone()),
+            after: Some(record),
+        };
+        let wire = serde_json::to_value(&populated).unwrap();
+        assert_eq!(
+            wire.as_object().unwrap().len(),
+            7,
+            "MemoryRepairOutcome with before=Some and after=Some must surface all seven keys on the wire",
+        );
+        let back: MemoryRepairOutcome = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, populated,
+            "MemoryRepairOutcome must round-trip through serde_json verbatim — the PartialEq derive is the contract every audit consumer joins on",
+        );
+    }
+
+    #[test]
     fn memory_repair_mode_serde_pins_snake_case_wire_form() {
         // MemoryRepairMode is the dry_run / apply toggle on every
         // MemoryRepairRequest dispatched through daemon, HTTP, and

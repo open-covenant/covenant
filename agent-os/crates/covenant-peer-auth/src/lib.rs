@@ -847,6 +847,52 @@ mod tests {
     }
 
     #[test]
+    fn summary_from_pins_token_prefix_redaction_and_field_mapping() {
+        let (token, entry) = entry("alice@host");
+        let full_b58 = token.to_b58();
+
+        let live = summary_from(&entry, None);
+        assert_eq!(
+            live.agent_id, entry.agent_id,
+            "agent_id must be copied verbatim from the entry",
+        );
+        assert_eq!(
+            live.registered_at, entry.registered_at,
+            "registered_at must be copied verbatim from the entry",
+        );
+        assert_eq!(
+            live.token_prefix.chars().count(),
+            6,
+            "token_prefix must be exactly 6 base58 characters so the full token never wires through PeerSummary",
+        );
+        assert_eq!(
+            live.token_prefix,
+            full_b58.chars().take(6).collect::<String>(),
+            "token_prefix must be the first 6 chars of token.to_b58()",
+        );
+        assert_ne!(
+            live.token_prefix, full_b58,
+            "PeerSummary must NEVER carry the full base58 token — that would leak the peer-auth secret",
+        );
+        assert_eq!(live.revoked_at, None);
+
+        let revoked = summary_from(&entry, Some(99));
+        assert_eq!(
+            revoked.revoked_at,
+            Some(99),
+            "revoked_at must be forwarded verbatim so Live/Revoked filters see the right state",
+        );
+        assert_eq!(
+            revoked.agent_id, entry.agent_id,
+            "agent_id must remain copied regardless of the revoked_at value",
+        );
+        assert_eq!(
+            revoked.token_prefix, live.token_prefix,
+            "token_prefix is a property of the token, not of the revoked state",
+        );
+    }
+
+    #[test]
     fn summary_matches_pins_none_empty_and_pubkey_prefix_branches() {
         let mut pk = [0u8; 32];
         pk[0] = 7;

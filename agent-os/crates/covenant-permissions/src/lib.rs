@@ -1648,6 +1648,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_tool_scope_rejects_non_string_tool_and_non_object_arguments() {
+        assert_invalid_scope(
+            "tool.call.echo",
+            serde_json::json!({ "version": 1, "tool": 42 }),
+        );
+        assert_invalid_scope(
+            "tool.call.echo",
+            serde_json::json!({ "version": 1, "arguments": "bad" }),
+        );
+    }
+
+    #[test]
     fn tool_call_scope_allows_unscoped_grants() {
         assert!(tool_call_scope_allows(
             "tool.call.echo",

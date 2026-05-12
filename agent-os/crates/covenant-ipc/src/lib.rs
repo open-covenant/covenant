@@ -1596,6 +1596,118 @@ mod tests {
     }
 
     #[test]
+    fn response_capability_revoked_serde_pins_two_field_variant() {
+        // Response::CapabilityRevoked is the variant the daemon
+        // sends after a successful RevokeCapability request. It
+        // carries signature_b58 (the SignedCapability signature
+        // targeted for revocation, base58) and removed (bool — true
+        // if a live binding was removed, false if the signature was
+        // already tombstoned or never existed). With #[serde(tag =
+        // "kind", rename_all = "snake_case")] on the Response enum,
+        // the wire object is exactly three top-level keys:
+        // kind='capability_revoked' plus the two variant fields. No
+        // prior test pins the exact wire shape, round-trip, or
+        // omission rejection. A refactor that added
+        // skip_serializing_if on removed would drop the column when
+        // false and stale CLIs that branch on key presence would
+        // silently treat every revoke as if it had removed a live
+        // binding — masking the idempotent already-revoked path.
+        for (event, expected_removed) in [
+            (
+                Response::CapabilityRevoked {
+                    signature_b58: "sig-xyz".into(),
+                    removed: true,
+                },
+                true,
+            ),
+            (
+                Response::CapabilityRevoked {
+                    signature_b58: "sig-xyz".into(),
+                    removed: false,
+                },
+                false,
+            ),
+        ] {
+            let wire = serde_json::to_value(&event).unwrap();
+            let obj = wire
+                .as_object()
+                .expect("Response serializes as a JSON object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec!["kind", "removed", "signature_b58"],
+                "Response::CapabilityRevoked wire form must be \
+                 exactly three top-level keys for both removed=true \
+                 and removed=false: 'kind' plus the two variant \
+                 fields. A refactor that added skip_serializing_if \
+                 on removed would drop the column when false and \
+                 stale CLIs that branch on key presence would \
+                 silently treat every revoke as a live-removal — \
+                 masking the idempotent already-revoked path",
+            );
+            assert_eq!(
+                obj.get("kind"),
+                Some(&serde_json::json!("capability_revoked")),
+                "Response discriminator slug must be snake_case \
+                 'capability_revoked'; a slug regression silently \
+                 strands every CLI parser that classifies revoke \
+                 outcomes by this exact value — the operator cannot \
+                 correlate the CLI confirmation with the persisted \
+                 tombstone row",
+            );
+            assert_eq!(
+                obj.get("signature_b58").and_then(serde_json::Value::as_str),
+                Some("sig-xyz"),
+                "Response::CapabilityRevoked::signature_b58 must \
+                 surface as the literal base58 signature — operator \
+                 triage greps on this exact value to find the \
+                 tombstone row in the persisted capability store",
+            );
+            assert_eq!(
+                obj.get("removed").and_then(serde_json::Value::as_bool),
+                Some(expected_removed),
+                "Response::CapabilityRevoked::removed must surface \
+                 verbatim — the CLI distinguishes a live-removal \
+                 from an idempotent already-revoked outcome by this \
+                 exact bool",
+            );
+
+            let back: Response = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(
+                back, event,
+                "Response::CapabilityRevoked must round-trip through \
+                 serde_json verbatim — the PartialEq derive is the \
+                 contract every CLI revoke-confirmation consumer \
+                 leans on",
+            );
+        }
+
+        let wire = serde_json::to_value(Response::CapabilityRevoked {
+            signature_b58: "sig-xyz".into(),
+            removed: true,
+        })
+        .unwrap();
+        let obj = wire.as_object().unwrap();
+        for required in ["signature_b58", "removed"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::CapabilityRevoked wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] on removed would let a malformed \
+                 row decode with removed=false and the CLI would \
+                 silently render every revoke as already-revoked — \
+                 a default on signature_b58 would let a malformed \
+                 row decode with an empty string and operator triage \
+                 could not correlate the response to the tombstone \
+                 row",
+            );
+        }
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

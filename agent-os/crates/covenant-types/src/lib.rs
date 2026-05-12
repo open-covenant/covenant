@@ -544,6 +544,31 @@ mod tests {
     }
 
     #[test]
+    fn resource_kind_serde_pins_lowercase_wire_form() {
+        // ResourceKind's lowercase slug is the discriminator that flows
+        // through SettlementReceipt JSON into the migration planner
+        // filter (receipt_migration_plan_json) and the chain-audit grep.
+        // Renaming a slug without a migration would silently split the
+        // audit pipeline across two forms.
+        let cases: [(ResourceKind, &str); 5] = [
+            (ResourceKind::Compute, "compute"),
+            (ResourceKind::Memory, "memory"),
+            (ResourceKind::Tool, "tool"),
+            (ResourceKind::Message, "message"),
+            (ResourceKind::Registration, "registration"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: ResourceKind = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(serde_json::from_str::<ResourceKind>("\"Memory\"").is_err());
+        assert!(serde_json::from_str::<ResourceKind>("\"memory_record\"").is_err());
+    }
+
+    #[test]
     fn budget_pause_reason_serde_pins_snake_case_wire_form() {
         // BudgetPauseReason rides inside BudgetPauseCheckpoint, which the
         // daemon persists through JsonlPauseCheckpointStore. The slugs

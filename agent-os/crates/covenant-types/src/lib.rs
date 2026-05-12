@@ -544,6 +544,31 @@ mod tests {
     }
 
     #[test]
+    fn priority_serde_pins_lowercase_wire_form_and_default() {
+        // Priority::Normal must remain the Default arm. Moving #[default]
+        // to Low or High would silently shift every default-priority
+        // Intent's queueing behavior with no compile-time signal.
+        assert_eq!(Priority::default(), Priority::Normal);
+
+        // Lowercase slugs are the wire form for Intent JSON and the
+        // agent.toml settlement section. A titlecase regression would
+        // break every manifest with priority = high.
+        let cases: [(Priority, &str); 3] = [
+            (Priority::Low, "low"),
+            (Priority::Normal, "normal"),
+            (Priority::High, "high"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: Priority = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(serde_json::from_str::<Priority>("\"Normal\"").is_err());
+    }
+
+    #[test]
     fn resource_kind_serde_pins_lowercase_wire_form() {
         // ResourceKind's lowercase slug is the discriminator that flows
         // through SettlementReceipt JSON into the migration planner

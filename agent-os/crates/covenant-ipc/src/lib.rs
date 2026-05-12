@@ -3293,6 +3293,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_a2a_results_serde_pins_single_field_variant() {
+        // Response::A2AResults is the variant the daemon sends
+        // after RecentA2AResults returns the A2ATaskResult rows the
+        // caller's authorization permits. It carries results:
+        // Vec<A2ATaskResult> — the agent-to-agent result list the
+        // CLI renders to the operator. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the
+        // wire object is exactly two top-level keys:
+        // kind='a2_a_results' plus results. The 'a2_a_' shape (not
+        // 'a2a_') is a serde rename_all snake_case quirk where the
+        // rule splits on every Upper boundary, including the
+        // digit-to-upper transition — the wire form is durable and
+        // any "fix" would silently break every CLI A2A result
+        // parser. No prior test pins the exact wire shape,
+        // round-trip, or omission rejection of this variant's
+        // required field. The inner A2ATaskResult element wire form
+        // is pinned by covenant-a2a tests; this slice locks the
+        // outer Response variant shape only.
+        let event = Response::A2AResults { results: vec![] };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "results"],
+            "Response::A2AResults wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'results' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'results' one level deeper and every CLI consumer that \
+             destructures the top-level array would silently fail — \
+             the operator's A2A result list would render empty even \
+             when the daemon returned populated rows",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("a2_a_results")),
+            "Response discriminator slug must be the durable \
+             'a2_a_results'; serde rename_all=snake_case splits on \
+             every Upper boundary including the digit→upper \
+             transition, so A2AResults emits 'a2_a_results' on the \
+             wire. A refactor that 'fixes' the slug to 'a2a_results' \
+             would silently strand every CLI A2A result parser",
+        );
+        let results_arr = obj
+            .get("results")
+            .and_then(serde_json::Value::as_array)
+            .expect("Response::A2AResults::results must serialize as an array");
+        assert_eq!(
+            results_arr.len(),
+            0,
+            "Response::A2AResults::results must round-trip the \
+             exact element count from the wire payload — the \
+             empty-vec construction is sufficient to lock the outer \
+             variant shape; element-level wire form is pinned by \
+             covenant-a2a",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::A2AResults must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI A2A result consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("results");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::A2AResults wire form must reject a payload \
+             missing 'results'; a stray #[serde(default)] would let \
+             a malformed row decode with an empty list and the CLI \
+             would surface a phantom empty A2A result history — a \
+             real fetch failure (truncated frame, partial decode \
+             error) would be silently reclassified as a clean state \
+             where the operator believes no agent tasks have \
+             completed when the daemon's result store is in fact \
+             populated",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

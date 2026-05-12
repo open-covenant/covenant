@@ -3532,6 +3532,47 @@ mod tests {
     }
 
     #[test]
+    fn intents_resume_error_json_pins_error_object_schema() {
+        const EXPECTED_KEYS: &[&str] = &["code", "message"];
+
+        fn assert_error_shape(value: &serde_json::Value) {
+            let error = value["error"]
+                .as_object()
+                .expect("intents_resume_error_json error field must be an object");
+            let mut keys: Vec<String> = error.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "intents_resume_error_json error object keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["error"]["code"].is_string(),
+                "error.code must be a string, not a structured object: {value}",
+            );
+            assert!(
+                value["error"]["message"].is_string(),
+                "error.message must be a string, not a structured object: {value}",
+            );
+        }
+
+        let intent_id = uuid::Uuid::nil();
+        assert_error_shape(&intents_resume_error_json(
+            "explicit",
+            Some(intent_id),
+            "invalid_intent_id",
+            "intent-id must be a uuid",
+        ));
+        assert_error_shape(&intents_resume_error_json(
+            "latest",
+            None,
+            "conflicting_flags",
+            "pass either <intent-id> or latest, not both",
+        ));
+    }
+
+    #[test]
     fn intents_resume_json_renders_stable_ok_shape() {
         let intent_id = uuid::Uuid::nil();
         let value = intents_resume_ok_json(

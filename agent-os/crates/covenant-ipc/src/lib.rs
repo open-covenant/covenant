@@ -3561,6 +3561,137 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_recent_audit_serde_pins_two_field_variant() {
+        // Request::RecentAudit is the operator/CLI verb for paging
+        // the most recent audit events scoped to the caller's
+        // pubkey, optionally bounded by since_ms. It pairs with
+        // Response::AuditEvents (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly three top-level
+        // keys: kind='recent_audit' plus limit plus since_ms.
+        //
+        // Structural twin of the just-pinned RecentReceipts variant
+        // — same shape, same default behaviour, different daemon
+        // dispatch and different slug. limit has #[serde(default =
+        // "default_recent_limit")] returning 10. since_ms is
+        // Option<u64> with #[serde(default)] and NO
+        // skip_serializing_if. The wire form keeps since_ms on the
+        // wire as JSON null when None and as a JSON number when
+        // Some — three keys in both cases.
+        //
+        // This slice locks: the exact wire shape, the snake_case
+        // discriminator 'recent_audit', since_ms=null on the
+        // unbounded path, since_ms=<number> on the bounded path,
+        // round-trip for both shapes, acceptance of frames missing
+        // either field.
+        let unbounded = Request::RecentAudit {
+            limit: 10,
+            since_ms: None,
+        };
+
+        let wire = serde_json::to_value(&unbounded).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "since_ms"],
+            "Request::RecentAudit wire form must be exactly three \
+             top-level keys: 'kind' plus the two variant fields \
+             ('limit', 'since_ms'). A refactor that added \
+             #[serde(skip_serializing_if = \"Option::is_none\")] to \
+             since_ms would shrink the unbounded wire form from \
+             three keys to two and silently break CLI/HTTP audit \
+             consumers that switch on the since_ms key's presence \
+             to distinguish bounded-vs-unbounded pages",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("recent_audit")),
+            "Request discriminator slug must be the durable \
+             'recent_audit'. A refactor that renamed the variant \
+             (e.g., AuditRecent for surface parity) would shift \
+             the slug and operator-driven audit inspection goes \
+             dark through the supported path",
+        );
+        assert_eq!(
+            obj.get("since_ms"),
+            Some(&serde_json::Value::Null),
+            "Request::RecentAudit::since_ms must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the unbounded wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+        assert_eq!(
+            obj.get("limit"),
+            Some(&serde_json::json!(10)),
+            "Request::RecentAudit::limit must surface as a JSON \
+             number; a refactor that promoted limit to a string or \
+             enum would silently mismatch every CLI/HTTP caller \
+             that sends a numeric usize page size",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, unbounded,
+            "Request::RecentAudit (unbounded) must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract every CLI/HTTP recent-audit consumer \
+             leans on",
+        );
+
+        let bounded = Request::RecentAudit {
+            limit: 25,
+            since_ms: Some(1_700_000_000_000),
+        };
+        let bounded_wire = serde_json::to_value(&bounded).unwrap();
+        let bounded_obj = bounded_wire.as_object().unwrap();
+        assert_eq!(
+            bounded_obj.get("since_ms"),
+            Some(&serde_json::json!(1_700_000_000_000u64)),
+            "populated since_ms must round-trip as a JSON number \
+             matching the u64 input; the three-key shape stays \
+             stable across bounded and unbounded",
+        );
+        let bounded_back: Request = serde_json::from_value(bounded_wire.clone()).unwrap();
+        assert_eq!(
+            bounded_back, bounded,
+            "Request::RecentAudit (bounded) must round-trip \
+             through serde_json verbatim",
+        );
+
+        let mut missing_since = obj.clone();
+        missing_since.remove("since_ms");
+        let parsed_no_since: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_since)).unwrap();
+        assert_eq!(
+            parsed_no_since, unbounded,
+            "Request::RecentAudit wire form must accept a payload \
+             missing 'since_ms' (Option<T> with #[serde(default)] \
+             decodes as None); this is the forward-compatibility \
+             contract for stale CLIs that predate the since_ms \
+             filter",
+        );
+
+        let mut missing_limit = obj.clone();
+        missing_limit.remove("limit");
+        let parsed_no_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_limit)).unwrap();
+        assert_eq!(
+            parsed_no_limit, unbounded,
+            "Request::RecentAudit wire form must accept a payload \
+             missing 'limit' (decodes as 10 via \
+             default_recent_limit); a refactor that dropped the \
+             default would silently break stale CLIs that omit \
+             limit, returning an empty page where operators expect \
+             the latest audit events",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

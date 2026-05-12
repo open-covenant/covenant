@@ -11319,16 +11319,10 @@ budget_credits_per_hour = {credits}
     #[test]
     fn parse_env_bool_pins_accepted_synonyms_and_reject_path() {
         for raw in ["1", "true", "yes", "on", "TRUE", " true ", "Yes", "ON"] {
-            assert!(
-                parse_env_bool(raw).unwrap(),
-                "expected true for {raw:?}"
-            );
+            assert!(parse_env_bool(raw).unwrap(), "expected true for {raw:?}");
         }
         for raw in ["0", "false", "no", "off", "FALSE", " 0 ", "No", "OFF"] {
-            assert!(
-                !parse_env_bool(raw).unwrap(),
-                "expected false for {raw:?}"
-            );
+            assert!(!parse_env_bool(raw).unwrap(), "expected false for {raw:?}");
         }
         for raw in ["teu", "", "2", "maybe"] {
             let err = parse_env_bool(raw).unwrap_err().to_string();

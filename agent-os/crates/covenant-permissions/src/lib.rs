@@ -1724,6 +1724,29 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_purge_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_explicit_null_before_ms(
+    ) {
+        assert!(!capabilities_purge_scope_allows(
+            "capabilities.purge",
+            &serde_json::json!([]),
+            1_000
+        )
+        .unwrap());
+
+        let bound_scope = serde_json::json!({ "before_ms": 1_000 });
+        assert!(
+            !capabilities_purge_scope_allows("capabilities.list", &bound_scope, 1_000).unwrap()
+        );
+
+        let explicit_null = serde_json::json!({ "before_ms": null });
+        assert!(capabilities_purge_scope_allows("capabilities.purge", &explicit_null, 0).unwrap());
+        assert!(
+            capabilities_purge_scope_allows("capabilities.purge", &explicit_null, u64::MAX)
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn a2a_scope_allows_peer_task_lease_and_duplicate_risk() {
         let scope = serde_json::json!({
             "version": 1,

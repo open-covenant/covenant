@@ -10848,6 +10848,55 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_auto_retry_scheduler_config_from_env_pins_env_to_field_mapping() {
+        use std::sync::Mutex;
+
+        static A2A_RETRY_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = A2A_RETRY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let names = [
+            "COVENANT_A2A_AUTO_RETRY_SCHEDULER",
+            "COVENANT_A2A_AUTO_RETRY_INTERVAL_MS",
+            "COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS",
+            "COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS",
+            "COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES",
+            "COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT",
+        ];
+        let saved: Vec<Option<String>> = names.iter().map(|n| std::env::var(n).ok()).collect();
+        for name in &names {
+            std::env::remove_var(name);
+        }
+
+        let defaults = a2a_auto_retry_scheduler_config_from_env().unwrap();
+        assert_eq!(defaults, A2AAutoRetrySchedulerConfig::default());
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.interval_ms, 60_000);
+
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_SCHEDULER", "true");
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_INTERVAL_MS", "1234");
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_MIN_LEASE_AGE_MS", "777");
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_MAX_ATTEMPTS", "9");
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES", "4");
+        std::env::set_var("COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT", "55");
+
+        let full = a2a_auto_retry_scheduler_config_from_env().unwrap();
+        assert!(full.enabled);
+        assert!(full.policy.enabled);
+        assert_eq!(full.interval_ms, 1234);
+        assert_eq!(full.policy.min_lease_age_ms, 777);
+        assert_eq!(full.policy.max_attempts, 9);
+        assert_eq!(full.policy.max_requeues, 4);
+        assert_eq!(full.policy.scan_limit, 55);
+
+        for (name, value) in names.iter().zip(saved.iter()) {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
     fn a2a_auto_retry_scheduler_config_from_values_pins_defaults_and_overrides() {
         let default = a2a_auto_retry_scheduler_config_from_values(None, None, None, None, None, None)
             .unwrap();

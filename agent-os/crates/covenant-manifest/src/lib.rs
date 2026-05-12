@@ -262,6 +262,43 @@ entry = "./tiny"
 "#;
 
     #[test]
+    fn runtime_serde_pins_each_variant_slug() {
+        // Runtime carries rename_all = lowercase AND an explicit
+        // #[serde(rename = "rust-bin")] for RustBin. Every agent package
+        // with `runtime = "rust-bin"` in its agent.toml depends on the
+        // explicit rename — without it, rename_all would emit `rustbin`
+        // (no hyphen) and silently fail every rust-bin manifest at
+        // daemon start. Pin all three slugs and the un-renamed form so
+        // a refactor that drops the rename attribute fails loud.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            runtime: Runtime,
+        }
+        let cases: [(&str, Runtime); 3] = [
+            ("python3", Runtime::Python3),
+            ("node", Runtime::Node),
+            ("rust-bin", Runtime::RustBin),
+        ];
+        for (slug, expected) in cases {
+            let toml_src = format!("runtime = \"{slug}\"");
+            let parsed: Holder = toml::from_str(&toml_src).unwrap_or_else(|err| {
+                panic!("Runtime slug {slug:?} must deserialize, got: {err}")
+            });
+            assert_eq!(parsed.runtime, expected);
+        }
+
+        // The default rename_all form for RustBin (rustbin, no hyphen)
+        // must NOT parse — that would mean the explicit rename attribute
+        // had been dropped and rust-bin manifests would also stop
+        // parsing on the next refactor.
+        assert!(toml::from_str::<Holder>("runtime = \"rustbin\"").is_err());
+
+        // Titlecase must fail — the lowercase contract stays a strict
+        // whitelist, not a permissive fallback.
+        assert!(toml::from_str::<Holder>("runtime = \"Python3\"").is_err());
+    }
+
+    #[test]
     fn sandbox_backend_is_sandbox_grade_pins_each_variant() {
         for backend in [SandboxBackend::TrustedLocal, SandboxBackend::LinuxGvisor] {
             let expected = match backend {

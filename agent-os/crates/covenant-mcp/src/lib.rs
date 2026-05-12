@@ -205,6 +205,42 @@ mod tests {
     }
 
     #[test]
+    fn content_serde_pins_each_variant_wire_form() {
+        let text = Content::text("hi");
+        let text_wire = serde_json::json!({ "type": "text", "text": "hi" });
+        assert_eq!(serde_json::to_value(&text).unwrap(), text_wire);
+        assert_eq!(
+            serde_json::from_value::<Content>(text_wire.clone()).unwrap(),
+            text
+        );
+
+        let json = Content::json(serde_json::json!({ "sum": 7 }));
+        let json_wire = serde_json::json!({ "type": "json", "value": { "sum": 7 } });
+        assert_eq!(serde_json::to_value(&json).unwrap(), json_wire);
+        assert_eq!(
+            serde_json::from_value::<Content>(json_wire.clone()).unwrap(),
+            json
+        );
+
+        assert!(
+            serde_json::from_value::<Content>(serde_json::json!({
+                "type": "Text",
+                "text": "hi",
+            }))
+            .is_err(),
+            "titlecase discriminator must be rejected so the camelCase whitelist stays tight",
+        );
+        assert!(
+            serde_json::from_value::<Content>(serde_json::json!({
+                "type": "image",
+                "data": "...",
+            }))
+            .is_err(),
+            "unknown variant must be rejected so future MCP additions force an explicit rename",
+        );
+    }
+
+    #[test]
     fn tool_call_result_is_error_serialises_camel_case() {
         let r = ToolCallResult::error("nope");
         let json = serde_json::to_string(&r).unwrap();

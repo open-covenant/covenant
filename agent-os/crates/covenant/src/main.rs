@@ -3842,6 +3842,38 @@ mod tests {
     }
 
     #[test]
+    fn capability_revoke_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "removed", "signature_b58"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("capability_revoke_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "capability_revoke_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("capability_revoked"));
+            assert!(
+                value["signature_b58"].is_string(),
+                "signature_b58 must be a string: {value}",
+            );
+            assert!(
+                value["removed"].is_boolean(),
+                "removed must be a JSON boolean, not 0/1 or string: {value}",
+            );
+        }
+
+        assert_shape(&capability_revoke_json("sigb58", true));
+        assert_shape(&capability_revoke_json("sigb58", false));
+    }
+
+    #[test]
     fn capabilities_purge_json_renders_stable_shape() {
         let value = capabilities_purge_json(1_700_000_000_000, 3);
         assert_eq!(value["kind"], "capabilities_purged");

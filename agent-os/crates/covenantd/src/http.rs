@@ -934,6 +934,35 @@ mod tests {
     }
 
     #[test]
+    fn cors_origins_from_env_pins_env_default_and_forward() {
+        use std::sync::Mutex;
+
+        static CORS_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = CORS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let saved = std::env::var("COVENANT_HTTP_ORIGINS").ok();
+        std::env::remove_var("COVENANT_HTTP_ORIGINS");
+
+        let defaults = cors_origins_from_env();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].to_str().unwrap(), DEFAULT_CORS_ORIGIN);
+
+        std::env::set_var(
+            "COVENANT_HTTP_ORIGINS",
+            "http://localhost:3000,https://app.example.com",
+        );
+        let forwarded = cors_origins_from_env();
+        assert_eq!(forwarded.len(), 2);
+        assert_eq!(forwarded[0].to_str().unwrap(), "http://localhost:3000");
+        assert_eq!(forwarded[1].to_str().unwrap(), "https://app.example.com");
+
+        match saved {
+            Some(v) => std::env::set_var("COVENANT_HTTP_ORIGINS", v),
+            None => std::env::remove_var("COVENANT_HTTP_ORIGINS"),
+        }
+    }
+
+    #[test]
     fn cors_origins_default_when_value_is_empty_or_whitespace() {
         let empty = cors_origins_from_value(Some(""));
         assert_eq!(empty.len(), 1);

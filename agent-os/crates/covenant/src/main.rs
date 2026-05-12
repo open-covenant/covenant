@@ -3479,6 +3479,59 @@ mod tests {
     }
 
     #[test]
+    fn intents_resume_error_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["error", "intent_id", "kind", "mode", "ok"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("intents_resume_error_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "intents_resume_error_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("intents_resume"));
+            assert!(
+                value["ok"].is_boolean(),
+                "ok must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert_eq!(
+                value["ok"].as_bool(),
+                Some(false),
+                "intents_resume_error_json must always report ok=false: {value}",
+            );
+            assert!(value["mode"].is_string(), "mode must be a string: {value}");
+            assert!(
+                value["intent_id"].is_string() || value["intent_id"].is_null(),
+                "intent_id must be a string uuid when known and null when missing: {value}",
+            );
+            assert!(
+                value["error"].is_object(),
+                "error must be a structured object with code and message, not a string blob: {value}",
+            );
+        }
+
+        let intent_id = uuid::Uuid::nil();
+        assert_shape(&intents_resume_error_json(
+            "latest",
+            Some(intent_id),
+            "daemon_error",
+            "budget exhausted; try again later",
+        ));
+        assert_shape(&intents_resume_error_json(
+            "explicit",
+            None,
+            "missing_intent_id",
+            "missing <intent-id>",
+        ));
+    }
+
+    #[test]
     fn intents_resume_json_renders_stable_ok_shape() {
         let intent_id = uuid::Uuid::nil();
         let value = intents_resume_ok_json(

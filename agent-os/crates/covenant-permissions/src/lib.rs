@@ -2450,6 +2450,65 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_token_prefix_pins_absent_null_prefix_match_and_strict_none_path() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_token_prefix(empty, Some("anything")),
+            "absent 'token_prefix' field must allow any Some(_); unscoped grants have no prefix gate",
+        );
+        assert!(
+            scope_allows_token_prefix(empty, None),
+            "absent 'token_prefix' field must allow actual=None; the absent-key branch is unconditional",
+        );
+
+        let explicit_null = serde_json::json!({ "token_prefix": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_token_prefix(explicit_null, Some("anything")),
+            "{{\"token_prefix\": null}} is the documented unbounded marker and must allow any Some(_)",
+        );
+        assert!(
+            scope_allows_token_prefix(explicit_null, None),
+            "{{\"token_prefix\": null}} must allow actual=None; the null arm is unconditional",
+        );
+
+        let bound = serde_json::json!({ "token_prefix": "abc" });
+        let bound = bound.as_object().unwrap();
+        assert!(
+            scope_allows_token_prefix(bound, Some("abcdef")),
+            "scope token_prefix=\"abc\" must allow actual=Some(\"abcdef\"); the redaction-friendly contract is starts_with, not exact equality",
+        );
+        assert!(
+            scope_allows_token_prefix(bound, Some("abc")),
+            "scope token_prefix=\"abc\" must allow actual=Some(\"abc\"); the bare prefix is its own valid extension",
+        );
+        assert!(
+            !scope_allows_token_prefix(bound, Some("ab")),
+            "scope token_prefix=\"abc\" must NOT allow actual=Some(\"ab\"); shorter-than-prefix actuals must fail starts_with",
+        );
+        assert!(
+            !scope_allows_token_prefix(bound, Some("xabc")),
+            "scope token_prefix=\"abc\" must NOT allow actual=Some(\"xabc\"); the comparison is starts_with, not contains",
+        );
+        assert!(
+            !scope_allows_token_prefix(bound, None),
+            "scope token_prefix=\"abc\" must NOT allow actual=None; a regression that allowed None here would silently authorize unauthenticated callers under prefix-scoped peer grants",
+        );
+
+        let non_string = serde_json::json!({ "token_prefix": 42 });
+        let non_string = non_string.as_object().unwrap();
+        assert!(
+            !scope_allows_token_prefix(non_string, Some("abc")),
+            "a non-string 'token_prefix' must strict-deny Some(_); this is the one helper in the family whose malformed-scope path is deny, because tokens gate a security boundary",
+        );
+        assert!(
+            !scope_allows_token_prefix(non_string, None),
+            "a non-string 'token_prefix' must strict-deny None too; the malformed-scope deny path is unconditional on the prefix side",
+        );
+    }
+
+    #[test]
     fn scope_allows_string_pins_absent_null_exact_match_and_non_string_path() {
         let empty = serde_json::json!({});
         let empty = empty.as_object().unwrap();

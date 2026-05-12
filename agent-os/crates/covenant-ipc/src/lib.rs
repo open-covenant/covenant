@@ -598,6 +598,64 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn request_ping_serde_pins_unit_variant() {
+        // Request::Ping is the unit variant the CLI sends as a
+        // liveness probe to confirm the daemon's IPC loop is
+        // responsive — it carries no payload and pairs with
+        // Response::Pong (already pinned by
+        // response_pong_serde_pins_unit_variant). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire form is the discriminator slug
+        // alone, exactly one top-level key: kind='ping'. No prior
+        // test pins the exact wire shape or round-trip of this
+        // variant. A refactor that promoted Ping from a unit
+        // variant to a struct or newtype variant carrying a
+        // payload would add a second required key on the wire and
+        // silently break every CLI heartbeat that sends
+        // Request::Ping; a slug regression silently strands every
+        // liveness probe by routing it to the daemon's error
+        // branch instead of the Pong path.
+        let event = Request::Ping;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::Ping wire form must be exactly one top-level \
+             key: 'kind'. A refactor that promoted the variant from \
+             unit to struct or newtype would add a second top-level \
+             key and every CLI heartbeat that sends {{\"kind\":\"ping\"}} \
+             alone would fail to decode on the daemon side — the \
+             operator's liveness probes would silently start \
+             returning Error responses instead of Pong, masking \
+             actual daemon health behind a serde-shape regression",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("ping")),
+            "Request discriminator slug must be the durable \
+             'ping'; a slug regression silently routes incoming \
+             liveness frames to the daemon's catch-all error \
+             branch instead of the Pong path — every CLI liveness \
+             probe reports the daemon as unresponsive even when it \
+             is fully healthy, masking liveness exactly the way \
+             the ping/pong round-trip is designed to detect",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::Ping must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI heartbeat consumer leans on to confirm liveness",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -6063,6 +6063,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_tier_accepts_documented_spellings_and_rejects_unknown() {
+        assert_eq!(parse_tier("working").unwrap(), MemoryTier::Working);
+        assert_eq!(parse_tier("episodic").unwrap(), MemoryTier::Episodic);
+        assert_eq!(parse_tier("longterm").unwrap(), MemoryTier::LongTerm);
+        assert_eq!(parse_tier("long-term").unwrap(), MemoryTier::LongTerm);
+        assert_eq!(parse_tier("long_term").unwrap(), MemoryTier::LongTerm);
+
+        let err = parse_tier("workimg").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown tier"),
+            "rejection must include the typed prefix so the CLI surface is recognisable: {err:?}",
+        );
+        assert!(
+            msg.contains("workimg"),
+            "rejection must echo the offending value so a typo is debuggable: {err:?}",
+        );
+    }
+
+    #[test]
     fn parse_a2a_queue_state_accepts_both_spellings() {
         assert_eq!(
             parse_a2a_queue_state("queued").unwrap(),

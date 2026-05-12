@@ -3557,6 +3557,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_receipt_batches_serde_pins_single_field_variant() {
+        // Response::ReceiptBatches is the variant the daemon sends
+        // in response to Request::ReceiptBatches — it carries
+        // batches: Vec<ReceiptBatchSummary>, the receipt batch
+        // summaries (batch_id, merkle_root, receipt_count) the CLI
+        // renders to the operator. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the
+        // wire object is exactly two top-level keys:
+        // kind='receipt_batches' plus batches. No prior test pins
+        // the exact wire shape, round-trip, or omission rejection
+        // of this variant's required field. The inner
+        // ReceiptBatchSummary element wire form is exercised by
+        // sibling ReceiptBatchFlushed tests; this slice locks the
+        // outer Response variant shape only — an empty Vec is
+        // sufficient to catch the slug, key set, and
+        // default-attribute regressions on the outer variant.
+        let event = Response::ReceiptBatches { batches: vec![] };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["batches", "kind"],
+            "Response::ReceiptBatches wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'batches' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             'batches' one level deeper and every CLI consumer that \
+             destructures the top-level array would silently fail — \
+             the operator's batch list would render empty even when \
+             the daemon returned populated rows",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("receipt_batches")),
+            "Response discriminator slug must be the durable \
+             'receipt_batches'; a slug regression silently strands \
+             every CLI parser that classifies receipt-batches \
+             outcomes by this exact value — the operator's CLI \
+             prints a confusing fallback instead of the batch list",
+        );
+        let batches_arr = obj
+            .get("batches")
+            .and_then(serde_json::Value::as_array)
+            .expect("Response::ReceiptBatches::batches must serialize as an array");
+        assert_eq!(
+            batches_arr.len(),
+            0,
+            "Response::ReceiptBatches::batches must round-trip the \
+             exact element count from the wire payload — the \
+             empty-vec construction is sufficient to lock the outer \
+             variant shape; element-level wire form is exercised by \
+             sibling ReceiptBatchFlushed tests",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ReceiptBatches must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI receipt-batches consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("batches");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::ReceiptBatches wire form must reject a \
+             payload missing 'batches'; a stray #[serde(default)] \
+             would let a malformed row decode with an empty list \
+             and the CLI would surface a phantom empty batch \
+             history — a real fetch failure (truncated frame, \
+             partial decode error) would be silently reclassified \
+             as a clean state where the operator believes no \
+             receipt batches have been anchored when the daemon's \
+             chain has in fact flushed batches",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

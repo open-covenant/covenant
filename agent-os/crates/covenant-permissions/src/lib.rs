@@ -3517,6 +3517,57 @@ mod tests {
     }
 
     #[test]
+    fn optional_string_array_pins_absent_array_non_array_non_string_entry_and_unsupported_entry() {
+        let allowed = &["working", "episodic", "longterm"];
+
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_string_array("memory.read", empty, "x", allowed).is_ok(),
+            "absent field must be Ok; the let-else short-circuits before any type or contents check so unscoped memory grants do not fail at the tiers gate",
+        );
+
+        let empty_array = serde_json::json!({ "x": [] });
+        let empty_array = empty_array.as_object().unwrap();
+        assert!(
+            optional_string_array("memory.read", empty_array, "x", allowed).is_ok(),
+            "{{\"x\": []}} must be Ok; the for-loop trivially succeeds, and a regression that required a non-empty array would silently reject documented zero-tier scopes",
+        );
+
+        let valid = serde_json::json!({ "x": ["working", "longterm"] });
+        let valid = valid.as_object().unwrap();
+        assert!(
+            optional_string_array("memory.read", valid, "x", allowed).is_ok(),
+            "{{\"x\": [\"working\", \"longterm\"]}} must be Ok against the memory tier allowlist; otherwise the gate silently rejects its own intended input",
+        );
+
+        let non_array = serde_json::json!({ "x": {} });
+        let non_array = non_array.as_object().unwrap();
+        let err = optional_string_array("memory.read", non_array, "x", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("must be an array")),
+            "{{\"x\": {{}}}} must produce the 'must be an array' error via as_array() returning None on an object; got {err:?}. A regression that fell through to accept objects would silently widen memory.tiers to arbitrary keyed shapes and bypass the tier allow-list entirely.",
+        );
+
+        let non_string_entry = serde_json::json!({ "x": [42] });
+        let non_string_entry = non_string_entry.as_object().unwrap();
+        let err =
+            optional_string_array("memory.read", non_string_entry, "x", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("entries must be strings")),
+            "{{\"x\": [42]}} must produce the 'entries must be strings' error via the inner as_str returning None; got {err:?}. A regression that skipped non-string entries would silently let partially-typed memory grants through with mixed-type tier arrays that downstream as_str() reads as missing.",
+        );
+
+        let unsupported = serde_json::json!({ "x": ["working", "unknown"] });
+        let unsupported = unsupported.as_object().unwrap();
+        let err = optional_string_array("memory.read", unsupported, "x", allowed).unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("unsupported value")),
+            "{{\"x\": [\"working\", \"unknown\"]}} must produce the 'unsupported value' error on the second entry; got {err:?}. A regression that stopped iterating after the first entry would silently authorize unsupported tiers placed later in the list, breaking the tier allow-list for any grant binding ['working', 'X'] where X is outside the allowed set.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

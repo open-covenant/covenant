@@ -1624,6 +1624,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_memory_scope_rejects_invalid_record_id_and_apply_shapes() {
+        assert_invalid_scope(
+            "memory.write",
+            serde_json::json!({ "version": 1, "record_id": 42 }),
+        );
+        assert_invalid_scope(
+            "memory.write",
+            serde_json::json!({ "version": 1, "apply": "yes" }),
+        );
+    }
+
+    #[test]
     fn tool_call_scope_allows_unscoped_grants() {
         assert!(tool_call_scope_allows(
             "tool.call.echo",

@@ -7,7 +7,7 @@
 
 use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
-    A2ATaskQueueEntry, A2ATaskResult,
+    A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
 use covenant_audit::{AuditEvent, AuditIntegrityReport};
 use covenant_budget::BudgetDebit;
@@ -223,6 +223,12 @@ pub enum Request {
     /// field is `#[serde(default)]` so a stale CLI built before the
     /// filter landed sends frames without it; the new daemon parses
     /// them as `None`, which is the pre-filter behaviour.
+    ///
+    /// `state_filter` narrows the visible task set to either queued
+    /// or in-flight entries. Same `#[serde(default)]` shape so a
+    /// stale CLI does not break the new daemon and a new CLI talking
+    /// to an older daemon still pulls the full queue (the older
+    /// daemon ignores the unknown field and returns both states).
     A2AQueue {
         #[serde(default = "default_recent_limit")]
         limit: usize,
@@ -230,6 +236,8 @@ pub enum Request {
         min_lease_age_ms: Option<u64>,
         #[serde(default)]
         deadline_within_ms: Option<u64>,
+        #[serde(default)]
+        state_filter: Option<A2ATaskQueueState>,
     },
     /// Manually repair an in-flight A2A lease. The daemon enforces
     /// visibility, capability, and audit rules before delegating to the

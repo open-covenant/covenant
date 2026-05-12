@@ -232,6 +232,7 @@ async fn live_covenantd_a2a_survives_daemon_restart() {
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             },
         )
         .await

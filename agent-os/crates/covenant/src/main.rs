@@ -27,7 +27,7 @@
 //!   covenant audit recent [--limit N] [--json]
 //!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
-//!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--json]
+//!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]
 //!   covenant a2a requeue <task-id> --reason <text> --duplicate-risk <idempotent|operator-accepted> [--lease-id <uuid>]
 //!   covenant a2a force-error <task-id> --reason <text> --message <text> [--lease-id <uuid>]
 //!   covenant a2a retry-stale [--enable] [--min-lease-age-ms N] [--max-attempts N] [--max-requeues N] [--scan-limit N] [--json]
@@ -45,7 +45,7 @@
 use anyhow::{bail, Context, Result};
 use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ADuplicateRisk, A2ARepairCommand, A2ARepairRequest,
-    A2ATaskQueueEntry, A2ATaskResult,
+    A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
 use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
@@ -146,7 +146,7 @@ fn print_usage() {
         "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
     );
     eprintln!(
-        "  covenant a2a status [-n N] [--min-lease-age-ms N] [--deadline-within-ms N] [--json]  list queued tasks, in-flight leases, and pending results; --deadline-within-ms N keeps only tasks whose deadline_ms is set and within at most N ms from now"
+        "  covenant a2a status [-n N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]  list queued tasks, in-flight leases, and pending results; --deadline-within-ms N keeps only tasks whose deadline_ms is set and within at most N ms from now; --state narrows to one queue state"
     );
     eprintln!(
         "  covenant a2a requeue <task-id> --reason TEXT --duplicate-risk idempotent|operator-accepted [--lease-id UUID]"
@@ -283,6 +283,14 @@ fn parse_duplicate_risk(value: &str) -> Result<A2ADuplicateRisk> {
         "idempotent" => Ok(A2ADuplicateRisk::Idempotent),
         "operator-accepted" | "operator_accepted" => Ok(A2ADuplicateRisk::OperatorAccepted),
         other => bail!("unknown duplicate risk '{other}' (expected idempotent|operator-accepted)"),
+    }
+}
+
+fn parse_a2a_queue_state(value: &str) -> Result<A2ATaskQueueState> {
+    match value {
+        "queued" => Ok(A2ATaskQueueState::Queued),
+        "in_flight" | "in-flight" => Ok(A2ATaskQueueState::InFlight),
+        other => bail!("unknown a2a state '{other}' (expected queued|in_flight)"),
     }
 }
 
@@ -1612,6 +1620,7 @@ async fn main() -> Result<()> {
                     let mut limit: usize = 10;
                     let mut min_lease_age_ms: Option<u64> = None;
                     let mut deadline_within_ms: Option<u64> = None;
+                    let mut state_filter: Option<A2ATaskQueueState> = None;
                     let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
@@ -1637,6 +1646,11 @@ async fn main() -> Result<()> {
                                         .context("--deadline-within-ms must be an integer")?,
                                 );
                             }
+                            "--state" => {
+                                i += 1;
+                                let v = args.get(i).context("--state needs a value")?;
+                                state_filter = Some(parse_a2a_queue_state(v)?);
+                            }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
                         }
@@ -1648,6 +1662,7 @@ async fn main() -> Result<()> {
                             limit,
                             min_lease_age_ms,
                             deadline_within_ms,
+                            state_filter,
                         },
                     )
                     .await?;
@@ -1660,6 +1675,7 @@ async fn main() -> Result<()> {
                                         limit,
                                         min_lease_age_ms,
                                         deadline_within_ms,
+                                        state_filter,
                                         &tasks,
                                         &results
                                     ))?
@@ -2799,6 +2815,7 @@ fn a2a_status_json(
     limit: usize,
     min_lease_age_ms: Option<u64>,
     deadline_within_ms: Option<u64>,
+    state_filter: Option<A2ATaskQueueState>,
     tasks: &[A2ATaskQueueEntry],
     results: &[A2ATaskResult],
 ) -> serde_json::Value {
@@ -2807,6 +2824,7 @@ fn a2a_status_json(
         "limit": limit,
         "min_lease_age_ms": min_lease_age_ms,
         "deadline_within_ms": deadline_within_ms,
+        "state_filter": state_filter,
         "tasks": tasks,
         "results": results,
     })
@@ -3916,11 +3934,19 @@ mod tests {
             attempt: 0,
         };
         let result = A2ATaskResult::ok(task_id, vec![]);
-        let value = a2a_status_json(5, Some(300_000), Some(60_000), &[entry], &[result]);
+        let value = a2a_status_json(
+            5,
+            Some(300_000),
+            Some(60_000),
+            Some(A2ATaskQueueState::InFlight),
+            &[entry],
+            &[result],
+        );
         assert_eq!(value["kind"], "a2a_status");
         assert_eq!(value["limit"], 5);
         assert_eq!(value["min_lease_age_ms"], 300_000);
         assert_eq!(value["deadline_within_ms"], 60_000);
+        assert_eq!(value["state_filter"], "in_flight");
         assert_eq!(value["tasks"][0]["state"], "queued");
         assert_eq!(value["tasks"][0]["task"]["intent_text"], "status probe");
         assert_eq!(value["results"][0]["status"], "ok");
@@ -3928,10 +3954,37 @@ mod tests {
 
     #[test]
     fn a2a_status_json_omits_deadline_filter_when_inactive() {
-        let value = a2a_status_json(5, None, None, &[], &[]);
+        let value = a2a_status_json(5, None, None, None, &[], &[]);
         assert_eq!(value["kind"], "a2a_status");
         assert!(value["min_lease_age_ms"].is_null());
         assert!(value["deadline_within_ms"].is_null());
+        assert!(value["state_filter"].is_null());
+    }
+
+    #[test]
+    fn parse_a2a_queue_state_accepts_both_spellings() {
+        assert_eq!(
+            parse_a2a_queue_state("queued").unwrap(),
+            A2ATaskQueueState::Queued,
+        );
+        assert_eq!(
+            parse_a2a_queue_state("in_flight").unwrap(),
+            A2ATaskQueueState::InFlight,
+        );
+        assert_eq!(
+            parse_a2a_queue_state("in-flight").unwrap(),
+            A2ATaskQueueState::InFlight,
+        );
+        let err = parse_a2a_queue_state("InFlight").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown a2a state"),
+            "case-sensitive parser must reject mixed case: {err:?}",
+        );
+        let err = parse_a2a_queue_state("queued ").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown a2a state"),
+            "trailing whitespace must be rejected so a typo does not silently disable the filter: {err:?}",
+        );
     }
 
     #[test]

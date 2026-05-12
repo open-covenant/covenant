@@ -464,6 +464,21 @@ fn a2a_entry_matches_deadline_within(
     deadline <= now_ms.saturating_add(window)
 }
 
+/// `--state queued|in_flight` filter. Returns true when the filter
+/// is unset, otherwise keeps only entries whose `state` matches. The
+/// filter runs against the typed `A2ATaskQueueState` discriminator on
+/// the queue entry — the CLI maps `--state` strings to the same enum
+/// so a typo at the CLI layer is rejected before the daemon sees it.
+fn a2a_entry_matches_state(
+    entry: &covenant_a2a::A2ATaskQueueEntry,
+    state_filter: Option<covenant_a2a::A2ATaskQueueState>,
+) -> bool {
+    match state_filter {
+        Some(state) => entry.state == state,
+        None => true,
+    }
+}
+
 /// Cap on `RevokeOutcome::Ambiguous.matches`. When more than this many
 /// registry entries match the operator's prefix, the daemon returns the
 /// first `PEER_MATCH_LIMIT` summaries plus `truncated: true` so the
@@ -979,9 +994,16 @@ impl Server {
                 limit,
                 min_lease_age_ms,
                 deadline_within_ms,
+                state_filter,
             } => {
-                self.a2a_queue(limit, min_lease_age_ms, deadline_within_ms, peer)
-                    .await
+                self.a2a_queue(
+                    limit,
+                    min_lease_age_ms,
+                    deadline_within_ms,
+                    state_filter,
+                    peer,
+                )
+                .await
             }
             Request::RepairA2ATask { request } => self.repair_a2a_task(request, peer).await,
             Request::RetryA2AStale { policy } => self.retry_a2a_stale(policy, peer).await,
@@ -1364,9 +1386,13 @@ impl Server {
         limit: usize,
         min_lease_age_ms: Option<u64>,
         deadline_within_ms: Option<u64>,
+        state_filter: Option<covenant_a2a::A2ATaskQueueState>,
         peer: &AgentId,
     ) -> Response {
-        let task_limit = if min_lease_age_ms.is_some() || deadline_within_ms.is_some() {
+        let task_limit = if min_lease_age_ms.is_some()
+            || deadline_within_ms.is_some()
+            || state_filter.is_some()
+        {
             usize::MAX
         } else {
             limit
@@ -1380,6 +1406,7 @@ impl Server {
                 .filter(|entry| {
                     a2a_entry_matches_deadline_within(entry, deadline_within_ms, now_ms)
                 })
+                .filter(|entry| a2a_entry_matches_state(entry, state_filter))
                 .take(limit)
                 .collect(),
             Err(e) => {
@@ -6794,6 +6821,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await;
         match queue {
@@ -6812,6 +6840,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: Some(0),
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await;
         match queue {
@@ -6876,6 +6905,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: Some(u64::MAX),
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await;
         match queue {
@@ -6885,6 +6915,61 @@ required = {caps:?}
                 assert_eq!(tasks[0].task.id, queued.id);
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].task_id, result_task.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let queued_only = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: Some(covenant_a2a::A2ATaskQueueState::Queued),
+            })
+            .await;
+        match queued_only {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::Queued);
+                assert_eq!(tasks[0].task.id, queued.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let in_flight_only = s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: Some(covenant_a2a::A2ATaskQueueState::InFlight),
+            })
+            .await;
+        match in_flight_only {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, in_flight.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let narrow_limit = s
+            .op_respond(Request::A2AQueue {
+                limit: 1,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: Some(covenant_a2a::A2ATaskQueueState::InFlight),
+            })
+            .await;
+        match narrow_limit {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(
+                    tasks.len(),
+                    1,
+                    "state_filter must be applied before --limit so a queued cluster cannot push in_flight rows out of the result window",
+                );
+                assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
+                assert_eq!(tasks[0].task.id, in_flight.id);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -6918,6 +7003,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await;
         match queue {
@@ -6978,6 +7064,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7070,6 +7157,7 @@ required = {caps:?}
                     limit: 10,
                     min_lease_age_ms: None,
                     deadline_within_ms: None,
+                    state_filter: None,
                 },
                 &delegate,
             )
@@ -7120,6 +7208,7 @@ required = {caps:?}
                     limit: 10,
                     min_lease_age_ms: None,
                     deadline_within_ms: None,
+                    state_filter: None,
                 },
                 &delegate,
             )
@@ -7185,6 +7274,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7217,6 +7307,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7288,6 +7379,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7359,6 +7451,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7536,6 +7629,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {
@@ -7609,6 +7703,7 @@ required = {caps:?}
                 limit: 10,
                 min_lease_age_ms: None,
                 deadline_within_ms: None,
+                state_filter: None,
             })
             .await
         {

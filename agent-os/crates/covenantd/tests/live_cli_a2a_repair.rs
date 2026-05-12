@@ -130,6 +130,7 @@ async fn send_and_lease(stream: &mut UnixStream, task: &A2ATask) -> Uuid {
             limit: 20,
             min_lease_age_ms: Some(0),
             deadline_within_ms: None,
+            state_filter: None,
         },
     )
     .await

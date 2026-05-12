@@ -376,6 +376,7 @@ struct LimitParams {
     limit: Option<usize>,
     min_lease_age_ms: Option<u64>,
     deadline_within_ms: Option<u64>,
+    state_filter: Option<covenant_a2a::A2ATaskQueueState>,
 }
 
 async fn receipts_recent(
@@ -623,6 +624,7 @@ async fn a2a_queue(
                     limit: q.limit.unwrap_or(10),
                     min_lease_age_ms: q.min_lease_age_ms,
                     deadline_within_ms: q.deadline_within_ms,
+                    state_filter: q.state_filter,
                 },
                 &peer,
             )

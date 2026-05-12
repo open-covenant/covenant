@@ -10,7 +10,7 @@ const RELEASE_DATE = "ALPHA TARGET: 13.05.2026";
 export default function Page() {
   return (
     <main className="relative h-[100dvh] min-h-[100svh] overflow-hidden bg-[#030303]">
-      <HeroMesh src="/hero-bg.avif" />
+      <HeroMesh src="/hero-bg.jpg" />
 
       <header
         className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-[max(35px,env(safe-area-inset-top))] sm:pt-[max(59px,env(safe-area-inset-top))]"
@@ -83,7 +83,7 @@ export default function Page() {
 
       <section className="relative z-10 flex h-full flex-col items-center justify-center px-4 text-center">
         <div className="pointer-events-none h-[min(80vh,90vw)] w-[min(80vh,90vw)] max-w-none">
-          <PixelReveal src="/hero-bg.avif" stagger={720} fadeDur={280} />
+          <PixelReveal src="/hero-bg.jpg" stagger={720} fadeDur={280} />
         </div>
       </section>
 

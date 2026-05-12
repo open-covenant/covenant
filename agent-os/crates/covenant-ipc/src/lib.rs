@@ -4794,6 +4794,147 @@ mod tests {
         }
     }
 
+    #[test]
+    fn response_peer_list_serde_pins_three_field_variant() {
+        // Response::PeerList is the variant the daemon sends after
+        // Request::ListPeers dumps the operator-visible peer
+        // registry snapshot in one payload. It carries
+        // peers: Vec<PeerSummary> (the rendered rows, post-filter,
+        // post-prefix-match), operator_pubkey_b58: String
+        // annotated with #[serde(default)] (the local operator
+        // pubkey so the CLI can self-mark its own row), and
+        // truncated: bool annotated with #[serde(default)] (whether
+        // the result was capped at limit and a follow-up page
+        // exists). With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly four top-level keys: kind='peer_list' plus the
+        // three variant fields. Both serde(default) fields have NO
+        // skip_serializing_if, so the wire form is stable across
+        // populated and default states — operator_pubkey_b58
+        // surfaces as a JSON string (empty when unset) and
+        // truncated surfaces as a JSON bool. No prior test pins
+        // the exact wire shape, round-trip, or the forward-compat
+        // decode contract at the outer Response level. The inner
+        // PeerSummary shape is pinned by covenant-peer-auth tests;
+        // this slice locks the outer variant shape and the
+        // asymmetric serde(default)-not-skip-serializing-if
+        // contract on operator_pubkey_b58 and truncated only.
+        let event = Response::PeerList {
+            peers: vec![],
+            operator_pubkey_b58: String::new(),
+            truncated: false,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "operator_pubkey_b58", "peers", "truncated"],
+            "Response::PeerList wire form must be exactly four \
+             top-level keys: 'kind' plus the three variant fields. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest the \
+             fields one level deeper and every CLI consumer that \
+             destructures .peers or .truncated would silently fail \
+             — the operator's peers list would read blank for \
+             every snapshot even when the daemon returned populated \
+             rows",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("peer_list")),
+            "Response discriminator slug must be the durable \
+             'peer_list'; a slug regression silently strands every \
+             CLI parser that classifies peer-list outcomes by this \
+             exact value — the operator's CLI prints a confusing \
+             fallback instead of the peer snapshot, masking the \
+             registry state during incident triage",
+        );
+        assert_eq!(
+            obj.get("operator_pubkey_b58").and_then(serde_json::Value::as_str),
+            Some(""),
+            "Response::PeerList::operator_pubkey_b58 must always \
+             surface as a JSON string (the durable \
+             not-skip-serializing-if surface — the four-key shape \
+             stays stable across populated and default states); a \
+             stray #[serde(skip_serializing_if = \
+             \"String::is_empty\")] would shrink the default-state \
+             wire form to three keys and silently break CLI \
+             consumers that switch on the key's presence to render \
+             the self-mark",
+        );
+        assert_eq!(
+            obj.get("truncated").and_then(serde_json::Value::as_bool),
+            Some(false),
+            "Response::PeerList::truncated must always surface as \
+             a JSON bool (the durable not-skip-serializing-if \
+             surface); a stray \
+             #[serde(skip_serializing_if = \"std::ops::Not::not\")] \
+             would shrink the default-state wire form to three keys \
+             and silently break CLI consumers that switch on the \
+             key's presence to render the truncation banner",
+        );
+        assert_eq!(
+            obj.get("peers")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "Response::PeerList::peers must serialize as an array — \
+             the empty-vec construction is sufficient to lock the \
+             outer variant shape; element-level wire form is \
+             pinned by covenant-peer-auth tests",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::PeerList must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI peers-list consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("peers");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::PeerList wire form must reject a payload \
+             missing 'peers'; a stray #[serde(default)] on peers \
+             would let a malformed row decode with an empty list \
+             and the CLI would surface a phantom empty registry — \
+             a real fetch failure (truncated frame, partial decode \
+             error) would be silently reclassified as a clean \
+             empty state where the operator believes no peers \
+             exist when in fact the daemon's snapshot path \
+             produced an error the boundary swallowed",
+        );
+
+        let forward_compat = serde_json::json!({
+            "kind": "peer_list",
+            "peers": [],
+        });
+        let decoded: Response = serde_json::from_value(forward_compat).unwrap();
+        assert_eq!(
+            decoded,
+            Response::PeerList {
+                peers: vec![],
+                operator_pubkey_b58: String::new(),
+                truncated: false,
+            },
+            "Response::PeerList with operator_pubkey_b58 and \
+             truncated omitted must decode with both at their \
+             defaults; dropping #[serde(default)] from either field \
+             would break stale CLIs built before the fields landed \
+             (or a newer CLI talking to an older daemon that omits \
+             the keys) by surfacing a confusing serde error \
+             instead of degrading cleanly to an empty self-mark or \
+             a no-truncation banner",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

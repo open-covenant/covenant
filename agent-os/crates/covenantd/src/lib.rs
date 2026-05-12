@@ -10589,6 +10589,83 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn runtime_runner_config_from_values_pins_backend_matrix() {
+        let home = Path::new("/tmp/h");
+
+        for raw in [None, Some(""), Some("   "), Some("trusted-local"), Some(" trusted-local ")] {
+            let config = runtime_runner_config_from_values(home, raw, None, None, None).unwrap();
+            assert_eq!(
+                config,
+                RuntimeRunnerConfig::TrustedLocal,
+                "expected TrustedLocal for backend={raw:?}",
+            );
+        }
+
+        let default_gvisor =
+            runtime_runner_config_from_values(home, Some("linux-gvisor"), Some("/rfs"), None, None)
+                .unwrap();
+        assert_eq!(
+            default_gvisor,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("runsc"),
+                rootfs: PathBuf::from("/rfs"),
+                scratch_root: home.join("runtime").join("gvisor"),
+            },
+        );
+
+        let override_gvisor = runtime_runner_config_from_values(
+            home,
+            Some(" linux-gvisor "),
+            Some(" /rfs "),
+            Some(" /usr/bin/runsc "),
+            Some(" /scratch "),
+        )
+        .unwrap();
+        assert_eq!(
+            override_gvisor,
+            RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("/usr/bin/runsc"),
+                rootfs: PathBuf::from("/rfs"),
+                scratch_root: PathBuf::from("/scratch"),
+            },
+            "expected trim on all four gvisor inputs",
+        );
+
+        let missing_rootfs =
+            runtime_runner_config_from_values(home, Some("linux-gvisor"), None, None, None)
+                .unwrap_err();
+        assert!(
+            missing_rootfs
+                .to_string()
+                .contains("COVENANT_GVISOR_ROOTFS is required"),
+            "expected rootfs-required error, got {missing_rootfs}",
+        );
+        let empty_rootfs = runtime_runner_config_from_values(
+            home,
+            Some("linux-gvisor"),
+            Some("   "),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            empty_rootfs
+                .to_string()
+                .contains("COVENANT_GVISOR_ROOTFS is required"),
+            "expected whitespace-only rootfs to be treated as missing, got {empty_rootfs}",
+        );
+
+        let unsupported =
+            runtime_runner_config_from_values(home, Some("docker"), None, None, None).unwrap_err();
+        let msg = unsupported.to_string();
+        assert!(
+            msg.contains("unsupported COVENANT_RUNTIME_BACKEND")
+                && msg.contains("expected trusted-local or linux-gvisor"),
+            "expected unsupported-backend error with enumeration, got {msg}",
+        );
+    }
+
+    #[test]
     fn parse_env_u64_pins_trim_and_error_context() {
         assert_eq!(parse_env_u64("X", "123").unwrap(), 123);
         assert_eq!(parse_env_u64("X", " 456 ").unwrap(), 456);

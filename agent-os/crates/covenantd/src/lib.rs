@@ -10589,6 +10589,37 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_matches_deadline_within_pins_filter_matrix() {
+        let sender = AgentId::new("sender@local", [1u8; 32]);
+        let recipient = AgentId::new("recipient@local", [2u8; 32]);
+        let make_entry = |deadline_ms: Option<u64>| covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::Queued,
+            task: covenant_a2a::A2ATask {
+                id: Uuid::new_v4(),
+                sender: sender.clone(),
+                recipient: recipient.clone(),
+                intent_text: "anything".into(),
+                task_kind: None,
+                parent: None,
+                deadline_ms,
+                idempotency: None,
+            },
+            lease_id: None,
+            leased_to: None,
+            leased_at_ms: None,
+            attempt: 0,
+        };
+        let no_deadline = make_entry(None);
+        let deadline150 = make_entry(Some(150));
+        assert!(a2a_entry_matches_deadline_within(&no_deadline, None, 100));
+        assert!(!a2a_entry_matches_deadline_within(&no_deadline, Some(50), 100));
+        assert!(!a2a_entry_matches_deadline_within(&deadline150, Some(100), 0));
+        assert!(a2a_entry_matches_deadline_within(&deadline150, Some(100), 100));
+        assert!(a2a_entry_matches_deadline_within(&deadline150, Some(50), 100));
+        assert!(!a2a_entry_matches_deadline_within(&deadline150, Some(10), 100));
+    }
+
+    #[test]
     fn a2a_entry_matches_min_lease_age_pins_filter_matrix() {
         let task = covenant_a2a::A2ATask {
             id: Uuid::new_v4(),

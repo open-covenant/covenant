@@ -544,6 +544,53 @@ mod tests {
     }
 
     #[test]
+    fn memory_compaction_policy_is_empty_pins_four_field_contract() {
+        // Default: all four fields inactive, predicate is true.
+        assert!(MemoryCompactionPolicy::default().is_empty());
+
+        // Each single-field activation must flip is_empty to false so a
+        // future refactor that drops one term from the AND chain (or
+        // adds a fifth field without updating is_empty) is loud at
+        // validate_compaction_request, not at the SQLite plan path.
+        let only_working = MemoryCompactionPolicy {
+            delete_working_before_ms: Some(1),
+            ..MemoryCompactionPolicy::default()
+        };
+        assert!(!only_working.is_empty());
+
+        let only_episodic = MemoryCompactionPolicy {
+            delete_episodic_before_ms: Some(1),
+            ..MemoryCompactionPolicy::default()
+        };
+        assert!(!only_episodic.is_empty());
+
+        let only_longterm = MemoryCompactionPolicy {
+            mark_longterm_stale_before_ms: Some(1),
+            ..MemoryCompactionPolicy::default()
+        };
+        assert!(!only_longterm.is_empty());
+
+        let only_detach = MemoryCompactionPolicy {
+            detach_stale_parents: true,
+            ..MemoryCompactionPolicy::default()
+        };
+        assert!(!only_detach.is_empty());
+
+        // All four set: also not empty. The explicit field list (no
+        // `..default()` spread) forces a new field added to
+        // MemoryCompactionPolicy to either land in this arm or break
+        // compilation here, so is_empty cannot grow stale silently.
+        let all_set = MemoryCompactionPolicy {
+            delete_working_before_ms: Some(1),
+            delete_episodic_before_ms: Some(2),
+            mark_longterm_stale_before_ms: Some(3),
+            detach_stale_parents: true,
+            marked_at_ms: Some(4),
+        };
+        assert!(!all_set.is_empty());
+    }
+
+    #[test]
     fn settlement_receipt_deserializes_pre_chain_metadata_rows() {
         let pubkey = bs58::encode([7u8; 32]).into_string();
         let json = format!(

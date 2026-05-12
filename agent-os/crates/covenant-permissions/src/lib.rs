@@ -2075,6 +2075,29 @@ mod tests {
     }
 
     #[test]
+    fn memory_purge_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_unscoped_grants(
+    ) {
+        assert!(
+            !memory_purge_scope_allows("memory", &serde_json::json!([]), Some("working"), 0)
+                .unwrap()
+        );
+
+        let bound_scope = serde_json::json!({
+            "version": 1,
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            !memory_purge_scope_allows("memory.read", &bound_scope, Some("working"), 999).unwrap()
+        );
+
+        let empty = serde_json::json!({});
+        assert!(memory_purge_scope_allows("memory.purge", &empty, Some("working"), 0).unwrap());
+        assert!(memory_purge_scope_allows("memory.purge", &empty, None, u64::MAX).unwrap());
+    }
+
+    #[test]
     fn memory_read_scope_allows_tier_mode_and_record_filters() {
         let scope = serde_json::json!({
             "version": 1,

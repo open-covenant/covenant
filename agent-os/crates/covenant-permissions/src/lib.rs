@@ -3389,6 +3389,46 @@ mod tests {
     }
 
     #[test]
+    fn optional_bool_pins_absent_bool_non_bool_and_null_rejection() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_bool("memory.apply", empty, "x").is_ok(),
+            "absent field must be Ok; the if-let short-circuits before is_boolean so unscoped grants do not fail at the strict-bool gate",
+        );
+
+        let true_value = serde_json::json!({ "x": true });
+        let true_value = true_value.as_object().unwrap();
+        assert!(
+            optional_bool("memory.apply", true_value, "x").is_ok(),
+            "{{\"x\": true}} must be Ok; otherwise scope-restricted memory.apply/audit.include_integrity grants can never bind the gate to the affirmative case",
+        );
+
+        let false_value = serde_json::json!({ "x": false });
+        let false_value = false_value.as_object().unwrap();
+        assert!(
+            optional_bool("memory.apply", false_value, "x").is_ok(),
+            "{{\"x\": false}} must be Ok; a regression that only accepted true would silently invert the gate and block apply=false / include_integrity=false grants from ever validating",
+        );
+
+        let string_value = serde_json::json!({ "x": "true" });
+        let string_value = string_value.as_object().unwrap();
+        let err = optional_bool("memory.apply", string_value, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("must be a boolean")),
+            "{{\"x\": \"true\"}} must produce the 'must be a boolean' error; got {err:?}. A regression that fell through to a truthy-string parse would silently authorize partially-typed scopes where downstream as_bool() reads None and treats the field as missing — exactly the silent-default-false hazard the gate exists to prevent.",
+        );
+
+        let null_value = serde_json::json!({ "x": null });
+        let null_value = null_value.as_object().unwrap();
+        let err = optional_bool("memory.apply", null_value, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("must be a boolean")),
+            "{{\"x\": null}} must produce the 'must be a boolean' error; got {err:?}. This is the strict-deny path that distinguishes optional_bool from optional_bool_or_null — memory.apply and audit.include_integrity have no documented unbounded-bool marker, and a regression that accepted null would silently merge the two helpers' contracts and start treating null as 'unset' across the audit/memory surface.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

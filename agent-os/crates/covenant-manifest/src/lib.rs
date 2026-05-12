@@ -314,6 +314,39 @@ entry = "./tiny"
     }
 
     #[test]
+    fn sandbox_backend_serde_pins_each_kebab_case_slug() {
+        // SandboxBackend rides on every Sandbox section parsed from
+        // agent.toml. linux-gvisor is the only sandbox-grade backend
+        // (sandbox_backend_is_sandbox_grade_pins_each_variant). A
+        // dropped rename_all = kebab-case attribute would silently
+        // refuse every existing manifest with `sandbox.backend =
+        // "linux-gvisor"` and the daemon would fail to start sandboxed
+        // agents with an opaque manifest-parse error.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            backend: SandboxBackend,
+        }
+        let cases: [(&str, SandboxBackend); 2] = [
+            ("trusted-local", SandboxBackend::TrustedLocal),
+            ("linux-gvisor", SandboxBackend::LinuxGvisor),
+        ];
+        for (slug, expected) in cases {
+            let toml_src = format!("backend = \"{slug}\"");
+            let parsed: Holder = toml::from_str(&toml_src)
+                .unwrap_or_else(|err| panic!("backend slug {slug:?} must deserialize, got: {err}"));
+            assert_eq!(parsed.backend, expected);
+        }
+
+        // Dropping rename_all would surface variant names verbatim
+        // (LinuxGvisor); the kebab-case whitelist must reject that
+        // form so the regression fails loud at parse time.
+        assert!(toml::from_str::<Holder>("backend = \"LinuxGvisor\"").is_err());
+        // snake_case must also fail — the contract is kebab-case only,
+        // not "any non-titlecase form".
+        assert!(toml::from_str::<Holder>("backend = \"linux_gvisor\"").is_err());
+    }
+
+    #[test]
     fn parses_full_spec_example() {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.agent.id, "research");

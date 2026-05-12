@@ -2206,6 +2206,104 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_kind_a2a_repair_applied_serde_pins_six_field_variant() {
+        // AuditKind::A2ARepairApplied is the audit row covenantd::Server
+        // emits when an operator repairs an in-flight A2A lease.
+        // `action` is `requeue`, `force_error`, or `auto_requeue`.
+        // Full task payloads stay in the mailbox log; the audit row
+        // records who acted, why, and which lease they intended to
+        // mutate. Six required fields: task_id (Uuid), action (String),
+        // reason (String), lease_id (Option<Uuid>), duplicate_risk
+        // (Option<String>), attempt (u32). Neither Option field carries
+        // #[serde(skip_serializing_if)] so both keys must surface on
+        // the wire (null when None) — a skip_serializing_if regression
+        // would silently shrink the wire form for the None case and
+        // consumers destructuring on a fixed-key set would drop into a
+        // different decode path. The durable slug is
+        // 'a2_a_repair_applied' per the serde rename_all=snake_case
+        // digit/upper split, matching the existing A2A* pins.
+        let kind = AuditKind::A2ARepairApplied {
+            task_id: Uuid::nil(),
+            action: "requeue".into(),
+            reason: "operator-cleared stuck lease".into(),
+            lease_id: Some(Uuid::nil()),
+            duplicate_risk: Some("low".into()),
+            attempt: 1,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "action",
+                "attempt",
+                "duplicate_risk",
+                "lease_id",
+                "reason",
+                "task_id",
+                "type",
+            ],
+            "AuditKind::A2ARepairApplied wire form must be exactly seven keys: the six variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("a2_a_repair_applied")),
+            "AuditKind discriminator slug must be 'a2_a_repair_applied' — serde's rename_all = snake_case splits the 'A2A' prefix on each digit/uppercase boundary, producing 'a2_a_…'. This is the durable wire form every persisted A2ARepairApplied audit row uses; a refactor that 'fixed' the slug to 'a2a_repair_applied' would silently strand every prior A2A-lease-repair audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::A2ARepairApplied must round-trip through serde_json verbatim — the PartialEq derive is the contract A2A-lease-repair audit triage joins on",
+        );
+
+        // Omission-rejection only walks the four strictly-required
+        // fields; lease_id and duplicate_risk are Option and serde
+        // accepts a missing key as None per stdlib semantics. The
+        // null-on-wire assertion below is what pins the
+        // skip_serializing_if regression for those two fields.
+        for required in ["task_id", "action", "reason", "attempt"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::A2ARepairApplied wire form must reject a payload missing {required:?}; a stray #[serde(default)] on task_id would erase the unforgeable target identifier, and a default on attempt would mask the retry-count signal that distinguishes a first repair from a re-repair",
+            );
+        }
+
+        let none_case = AuditKind::A2ARepairApplied {
+            task_id: Uuid::nil(),
+            action: "force_error".into(),
+            reason: "operator-aborted lease".into(),
+            lease_id: None,
+            duplicate_risk: None,
+            attempt: 2,
+        };
+        let wire_none = serde_json::to_value(&none_case).unwrap();
+        let obj_none = wire_none.as_object().unwrap();
+        assert_eq!(
+            obj_none.get("lease_id"),
+            Some(&serde_json::Value::Null),
+            "lease_id: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across Some and None repair rows",
+        );
+        assert_eq!(
+            obj_none.get("duplicate_risk"),
+            Some(&serde_json::Value::Null),
+            "duplicate_risk: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across Some and None repair rows",
+        );
+        assert_eq!(
+            obj_none.len(),
+            7,
+            "AuditKind::A2ARepairApplied with lease_id=None and duplicate_risk=None must still surface seven keys on the wire; a skip_serializing_if regression would silently shrink the wire form for the None case",
+        );
+    }
+
     fn dated(ts: u64) -> AuditEvent {
         AuditEvent {
             id: Uuid::new_v4(),

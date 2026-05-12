@@ -2018,7 +2018,7 @@ async fn main() -> Result<()> {
                         &mut stream,
                         &Request::ListPeers {
                             limit,
-                            pubkey_prefix: prefix,
+                            pubkey_prefix: prefix.clone(),
                             status_filter,
                         },
                     )
@@ -2032,12 +2032,13 @@ async fn main() -> Result<()> {
                             if as_json {
                                 println!(
                                     "{}",
-                                    serde_json::to_string(&serde_json::json!({
-                                        "kind": "peer_list",
-                                        "peers": peers,
-                                        "operator_pubkey_b58": operator_pubkey_b58,
-                                        "truncated": truncated,
-                                    }))?
+                                    serde_json::to_string(&peer_list_json(
+                                        limit,
+                                        prefix.as_deref(),
+                                        &peers,
+                                        &operator_pubkey_b58,
+                                        truncated,
+                                    ))?
                                 );
                             } else {
                                 for line in peer_list_lines(&peers, &operator_pubkey_b58, truncated)
@@ -2429,6 +2430,24 @@ fn peers_list_status_filter(
         (false, true) => Ok(Some(PeerStatusFilter::Revoked)),
         (false, false) => Ok(None),
     }
+}
+
+fn peer_list_json(
+    limit: usize,
+    filter_pubkey_prefix: Option<&str>,
+    peers: &[PeerSummary],
+    operator_pubkey_b58: &str,
+    truncated: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "peer_list",
+        "limit": limit,
+        "filter_pubkey_prefix": filter_pubkey_prefix,
+        "matched_count": peers.len(),
+        "peers": peers,
+        "operator_pubkey_b58": operator_pubkey_b58,
+        "truncated": truncated,
+    })
 }
 
 fn peer_list_lines(
@@ -3229,6 +3248,39 @@ mod tests {
         );
         assert!(out[0].contains("\tlive"));
         assert!(!out.iter().any(|l| l.contains("truncated")));
+    }
+
+    #[test]
+    fn peer_list_json_echoes_prefix_and_match_count() {
+        let p = make_peer(7, "alice@host", false);
+        let q = make_peer(8, "bob@host", true);
+        let value = peer_list_json(20, Some("ABcde"), &[p.clone(), q.clone()], "OPB58", false);
+        assert_eq!(value["kind"], "peer_list");
+        assert_eq!(value["limit"], 20);
+        assert_eq!(value["filter_pubkey_prefix"], "ABcde");
+        assert_eq!(value["matched_count"], 2);
+        assert_eq!(value["operator_pubkey_b58"], "OPB58");
+        assert_eq!(value["truncated"], false);
+        assert_eq!(value["peers"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn peer_list_json_omits_prefix_when_inactive() {
+        let p = make_peer(7, "alice@host", false);
+        let value = peer_list_json(20, None, &[p], "OPB58", false);
+        assert!(
+            value["filter_pubkey_prefix"].is_null(),
+            "filter_pubkey_prefix must be null when --prefix is not supplied so machine consumers see a stable absent-filter shape: {value:?}",
+        );
+        assert_eq!(value["matched_count"], 1);
+    }
+
+    #[test]
+    fn peer_list_json_reports_zero_match_count_for_empty_response() {
+        let value = peer_list_json(20, Some("nomatch"), &[], "OPB58", false);
+        assert_eq!(value["matched_count"], 0);
+        assert_eq!(value["filter_pubkey_prefix"], "nomatch");
+        assert_eq!(value["peers"].as_array().unwrap().len(), 0);
     }
 
     #[test]

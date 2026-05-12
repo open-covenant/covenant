@@ -2514,6 +2514,61 @@ mod tests {
     }
 
     #[test]
+    fn response_pong_serde_pins_unit_variant() {
+        // Response::Pong is the unit variant the daemon sends in
+        // response to Request::Ping — it carries no payload. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire form for a unit variant is the
+        // discriminator slug alone, exactly one top-level key:
+        // kind='pong'. No prior test pins the exact wire shape or
+        // round-trip. A refactor that promoted Pong from a unit
+        // variant to a struct or newtype variant carrying a payload
+        // would add a second top-level key on the wire and silently
+        // break every CLI heartbeat consumer that classifies the
+        // ping response by kind='pong' alone; a slug regression
+        // silently strands every liveness probe that uses this
+        // exact value and the operator's CLI reports the daemon as
+        // unresponsive even when it is fully healthy.
+        let event = Response::Pong;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Response::Pong wire form must be exactly one top-level \
+             key: 'kind'. A refactor that promoted the variant from \
+             unit to struct or newtype would add a second top-level \
+             key and every CLI heartbeat consumer that classifies \
+             the ping response by 'kind' alone would silently fail \
+             — the operator's connection probe would report the \
+             daemon as unresponsive even when it is healthy",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("pong")),
+            "Response discriminator slug must be the durable \
+             'pong'; a slug regression silently strands every CLI \
+             heartbeat parser that uses this exact value as the \
+             liveness signal — the CLI reports the daemon as \
+             unresponsive even when it is fully healthy and \
+             masking liveness is exactly the failure mode the \
+             ping/pong round-trip is designed to detect",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::Pong must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI ping consumer leans on to confirm liveness",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

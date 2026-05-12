@@ -1832,6 +1832,120 @@ mod tests {
     }
 
     #[test]
+    fn a2a_repair_command_serde_pins_each_snake_case_action_slug() {
+        // A2ARepairCommand carries #[serde(tag = "action", rename_all =
+        // "snake_case")] and rides inside every A2ARepairRequest
+        // dispatched through daemon, HTTP, and CLI A2A repair flows.
+        // The discriminator name "action" is load-bearing — a refactor
+        // to the serde default tag "type" would silently break every
+        // CLI-built repair payload still keying on action. The
+        // rename_all attribute is similarly load-bearing — its drop
+        // would emit titlecase Requeue/ForceError variants in the
+        // wire JSON while sibling A2ARepairAction (already pinned)
+        // kept its snake_case slugs, splitting a2a_repair_action audit
+        // consumers across two forms. Pin both the tag name and the
+        // per-variant snake_case slug, exercising the #[serde(default,
+        // skip_serializing_if = "Option::is_none")] lease_id field on
+        // both arms.
+        let lease = Uuid::new_v4();
+
+        let requeue_no_lease = A2ARepairCommand::Requeue {
+            lease_id: None,
+            duplicate_risk: A2ADuplicateRisk::Idempotent,
+        };
+        let requeue_no_lease_wire = serde_json::json!({
+            "action": "requeue",
+            "duplicate_risk": "idempotent",
+        });
+        assert_eq!(
+            serde_json::to_value(&requeue_no_lease).unwrap(),
+            requeue_no_lease_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<A2ARepairCommand>(requeue_no_lease_wire).unwrap(),
+            requeue_no_lease,
+        );
+
+        let requeue_with_lease = A2ARepairCommand::Requeue {
+            lease_id: Some(lease),
+            duplicate_risk: A2ADuplicateRisk::OperatorAccepted,
+        };
+        let requeue_with_lease_wire = serde_json::json!({
+            "action": "requeue",
+            "lease_id": lease,
+            "duplicate_risk": "operator_accepted",
+        });
+        assert_eq!(
+            serde_json::to_value(&requeue_with_lease).unwrap(),
+            requeue_with_lease_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<A2ARepairCommand>(requeue_with_lease_wire).unwrap(),
+            requeue_with_lease,
+        );
+
+        let force_no_lease = A2ARepairCommand::ForceError {
+            lease_id: None,
+            message: "x".into(),
+        };
+        let force_no_lease_wire = serde_json::json!({
+            "action": "force_error",
+            "message": "x",
+        });
+        assert_eq!(
+            serde_json::to_value(&force_no_lease).unwrap(),
+            force_no_lease_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<A2ARepairCommand>(force_no_lease_wire).unwrap(),
+            force_no_lease,
+        );
+
+        let force_with_lease = A2ARepairCommand::ForceError {
+            lease_id: Some(lease),
+            message: "x".into(),
+        };
+        let force_with_lease_wire = serde_json::json!({
+            "action": "force_error",
+            "lease_id": lease,
+            "message": "x",
+        });
+        assert_eq!(
+            serde_json::to_value(&force_with_lease).unwrap(),
+            force_with_lease_wire,
+        );
+        assert_eq!(
+            serde_json::from_value::<A2ARepairCommand>(force_with_lease_wire).unwrap(),
+            force_with_lease,
+        );
+
+        // Dropping rename_all would surface variant names verbatim
+        // (Requeue); the snake_case whitelist must reject that form
+        // so the regression fails loud.
+        assert!(
+            serde_json::from_value::<A2ARepairCommand>(serde_json::json!({
+                "action": "Requeue",
+                "duplicate_risk": "idempotent",
+            }))
+            .is_err(),
+            "titlecase action slug (the rename_all default) must be rejected",
+        );
+
+        // Switching the tag from "action" to the serde default "type"
+        // would silently break every CLI repair payload. Pin the tag
+        // name so a refactor that drops tag = "action" fails loud at
+        // the boundary instead of through a confusing upstream error.
+        assert!(
+            serde_json::from_value::<A2ARepairCommand>(serde_json::json!({
+                "type": "requeue",
+                "duplicate_risk": "idempotent",
+            }))
+            .is_err(),
+            "wrong discriminator name (serde default 'type') must be rejected",
+        );
+    }
+
+    #[test]
     fn a2a_repair_state_serde_pins_snake_case_wire_form() {
         // A2ARepairState rides next to A2ARepairAction inside every
         // A2ARepairOutcome audit row. ResultPending is load-bearing —

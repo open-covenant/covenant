@@ -2977,6 +2977,73 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_optional_string_pins_absent_null_present_match_and_none_allow_through() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_optional_string(empty, "x", Some("foo")),
+            "absent field must allow actual=Some(_); the absent-key branch is unconditional",
+        );
+        assert!(
+            scope_allows_optional_string(empty, "x", Some("")),
+            "absent field must allow actual=Some(\"\"); the absent-key branch cannot gate on string content",
+        );
+        assert!(
+            scope_allows_optional_string(empty, "x", None),
+            "absent field must allow actual=None; otherwise unscoped grants reject every request whose optional string is omitted",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_optional_string(explicit_null, "x", Some("foo")),
+            "{{\"x\": null}} is the documented unbounded marker and must allow actual=Some(_)",
+        );
+        assert!(
+            scope_allows_optional_string(explicit_null, "x", None),
+            "{{\"x\": null}} must allow actual=None as well; the null arm is unconditional",
+        );
+
+        let bound = serde_json::json!({ "x": "foo" });
+        let bound = bound.as_object().unwrap();
+        assert!(
+            scope_allows_optional_string(bound, "x", None),
+            "scope {{\"x\": \"foo\"}} must allow actual=None; the .map(...).unwrap_or(true) branch is the documented divergence from optional_bool/optional_before_ms — optional_string treats 'not specified' as allowed under a bound, and a regression to unwrap_or(false) would silently reject unspecified-string requests through bound scopes",
+        );
+        assert!(
+            scope_allows_optional_string(bound, "x", Some("foo")),
+            "scope {{\"x\": \"foo\"}} must allow actual=Some(\"foo\") on exact match; otherwise the equality check silently denies its own pinned value",
+        );
+        assert!(
+            !scope_allows_optional_string(bound, "x", Some("bar")),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=Some(\"bar\"); the equality is strict, otherwise bound string scopes silently authorize unrelated requests",
+        );
+        assert!(
+            !scope_allows_optional_string(bound, "x", Some("foobar")),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=Some(\"foobar\"); a regression that swapped equality for starts_with would silently widen string authority across prefixes",
+        );
+        assert!(
+            !scope_allows_optional_string(bound, "x", Some("")),
+            "scope {{\"x\": \"foo\"}} must NOT allow actual=Some(\"\"); the empty string does not equal a bound non-empty value",
+        );
+
+        let non_string = serde_json::json!({ "x": 42 });
+        let non_string = non_string.as_object().unwrap();
+        assert!(
+            scope_allows_optional_string(non_string, "x", None),
+            "a non-string scope value with actual=None must allow via .map(...).unwrap_or(true); the malformed-scope path on actual=None never enters the equality closure, so the unwrap_or(true) fires and produces the documented allow-through",
+        );
+        assert!(
+            !scope_allows_optional_string(non_string, "x", Some("foo")),
+            "a non-string scope value with actual=Some(_) must reject; value.as_str() returns None which never equals Some(\"foo\"), and a regression that treated malformed scope objects as allow-all on the Some side would silently authorize every string-bearing request",
+        );
+        assert!(
+            !scope_allows_optional_string(non_string, "x", Some("")),
+            "a non-string scope value must also reject actual=Some(\"\"); the equality is None != Some(\"\") symmetrically across all Some(_) inputs",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

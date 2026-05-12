@@ -1114,6 +1114,72 @@ mod tests {
     }
 
     #[test]
+    fn budget_event_capacity_set_serde_pins_three_field_variant() {
+        // BudgetEvent::CapacitySet is the load-bearing JSONL budget-ledger
+        // row appended by BudgetLedger::set_capacity. The crate-internal
+        // enum is persisted to disk (one JSONL line per event under the
+        // budget data dir) so its wire shape is durable across releases —
+        // replay reads each line through serde_json::from_str. Three
+        // required fields plus the snake_case 'capacity_set' tag:
+        // agent (nested AgentId with display + pubkey), credits_per_hour
+        // (u64), at_ms (u64). budget_debit_serde_pins_four_required_fields
+        // covers the BudgetDebit payload but not the BudgetEvent
+        // enum-level discriminator + variant shape; this test closes the
+        // capacity-provisioning replay-contract gap so a refactor that
+        // defaulted credits_per_hour would not silently disable an
+        // agent's bucket after restart.
+        let event = BudgetEvent::CapacitySet {
+            agent: agent("alice@host"),
+            credits_per_hour: 1500,
+            at_ms: 12345,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("BudgetEvent serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent", "at_ms", "credits_per_hour", "type"],
+            "BudgetEvent::CapacitySet wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&json!("capacity_set")),
+            "BudgetEvent discriminator slug must be snake_case 'capacity_set'; a titlecase or kebab-case regression silently strands every prior JSONL capacity-provisioning row at replay time and leaves runtime buckets uninitialized after restart",
+        );
+
+        let agent_obj = obj
+            .get("agent")
+            .and_then(serde_json::Value::as_object)
+            .expect("agent must serialize as a nested JSON object");
+        let mut agent_keys: Vec<&str> = agent_obj.keys().map(String::as_str).collect();
+        agent_keys.sort();
+        assert_eq!(
+            agent_keys,
+            vec!["display", "pubkey"],
+            "BudgetEvent::CapacitySet::agent must surface the AgentId display+pubkey shape; a refactor that flattened or restructured AgentId would break the budget-log JSONL replay's per-agent bucket keying",
+        );
+
+        let back: BudgetEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "BudgetEvent::CapacitySet must round-trip through serde_json verbatim — the Eq derive is the contract the JSONL replay path leans on",
+        );
+
+        for required in ["agent", "credits_per_hour", "at_ms"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<BudgetEvent>(serde_json::Value::Object(missing)).is_err(),
+                "BudgetEvent::CapacitySet wire form must reject a payload missing {required:?}; a stray #[serde(default)] on credits_per_hour would let a malformed row decode with credits_per_hour=0 and replay quietly disables the agent's bucket — every subsequent dispatch hits BudgetExhausted with tokens_remaining=0",
+            );
+        }
+    }
+
+    #[test]
     fn validate_pause_checkpoint_pins_version_credits_and_resume_state() {
         let a = agent("alice@local");
         let intent = Uuid::from_u128(1);

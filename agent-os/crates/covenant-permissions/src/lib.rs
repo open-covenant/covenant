@@ -1892,6 +1892,23 @@ mod tests {
     }
 
     #[test]
+    fn a2a_scope_allows_pins_non_object_scope_and_validate_scope_error_propagation() {
+        let request = A2aScopeRequest::default();
+        assert!(
+            !a2a_scope_allows("a2a", &serde_json::json!([]), "a2a.send.peer", request).unwrap()
+        );
+
+        let err = a2a_scope_allows(
+            "a2a.send.peer",
+            &serde_json::json!({ "version": 0 }),
+            "a2a.send.peer",
+            request,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
     fn peer_scope_allows_peer_token_force_and_cutoff_predicates() {
         let peer_pubkey_b58 = bs58::encode([1u8; 32]).into_string();
         let scope = serde_json::json!({

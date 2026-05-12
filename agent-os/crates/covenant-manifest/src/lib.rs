@@ -18,6 +18,13 @@ pub struct Manifest {
     pub sandbox: Sandbox,
     #[serde(default)]
     pub settlement: Settlement,
+    /// Hermes-runtime-specific config. Ignored when `agent.runtime` is
+    /// not `Hermes`. The fields are documentary today — Hermes manages
+    /// its tool allowlist server-side — but they pin the contract the
+    /// agent author expects, surface in operator listings, and act as
+    /// the seam for future per-run enforcement once Hermes exposes one.
+    #[serde(default)]
+    pub hermes: HermesAgent,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -141,6 +148,35 @@ pub enum FilesystemPolicy {
 pub struct Settlement {
     pub budget_credits_per_hour: u64,
     pub priority: Priority,
+}
+
+/// `[hermes]` block in `agent.toml`. All fields default to empty/None;
+/// presence is what matters. See `Manifest::hermes`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct HermesAgent {
+    /// Tools the agent author expects the run to invoke. Names match
+    /// Hermes's tool-registry slugs (e.g. `"terminal"`, `"read_file"`,
+    /// `"web"`). Documentary today — operators can spot a manifest that
+    /// over-asks before granting capabilities — and an enforcement hook
+    /// once Hermes accepts per-run tool allowlists.
+    pub tools_allowed: Vec<String>,
+    /// How the runner should handle Hermes `approval.request` events
+    /// when no operator is online. `operator-prompt` is the default
+    /// (block until an operator answers via the console). `auto-deny`
+    /// short-circuits to a denied response. `auto-once` accepts once and
+    /// stops. Reserved — runtime enforcement lands when the runner
+    /// learns to post `/v1/runs/{id}/approval`.
+    pub approval_policy: HermesApprovalPolicy,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HermesApprovalPolicy {
+    #[default]
+    OperatorPrompt,
+    AutoDeny,
+    AutoOnce,
 }
 
 /// Reserved capability namespaces (spec §5).
@@ -726,6 +762,64 @@ entry = ""
             }
             other => panic!("expected validation error for empty entry, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hermes_section_parses_and_defaults_when_omitted() {
+        let with_block = r#"
+[agent]
+id = "hermes-x"
+name = "x"
+version = "0.1.0"
+runtime = "hermes"
+
+[hermes]
+tools_allowed   = ["terminal", "web"]
+approval_policy = "auto-deny"
+"#;
+        let m = Manifest::parse(with_block).unwrap();
+        assert_eq!(m.hermes.tools_allowed, vec!["terminal", "web"]);
+        assert_eq!(m.hermes.approval_policy, HermesApprovalPolicy::AutoDeny);
+
+        // Missing block deserializes to defaults — and subprocess
+        // manifests stay parse-clean without forcing every legacy
+        // agent.toml to add an unused [hermes] block.
+        let without = r#"
+[agent]
+id = "py"
+name = "py"
+version = "0.1.0"
+runtime = "python3"
+entry = "main.py"
+"#;
+        let m = Manifest::parse(without).unwrap();
+        assert!(m.hermes.tools_allowed.is_empty());
+        assert_eq!(
+            m.hermes.approval_policy,
+            HermesApprovalPolicy::OperatorPrompt
+        );
+    }
+
+    #[test]
+    fn hermes_approval_policy_serde_pins_each_kebab_case_slug() {
+        // The kebab-case slugs are the public contract — a refactor
+        // that dropped rename_all or renamed a variant would break
+        // every manifest already declaring approval_policy.
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            approval_policy: HermesApprovalPolicy,
+        }
+        let cases: [(&str, HermesApprovalPolicy); 3] = [
+            ("operator-prompt", HermesApprovalPolicy::OperatorPrompt),
+            ("auto-deny", HermesApprovalPolicy::AutoDeny),
+            ("auto-once", HermesApprovalPolicy::AutoOnce),
+        ];
+        for (slug, expected) in cases {
+            let toml_src = format!("approval_policy = \"{slug}\"");
+            let parsed: Holder = toml::from_str(&toml_src).expect("kebab slug must parse");
+            assert_eq!(parsed.approval_policy, expected);
+        }
+        assert!(toml::from_str::<Holder>("approval_policy = \"OperatorPrompt\"").is_err());
     }
 
     #[test]

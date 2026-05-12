@@ -131,6 +131,28 @@ impl HermesRunner {
         serde_json::from_str(&text).map_err(|source| RunnerError::MalformedStdout { source })
     }
 
+    /// Probe `GET /v1/capabilities` and return the advertised feature
+    /// set. Used by the daemon at startup to warn loudly when the
+    /// gateway is missing a feature this runner depends on (run
+    /// submission, SSE event stream, stop). A failed probe (gateway
+    /// down, auth missing) returns `None` — the daemon logs and
+    /// continues, since transient outages should not block boot.
+    pub async fn probe_capabilities(&self) -> Option<HermesCapabilities> {
+        let url = format!("{}/capabilities", self.base_url);
+        let resp = self.apply_auth(self.http.get(&url)).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let value: Value = resp.json().await.ok()?;
+        let features = value.get("features")?.as_object()?;
+        Some(HermesCapabilities {
+            run_submission: feature_flag(features, "run_submission"),
+            run_events_sse: feature_flag(features, "run_events_sse"),
+            run_stop: feature_flag(features, "run_stop"),
+            run_approval_response: feature_flag(features, "run_approval_response"),
+        })
+    }
+
     async fn cancel(&self, run_id: &str) {
         let url = format!("{}/runs/{}/stop", self.base_url, run_id);
         // Best-effort: we're already in an error/timeout path; log and
@@ -447,6 +469,28 @@ struct HermesRunStatus {
     output: Option<String>,
     #[serde(default)]
     error: Option<String>,
+}
+
+/// Subset of Hermes's advertised features that the Covenant runner
+/// depends on. Anything we use is checked here so a misconfigured
+/// gateway surfaces at startup rather than at first dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HermesCapabilities {
+    pub run_submission: bool,
+    pub run_events_sse: bool,
+    pub run_stop: bool,
+    pub run_approval_response: bool,
+}
+
+impl HermesCapabilities {
+    /// `true` iff every feature this runner needs is advertised.
+    pub fn covers_runner(&self) -> bool {
+        self.run_submission && self.run_events_sse && self.run_stop
+    }
+}
+
+fn feature_flag(features: &serde_json::Map<String, Value>, key: &str) -> bool {
+    features.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 #[cfg(test)]

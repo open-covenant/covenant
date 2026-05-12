@@ -38,6 +38,41 @@ async fn main() -> Result<()> {
         "runtime runner ready"
     );
 
+    // Probe the Hermes gateway up front when configured. A failed probe
+    // or missing feature flag is non-fatal — we log loud so the operator
+    // can fix it, then continue. Boot-time blocking on a remote service
+    // would make a transient Hermes outage break Covenant restarts.
+    if let Some(cfg) = hermes_config.as_ref() {
+        let probe_runner =
+            covenant_runtime::HermesRunner::new(cfg.base_url.clone(), cfg.api_key.clone());
+        match probe_runner.probe_capabilities().await {
+            Some(caps) if caps.covers_runner() => {
+                info!(
+                    base_url = %cfg.base_url,
+                    sse = caps.run_events_sse,
+                    stop = caps.run_stop,
+                    approval = caps.run_approval_response,
+                    "hermes gateway features confirmed",
+                );
+            }
+            Some(caps) => {
+                tracing::warn!(
+                    base_url = %cfg.base_url,
+                    run_submission = caps.run_submission,
+                    run_events_sse = caps.run_events_sse,
+                    run_stop = caps.run_stop,
+                    "hermes gateway missing required features — dispatches may fail; upgrade to hermes-agent ≥ v0.12 or run with hermes disabled",
+                );
+            }
+            None => {
+                tracing::warn!(
+                    base_url = %cfg.base_url,
+                    "hermes capabilities probe failed (gateway unreachable or auth invalid) — hermes runtime will surface errors on first dispatch",
+                );
+            }
+        }
+    }
+
     let memory_path = home.join("memory.db");
     let memory = Arc::new(
         covenant_memory::SqliteStore::open(&memory_path)

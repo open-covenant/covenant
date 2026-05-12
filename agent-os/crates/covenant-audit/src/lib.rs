@@ -102,7 +102,7 @@ pub enum AuditKind {
         intent_id: Uuid,
         run_id: String,
         choice: String,
-        resolved: u32,
+        resolved: u64,
     },
     CapabilityCheck {
         agent_id: String,
@@ -3017,7 +3017,7 @@ mod tests {
                 intent_id: Uuid::nil(),
                 run_id: "run_abc".into(),
                 choice: "once".into(),
-                resolved: 3,
+                resolved: 3u64,
             },
             "hermes_approval_resolved",
             &["choice", "intent_id", "resolved", "run_id"],

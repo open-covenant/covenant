@@ -73,10 +73,13 @@ pub enum RuntimeTrace {
         choices: Vec<String>,
     },
     /// An operator (or auto-policy) answered the pending approval.
+    /// `resolved` is the count Hermes reports as resolved by this
+    /// response — kept as `u64` so an upstream change to the counter
+    /// width never silently truncates an audit row.
     HermesApprovalResponded {
         run_id: String,
         choice: String,
-        resolved: u32,
+        resolved: u64,
     },
 }
 
@@ -1551,7 +1554,7 @@ cpu_ms_per_task = 5000
         // The HermesRunner is wired as a sibling of SubprocessRunner;
         // if CompositeRunner is bypassed and a subprocess agent lands
         // on the Hermes path, fail loud with a typed error.
-        let runner = HermesRunner::new("http://127.0.0.1:1", None);
+        let runner = HermesRunner::new("http://127.0.0.1:1", None).unwrap();
         let dir = tempdir().unwrap();
         let card = card_for(&subprocess_manifest(), dir.path().to_path_buf());
 

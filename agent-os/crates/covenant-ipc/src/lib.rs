@@ -1586,6 +1586,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_flush_receipts_serde_pins_default_bearing_single_field_variant() {
+        // Request::FlushReceipts is the operator-driven
+        // settlement-receipt flush variant the CLI and HTTP gateway
+        // send to batch-emit the most recent N locally-stored
+        // receipts onto the persistent chain receipt sidecar. limit
+        // defaults to default_recent_limit() (10) via
+        // #[serde(default = "default_recent_limit")] so a stale CLI
+        // can omit the field. It pairs with
+        // Response::ReceiptBatchFlushed (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='flush_receipts' plus limit. No prior test
+        // pins the exact wire shape, limit numeric serialization,
+        // round-trip, or the default-on-missing decode contract for
+        // this variant. The default-on-missing decode is a
+        // load-bearing compatibility hinge — a stale CLI that does
+        // not yet know to send limit must continue working.
+        let event = Request::FlushReceipts { limit: 25 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit"],
+            "Request::FlushReceipts wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'limit' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a typed FlushOptions would nest \
+             'limit' one level deeper and every CLI/HTTP flush \
+             trigger that sends \
+             {{\"kind\":\"flush_receipts\",\"limit\":<n>}} would \
+             fail to decode on the daemon side — the operator \
+             could not flush local receipts onto the chain \
+             sidecar through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("flush_receipts")),
+            "Request discriminator slug must be the durable \
+             'flush_receipts'; a slug regression silently routes \
+             incoming flush frames to the daemon's catch-all error \
+             branch — every CLI/HTTP flush probe fails with a \
+             confusing fallback message instead of \
+             ReceiptBatchFlushed, and the receipt sidecar stops \
+             receiving batched writes",
+        );
+        assert_eq!(
+            obj.get("limit").and_then(serde_json::Value::as_u64),
+            Some(25),
+            "Request::FlushReceipts::limit must surface as the \
+             literal numeric batch cap — the daemon's flush path \
+             binds on this exact field; a rename or retype would \
+             silently emit a different batch size than the \
+             operator asked for, distorting receipt accounting",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::FlushReceipts must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP receipt-flush consumer leans \
+             on",
+        );
+
+        let stale = serde_json::json!({"kind": "flush_receipts"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::FlushReceipts must decode from a payload \
+             missing 'limit' — the #[serde(default)] attribute is \
+             the durable compatibility hinge that lets stale CLIs \
+             continue flushing without a rebuild",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::FlushReceipts { limit: 10 },
+            "Request::FlushReceipts with missing 'limit' must \
+             default to default_recent_limit() = 10 — a refactor \
+             that changes the default function return value or \
+             drops the #[serde(default)] attribute silently \
+             changes the batch size for every stale CLI in the \
+             field; the operator's receipt-flush behaviour \
+             diverges from the documented contract without a \
+             single error surface",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

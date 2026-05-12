@@ -3692,6 +3692,164 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_revoke_peer_serde_pins_three_field_variant() {
+        // Request::RevokePeer is the operator/CLI verb for revoking
+        // a single peer registry entry by 6-char token_prefix. It
+        // pairs with Response::PeerRevoked (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly four top-level
+        // keys: kind='revoke_peer' plus token_prefix plus force plus
+        // match_limit.
+        //
+        // token_prefix is a required String. force is a bool with
+        // #[serde(default)] and NO skip_serializing_if — it always
+        // surfaces on the wire as a JSON boolean (false on the safe
+        // self-revoke-guarded default, true on the deliberate brick
+        // path). match_limit is Option<usize> with #[serde(default)]
+        // and NO skip_serializing_if — it surfaces as JSON null when
+        // None and as a JSON number when Some. This pins a new shape:
+        // a required field plus a default-bearing primitive bool plus
+        // an Option-default usize. Distinct from the just-pinned
+        // RecentAudit two-field variant — RevokePeer adds the
+        // false-on-wire surface for the bool default, which is
+        // different from the null-on-wire surface for Option defaults.
+        //
+        // This slice locks: the exact wire shape (kind, token_prefix,
+        // force, match_limit), the snake_case discriminator
+        // 'revoke_peer', force=false on the safe-default path,
+        // force=true on the override path, match_limit=null on the
+        // daemon-cap path, match_limit=<number> on the override path,
+        // round-trip for both shapes, acceptance of frames missing
+        // either default-bearing field.
+        let safe_default = Request::RevokePeer {
+            token_prefix: "abc123".into(),
+            force: false,
+            match_limit: None,
+        };
+
+        let wire = serde_json::to_value(&safe_default).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["force", "kind", "match_limit", "token_prefix"],
+            "Request::RevokePeer wire form must be exactly four \
+             top-level keys: 'kind' plus the three variant fields \
+             ('token_prefix', 'force', 'match_limit'). A refactor \
+             that added #[serde(skip_serializing_if = \
+             \"Option::is_none\")] to match_limit would shrink the \
+             daemon-cap wire form from four keys to three and \
+             silently break CLI/HTTP consumers that switch on the \
+             match_limit key's presence to distinguish operator-\
+             overridden ambiguity caps from daemon defaults",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("revoke_peer")),
+            "Request discriminator slug must be the durable \
+             'revoke_peer'. A refactor that renamed the variant \
+             (e.g., PeerRevoke for surface parity with the response \
+             slug) would shift the slug and operator-driven \
+             incident-response peer revocation goes dark through \
+             the supported path",
+        );
+        assert_eq!(
+            obj.get("token_prefix"),
+            Some(&serde_json::json!("abc123")),
+            "Request::RevokePeer::token_prefix must surface as a \
+             JSON string; a refactor that promoted it to a typed \
+             newtype without preserving Serialize-as-String would \
+             silently mismatch every CLI/HTTP caller that pastes \
+             the 6-char prefix from `peers list` output",
+        );
+        assert_eq!(
+            obj.get("force"),
+            Some(&serde_json::json!(false)),
+            "Request::RevokePeer::force must surface as JSON false \
+             when the safe default is in effect (the durable false-\
+             on-wire surface, NOT a missing key); a stray \
+             skip_serializing_if would drop the key from the safe-\
+             default path and break consumers that switch on the \
+             force key's presence to render a 'force flag was set' \
+             UI cue",
+        );
+        assert_eq!(
+            obj.get("match_limit"),
+            Some(&serde_json::Value::Null),
+            "Request::RevokePeer::match_limit must surface as JSON \
+             null when None (the durable null-on-wire surface, NOT \
+             a missing key); a stray skip_serializing_if would \
+             shrink the daemon-cap wire form and silently break CLI \
+             consumers that switch on the key's presence",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, safe_default,
+            "Request::RevokePeer (safe default) must round-trip \
+             through serde_json verbatim — the PartialEq derive is \
+             the contract every CLI/HTTP revoke-peer consumer leans \
+             on",
+        );
+
+        let override_case = Request::RevokePeer {
+            token_prefix: "abc123".into(),
+            force: true,
+            match_limit: Some(7),
+        };
+        let override_wire = serde_json::to_value(&override_case).unwrap();
+        let override_obj = override_wire.as_object().unwrap();
+        assert_eq!(
+            override_obj.get("force"),
+            Some(&serde_json::json!(true)),
+            "populated force must round-trip as a JSON true; the \
+             four-key shape stays stable across safe-default and \
+             override",
+        );
+        assert_eq!(
+            override_obj.get("match_limit"),
+            Some(&serde_json::json!(7u64)),
+            "populated match_limit must round-trip as a JSON number \
+             matching the usize input; the four-key shape stays \
+             stable across daemon-cap and operator-cap",
+        );
+        let override_back: Request = serde_json::from_value(override_wire.clone()).unwrap();
+        assert_eq!(
+            override_back, override_case,
+            "Request::RevokePeer (override) must round-trip through \
+             serde_json verbatim",
+        );
+
+        let mut missing_force = obj.clone();
+        missing_force.remove("force");
+        let parsed_no_force: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_force)).unwrap();
+        assert_eq!(
+            parsed_no_force, safe_default,
+            "Request::RevokePeer wire form must accept a payload \
+             missing 'force' (bool with #[serde(default)] decodes \
+             as false); this is the forward-compatibility contract \
+             for stale CLIs that predate the self-revoke guard",
+        );
+
+        let mut missing_match_limit = obj.clone();
+        missing_match_limit.remove("match_limit");
+        let parsed_no_match_limit: Request =
+            serde_json::from_value(serde_json::Value::Object(missing_match_limit)).unwrap();
+        assert_eq!(
+            parsed_no_match_limit, safe_default,
+            "Request::RevokePeer wire form must accept a payload \
+             missing 'match_limit' (Option<T> with \
+             #[serde(default)] decodes as None); this is the \
+             forward-compatibility contract for stale CLIs that \
+             predate the operator-overridable ambiguity cap",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

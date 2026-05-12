@@ -5049,6 +5049,117 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_backfill_plan_json_pins_records_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "credits_consumed",
+            "memory_owner_display",
+            "memory_owner_pubkey",
+            "memory_record_id",
+            "payer_display",
+            "payer_pubkey",
+            "reason",
+            "receipt_id",
+            "status",
+        ];
+
+        fn assert_records_element_shape(value: &serde_json::Value) {
+            let records = value["records"]
+                .as_array()
+                .expect("memory_receipt_backfill_plan_json records field must be an array");
+            assert!(
+                records.len() >= 2,
+                "fixture must produce at least two records to pin the per-element schema across distinct payers: {value}",
+            );
+            for record in records {
+                let object = record
+                    .as_object()
+                    .expect("each records[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(record["receipt_id"].is_string(), "records[].receipt_id must be a string uuid: {record}");
+                assert!(record["memory_record_id"].is_string(), "records[].memory_record_id must be a string uuid: {record}");
+                assert!(record["payer_display"].is_string(), "records[].payer_display must be a string: {record}");
+                assert!(record["payer_pubkey"].is_string(), "records[].payer_pubkey must be a base58 string: {record}");
+                assert!(record["memory_owner_display"].is_string(), "records[].memory_owner_display must be a string: {record}");
+                assert!(record["memory_owner_pubkey"].is_string(), "records[].memory_owner_pubkey must be a base58 string: {record}");
+                assert!(
+                    record["credits_consumed"].is_u64(),
+                    "records[].credits_consumed must be a non-negative integer, not a stringified number: {record}",
+                );
+                assert!(record["status"].is_string(), "records[].status must be a string slug: {record}");
+                assert!(record["reason"].is_string(), "records[].reason must be a string, not a structured object: {record}");
+            }
+        }
+
+        let owner_a = AgentId::new("owner-a@local", [10u8; 32]);
+        let owner_b = AgentId::new("owner-b@local", [11u8; 32]);
+        let memory_a = MemoryRecord {
+            id: uuid::Uuid::from_u128(101),
+            tier: MemoryTier::Working,
+            owner: owner_a.clone(),
+            text: "memory a".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let memory_b = MemoryRecord {
+            id: uuid::Uuid::from_u128(102),
+            tier: MemoryTier::LongTerm,
+            owner: owner_b.clone(),
+            text: "memory b".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt_a = SettlementReceipt {
+            id: uuid::Uuid::from_u128(201),
+            payer: owner_a,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 5,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let receipt_b = SettlementReceipt {
+            id: uuid::Uuid::from_u128(202),
+            payer: owner_b,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 7,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_records_element_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory_a, memory_b],
+            &[receipt_a, receipt_b],
+        ));
+    }
+
+    #[test]
     fn memory_read_json_renders_stable_shape() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let record = MemoryRecord {

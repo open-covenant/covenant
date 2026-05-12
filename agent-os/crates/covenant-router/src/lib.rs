@@ -240,6 +240,39 @@ required = {caps:?}
     }
 
     #[test]
+    fn capability_keywords_pins_each_documented_arm_and_unknown_falls_to_empty() {
+        for (cap, anchor) in [
+            ("tool.web_search", "search"),
+            ("tool.summarize", "summarize"),
+            ("tool.gpu_inference", "image"),
+            ("memory.write", "remember"),
+            ("memory.read", "recall"),
+            ("intent.delegate", "delegate"),
+        ] {
+            let kws = capability_keywords(cap);
+            assert!(
+                !kws.is_empty(),
+                "capability {cap:?} must have at least one keyword or every agent declaring it becomes silently unroutable",
+            );
+            assert!(
+                kws.contains(&anchor),
+                "capability {cap:?} must contain its anchor keyword {anchor:?} so an accidental arm swap with another capability is caught: got {kws:?}",
+            );
+        }
+
+        assert_eq!(
+            capability_keywords("unknown.capability"),
+            &[] as &[&str],
+            "unknown capabilities must return an empty slice; if this fires the catch-all has been replaced with a fallback list and unknown caps would silently match every intent",
+        );
+        assert_eq!(
+            capability_keywords(""),
+            &[] as &[&str],
+            "an empty capability string must also fall through to the empty slice; otherwise an unset cap would silently match every intent",
+        );
+    }
+
+    #[test]
     fn find_by_id_returns_registered_card() {
         let r = Router::from_cards(vec![research_card()]);
         assert_eq!(r.find_by_id("research").unwrap().name, "research");

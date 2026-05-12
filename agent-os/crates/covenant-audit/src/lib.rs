@@ -876,6 +876,90 @@ mod tests {
     }
 
     #[test]
+    fn audit_integrity_report_serde_pins_five_required_fields() {
+        // AuditIntegrityReport is the audit-chain integrity verdict the
+        // daemon emits inside Response::AuditIntegrity, rendered by CLI
+        // `covenant audit verify` and consumed by HTTP `/audit/integrity-report`.
+        // The five wire keys document the audit-chain replay outcome:
+        // * events / anchors are u64 counts.
+        // * valid is the boolean operator go/no-go signal.
+        // * root_hash_hex is the audit-root subject the release signing
+        //   path binds to.
+        // * failures is the human-readable list of bad rows.
+        // None of the fields carry #[serde(default)] or
+        // #[serde(skip_serializing_if)] — a refactor that defaulted any
+        // would silently shift the operator verdict shape.
+
+        let healthy = AuditIntegrityReport {
+            events: 100,
+            anchors: 4,
+            valid: true,
+            root_hash_hex: "a".repeat(64),
+            failures: vec![],
+        };
+        let wire = serde_json::to_value(&healthy).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditIntegrityReport serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["anchors", "events", "failures", "root_hash_hex", "valid"],
+            "AuditIntegrityReport wire object must contain exactly the five \
+             documented fields; an addition, rename, or drop of any key \
+             silently shifts the operator's audit-verify output and the \
+             release-evidence audit-root subject binding"
+        );
+
+        let decoded: AuditIntegrityReport = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, healthy,
+            "AuditIntegrityReport must round-trip through serde_json verbatim — \
+             the Eq derive is the contract every fixture replay leans on"
+        );
+
+        let with_failures = AuditIntegrityReport {
+            events: 12,
+            anchors: 0,
+            valid: false,
+            root_hash_hex: "b".repeat(64),
+            failures: vec!["row 7: hash mismatch".into(), "row 9: missing prev".into()],
+        };
+        let wire = serde_json::to_value(&with_failures).unwrap();
+        let failures_array = wire
+            .get("failures")
+            .and_then(serde_json::Value::as_array)
+            .expect("failures must serialise as a JSON array");
+        let strings: Vec<&str> = failures_array
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert_eq!(
+            strings,
+            vec!["row 7: hash mismatch", "row 9: missing prev"],
+            "populated failures must surface each row as a JSON string verbatim \
+             — release-evidence consumers destructure on this shape"
+        );
+
+        let full_obj = serde_json::to_value(&healthy).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in ["events", "anchors", "valid", "root_hash_hex", "failures"] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<AuditIntegrityReport>(serde_json::Value::Object(payload))
+                    .is_err(),
+                "AuditIntegrityReport must reject a wire payload that omits \
+                 {required}; a stray #[serde(default)] introduction — \
+                 particularly on `valid` (the operator's go/no-go signal) or \
+                 `root_hash_hex` (the release-binding subject) — must fail the \
+                 test loud"
+            );
+        }
+    }
+
+    #[test]
     fn audit_event_round_trips_through_serde() {
         let e = dummy(intent_kind("ok"));
         let json = serde_json::to_string(&e).unwrap();

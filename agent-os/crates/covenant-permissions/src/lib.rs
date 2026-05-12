@@ -2321,6 +2321,65 @@ mod tests {
     }
 
     #[test]
+    fn memory_repair_scope_allows_pins_non_object_action_mismatch_with_bound_scope_and_unscoped_grants(
+    ) {
+        assert!(
+            !memory_repair_scope_allows(
+                "memory",
+                &serde_json::json!([]),
+                "record-1",
+                "working",
+                0,
+                true
+            )
+            .unwrap()
+        );
+
+        let bound_scope = serde_json::json!({
+            "version": 1,
+            "record_id": "record-1",
+            "tiers": ["working"],
+            "before_ms": 1_000,
+            "apply": true
+        });
+        assert!(
+            !memory_repair_scope_allows(
+                "memory.repair.dry_run",
+                &bound_scope,
+                "record-1",
+                "working",
+                999,
+                true
+            )
+            .unwrap()
+        );
+
+        let empty = serde_json::json!({});
+        assert!(
+            memory_repair_scope_allows(
+                "memory.repair.apply",
+                &empty,
+                "any-record",
+                "working",
+                0,
+                true
+            )
+            .unwrap()
+        );
+        assert!(
+            memory_repair_scope_allows(
+                "memory.repair.apply",
+                &empty,
+                "any-record",
+                "longterm",
+                u64::MAX,
+                true
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn memory_compaction_scope_allows_tiers_and_cutoffs() {
         let scope = serde_json::json!({
             "version": 1,

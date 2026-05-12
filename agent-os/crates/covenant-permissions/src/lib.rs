@@ -1584,6 +1584,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_audit_scope_rejects_invalid_before_ms_and_include_integrity_types() {
+        assert_invalid_scope(
+            "audit.verify",
+            serde_json::json!({ "version": 1, "before_ms": "bad" }),
+        );
+        assert_invalid_scope(
+            "audit.verify",
+            serde_json::json!({ "version": 1, "include_integrity": "yes" }),
+        );
+    }
+
+    #[test]
     fn tool_call_scope_allows_unscoped_grants() {
         assert!(tool_call_scope_allows(
             "tool.call.echo",

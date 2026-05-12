@@ -1093,6 +1093,62 @@ mod tests {
     }
 
     #[test]
+    fn revoke_outcome_ambiguous_truncated_pins_serde_default() {
+        // RevokeOutcome::Ambiguous::truncated carries #[serde(default)] with
+        // a documented stale-CLI compatibility contract: a CLI built before
+        // the field landed must continue to deserialise a new daemon's
+        // RevokeOutcome::Ambiguous response, and the omitted-field wire
+        // form must decode to truncated=false (the pre-bound behavior where
+        // the operator assumes the displayed matches are exhaustive). A
+        // refactor that drops the attribute strands every stale CLI; a
+        // refactor that swaps it to a true-returning function silently
+        // flips operator-facing semantics for every legacy response.
+        let omitted: RevokeOutcome =
+            serde_json::from_value(serde_json::json!({"type": "ambiguous", "matches": []}))
+                .expect("stale CLI wire form must decode");
+        assert_eq!(
+            omitted,
+            RevokeOutcome::Ambiguous {
+                matches: vec![],
+                truncated: false,
+            },
+            "omitted truncated must decode to false; a dropped #[serde(default)] breaks every stale CLI",
+        );
+
+        let explicit: RevokeOutcome = serde_json::from_value(serde_json::json!({
+            "type": "ambiguous",
+            "matches": [],
+            "truncated": true,
+        }))
+        .expect("explicit truncated wire form must decode");
+        assert_eq!(
+            explicit,
+            RevokeOutcome::Ambiguous {
+                matches: vec![],
+                truncated: true,
+            },
+            "explicit truncated must decode verbatim; the serde default must not shadow set values",
+        );
+
+        let wire = serde_json::to_value(RevokeOutcome::Ambiguous {
+            matches: vec![],
+            truncated: false,
+        })
+        .unwrap();
+        assert_eq!(
+            wire.get("truncated").and_then(|v| v.as_bool()),
+            Some(false),
+            "Ambiguous variant must serialize truncated=false explicitly; there is no skip_serializing_if on the field, so the daemon's output must keep the field present for new CLI parsers",
+        );
+
+        assert!(
+            serde_json::from_value::<RevokeOutcome>(serde_json::json!({"type": "ambiguous"}))
+                .is_err(),
+            "missing matches field must fail to decode; the contract surface must not silently shrink",
+        );
+    }
+
+    #[test]
     fn token_round_trips_through_base58() {
         let t = PeerToken::generate();
         let s = t.to_b58();

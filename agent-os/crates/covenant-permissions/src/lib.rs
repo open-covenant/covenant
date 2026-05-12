@@ -3083,6 +3083,97 @@ mod tests {
     }
 
     #[test]
+    fn signed_capability_envelope_serde_pins_two_required_fields() {
+        // SignedCapability is the signed grant envelope that rides
+        // every JSONL grant log line, IPC capability response, and HTTP
+        // grant surface. Two fields: capability (the inner Capability
+        // struct, pinned separately by capability_serde_pins_five_field_wire_form)
+        // and signature ([u8; 64] serialized as bs58 via
+        // #[serde(with = "sig_b58")], pinned by
+        // signed_capability_signature_serde_pins_base58_and_length_arms).
+        // The existing round-trip test
+        // signed_capability_round_trips_through_serde is too loose to
+        // detect a refactor that flattens the inner Capability into the
+        // envelope, or adds a third top-level metadata field, or renames
+        // either documented key. Pin the envelope key set on the wire,
+        // the per-required-field reject, and the no-flatten contract.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let signed = sign(
+            cap(subject, "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+
+        let wire = serde_json::to_value(&signed).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("SignedCapability serializes as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["capability", "signature"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "SignedCapability wire form must be exactly two top-level keys; \
+             a #[serde(flatten)] on capability would lift inner fields to \
+             the envelope and silently collide with any future metadata \
+             sibling, and an added top-level field would break the JSONL \
+             grant log replay round-trip",
+        );
+
+        let capability_value = obj
+            .get("capability")
+            .expect("capability key must be present");
+        assert!(
+            capability_value.is_object(),
+            "capability must serialise as a nested JSON object; a flatten \
+             would surface inner Capability keys (subject, action, scope, …) \
+             at the envelope level instead",
+        );
+        // The envelope must NOT surface any of the inner Capability keys
+        // at the top level — that would mean capability was flattened.
+        for inner in ["subject", "action", "scope", "granted_by", "expires_at"] {
+            assert!(
+                !obj.contains_key(inner),
+                "envelope must not expose inner Capability key {inner:?} at \
+                 the top level — that would mean capability was flattened",
+            );
+        }
+
+        let signature_value = obj.get("signature").expect("signature key must be present");
+        assert!(
+            signature_value.is_string(),
+            "signature must serialise as a JSON string (bs58); the contract \
+             is pinned by signed_capability_signature_serde_pins_base58_and_length_arms",
+        );
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["capability", "signature"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<SignedCapability>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "SignedCapability wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // A payload that flattens Capability fields directly into the
+        // envelope (no inner capability key) must fail — that's the
+        // shape a refactor introducing #[serde(flatten)] on capability
+        // would produce, and the deserializer must refuse it so the
+        // regression fails loud at the envelope boundary.
+        let inner_cap = serde_json::to_value(&signed.capability).unwrap();
+        let mut flattened = inner_cap.as_object().unwrap().clone();
+        flattened.insert("signature".into(), obj.get("signature").unwrap().clone());
+        assert!(
+            serde_json::from_value::<SignedCapability>(serde_json::Value::Object(flattened))
+                .is_err(),
+            "flattened capability fields (no inner capability key) must be \
+             rejected so a #[serde(flatten)] refactor fails at the envelope",
+        );
+    }
+
+    #[test]
     fn signed_capability_signature_serde_pins_base58_and_length_arms() {
         // SignedCapability::signature carries #[serde(with = "sig_b58")];
         // every JSONL grant log, IPC capability response, and HTTP grant

@@ -4313,6 +4313,46 @@ mod tests {
     }
 
     #[test]
+    fn memory_purge_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["before_ms", "kind", "purged", "tier"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("memory_purge_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_purge_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("memory_purged"));
+            assert!(
+                value["tier"].is_string() || value["tier"].is_null(),
+                "tier must be a string slug or null when all tiers were purged: {value}",
+            );
+            assert!(
+                value["before_ms"].is_u64(),
+                "before_ms must be a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["purged"].is_u64(),
+                "purged must be a non-negative integer, not a string: {value}",
+            );
+        }
+
+        assert_shape(&memory_purge_json(
+            Some(MemoryTier::Working),
+            1_700_000_000_000,
+            3,
+        ));
+        assert_shape(&memory_purge_json(None, 0, 0));
+    }
+
+    #[test]
     fn memory_compaction_json_renders_stable_shape() {
         let outcome = MemoryCompactionOutcome {
             mode: MemoryRepairMode::DryRun,

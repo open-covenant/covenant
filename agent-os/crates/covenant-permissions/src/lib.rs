@@ -2448,4 +2448,42 @@ mod tests {
         assert!(s.recent(10).await.unwrap().is_empty());
         assert!(s.list_for_subject(subject.pubkey).await.unwrap().is_empty());
     }
+
+    #[test]
+    fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
+        assert!(
+            memory_read_action_allows("memory.read", None),
+            "the umbrella 'memory.read' action must pass when no tier is supplied; otherwise unscoped grants cannot authorize tier-less reads",
+        );
+        assert!(
+            memory_read_action_allows("memory.read", Some("short")),
+            "the umbrella 'memory.read' action must pass regardless of supplied tier; otherwise an unrestricted grant silently stops authorizing tier-bearing reads",
+        );
+
+        assert!(
+            memory_read_action_allows("memory.read.short", Some("short")),
+            "the tiered 'memory.read.<tier>' action must pass on exact tier match; otherwise tier-scoped grants never authorize their own tier",
+        );
+        assert!(
+            !memory_read_action_allows("memory.read.short", Some("long")),
+            "the tiered action must NOT pass on tier mismatch; otherwise a 'short'-scoped grant silently authorizes 'long' reads",
+        );
+        assert!(
+            !memory_read_action_allows("memory.read.short", None),
+            "the tiered action must NOT pass when no tier is supplied; defaulting to allow would silently authorize tier-scoped reads with no tier context",
+        );
+
+        assert!(
+            !memory_read_action_allows("memory.write", Some("short")),
+            "an action that is not 'memory.read' and does not start with 'memory.read.' must be rejected; otherwise unrelated actions silently flow through the read gate",
+        );
+        assert!(
+            !memory_read_action_allows("memory", None),
+            "a partial-prefix action like 'memory' must be rejected; otherwise a non-action string silently authorizes reads",
+        );
+        assert!(
+            !memory_read_action_allows("memory.readx", Some("short")),
+            "an action with a near-prefix like 'memory.readx' must be rejected; otherwise strip_prefix matching silently widens to typo-ed prefixes",
+        );
+    }
 }

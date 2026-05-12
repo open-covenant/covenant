@@ -1490,6 +1490,112 @@ mod tests {
     }
 
     #[test]
+    fn response_capability_granted_serde_pins_three_field_variant() {
+        // Response::CapabilityGranted is the variant the daemon
+        // sends after a successful GrantCapability request — it
+        // carries three fields the CLI surfaces to operators:
+        // signature_b58 (the persisted SignedCapability signature,
+        // base58), subject_display (the AgentId display the
+        // capability is bound to), and action (the dispatch verb the
+        // grant authorises). With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly four top-level keys: kind='capability_granted'
+        // plus the three variant fields. No prior test pins the
+        // exact wire shape, round-trip, or omission rejection. A
+        // refactor that promoted CapabilityGranted from a struct
+        // variant to a newtype variant would nest the three fields
+        // one level deeper next to 'kind' and every CLI consumer
+        // that prints the granted-capability confirmation would
+        // silently drop the signature or subject — operator triage
+        // could not tell which capability was actually granted or
+        // to whom.
+        let event = Response::CapabilityGranted {
+            signature_b58: "sig-abc".into(),
+            subject_display: "research@host".into(),
+            action: "tool.call.fs.read".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "kind", "signature_b58", "subject_display"],
+            "Response::CapabilityGranted wire form must be exactly \
+             four top-level keys: 'kind' plus the three variant \
+             fields. A refactor that promoted the variant from \
+             struct to newtype wrapping a payload struct would nest \
+             the three fields one level deeper and every CLI \
+             consumer that prints the granted-capability \
+             confirmation would silently drop the signature or \
+             subject",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("capability_granted")),
+            "Response discriminator slug must be snake_case \
+             'capability_granted'; a slug regression silently \
+             strands every CLI parser that classifies grant outcomes \
+             by this exact value — the operator cannot confirm the \
+             grant succeeded and the audit row attribution becomes \
+             ambiguous",
+        );
+        assert_eq!(
+            obj.get("signature_b58").and_then(serde_json::Value::as_str),
+            Some("sig-abc"),
+            "Response::CapabilityGranted::signature_b58 must surface \
+             as the literal base58 signature — operator triage greps \
+             on this exact value to correlate the CLI confirmation \
+             with the persisted SignedCapability row",
+        );
+        assert_eq!(
+            obj.get("subject_display")
+                .and_then(serde_json::Value::as_str),
+            Some("research@host"),
+            "Response::CapabilityGranted::subject_display must \
+             surface as the literal AgentId display — the CLI prints \
+             this verbatim so operators can confirm which agent the \
+             capability is bound to before they act on the grant",
+        );
+        assert_eq!(
+            obj.get("action").and_then(serde_json::Value::as_str),
+            Some("tool.call.fs.read"),
+            "Response::CapabilityGranted::action must surface as the \
+             literal dispatch verb — a refactor that renamed or \
+             skipped the field would strand operators that grep CLI \
+             output for the matching capability slug",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::CapabilityGranted must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI grant-confirmation consumer leans on",
+        );
+
+        for required in ["signature_b58", "subject_display", "action"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+                "Response::CapabilityGranted wire form must reject a \
+                 payload missing {required:?}; a stray \
+                 #[serde(default)] on subject_display or action would \
+                 let a malformed row decode with empty strings and \
+                 the CLI would print a granted-capability \
+                 confirmation with no subject or no action — \
+                 operators could not grep their CLI output for the \
+                 matching audit row and the post-grant audit trail \
+                 would be silently broken",
+            );
+        }
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

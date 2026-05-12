@@ -2850,6 +2850,77 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_optional_before_ms_pins_absent_null_compare_and_none_strict_deny() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_optional_before_ms(empty, Some(0)),
+            "absent 'before_ms' field must allow actual=Some(0); the absent-key branch is unconditional",
+        );
+        assert!(
+            scope_allows_optional_before_ms(empty, Some(u64::MAX)),
+            "absent 'before_ms' field must allow actual=Some(u64::MAX); a regression that gated the absent path on the magnitude would silently reject the unbounded request through an unscoped grant",
+        );
+        assert!(
+            scope_allows_optional_before_ms(empty, None),
+            "absent 'before_ms' field must allow actual=None; otherwise unscoped grants reject every request whose before_ms is omitted",
+        );
+
+        let explicit_null = serde_json::json!({ "before_ms": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            scope_allows_optional_before_ms(explicit_null, Some(0)),
+            "{{\"before_ms\": null}} is the documented unbounded marker and must allow actual=Some(0)",
+        );
+        assert!(
+            scope_allows_optional_before_ms(explicit_null, Some(u64::MAX)),
+            "{{\"before_ms\": null}} must allow actual=Some(u64::MAX); a regression that demanded a finite bound under the null arm would silently reject the unbounded marker's intended use",
+        );
+        assert!(
+            scope_allows_optional_before_ms(explicit_null, None),
+            "{{\"before_ms\": null}} must allow actual=None as well; the null arm is unconditional regardless of whether the request supplied a threshold",
+        );
+
+        let bounded = serde_json::json!({ "before_ms": 100u64 });
+        let bounded = bounded.as_object().unwrap();
+        assert!(
+            scope_allows_optional_before_ms(bounded, Some(0)),
+            "scope before_ms=100 must allow actual=Some(0); the comparison is inclusive on the low end",
+        );
+        assert!(
+            scope_allows_optional_before_ms(bounded, Some(99)),
+            "scope before_ms=100 must allow actual=Some(99); below the scoped maximum",
+        );
+        assert!(
+            scope_allows_optional_before_ms(bounded, Some(100)),
+            "scope before_ms=100 must allow actual=Some(100); the <= comparison must include equality, otherwise boundary-bound purges silently fail (matches scope_allows_before_ms on the strict side)",
+        );
+        assert!(
+            !scope_allows_optional_before_ms(bounded, Some(101)),
+            "scope before_ms=100 must NOT allow actual=Some(101); a regression that flipped <= to >= or used the wrong direction would silently authorize wider purge windows on the optional side",
+        );
+        assert!(
+            !scope_allows_optional_before_ms(bounded, None),
+            "scope before_ms=100 must NOT allow actual=None; the .map(...).unwrap_or(false) strict-deny on actual=None is what distinguishes optional_before_ms from optional_string, and dropping it would silently authorize unspecified-before_ms purges under bound scopes",
+        );
+
+        let malformed = serde_json::json!({ "before_ms": "oops" });
+        let malformed = malformed.as_object().unwrap();
+        assert!(
+            scope_allows_optional_before_ms(malformed, Some(0)),
+            "a non-u64 'before_ms' must collapse the threshold to zero via unwrap_or(0); zero is still <= 0 so only the strict-zero request is allowed",
+        );
+        assert!(
+            !scope_allows_optional_before_ms(malformed, Some(1)),
+            "a non-u64 'before_ms' must reject actual=Some(1) via the zero-fallback; relaxing this to unwrap_or(u64::MAX) would silently authorize any purge through a malformed scope object",
+        );
+        assert!(
+            !scope_allows_optional_before_ms(malformed, None),
+            "a non-u64 'before_ms' with actual=None must strict-deny via .map(...).unwrap_or(false); this is the path where the zero-fallback never fires because actual=None never enters the closure, so the helper falls through to the outer unwrap_or(false) strict-deny",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

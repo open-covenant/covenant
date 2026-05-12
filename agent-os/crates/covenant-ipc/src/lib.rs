@@ -1399,6 +1399,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_purge_capabilities_serde_pins_single_field_variant() {
+        // Request::PurgeCapabilities is the operator-driven
+        // retention variant the CLI and HTTP gateway send to drop
+        // revocation tombstones (and their matching grant rows)
+        // whose revoked_at is strictly older than before_ms —
+        // live grants are untouched. It pairs with
+        // Response::CapabilitiesPurged (already pinned) which
+        // carries the dropped row count. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='purge_capabilities' plus before_ms. No prior
+        // test pins the exact wire shape, numeric u64
+        // serialization, or missing-field rejection for this
+        // variant. A serde-shape regression on this retention path
+        // either silently strands the operator's tombstone pruning
+        // or — worse — decodes a malformed frame as a default-zero
+        // cutoff and runs retention against an unintended window.
+        let event = Request::PurgeCapabilities {
+            before_ms: 1_700_000_000_000,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["before_ms", "kind"],
+            "Request::PurgeCapabilities wire form must be exactly \
+             two top-level keys: 'kind' plus the single \
+             'before_ms' field. A refactor that promoted the \
+             variant from struct to newtype wrapping a typed \
+             RetentionWindow would nest 'before_ms' one level \
+             deeper and every CLI/HTTP retention call that sends \
+             {{\"kind\":\"purge_capabilities\",\"before_ms\":<n>}} \
+             would fail to decode on the daemon side — \
+             revoked-capability tombstones would accumulate \
+             without bound and operator triage could not tell the \
+             difference between an active grant and a \
+             pre-revocation grant in the registry",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("purge_capabilities")),
+            "Request discriminator slug must be the durable \
+             'purge_capabilities'; a slug regression silently \
+             routes incoming retention frames to the daemon's \
+             catch-all error branch — every CLI/HTTP retention \
+             probe fails with a confusing fallback message \
+             instead of CapabilitiesPurged, and the capabilities \
+             registry keeps growing without the operator noticing",
+        );
+        assert_eq!(
+            obj.get("before_ms").and_then(serde_json::Value::as_u64),
+            Some(1_700_000_000_000),
+            "Request::PurgeCapabilities::before_ms must surface as \
+             the literal u64 cutoff in milliseconds — the daemon's \
+             retention path binds on this exact field with strict \
+             greater-than-or-equal semantics; a rename, retype, or \
+             accidental signed coercion would silently shift the \
+             window and either skip tombstones the operator meant \
+             to drop or drop tombstones the operator meant to keep",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::PurgeCapabilities must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP capabilities-retention \
+             consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("before_ms");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::PurgeCapabilities wire form must reject a \
+             payload missing 'before_ms'; a stray #[serde(default)] \
+             would let a malformed frame decode with before_ms=0 \
+             and the daemon would run retention against an \
+             unintended cutoff — with a flipped comparison or \
+             off-by-one in the retention path this becomes a \
+             fleet-wide capability-history wipe in response to a \
+             request the operator did not send, destroying the \
+             revocation evidence operator triage needs to detect \
+             tampering",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

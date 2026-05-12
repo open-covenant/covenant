@@ -2562,7 +2562,7 @@ mod tests {
         // rotated the field name would silently break every
         // CLI/HTTP enqueue caller.
         let task = covenant_a2a::A2ATask {
-            id: Uuid::from_u128(0xA2A_5EE_DE_F00D_CAFE_0000_BABE_BEEF),
+            id: Uuid::from_u128(0xA2A5_EEDE_F00D_CAFE_0000_BABE_BEEF),
             sender: covenant_types::AgentId::new("alice@local", [1u8; 32]),
             recipient: covenant_types::AgentId::new("bob@local", [2u8; 32]),
             intent_text: "fetch papers".into(),

@@ -2450,6 +2450,50 @@ mod tests {
     }
 
     #[test]
+    fn scope_allows_record_id_pins_absent_key_exact_match_and_non_string_fallthrough() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            scope_allows_record_id(empty, "rec-1"),
+            "absent 'record_id' field must default to allow; otherwise unscoped record-bearing memory ops are silently rejected",
+        );
+        assert!(
+            scope_allows_record_id(empty, ""),
+            "absent 'record_id' field must allow even an empty record_id so the unscoped default is unconditional, matching scope_allows_apply",
+        );
+
+        let bound = serde_json::json!({ "record_id": "rec-1" });
+        let bound = bound.as_object().unwrap();
+        assert!(
+            scope_allows_record_id(bound, "rec-1"),
+            "scope {{\"record_id\": \"rec-1\"}} must allow exactly \"rec-1\"; otherwise the equality check silently denies its own pinned record",
+        );
+        assert!(
+            !scope_allows_record_id(bound, "rec-12"),
+            "scope {{\"record_id\": \"rec-1\"}} must NOT allow \"rec-12\"; a regression that swapped equality for starts_with would silently broaden authority across record-id prefixes",
+        );
+        assert!(
+            !scope_allows_record_id(bound, "rec-1a"),
+            "scope {{\"record_id\": \"rec-1\"}} must NOT allow \"rec-1a\"; the equality check must not silently widen to contains/starts_with",
+        );
+        assert!(
+            !scope_allows_record_id(bound, ""),
+            "scope {{\"record_id\": \"rec-1\"}} must NOT allow the empty record_id; defaulting to allow on empty would silently bypass the bound scope",
+        );
+
+        let non_string = serde_json::json!({ "record_id": 42 });
+        let non_string = non_string.as_object().unwrap();
+        assert!(
+            scope_allows_record_id(non_string, "rec-1"),
+            "a non-string 'record_id' field must fall through to allow for a normal record_id; otherwise the helper would diverge from scope_allows_apply and reject partially-typed scope objects",
+        );
+        assert!(
+            scope_allows_record_id(non_string, ""),
+            "a non-string 'record_id' field must fall through to allow for an empty record_id as well, matching the rest of the scope_allows_* family",
+        );
+    }
+
+    #[test]
     fn scope_allows_apply_pins_absent_key_bool_match_and_non_bool_fallthrough() {
         let empty = serde_json::json!({});
         let empty = empty.as_object().unwrap();

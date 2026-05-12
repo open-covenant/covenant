@@ -574,6 +574,72 @@ entry = "x.f90"
     }
 
     #[test]
+    fn settlement_section_serde_pins_two_default_bearing_fields() {
+        // Settlement is the [settlement] block in agent.toml with two
+        // fields — budget_credits_per_hour (u64) and priority
+        // (covenant_types::Priority) — backed by the derived Default
+        // impl which returns (0, Priority::Normal). The struct carries
+        // #[serde(default)] so omitted fields fall back to the impl's
+        // values.
+        //
+        // The struct's doc explicitly states "Phase 0 tolerates 0;
+        // enforced from Phase 1" — locking 0 as the default for
+        // budget_credits_per_hour keeps that contract; a refactor that
+        // seeded a non-zero default would silently push agents into
+        // BudgetExhausted at intent dispatch and operator deployments
+        // running unbudgeted under Phase 0 would start hitting capacity
+        // failures with no parse-time signal.
+        let agent_block = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#;
+
+        // Full override — non-default values so a refactor that swapped
+        // the two fields' bindings would be loud.
+        let full = format!(
+            "{agent_block}\n[settlement]\nbudget_credits_per_hour = 4242\npriority = \"high\"\n"
+        );
+        let parsed = Manifest::parse(&full).expect("full settlement block must parse");
+        assert_eq!(parsed.settlement.budget_credits_per_hour, 4242);
+        assert_eq!(parsed.settlement.priority, Priority::High);
+
+        // Section omitted entirely → Default impl values surface.
+        let omitted =
+            Manifest::parse(agent_block).expect("manifest without [settlement] must parse");
+        assert_eq!(
+            omitted.settlement.budget_credits_per_hour, 0,
+            "Settlement::budget_credits_per_hour default must be 0 — the \
+             doc says 'Phase 0 tolerates 0; enforced from Phase 1', so a \
+             refactor that seeded a non-zero default would silently push \
+             every Phase-0 deployment into BudgetExhausted at intent \
+             dispatch with no parse-time signal"
+        );
+        assert_eq!(
+            omitted.settlement.priority,
+            Priority::Normal,
+            "Settlement::priority default must be Normal — a refactor that \
+             swapped the default would silently re-rank every untouched \
+             agent in the router's priority ordering"
+        );
+
+        // Partial overrides — each field's omission must fall through to
+        // the default WITHOUT disturbing the other one.
+        let only_budget = format!("{agent_block}\n[settlement]\nbudget_credits_per_hour = 999\n");
+        let parsed = Manifest::parse(&only_budget).unwrap();
+        assert_eq!(parsed.settlement.budget_credits_per_hour, 999);
+        assert_eq!(parsed.settlement.priority, Priority::Normal);
+
+        let only_priority = format!("{agent_block}\n[settlement]\npriority = \"low\"\n");
+        let parsed = Manifest::parse(&only_priority).unwrap();
+        assert_eq!(parsed.settlement.budget_credits_per_hour, 0);
+        assert_eq!(parsed.settlement.priority, Priority::Low);
+    }
+
+    #[test]
     fn sandbox_section_serde_pins_three_default_bearing_fields() {
         // Sandbox is the [sandbox] block in agent.toml with three
         // fields — required (bool), backend (SandboxBackend),

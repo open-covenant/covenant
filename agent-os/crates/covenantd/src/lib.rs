@@ -11179,6 +11179,74 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_read_record_allowed_pins_scope_match_paths() {
+        let record = MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: AgentId::new("owner@local", [1u8; 32]),
+            text: "pinned".into(),
+            embedding: vec![],
+            metadata: serde_json::json!({}),
+            created_at: 1_000,
+            parent: None,
+        };
+        let record_id = record.id.to_string();
+
+        let allow_all = vec![("memory.read".to_string(), serde_json::json!({}))];
+        assert!(memory_read_record_allowed(&allow_all, &record));
+
+        let working_tier = vec![(
+            "memory.read.working".to_string(),
+            serde_json::json!({"version": 1, "tiers": ["working"]}),
+        )];
+        assert!(memory_read_record_allowed(&working_tier, &record));
+
+        let id_match = vec![(
+            "memory.read".to_string(),
+            serde_json::json!({"version": 1, "record_id": record_id}),
+        )];
+        assert!(memory_read_record_allowed(&id_match, &record));
+
+        let before_after_record = vec![(
+            "memory.read".to_string(),
+            serde_json::json!({"version": 1, "before_ms": record.created_at + 1}),
+        )];
+        assert!(memory_read_record_allowed(&before_after_record, &record));
+
+        let denying_then_allow = vec![
+            (
+                "memory.read.working".to_string(),
+                serde_json::json!({"version": 1, "tiers": ["episodic"]}),
+            ),
+            ("memory.read".to_string(), serde_json::json!({})),
+        ];
+        assert!(memory_read_record_allowed(&denying_then_allow, &record));
+
+        let wrong_tier = vec![(
+            "memory.read.working".to_string(),
+            serde_json::json!({"version": 1, "tiers": ["episodic"]}),
+        )];
+        assert!(!memory_read_record_allowed(&wrong_tier, &record));
+
+        let wrong_id = vec![(
+            "memory.read".to_string(),
+            serde_json::json!({"version": 1, "record_id": Uuid::new_v4().to_string()}),
+        )];
+        assert!(!memory_read_record_allowed(&wrong_id, &record));
+
+        let before_at_record = vec![(
+            "memory.read".to_string(),
+            serde_json::json!({"version": 1, "before_ms": record.created_at}),
+        )];
+        assert!(!memory_read_record_allowed(&before_at_record, &record));
+
+        let invalid_scope = vec![("memory.read".to_string(), serde_json::json!(true))];
+        assert!(!memory_read_record_allowed(&invalid_scope, &record));
+
+        assert!(!memory_read_record_allowed(&[], &record));
+    }
+
+    #[test]
     fn a2a_entry_matches_deadline_within_pins_filter_matrix() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);

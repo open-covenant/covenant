@@ -4116,6 +4116,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_peer_revoked_serde_pins_single_field_variant() {
+        // Response::PeerRevoked is the variant the daemon sends in
+        // response to Request::RevokePeer. It carries outcome:
+        // RevokeOutcome, the four-case tagged enum the CLI surfaces
+        // (Revoked, AlreadyRevoked, NotFound, Ambiguous) so the
+        // operator can see exactly which outcome the prefix matched.
+        // With #[serde(tag = "kind", rename_all = "snake_case")] on
+        // the Response enum, the wire object is exactly two top-level
+        // keys: kind='peer_revoked' plus outcome. No prior test pins
+        // the exact wire shape, round-trip, or omission rejection of
+        // this variant's required field. The inner RevokeOutcome
+        // shape is pinned by covenant-peer-auth tests; this slice
+        // locks the outer Response variant shape only — the NotFound
+        // unit-variant case is the lowest-construction-cost
+        // RevokeOutcome and exercises the same outer surface as every
+        // other case.
+        let event = Response::PeerRevoked {
+            outcome: RevokeOutcome::NotFound,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "outcome"],
+            "Response::PeerRevoked wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'outcome' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping RevokeOutcome would either inline its \
+             fields next to 'kind' or nest 'outcome' one level \
+             deeper — either form silently breaks every CLI consumer \
+             that reads .outcome.type to switch on the four \
+             RevokeOutcome cases",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("peer_revoked")),
+            "Response discriminator slug must be the durable \
+             'peer_revoked'; a slug regression silently strands every \
+             CLI parser that classifies revoke outcomes by this exact \
+             value — the operator's CLI prints a confusing fallback \
+             instead of the revoke outcome, masking whether the \
+             prefix-matched peer was actually removed",
+        );
+        assert!(
+            obj.get("outcome")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::PeerRevoked::outcome must serialize as a \
+             nested JSON object — the inner RevokeOutcome shape is \
+             pinned by covenant-peer-auth tests; this slice only \
+             locks that outcome appears as one keyed object under the \
+             outer variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::PeerRevoked must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI revoke-outcome consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("outcome");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::PeerRevoked wire form must reject a payload \
+             missing 'outcome'; a stray #[serde(default)] would let a \
+             malformed row decode with a synthetic default \
+             RevokeOutcome (none of the four cases) and the CLI would \
+             surface a phantom 'unknown' state — a real fetch failure \
+             (truncated frame, partial decode error) would be \
+             silently reclassified as a clean apply where the \
+             operator believes the prefix matched nothing when in \
+             fact the daemon's revoke path produced an error the \
+             boundary swallowed",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

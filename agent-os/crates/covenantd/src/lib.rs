@@ -10589,6 +10589,21 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn audit_failure_response_pins_message_and_variant() {
+        let err = AuditError::ChainCorruption {
+            events: 0,
+            chain: 0,
+        };
+        let response = audit_failure_response(err);
+        match response {
+            Response::Error { message } => {
+                assert_eq!(message, "audit write failed; refusing to proceed");
+            }
+            other => panic!("expected Response::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn budget_pause_checkpoint_pins_each_field() {
         let intent_id = Uuid::new_v4();
         let agent = AgentId::new("x@local", [7u8; 32]);

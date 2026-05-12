@@ -1003,6 +1003,38 @@ mod tests {
         AgentId::new(name, pk)
     }
 
+    #[test]
+    fn looks_machine_local_path_pins_unix_tilde_homevar_and_windows_prefixes_and_rejects_non_paths()
+    {
+        for s in [
+            "/tmp/covenant-state",
+            "~/.config/covenant",
+            "$HOME/cov",
+            "C:\\Users\\cov",
+            "D:/data/cov",
+        ] {
+            assert!(
+                looks_machine_local_path(s),
+                "{s:?} is a documented machine-local prefix and must be rejected by validate_resume_state_value before it can leak into shared pause checkpoints",
+            );
+        }
+
+        for s in [
+            "",
+            "foo",
+            "foo/bar",
+            "./foo",
+            "https://example.com/x",
+            "C",
+            "C:",
+        ] {
+            assert!(
+                !looks_machine_local_path(s),
+                "{s:?} must NOT match the machine-local predicate; falsely flagging non-paths would block legitimate resume_state values without explaining why",
+            );
+        }
+    }
+
     fn checkpoint(agent: &AgentId, intent_id: Uuid) -> BudgetPauseCheckpoint {
         let mut resume_state = serde_json::Map::new();
         resume_state.insert("cursor".to_string(), json!({"step": 2, "unit": "compile"}));

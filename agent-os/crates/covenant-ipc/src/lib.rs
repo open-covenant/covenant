@@ -2159,6 +2159,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_resume_intent_serde_pins_single_field_variant() {
+        // Request::ResumeIntent is the operator-driven
+        // intent-resume verb the CLI and HTTP gateway send to
+        // re-dispatch the intent the audit log's most recent
+        // BudgetExhausted row records under intent_id. It pairs
+        // with Response::IntentResult (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='resume_intent' plus intent_id. The intent_id
+        // field is typed Uuid (not String) so a retyping refactor
+        // would silently break wire compatibility — the typed
+        // binding is the load-bearing surface. No prior test pins
+        // the exact wire shape, Uuid hyphenated-string
+        // serialization, round-trip, or missing-field rejection
+        // for this variant. A serde-shape regression on this
+        // resume path either silently strands the operator's
+        // resume order (the budget-exhausted intent never
+        // re-dispatches) or — with a stray serde(default) —
+        // decodes against Uuid::nil() and the daemon scans the
+        // audit chain for the all-zeros intent, finding nothing
+        // and returning a confusing not-found instead of running
+        // the actual resume.
+        let intent_id = Uuid::from_u128(0xC0FF_EEDE_ADBE_EFCA_FEBA_BE0B_ADF0_0DDC);
+        let event = Request::ResumeIntent { intent_id };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["intent_id", "kind"],
+            "Request::ResumeIntent wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'intent_id' \
+             field. A refactor that promoted the variant from \
+             struct to newtype wrapping a typed ResumeTarget \
+             would nest 'intent_id' one level deeper and every \
+             CLI/HTTP resume call that sends \
+             {{\"kind\":\"resume_intent\",\"intent_id\":\"<uuid>\"}} \
+             would fail to decode on the daemon side — the \
+             budget-exhausted intent would never re-dispatch \
+             through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("resume_intent")),
+            "Request discriminator slug must be the durable \
+             'resume_intent'; a slug regression silently routes \
+             incoming resume frames to the daemon's catch-all \
+             error branch — every CLI/HTTP resume probe fails \
+             with a confusing fallback message instead of \
+             IntentResult, and the operator cannot resume a \
+             budget-exhausted intent through the supported path",
+        );
+        assert_eq!(
+            obj.get("intent_id").and_then(serde_json::Value::as_str),
+            Some(intent_id.to_string().as_str()),
+            "Request::ResumeIntent::intent_id must surface as the \
+             Uuid's hyphenated string form (8-4-4-4-12 hex). A \
+             retype from Uuid to String would lose the typed \
+             binding and let a malformed hex / missing-hyphen \
+             payload decode successfully against the wrong audit \
+             row; a refactor that swapped Uuid's serde repr to \
+             the simple no-hyphen form or a byte array would \
+             silently break every operator's resume scripts \
+             against the prior wire contract",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::ResumeIntent must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP resume consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("intent_id");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::ResumeIntent wire form must reject a \
+             payload missing 'intent_id'; a stray \
+             #[serde(default)] would let a malformed frame decode \
+             with intent_id=Uuid::nil() and the daemon would scan \
+             the audit chain for the all-zeros intent — finding \
+             nothing and returning a confusing not-found instead \
+             of running the actual resume, with the operator's \
+             budget bucket never re-spending against the real \
+             dispatch and audit attribution collapsing to a \
+             phantom subject",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

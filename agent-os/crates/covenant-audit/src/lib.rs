@@ -1117,6 +1117,67 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_capability_check_serde_pins_four_field_variant() {
+        // AuditKind::CapabilityCheck is the load-bearing audit row
+        // emitted on every dispatch-time capability check through
+        // covenantd::Server. Four required fields: agent_id (String),
+        // required_actions (Vec<String>), missing_actions (Vec<String>),
+        // passed (bool). audit_event_serde_pins_four_required_fields
+        // uses CapabilityCheck only as the envelope's payload carrier
+        // and does not pin the variant fields directly — a refactor
+        // that flipped missing_actions to #[serde(default)] would let
+        // a row with passed=false silently decode with an empty list
+        // and erase the triage signal naming which capability was
+        // short, and a bool→Option<bool> flip on passed would collapse
+        // the pass/fail discriminator into policy-dependent None
+        // handling.
+        let kind = AuditKind::CapabilityCheck {
+            agent_id: "agent@local".into(),
+            required_actions: vec!["memory.read".into()],
+            missing_actions: vec!["memory.write".into()],
+            passed: false,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "agent_id",
+                "missing_actions",
+                "passed",
+                "required_actions",
+                "type",
+            ],
+            "AuditKind::CapabilityCheck wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_check")),
+            "AuditKind discriminator slug must be snake_case 'capability_check'; a titlecase or kebab-case regression silently strands every prior capability-check audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::CapabilityCheck must round-trip through serde_json verbatim — the PartialEq derive is the contract dispatch-time capability-enforcement triage joins on",
+        );
+
+        for required in ["agent_id", "required_actions", "missing_actions", "passed"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityCheck wire form must reject a payload missing {required:?}; a stray #[serde(default)] on missing_actions would silently let a passed=false row decode with an empty list and erase which capability was short, and a bool→Option<bool> flip on passed would collapse the pass/fail discriminator into policy-dependent None handling",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_intent_dispatched_serde_pins_five_field_variant() {
         // AuditKind::IntentDispatched is the load-bearing audit variant
         // emitted on every successful dispatch through
@@ -1131,11 +1192,14 @@ mod tests {
         // * status: String — strictly required
         //
         // audit_event_serde_pins_four_required_fields uses
-        // CapabilityCheck only; this test pins the IntentDispatched
-        // wire form directly so a refactor that flipped result_hash_hex
-        // to #[serde(default)] (chain_hash absorbs an empty string and
-        // the verifier passes) or renamed any field would fail loud
-        // instead of producing a silently-broken audit row.
+        // CapabilityCheck only as a payload carrier and is now joined
+        // by audit_kind_capability_check_serde_pins_four_field_variant
+        // which pins that variant's wire form directly; this test pins
+        // the IntentDispatched wire form so a refactor that flipped
+        // result_hash_hex to #[serde(default)] (chain_hash absorbs an
+        // empty string and the verifier passes) or renamed any field
+        // would fail loud instead of producing a silently-broken
+        // audit row.
         let kind = AuditKind::IntentDispatched {
             intent_id: Uuid::nil(),
             intent_text: "hi".into(),

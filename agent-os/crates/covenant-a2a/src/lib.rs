@@ -1817,6 +1817,34 @@ mod tests {
     }
 
     #[test]
+    fn a2a_task_queue_state_serde_pins_snake_case_wire_form() {
+        // A2ATaskQueueState rides on every persisted A2ATaskQueueEntry.
+        // InFlight is load-bearing — a daemon restarting against a
+        // queue file that emitted "InFlight" titlecase (the rename_all
+        // default) would silently fail to deserialize half the rows
+        // and forget every leased task.
+        let cases: [(A2ATaskQueueState, &str); 2] = [
+            (A2ATaskQueueState::Queued, "queued"),
+            (A2ATaskQueueState::InFlight, "in_flight"),
+        ];
+        for (variant, slug) in cases {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: A2ATaskQueueState = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        assert!(
+            serde_json::from_str::<A2ATaskQueueState>("\"InFlight\"").is_err(),
+            "titlecase InFlight (the rename_all default) must be rejected",
+        );
+        assert!(
+            serde_json::from_str::<A2ATaskQueueState>("\"inFlight\"").is_err(),
+            "camelCase inFlight must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn task_skips_optional_fields_when_none() {
         let t = dummy_task();
         let s = serde_json::to_string(&t).unwrap();

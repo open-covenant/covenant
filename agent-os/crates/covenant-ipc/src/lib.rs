@@ -656,6 +656,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_protocol_info_serde_pins_unit_variant() {
+        // Request::ProtocolInfo is the unit variant the CLI sends
+        // BEFORE Authenticate to negotiate IPC protocol
+        // compatibility — it is the only request the daemon
+        // answers without a privileged token, and it pairs with
+        // Response::ProtocolInfo (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire form is exactly one top-level
+        // key: kind='protocol_info'. No prior test pins the exact
+        // wire shape or round-trip of this variant. The
+        // unauthenticated handshake is load-bearing — a slug
+        // regression or newtype promotion silently routes the
+        // negotiation frame to the daemon's authentication-required
+        // branch, and stale CLIs talking to a newer daemon (or
+        // vice versa) lose the documented version-handshake escape
+        // hatch — every connection looks like an authentication
+        // failure instead of a protocol-mismatch.
+        let event = Request::ProtocolInfo;
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["kind"],
+            "Request::ProtocolInfo wire form must be exactly one \
+             top-level key: 'kind'. A refactor that promoted the \
+             variant from unit to struct or newtype would add a \
+             second top-level key and every CLI handshake that \
+             sends {{\"kind\":\"protocol_info\"}} alone would fail \
+             to decode on the daemon side — the operator's stale \
+             CLI would get routed to the authentication-required \
+             branch and the documented protocol-negotiation escape \
+             hatch would silently disappear",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("protocol_info")),
+            "Request discriminator slug must be the durable \
+             'protocol_info'; a slug regression silently routes \
+             incoming negotiation frames to the daemon's catch-all \
+             error branch — every CLI version-negotiation fails \
+             with a confusing authentication-required error instead \
+             of a protocol-mismatch error, masking the version skew \
+             during incident triage",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::ProtocolInfo must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI protocol-negotiation consumer \
+             leans on",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

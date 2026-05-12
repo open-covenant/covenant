@@ -1491,6 +1491,55 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_a2a_sender_mismatch_serde_pins_two_field_variant() {
+        // AuditKind::A2ASenderMismatch is the audit row emitted when
+        // SendA2ATask is rejected because the supplied task.sender does
+        // not match the authenticated peer on the connection. Closes
+        // the sender-spoof attack class — a malicious local process
+        // claiming to be a different agent on the wire than the one
+        // bound to its peer token. peer_display (the authenticated
+        // peer) and claimed_sender_display (the spoofed identity) are
+        // both load-bearing for triage; a rename or #[serde(default)]
+        // on either would collapse the two identities into one
+        // diagnostic and the spoof attribution would be lost.
+        let kind = AuditKind::A2ASenderMismatch {
+            peer_display: "attacker@local".into(),
+            claimed_sender_display: "victim@local".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["claimed_sender_display", "peer_display", "type"]
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("a2_a_sender_mismatch")),
+            "AuditKind discriminator slug must be 'a2_a_sender_mismatch' — serde's rename_all = snake_case splits the 'A2A' prefix on each digit/uppercase boundary, producing 'a2_a_…'. This is the durable wire form every persisted A2ASenderMismatch audit row uses; a refactor that 'fixed' the slug to 'a2a_sender_mismatch' would silently strand every prior sender-spoof audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::A2ASenderMismatch must round-trip through serde_json verbatim — the PartialEq derive is the contract sender-spoof attribution leans on",
+        );
+
+        for required in ["peer_display", "claimed_sender_display"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::A2ASenderMismatch wire form must reject a payload missing {required:?}; a stray #[serde(default)] on either identity would collapse the two-party spoof event into a one-sided diagnostic",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_a2a_result_rejected_serde_pins_two_field_variant() {
         // AuditKind::A2AResultRejected is the audit row emitted when
         // PostA2AResult is rejected upstream of any capability check

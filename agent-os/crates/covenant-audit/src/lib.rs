@@ -1491,6 +1491,48 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_operator_peer_revoke_rejected_serde_pins_two_field_variant() {
+        // AuditKind::OperatorPeerRevokeRejected is the daemon-as-issuer
+        // probe row emitted when RevokePeer is rejected because the
+        // authenticated peer is not the operator. Same audience model
+        // as OperatorTokenRotationRejected and OperatorPeersListRejected.
+        // peer_pubkey_b58 is the unforgeable identifier; peer_display
+        // is wire-supplied.
+        let kind = AuditKind::OperatorPeerRevokeRejected {
+            peer_display: "guest@local".into(),
+            peer_pubkey_b58: "guestPubkeyB58".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["peer_display", "peer_pubkey_b58", "type"]);
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("operator_peer_revoke_rejected")),
+            "AuditKind discriminator slug must be snake_case 'operator_peer_revoke_rejected'; a titlecase or kebab-case regression silently strands every prior revoke-probe row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::OperatorPeerRevokeRejected must round-trip through serde_json verbatim — the PartialEq derive is the contract revoke-probe triage joins on",
+        );
+
+        for required in ["peer_display", "peer_pubkey_b58"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::OperatorPeerRevokeRejected wire form must reject a payload missing {required:?}; a stray #[serde(default)] on peer_pubkey_b58 would leave only the wire-controlled peer_display and erase the unforgeable probe-attribution signal",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_peer_revoked_serde_pins_three_field_variant() {
         // AuditKind::PeerRevoked records every successful operator
         // RevokePeer call. peer_display and peer_pubkey_b58 describe

@@ -2139,6 +2139,90 @@ mod tests {
     }
 
     #[test]
+    fn response_audit_purged_serde_pins_single_field_variant() {
+        // Response::AuditPurged is the variant the daemon sends
+        // after PurgeAudit removes audit-log rows older than the
+        // cutoff that the caller's signed capability authorizes.
+        // It carries purged: u64 — the count of audit rows the
+        // cutoff dropped, which the CLI surfaces so the operator
+        // can confirm the destructive retention pass took effect.
+        // With #[serde(tag = "kind", rename_all = "snake_case")] on
+        // the Response enum, the wire object is exactly two
+        // top-level keys: kind='audit_purged' plus purged. No prior
+        // test pins the exact wire shape, round-trip, or omission
+        // rejection. A refactor that promoted AuditPurged from a
+        // struct variant to a newtype variant would nest purged one
+        // level deeper and operator-facing CLIs would silently read
+        // zero; a stray #[serde(default)] on purged would let a
+        // malformed row decode with 0 and the operator would
+        // believe the destructive audit-log trim is a no-op even
+        // when many rows were removed — risking duplicate
+        // destructive runs against an already-trimmed audit log.
+        let event = Response::AuditPurged { purged: 13 };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "purged"],
+            "Response::AuditPurged wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'purged' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping a payload struct would nest 'purged' \
+             one level deeper and every CLI consumer that confirms \
+             the destructive audit-log retention pass dropped rows \
+             would silently read zero — operator triage could not \
+             distinguish a successful destructive trim from a no-op \
+             match",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("audit_purged")),
+            "Response discriminator slug must be the durable \
+             'audit_purged'; a slug regression silently strands \
+             every CLI parser that classifies audit-purge outcomes \
+             by this exact value — the operator's CLI prints a \
+             confusing fallback instead of confirming the \
+             dropped-row count and may tempt the operator to \
+             re-issue the destructive command",
+        );
+        assert_eq!(
+            obj.get("purged").and_then(serde_json::Value::as_u64),
+            Some(13),
+            "Response::AuditPurged::purged must surface as the u64 \
+             row count verbatim — the operator reads this exact \
+             integer to confirm the audit-log retention pass \
+             advanced",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::AuditPurged must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI audit-purge consumer leans on to \
+             render the destructive removal count to the operator",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("purged");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::AuditPurged wire form must reject a payload \
+             missing 'purged'; a stray #[serde(default)] would let \
+             a malformed row decode with 0 and the CLI would \
+             surface a phantom zero count — the destructive \
+             audit-log trim would look like a no-op even when many \
+             rows were removed, risking duplicate destructive runs \
+             against an already-trimmed audit log",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

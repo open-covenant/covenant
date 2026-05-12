@@ -1985,6 +1985,18 @@ mod tests {
     }
 
     #[test]
+    fn a2a_scope_allows_pins_peer_pubkey_b58_actual_none_with_bound_scope_rejected() {
+        let scope = serde_json::json!({ "version": 1, "peer_pubkey_b58": "peer-1" });
+        let actual_none = A2aScopeRequest {
+            peer_pubkey_b58: None,
+            ..A2aScopeRequest::default()
+        };
+        assert!(
+            !a2a_scope_allows("a2a.send.peer", &scope, "a2a.send.peer", actual_none).unwrap()
+        );
+    }
+
+    #[test]
     fn a2a_scope_allows_pins_duplicate_risk_underscore_dash_normalization() {
         let underscore_scope =
             serde_json::json!({ "version": 1, "duplicate_risk": "operator_accepted" });

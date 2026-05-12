@@ -847,6 +847,49 @@ mod tests {
     }
 
     #[test]
+    fn summary_passes_status_pins_all_three_filters_against_live_and_revoked_summaries() {
+        let live = PeerSummary {
+            agent_id: dummy_agent("live@host"),
+            token_prefix: "abcdef".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: None,
+        };
+        let revoked = PeerSummary {
+            agent_id: dummy_agent("rev@host"),
+            token_prefix: "uvwxyz".to_string(),
+            registered_at: 1_700_000_000_000,
+            revoked_at: Some(7),
+        };
+
+        assert!(
+            summary_passes_status(&live, None),
+            "None filter must pass a live summary so stale clients omitting status_filter keep seeing live peers",
+        );
+        assert!(
+            summary_passes_status(&revoked, None),
+            "None filter must also pass a revoked summary so the pre-filter wire shape is preserved for stale clients",
+        );
+
+        assert!(
+            summary_passes_status(&live, Some(PeerStatusFilter::Live)),
+            "Live filter must accept a summary with revoked_at = None; otherwise the live operator view drops legitimate live peers",
+        );
+        assert!(
+            !summary_passes_status(&revoked, Some(PeerStatusFilter::Live)),
+            "Live filter must reject a summary with revoked_at = Some(_); otherwise the Live view silently leaks revoked peers during incident triage",
+        );
+
+        assert!(
+            !summary_passes_status(&live, Some(PeerStatusFilter::Revoked)),
+            "Revoked filter must reject a summary with revoked_at = None; otherwise the Revoked view silently includes live peers and an incident reviewer cannot trust the count",
+        );
+        assert!(
+            summary_passes_status(&revoked, Some(PeerStatusFilter::Revoked)),
+            "Revoked filter must accept a summary with revoked_at = Some(_); otherwise the Revoked view drops the rows it exists to surface",
+        );
+    }
+
+    #[test]
     fn token_round_trips_through_base58() {
         let t = PeerToken::generate();
         let s = t.to_b58();

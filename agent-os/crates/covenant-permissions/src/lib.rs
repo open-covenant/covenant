@@ -3429,6 +3429,45 @@ mod tests {
     }
 
     #[test]
+    fn optional_bool_or_null_pins_absent_null_bool_and_non_bool_rejection() {
+        let empty = serde_json::json!({});
+        let empty = empty.as_object().unwrap();
+        assert!(
+            optional_bool_or_null("peers.revoke", empty, "x").is_ok(),
+            "absent field must be Ok; the if-let short-circuits before the !is_null && !is_boolean check so unscoped peer grants do not fail at the bool-or-null gate",
+        );
+
+        let explicit_null = serde_json::json!({ "x": null });
+        let explicit_null = explicit_null.as_object().unwrap();
+        assert!(
+            optional_bool_or_null("peers.revoke", explicit_null, "x").is_ok(),
+            "{{\"x\": null}} must be Ok; the !is_null half of the conjunction short-circuits before is_boolean, and null is the documented unbounded marker for peers.self/peers.force",
+        );
+
+        let true_value = serde_json::json!({ "x": true });
+        let true_value = true_value.as_object().unwrap();
+        assert!(
+            optional_bool_or_null("peers.revoke", true_value, "x").is_ok(),
+            "{{\"x\": true}} must be Ok; otherwise a scope-restricted peers.revoke grant binding self=true can never validate against itself",
+        );
+
+        let false_value = serde_json::json!({ "x": false });
+        let false_value = false_value.as_object().unwrap();
+        assert!(
+            optional_bool_or_null("peers.revoke", false_value, "x").is_ok(),
+            "{{\"x\": false}} must be Ok; a regression that accepted only true would silently invert the gate and break force=false / self=false peer grants",
+        );
+
+        let string_value = serde_json::json!({ "x": "true" });
+        let string_value = string_value.as_object().unwrap();
+        let err = optional_bool_or_null("peers.revoke", string_value, "x").unwrap_err();
+        assert!(
+            matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("boolean or null")),
+            "{{\"x\": \"true\"}} must produce the 'boolean or null' error; got {err:?}. A regression that accepted truthy-looking strings or numbers would silently widen the gate beyond what peers.revoke/peers.unrevoke expects, and downstream as_bool() would still read None — letting the partially-typed scope bypass the bound entirely.",
+        );
+    }
+
+    #[test]
     fn memory_read_action_allows_pins_umbrella_tier_match_and_missing_or_unknown_tier_rejection() {
         assert!(
             memory_read_action_allows("memory.read", None),

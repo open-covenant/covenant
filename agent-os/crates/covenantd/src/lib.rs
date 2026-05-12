@@ -10589,6 +10589,31 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn memory_read_actions_pins_each_tier_and_none() {
+        assert_eq!(
+            memory_read_actions(Some(MemoryTier::Working)),
+            vec!["memory.read".to_string(), "memory.read.working".to_string()]
+        );
+        assert_eq!(
+            memory_read_actions(Some(MemoryTier::Episodic)),
+            vec!["memory.read".to_string(), "memory.read.episodic".to_string()]
+        );
+        assert_eq!(
+            memory_read_actions(Some(MemoryTier::LongTerm)),
+            vec!["memory.read".to_string(), "memory.read.longterm".to_string()]
+        );
+        assert_eq!(
+            memory_read_actions(None),
+            vec![
+                "memory.read".to_string(),
+                "memory.read.working".to_string(),
+                "memory.read.episodic".to_string(),
+                "memory.read.longterm".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn a2a_entry_matches_deadline_within_pins_filter_matrix() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);

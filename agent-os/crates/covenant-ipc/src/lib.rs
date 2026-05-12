@@ -2946,6 +2946,106 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_repair_a2a_task_serde_pins_struct_typed_single_field_variant() {
+        // Request::RepairA2ATask is the operator-controlled A2A
+        // in-flight lease repair verb the CLI and HTTP gateway send
+        // to push an A2ARepairRequest at the daemon. It pairs with
+        // Response::A2ARepaired (already pinned). With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Request enum, the wire object is exactly two top-level
+        // keys: kind='repair_a2_a_task' plus request. The A2A
+        // snake_case quirk splits the slug into 'repair_a2_a_task'
+        // — durable documented form, same shape as the already-
+        // pinned send_a2_a_task / post_a2_a_result slugs. The
+        // nested request must surface as a JSON object under
+        // 'request', not flattened into the parent and not promoted
+        // to a tuple variant. The inner A2ARepairRequest shape is
+        // pinned by covenant-a2a tests; this slice only locks the
+        // outer Request variant shape.
+        let request = covenant_a2a::A2ARepairRequest {
+            task_id: Uuid::nil(),
+            command: covenant_a2a::A2ARepairCommand::Requeue {
+                lease_id: None,
+                duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+            },
+            reason: "test".into(),
+        };
+        let event = Request::RepairA2ATask {
+            request: request.clone(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "request"],
+            "Request::RepairA2ATask wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'request' \
+             field. A refactor that added #[serde(flatten)] to \
+             'request' would collapse the inner A2ARepairRequest \
+             fields (task_id, command, reason) into the outer \
+             object next to 'kind' and every CLI/HTTP A2A-repair \
+             caller that sends \
+             {{\"kind\":\"repair_a2_a_task\",\"request\":{{...}}}} \
+             would fail to decode — the nested 'request' key would \
+             vanish and the daemon's lease-repair verb would go \
+             dark through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("repair_a2_a_task")),
+            "Request discriminator slug must be the durable \
+             'repair_a2_a_task' (rename_all = snake_case splits \
+             the A2A boundary digit/uppercase into 'a2_a' — this \
+             is the documented form, not a typo). A refactor that \
+             'fixes' the slug to 'repair_a2a_task' would silently \
+             route incoming A2A-repair frames to the daemon's \
+             catch-all error branch — every CLI/HTTP A2A lease \
+             repair fails and stale in-flight leases stop being \
+             remediated through the supported path",
+        );
+        let request_value = obj.get("request").expect("'request' key must be present");
+        assert!(
+            request_value.is_object(),
+            "Request::RepairA2ATask::request must surface as a \
+             nested JSON object — a refactor that promoted the \
+             variant to a tuple (Request::RepairA2ATask(A2ARepairRequest)) \
+             or that changed the field to a string-encoded payload \
+             would surface a non-object here; the daemon's \
+             A2A-repair dispatch path binds on the nested-object \
+             surface and any other shape silently breaks every \
+             CLI/HTTP caller",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::RepairA2ATask must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI/HTTP A2A-repair consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("request");
+        assert!(
+            serde_json::from_value::<Request>(serde_json::Value::Object(missing)).is_err(),
+            "Request::RepairA2ATask wire form must reject a \
+             payload missing 'request'; a stray #[serde(default)] \
+             paired with a future Default on A2ARepairRequest \
+             would let a malformed frame decode as a phantom \
+             repair targeting the nil task_id with an empty \
+             command/reason — every audit-row attribution for the \
+             resulting repair would collapse to a meaningless \
+             default subject and operator stale-lease remediation \
+             would silently mis-fire against the wrong lease",
+        );
+    }
+
     #[tokio::test]
     async fn request_roundtrip_via_pipe() {
         let (mut a, mut b) = tokio::io::duplex(8192);

@@ -1507,4 +1507,101 @@ mod tests {
         // memory_tier_serde_pins_canonical_longterm_and_legacy_aliases.
         assert_eq!(wire.get("tier").unwrap(), &serde_json::json!("working"));
     }
+
+    #[test]
+    fn memory_compaction_outcome_serde_pins_six_required_fields() {
+        // MemoryCompactionOutcome is the wire shape every daemon, HTTP,
+        // and CLI memory-compaction command returns, and the same envelope
+        // the MemoryCompactionApplied audit row destructures. All six
+        // fields are strictly required on both sides — no serde
+        // attributes, every Vec<Uuid> surfaces as a JSON array even when
+        // empty. A skip_serializing_if = Vec::is_empty on any of the three
+        // Uuid vectors would silently drop those keys for no-op
+        // compactions and split audit consumers across two shapes.
+        let empty = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::Apply,
+            would_change: true,
+            changed: false,
+            deleted: vec![],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+
+        let wire = serde_json::to_value(&empty).unwrap();
+        let keys: std::collections::BTreeSet<&str> = wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "mode",
+            "would_change",
+            "changed",
+            "deleted",
+            "stale_marked",
+            "parents_detached",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "MemoryCompactionOutcome wire form must be exactly six keys; a skip_serializing_if = Vec::is_empty on any uuid vector would silently shift a no-op compaction's wire shape and break the MemoryCompactionApplied audit consumers",
+        );
+
+        for empty_vec_key in ["deleted", "stale_marked", "parents_detached"] {
+            assert_eq!(
+                wire.get(empty_vec_key).unwrap(),
+                &serde_json::json!([]),
+                "{empty_vec_key} must surface as an empty JSON array — pinning no skip_serializing_if on the Vec<Uuid> fields so a no-op compaction is structurally distinct from a missing field",
+            );
+        }
+
+        // Populated deleted vec must round-trip with the uuid string.
+        let id = Uuid::nil();
+        let populated = MemoryCompactionOutcome {
+            mode: MemoryRepairMode::Apply,
+            would_change: true,
+            changed: true,
+            deleted: vec![id],
+            stale_marked: vec![],
+            parents_detached: vec![],
+        };
+        let populated_wire = serde_json::to_value(&populated).unwrap();
+        assert_eq!(
+            populated_wire.get("deleted").unwrap(),
+            &serde_json::json!([id.to_string()]),
+            "populated deleted vec must emit each uuid as a JSON string",
+        );
+        let back: MemoryCompactionOutcome = serde_json::from_value(populated_wire).unwrap();
+        assert_eq!(back, populated);
+
+        // Round-trip on the empty case pins the PartialEq + Eq derive contract.
+        let back_empty: MemoryCompactionOutcome = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back_empty, empty);
+
+        // Each strictly-required field must reject when omitted.
+        for required in [
+            "mode",
+            "would_change",
+            "changed",
+            "deleted",
+            "stale_marked",
+            "parents_detached",
+        ] {
+            let mut missing = wire.as_object().unwrap().clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<MemoryCompactionOutcome>(serde_json::Value::Object(
+                    missing
+                ))
+                .is_err(),
+                "MemoryCompactionOutcome wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Cross-binding: mode on an Apply outcome must serialize to the
+        // snake_case slug "apply", matching memory_repair_mode_serde_pins_snake_case_wire_form.
+        assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("apply"));
+    }
 }

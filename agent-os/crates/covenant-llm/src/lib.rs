@@ -660,6 +660,45 @@ async fn ollama_reachable(endpoint: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn role_serde_and_chat_message_constructors_pin_wire_contract() {
+        // The wire form of Role flows into OpenAiRequest and
+        // OllamaChatRequest bodies via embedded &[ChatMessage]. OpenAI,
+        // DeepSeek, and Ollama all expect the lowercase slugs; a
+        // titlecase regression would silently break every chat call.
+        for (variant, slug) in [
+            (Role::System, "system"),
+            (Role::User, "user"),
+            (Role::Assistant, "assistant"),
+        ] {
+            let wire = serde_json::to_string(&variant).unwrap();
+            assert_eq!(wire, format!("\"{slug}\""));
+            let back: Role = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        // Each constructor must bind its variant to the role field; a
+        // copy-paste swap between ::user and ::assistant would silently
+        // mis-tag prompts so the model sees user turns as assistant.
+        let sys = ChatMessage::system("you are a covenant agent");
+        assert_eq!(sys.role, Role::System);
+        assert_eq!(sys.content, "you are a covenant agent");
+
+        let usr = ChatMessage::user("hello");
+        assert_eq!(usr.role, Role::User);
+        assert_eq!(usr.content, "hello");
+
+        let ast = ChatMessage::assistant("acknowledged");
+        assert_eq!(ast.role, Role::Assistant);
+        assert_eq!(ast.content, "acknowledged");
+
+        // Titlecase slugs must fail loud — the rename_all = lowercase
+        // contract stays a whitelist so a future #[serde(other)] arm
+        // cannot silently absorb mis-cased upstream payloads.
+        assert!(serde_json::from_str::<Role>("\"System\"").is_err());
+        assert!(serde_json::from_str::<Role>("\"USER\"").is_err());
+    }
+
     #[tokio::test]
     async fn mock_provider_returns_canned_text() {
         let p = MockProvider::new("hi");

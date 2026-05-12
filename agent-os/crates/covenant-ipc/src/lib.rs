@@ -1410,6 +1410,86 @@ mod tests {
     }
 
     #[test]
+    fn response_error_serde_pins_single_field_variant() {
+        // Response::Error is the catch-all variant the daemon sends
+        // for every error reply that does not fit a more specific
+        // outcome — capability check failures, malformed requests,
+        // internal errors. It carries message: String, the
+        // operator-facing diagnostic. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] on the Response enum, the wire
+        // object is exactly two top-level keys: kind='error' plus
+        // message. No prior test pins the exact wire shape,
+        // round-trip, or omission rejection for this variant. A
+        // refactor that promoted Error from a struct variant to a
+        // newtype variant would nest message one level deeper next
+        // to 'kind' and operator triage would see the error
+        // discriminator but no explanation; a slug regression on the
+        // discriminator silently strands every CLI fallback error
+        // branch that classifies by kind='error'.
+        let event = Response::Error {
+            message: "capability check failed".into(),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "message"],
+            "Response::Error wire form must be exactly two top-level \
+             keys: 'kind' plus the single 'message' field. A refactor \
+             that promoted the variant from struct to newtype \
+             wrapping a payload struct would nest 'message' one level \
+             deeper and every CLI consumer that surfaces the \
+             operator-facing diagnostic would silently drop it — \
+             operator triage would see the error discriminator but \
+             cannot tell what failed",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("error")),
+            "Response discriminator slug must be snake_case 'error'; \
+             a slug regression silently strands every CLI fallback \
+             error branch that classifies by this exact value — the \
+             operator's CLI prints a confusing unknown-response \
+             fallback instead of the daemon's diagnostic and masks \
+             the signal that the operation failed at all",
+        );
+        assert_eq!(
+            obj.get("message").and_then(serde_json::Value::as_str),
+            Some("capability check failed"),
+            "Response::Error::message must surface as the literal \
+             diagnostic string — the CLI prints this verbatim and \
+             operator triage greps the audit log for the matching \
+             text",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::Error must round-trip through serde_json \
+             verbatim — the PartialEq derive is the contract every \
+             CLI error consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("message");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::Error wire form must reject a payload missing \
+             'message'; a stray #[serde(default)] would let a \
+             malformed row decode with message=String::new() and the \
+             CLI would print an empty diagnostic — the operator \
+             could not distinguish a real error from a malformed \
+             daemon response and might retry the same broken request \
+             instead of escalating",
+        );
+    }
+
+    #[test]
     fn response_intent_result_serde_pins_five_field_variant() {
         // Response::IntentResult is the variant the daemon sends
         // after dispatch_intent completes — it carries intent_id,

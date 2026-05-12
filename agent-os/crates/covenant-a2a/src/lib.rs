@@ -2449,6 +2449,112 @@ mod tests {
     }
 
     #[test]
+    fn a2a_task_serde_pins_four_required_and_four_option_skip_empty() {
+        // A2ATask is the request envelope every A2A send/recv flow
+        // consumes. Eight fields: four strictly required (id, sender,
+        // recipient, intent_text) and four Option carrying
+        // #[serde(default, skip_serializing_if = "Option::is_none")] —
+        // task_kind, parent, deadline_ms, idempotency. The sibling
+        // task_skips_optional_fields_when_none test uses loose
+        // !s.contains() substring assertions; a refactor that flattens
+        // an Option (lifting inner keys to the envelope) or renames
+        // intent_text would silently bypass those substring checks.
+        // Pin the exact key set on both no-options (4-key) and
+        // all-options (8-key) paths, the required-field reject loop,
+        // and cross-bind to a2a_idempotency_serde_pins_two_required_fields
+        // by asserting idempotency surfaces as a nested {duplicate_safety,
+        // key} object.
+        let none = dummy_task();
+        let none_wire = serde_json::to_value(&none).unwrap();
+        let none_obj = none_wire
+            .as_object()
+            .expect("A2ATask serialises as a JSON object");
+        let none_keys: std::collections::BTreeSet<&str> =
+            none_obj.keys().map(String::as_str).collect();
+        let four: std::collections::BTreeSet<&str> = ["id", "sender", "recipient", "intent_text"]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            none_keys, four,
+            "no-options A2ATask wire form must be exactly four keys; \
+             dropping skip_serializing_if from any Option would inflate \
+             the wire form with explicit nulls and break consumers that \
+             filter on key presence to count populated metadata",
+        );
+
+        let mut some = dummy_task();
+        some.task_kind = Some("research".into());
+        some.parent = Some(Uuid::new_v4());
+        some.deadline_ms = Some(60_000);
+        some.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory",
+        ));
+        let some_wire = serde_json::to_value(&some).unwrap();
+        let some_obj = some_wire.as_object().unwrap();
+        let some_keys: std::collections::BTreeSet<&str> =
+            some_obj.keys().map(String::as_str).collect();
+        let eight: std::collections::BTreeSet<&str> = [
+            "id",
+            "sender",
+            "recipient",
+            "intent_text",
+            "task_kind",
+            "parent",
+            "deadline_ms",
+            "idempotency",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            some_keys, eight,
+            "all-options A2ATask wire form must be exactly eight keys",
+        );
+
+        // Cross-bind to a2a_idempotency_serde_pins_two_required_fields:
+        // idempotency must serialise as a nested JSON object carrying
+        // the inner {duplicate_safety, key} contract — NOT flattened
+        // into the envelope, which would lift inner keys and silently
+        // collide with future top-level metadata.
+        let idemp_obj = some_obj
+            .get("idempotency")
+            .and_then(serde_json::Value::as_object)
+            .expect("idempotency must serialise as a nested JSON object");
+        let idemp_keys: std::collections::BTreeSet<&str> =
+            idemp_obj.keys().map(String::as_str).collect();
+        let idemp_expected: std::collections::BTreeSet<&str> =
+            ["duplicate_safety", "key"].into_iter().collect();
+        assert_eq!(
+            idemp_keys, idemp_expected,
+            "idempotency must carry the inner {{duplicate_safety, key}} shape \
+             — pinned by a2a_idempotency_serde_pins_two_required_fields",
+        );
+        for inner in ["duplicate_safety", "key"] {
+            assert!(
+                !some_obj.contains_key(inner),
+                "envelope must not expose inner idempotency key {inner:?} at \
+                 the top level — that would mean idempotency was flattened",
+            );
+        }
+
+        // Round-trip pins the PartialEq + Eq derive contract on both paths.
+        let back_none: A2ATask = serde_json::from_value(none_wire.clone()).unwrap();
+        assert_eq!(back_none, none);
+        let back_some: A2ATask = serde_json::from_value(some_wire.clone()).unwrap();
+        assert_eq!(back_some, some);
+
+        // Each strictly-required field must reject when omitted.
+        for required in ["id", "sender", "recipient", "intent_text"] {
+            let mut missing = none_obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2ATask>(serde_json::Value::Object(missing)).is_err(),
+                "A2ATask wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
+    #[test]
     fn idempotency_cache_key_pins_safety_kind_fallback_and_empty_key_paths() {
         let base = dummy_task();
         let sender_b58 = base.sender.pubkey_base58();

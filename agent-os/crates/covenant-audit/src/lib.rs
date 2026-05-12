@@ -876,6 +876,86 @@ mod tests {
     }
 
     #[test]
+    fn audit_chain_entry_serde_pins_six_required_fields() {
+        // AuditChainEntry is the per-row on-disk audit-chain record
+        // persisted alongside the events JSONL. Six wire keys bind every
+        // audit event to its predecessor through a sha256 chain:
+        //
+        // * `index` / `event_id` / `timestamp_ms`: row identity.
+        // * `event_hash_hex`: this row's event-payload digest.
+        // * `previous_hash_hex`: chain link backward.
+        // * `chain_hash_hex`: anchor the verifier replays against.
+        //
+        // None of the fields carry `#[serde(default)]` or
+        // `#[serde(skip_serializing_if)]`, so every persisted JSONL row
+        // must contain the six keys. A refactor that defaulted any of
+        // them — particularly `chain_hash_hex` or `previous_hash_hex`
+        // — would silently let a corrupted row decode with an empty
+        // string and the verifier would accept the broken chain.
+
+        let entry = AuditChainEntry {
+            index: 7,
+            event_id: Uuid::from_u128(0x42),
+            timestamp_ms: 100,
+            event_hash_hex: "a".repeat(64),
+            previous_hash_hex: "b".repeat(64),
+            chain_hash_hex: "c".repeat(64),
+        };
+        let wire = serde_json::to_value(&entry).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditChainEntry serialises as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "chain_hash_hex",
+                "event_hash_hex",
+                "event_id",
+                "index",
+                "previous_hash_hex",
+                "timestamp_ms",
+            ],
+            "AuditChainEntry wire object must contain exactly the six \
+             documented fields; an addition, rename, or drop of any key \
+             silently invalidates every persisted audit chain JSONL row"
+        );
+
+        let decoded: AuditChainEntry = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            decoded, entry,
+            "AuditChainEntry must round-trip through serde_json verbatim — \
+             the Eq derive is the contract the verifier's read_chain_entries \
+             path leans on"
+        );
+
+        let full_obj = serde_json::to_value(&entry).unwrap();
+        let full_map = full_obj.as_object().unwrap().clone();
+        for required in [
+            "index",
+            "event_id",
+            "timestamp_ms",
+            "event_hash_hex",
+            "previous_hash_hex",
+            "chain_hash_hex",
+        ] {
+            let mut payload = full_map.clone();
+            payload.remove(required);
+            assert!(
+                serde_json::from_value::<AuditChainEntry>(serde_json::Value::Object(payload))
+                    .is_err(),
+                "AuditChainEntry must reject a wire payload that omits \
+                 {required}; a stray #[serde(default)] introduction — \
+                 particularly on chain_hash_hex (the verifier's anchor) or \
+                 previous_hash_hex (the predecessor link) — would let a \
+                 corrupted chain row decode with an empty default and break \
+                 the verifier's integrity verdict"
+            );
+        }
+    }
+
+    #[test]
     fn audit_integrity_report_serde_pins_five_required_fields() {
         // AuditIntegrityReport is the audit-chain integrity verdict the
         // daemon emits inside Response::AuditIntegrity, rendered by CLI

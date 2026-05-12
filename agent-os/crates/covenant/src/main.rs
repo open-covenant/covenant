@@ -4121,6 +4121,38 @@ mod tests {
     }
 
     #[test]
+    fn audit_purge_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["before_ms", "kind", "purged"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("audit_purge_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "audit_purge_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("audit_purged"));
+            assert!(
+                value["before_ms"].is_u64(),
+                "before_ms must be a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["purged"].is_u64(),
+                "purged must be a non-negative integer, not a string: {value}",
+            );
+        }
+
+        assert_shape(&audit_purge_json(1_700_000_000_000, 3));
+        assert_shape(&audit_purge_json(0, 0));
+    }
+
+    #[test]
     fn audit_recent_json_renders_stable_shape() {
         let event = AuditEvent {
             id: uuid::Uuid::nil(),

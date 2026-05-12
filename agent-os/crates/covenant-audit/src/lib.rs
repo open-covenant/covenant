@@ -1491,6 +1491,55 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_peer_revoked_serde_pins_three_field_variant() {
+        // AuditKind::PeerRevoked records every successful operator
+        // RevokePeer call. peer_display and peer_pubkey_b58 describe
+        // the *revoked* peer (not the operator issuer). token_prefix
+        // is the 6-char base58 redaction OperatorTokenRotated uses —
+        // full token bytes never enter the audit log. A rename or
+        // default on peer_pubkey_b58 erases the unforgeable identity
+        // of the revoked peer; a refactor that swapped token_prefix
+        // for full token bytes converts an audit-row leak into
+        // credential theft of the revoked peer's prior token.
+        let kind = AuditKind::PeerRevoked {
+            peer_display: "guest@local".into(),
+            peer_pubkey_b58: "guestPubkeyB58".into(),
+            token_prefix: "abcdef".into(),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["peer_display", "peer_pubkey_b58", "token_prefix", "type"],
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("peer_revoked")),
+            "AuditKind discriminator slug must be snake_case 'peer_revoked'; a titlecase or kebab-case regression silently strands every prior revocation audit row at decode time",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::PeerRevoked must round-trip through serde_json verbatim — the PartialEq derive is the contract revocation audit triage joins on",
+        );
+
+        for required in ["peer_display", "peer_pubkey_b58", "token_prefix"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::PeerRevoked wire form must reject a payload missing {required:?}; a stray #[serde(default)] on peer_pubkey_b58 would erase the unforgeable identity of the revoked peer, and on token_prefix would mask the durable redacted-token correlation",
+            );
+        }
+    }
+
+    #[test]
     fn audit_kind_operator_peers_list_rejected_serde_pins_two_field_variant() {
         // AuditKind::OperatorPeersListRejected is the daemon-as-issuer
         // probe row emitted when ListPeers is rejected because the

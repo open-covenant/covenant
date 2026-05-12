@@ -10588,6 +10588,73 @@ budget_credits_per_hour = {credits}
         assert_eq!(memory_repair_action(&backfill), "backfill_provenance");
     }
 
+    #[test]
+    fn chain_status_from_env_pins_defaults_missing_and_ready() {
+        use std::sync::Mutex;
+
+        static CHAIN_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = CHAIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        const VARS: [&str; 5] = [
+            "COVENANT_SOLANA_CLUSTER",
+            "COVENANT_SOLANA_RPC_URL",
+            "COVENANT_SOLANA_WS_URL",
+            "COVENANT_PROTOCOL_PROGRAM_ID",
+            "COVNT_MINT",
+        ];
+        let saved: Vec<(&str, Option<String>)> = VARS
+            .iter()
+            .map(|name| (*name, std::env::var(*name).ok()))
+            .collect();
+
+        for name in VARS {
+            std::env::remove_var(name);
+        }
+        let bare = chain_status_from_env();
+        assert_eq!(bare.cluster, "devnet", "cluster must default to devnet");
+        assert_eq!(bare.rpc_url, None);
+        assert_eq!(bare.ws_url, None);
+        assert_eq!(bare.program_id, None);
+        assert_eq!(bare.covnt_mint, None);
+        assert!(!bare.ready, "no required vars set => ready must be false");
+        assert_eq!(
+            bare.missing,
+            vec![
+                "COVENANT_SOLANA_RPC_URL".to_string(),
+                "COVENANT_PROTOCOL_PROGRAM_ID".to_string(),
+                "COVNT_MINT".to_string(),
+            ],
+            "missing must enumerate exactly the three required env names in declaration order"
+        );
+
+        std::env::set_var("COVENANT_SOLANA_RPC_URL", "https://rpc.example/");
+        std::env::set_var("COVENANT_PROTOCOL_PROGRAM_ID", "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2");
+        std::env::set_var("COVNT_MINT", "4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E");
+        let ready = chain_status_from_env();
+        assert!(ready.ready, "all three required vars set => ready must be true");
+        assert!(ready.missing.is_empty(), "missing must be empty when ready");
+        assert_eq!(ready.cluster, "devnet");
+        assert_eq!(ready.rpc_url.as_deref(), Some("https://rpc.example/"));
+        assert_eq!(ready.program_id.as_deref(), Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"));
+        assert_eq!(ready.covnt_mint.as_deref(), Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E"));
+
+        for name in VARS {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("COVENANT_SOLANA_CLUSTER", "mainnet");
+        let cluster_only = chain_status_from_env();
+        assert_eq!(cluster_only.cluster, "mainnet");
+        assert!(!cluster_only.ready, "cluster alone is not sufficient for ready");
+        assert_eq!(cluster_only.missing.len(), 3);
+
+        for (name, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn read_operator_token_b58_pins_mode_trim_and_decode() {

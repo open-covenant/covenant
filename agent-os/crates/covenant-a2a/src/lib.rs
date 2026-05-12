@@ -1732,6 +1732,78 @@ mod tests {
     }
 
     #[test]
+    fn a2a_auto_retry_skip_reason_serde_pins_each_snake_case_slug() {
+        // A2AAutoRetrySkipReason carries rename_all = snake_case and rides
+        // inside every A2AAutoRetrySkipped report serialized over IPC,
+        // HTTP, and CLI. The slugs are also pinned via as_str (line 1692)
+        // for the BTreeMap key into A2AAutoRetrySchedulerScan audit rows.
+        // The two surfaces share the same exhaustive table but route
+        // through independent code paths: a refactor that drops the
+        // rename_all attribute on the enum would silently switch the
+        // Serialize side to titlecase variant names while leaving the
+        // manual as_str() arms intact, splitting the same skip bucket
+        // across two names in operator dashboards joining the JSON
+        // report against the audit BTreeMap. Pin the serde wire form
+        // and assert serde-vs-as_str parity so the two surfaces cannot
+        // drift apart silently.
+        let cases: [(A2AAutoRetrySkipReason, &str); 9] = [
+            (A2AAutoRetrySkipReason::Disabled, "disabled"),
+            (A2AAutoRetrySkipReason::NotInFlight, "not_in_flight"),
+            (A2AAutoRetrySkipReason::MissingLease, "missing_lease"),
+            (A2AAutoRetrySkipReason::LeaseTooYoung, "lease_too_young"),
+            (
+                A2AAutoRetrySkipReason::MissingIdempotency,
+                "missing_idempotency",
+            ),
+            (
+                A2AAutoRetrySkipReason::UnsafeDuplicateSafety,
+                "unsafe_duplicate_safety",
+            ),
+            (
+                A2AAutoRetrySkipReason::MaxAttemptsReached,
+                "max_attempts_reached",
+            ),
+            (A2AAutoRetrySkipReason::LimitReached, "limit_reached"),
+            (
+                A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+                "capability_scope_mismatch",
+            ),
+        ];
+        for (reason, expected) in cases {
+            let wire = serde_json::to_string(&reason).unwrap();
+            assert_eq!(
+                wire,
+                format!("\"{expected}\""),
+                "{reason:?} must serialize to {expected:?}; a dropped rename_all \
+                 would emit titlecase variants here while as_str keeps emitting \
+                 snake_case, splitting the JSON report and the audit BTreeMap",
+            );
+            let back: A2AAutoRetrySkipReason = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, reason);
+            assert_eq!(
+                reason.as_str(),
+                expected,
+                "as_str slug must equal the serde slug for {reason:?}; if this \
+                 fires the two surfaces have diverged and operator dashboards \
+                 will key one bucket under two names",
+            );
+        }
+
+        // Dropping rename_all would surface variant names verbatim
+        // (NotInFlight); the snake_case whitelist must reject that
+        // form so the regression fails loud at parse time.
+        assert!(
+            serde_json::from_str::<A2AAutoRetrySkipReason>("\"NotInFlight\"").is_err(),
+            "titlecase NotInFlight (the rename_all default) must be rejected",
+        );
+        // kebab-case must also fail — the contract is snake_case only.
+        assert!(
+            serde_json::from_str::<A2AAutoRetrySkipReason>("\"not-in-flight\"").is_err(),
+            "kebab-case must be rejected so the snake_case whitelist stays tight",
+        );
+    }
+
+    #[test]
     fn a2a_repair_action_serde_pins_snake_case_wire_form() {
         // A2ARepairAction is the discriminator on every A2ARepairOutcome
         // emitted by manual and scheduled repair flows; the slug lands in

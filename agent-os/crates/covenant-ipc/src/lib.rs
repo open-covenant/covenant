@@ -3738,6 +3738,104 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_memory_compacted_serde_pins_single_field_variant() {
+        // Response::MemoryCompacted is the variant the daemon sends
+        // after Request::MemoryCompact runs a bounded compaction pass
+        // against the local memory store — deleting expired
+        // working/episodic rows, marking long-term rows stale, and
+        // optionally detaching stale parents. It carries outcome:
+        // MemoryCompactionOutcome, the per-pass evidence the CLI
+        // surfaces (mode, would_change, changed, deleted ids,
+        // stale_marked ids, parents_detached ids) so the operator
+        // can confirm exactly which rows were touched and how. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] on the
+        // Response enum, the wire object is exactly two top-level
+        // keys: kind='memory_compacted' plus outcome. No prior test
+        // pins the exact wire shape, round-trip, or omission
+        // rejection of this variant's required field. The inner
+        // MemoryCompactionOutcome shape is pinned by
+        // covenant-types/covenant-memory tests; this slice locks the
+        // outer Response variant shape only — a minimally constructed
+        // outcome is sufficient to catch the slug, key set, and
+        // default-attribute regressions on the outer variant.
+        let event = Response::MemoryCompacted {
+            outcome: MemoryCompactionOutcome {
+                mode: covenant_types::MemoryRepairMode::DryRun,
+                would_change: false,
+                changed: false,
+                deleted: vec![],
+                stale_marked: vec![],
+                parents_detached: vec![],
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "outcome"],
+            "Response::MemoryCompacted wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'outcome' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping MemoryCompactionOutcome would either \
+             inline its fields next to 'kind' or nest 'outcome' one \
+             level deeper — either form silently breaks every CLI \
+             consumer that reads .outcome.deleted, \
+             .outcome.stale_marked, or .outcome.changed",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("memory_compacted")),
+            "Response discriminator slug must be the durable \
+             'memory_compacted'; a slug regression silently strands \
+             every CLI parser that classifies memory-compaction \
+             outcomes by this exact value — the operator's CLI prints \
+             a confusing fallback instead of the compaction outcome, \
+             masking whether the pass was a dry-run, a no-op apply, \
+             or actually deleted/stale-marked/detached rows",
+        );
+        assert!(
+            obj.get("outcome")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::MemoryCompacted::outcome must serialize as a \
+             nested JSON object — the inner MemoryCompactionOutcome \
+             shape is pinned by covenant-types tests; this slice only \
+             locks that outcome appears as one keyed object under the \
+             outer variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::MemoryCompacted must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI memory-compaction consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("outcome");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::MemoryCompacted wire form must reject a \
+             payload missing 'outcome'; a stray #[serde(default)] \
+             would let a malformed row decode with a synthetic \
+             default MemoryCompactionOutcome (empty deleted, \
+             stale_marked, parents_detached lists with changed=false) \
+             and the CLI would surface a phantom no-op state — a real \
+             fetch failure (truncated frame, partial decode error) \
+             would be silently reclassified as a clean apply where \
+             the operator believes no rows were compacted when in \
+             fact the daemon's compaction path produced an error the \
+             boundary swallowed",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

@@ -6151,6 +6151,30 @@ mod tests {
     }
 
     #[test]
+    fn resource_name_pins_documented_slugs_and_matches_serde_lowercase_form() {
+        assert_eq!(resource_name(ResourceKind::Compute), "compute");
+        assert_eq!(resource_name(ResourceKind::Memory), "memory");
+        assert_eq!(resource_name(ResourceKind::Tool), "tool");
+        assert_eq!(resource_name(ResourceKind::Message), "message");
+        assert_eq!(resource_name(ResourceKind::Registration), "registration");
+
+        for kind in [
+            ResourceKind::Compute,
+            ResourceKind::Memory,
+            ResourceKind::Tool,
+            ResourceKind::Message,
+            ResourceKind::Registration,
+        ] {
+            let wire = serde_json::to_value(kind).unwrap();
+            assert_eq!(
+                wire.as_str(),
+                Some(resource_name(kind)),
+                "CLI slug and serde wire form must agree so logs and JSON envelopes can be cross-referenced without a translation table: {kind:?}",
+            );
+        }
+    }
+
+    #[test]
     fn parse_uuid_returns_value_on_documented_uuid_and_reports_field_name_on_invalid_input() {
         let literal = "550e8400-e29b-41d4-a716-446655440000";
         let expected = uuid::Uuid::parse_str(literal).unwrap();

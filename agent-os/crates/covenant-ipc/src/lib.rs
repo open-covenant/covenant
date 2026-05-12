@@ -3465,6 +3465,98 @@ mod tests {
         );
     }
 
+    #[test]
+    fn response_chain_status_serde_pins_single_field_variant() {
+        // Response::ChainStatus is the variant the daemon sends in
+        // response to Request::ChainStatus — it carries status:
+        // ChainStatus, the struct containing the chain name,
+        // cluster, RPC and WebSocket URLs, program ID, COVNT mint,
+        // a readiness flag, and a list of missing configuration
+        // entries. With #[serde(tag = "kind", rename_all =
+        // "snake_case")] on the Response enum, the wire object is
+        // exactly two top-level keys: kind='chain_status' plus
+        // status. No prior test pins the exact wire shape,
+        // round-trip, or omission rejection of this variant's
+        // required field. The inner ChainStatus struct shape is
+        // pinned by covenant-settlement tests; this slice locks the
+        // outer Response variant shape only — a minimally
+        // constructed ChainStatus is sufficient to catch the slug,
+        // key set, and default-attribute regressions on the outer
+        // variant.
+        let event = Response::ChainStatus {
+            status: ChainStatus {
+                chain: "solana".into(),
+                cluster: "devnet".into(),
+                rpc_url: None,
+                ws_url: None,
+                program_id: None,
+                covnt_mint: None,
+                ready: false,
+                missing: vec![],
+            },
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "status"],
+            "Response::ChainStatus wire form must be exactly two \
+             top-level keys: 'kind' plus the single 'status' field. \
+             A refactor that promoted the variant from struct to \
+             newtype wrapping ChainStatus would either inline its \
+             fields next to 'kind' or nest 'status' one level \
+             deeper — either form silently breaks every CLI \
+             consumer that reads .status.ready or \
+             .status.last_anchored_receipt",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("chain_status")),
+            "Response discriminator slug must be the durable \
+             'chain_status'; a slug regression silently strands \
+             every CLI parser that branches on kind=chain_status — \
+             the operator's CLI prints a confusing fallback instead \
+             of the chain-status panel",
+        );
+        assert!(
+            obj.get("status")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "Response::ChainStatus::status must serialize as a \
+             nested JSON object — the inner ChainStatus shape is \
+             pinned by covenant-settlement tests; this slice only \
+             locks that status appears as one keyed object under \
+             the outer variant",
+        );
+
+        let back: Response = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ChainStatus must round-trip through \
+             serde_json verbatim — the PartialEq derive is the \
+             contract every CLI chain-status consumer leans on",
+        );
+
+        let mut missing = obj.clone();
+        missing.remove("status");
+        assert!(
+            serde_json::from_value::<Response>(serde_json::Value::Object(missing)).is_err(),
+            "Response::ChainStatus wire form must reject a payload \
+             missing 'status'; a stray #[serde(default)] would let \
+             a malformed row decode with a default ChainStatus and \
+             the CLI would surface a phantom 'clean chain' state — \
+             a real fetch failure (truncated frame, partial decode \
+             error) would be silently reclassified as a clean state \
+             where the operator believes no settlement pressure \
+             exists when the chain is in fact lagging or stuck",
+        );
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_header() {
         let (mut a, mut b) = tokio::io::duplex(64);

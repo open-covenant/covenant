@@ -43,6 +43,8 @@ services:
         value: "20"
       - key: NEXT_PUBLIC_DEMO_MODE
         value: "1"
+      - key: NEXT_PUBLIC_DEMO_RESET_INTERVAL_HOURS
+        value: "12"
       - key: COVENANT_DAEMON_URL
         value: http://covenant-sandbox-daemon:8421
       - fromGroup: covenant-sandbox-shared

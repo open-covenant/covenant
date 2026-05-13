@@ -1955,4 +1955,63 @@ cpu_ms_per_task = 5000
             ),
         }
     }
+
+    #[test]
+    fn runner_error_sandbox_display_messages_pin_four_string_variant_format_strings() {
+        let sandbox_required = format!(
+            "{}",
+            RunnerError::SandboxRequired {
+                agent: "researcher@local".into(),
+                required: SandboxBackend::LinuxGvisor,
+            }
+        );
+        assert_eq!(
+            sandbox_required,
+            "agent researcher@local requires sandbox backend LinuxGvisor; active runner is trusted-local",
+            "RunnerError::SandboxRequired Display drifted (typo or dropped 'active runner is trusted-local' qualifier regression class)"
+        );
+
+        let unsupported = format!(
+            "{}",
+            RunnerError::UnsupportedSandboxPolicy {
+                agent: "researcher@local".into(),
+                backend: SandboxBackend::LinuxGvisor,
+                reason: "host network not supported".into(),
+            }
+        );
+        assert_eq!(
+            unsupported,
+            "agent researcher@local cannot run on sandbox backend LinuxGvisor: host network not supported",
+            "RunnerError::UnsupportedSandboxPolicy Display drifted (typo or slot-swap regression class — \
+             reason must appear after the backend, separated by ': ')"
+        );
+
+        let wrong_runtime = format!(
+            "{}",
+            RunnerError::WrongRuntime {
+                agent: "researcher@local".into(),
+                expected: "subprocess",
+                got: "hermes",
+            }
+        );
+        assert_eq!(
+            wrong_runtime,
+            "agent researcher@local declares runtime \"hermes\" but this runner only handles \"subprocess\"",
+            "RunnerError::WrongRuntime Display drifted (typo, slot-swap, or debug-vs-display regression class — \
+             got is what the AGENT declared; expected is what the RUNNER handles)"
+        );
+
+        let hermes_unconfigured = format!(
+            "{}",
+            RunnerError::HermesUnconfigured {
+                agent: "researcher@local".into(),
+            }
+        );
+        assert_eq!(
+            hermes_unconfigured,
+            "agent researcher@local declares runtime \"hermes\" but no Hermes gateway is configured \
+             — set HERMES_API_BASE_URL",
+            "RunnerError::HermesUnconfigured Display drifted (typo or dropped 'HERMES_API_BASE_URL' env-var name regression class)"
+        );
+    }
 }

@@ -2531,4 +2531,29 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn memory_error_sqlite_source_delegation_pin_returns_inner_rusqlite_error_via_std_error_source()
+    {
+        use std::error::Error;
+
+        let inner = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory")
+            .execute("INSERT INTO nonexistent_table VALUES(1)", [])
+            .expect_err("sqlite must fail with no such table");
+        let expected_display = format!("{inner}");
+        let err = MemoryError::Sqlite(inner);
+        let source = err.source().expect(
+            "MemoryError::Sqlite must surface the inner rusqlite::Error via std::error::Error::source so daemon-side memory repair/compaction retry-policy classifiers can walk the error chain and downcast source() to rusqlite::Error to extract rusqlite::ErrorCode for distinct retry decisions (SQLITE_BUSY/LOCKED retry with backoff, SQLITE_CORRUPT escalates to operator-attention); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "MemoryError::Sqlite source() Display must match a direct format!() of the same rusqlite::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<rusqlite::Error>().is_some(),
+            "MemoryError::Sqlite source() must downcast_ref to rusqlite::Error so daemon-side memory retry-policy classifiers can extract rusqlite::ErrorCode for retry decisions; a refactor that wrapped the inner in a project-local newtype (e.g., MemorySqliteError(rusqlite::Error) under a 'distinguish memory-store SQLite failures from sibling SQL surfaces' rationale) would silently break downcast_ref::<rusqlite::Error>() at every downstream callsite (concrete-source-type downcast regression class)"
+        );
+    }
 }

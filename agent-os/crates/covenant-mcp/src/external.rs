@@ -881,10 +881,7 @@ mod tests {
             "BootstrapError::BadList Display drifted (typo or dropped 'tools/list' protocol-stage marker regression class)"
         );
 
-        let duplicate = format!(
-            "{}",
-            BootstrapError::DuplicateToolName("fs.read".into())
-        );
+        let duplicate = format!("{}", BootstrapError::DuplicateToolName("fs.read".into()));
         assert_eq!(
             duplicate, "duplicate remote tool name after MCP prefixing: fs.read",
             "BootstrapError::DuplicateToolName Display drifted (typo or dropped 'after MCP prefixing' post-prefix-namespace qualifier regression class)"

@@ -2759,6 +2759,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_purge_older_than_pins_cutoff_equality_keep_arm() {
+        // covenant_audit::JsonlAuditLog::purge_older_than (line 548-)
+        // keeps records via the same '>= before_ms' predicate as
+        // InMemoryAuditLog: events at the EXACT cutoff are RETAINED,
+        // strictly-older events are PURGED. The atomic-rewrite path
+        // (tempfile + rename) persists the result to disk, so a
+        // cutoff-equality flip would silently lose the equal-stamped
+        // event on every daemon restart that consumes the rewritten
+        // JSONL log.
+        //
+        // jsonl_purge_rewrites_only_when_something_drops (line 2762)
+        // uses cutoff=150 against events at 100/200/300 — no event
+        // sits at the cutoff. jsonl_purge_no_op_when_nothing_old
+        // uses cutoff=50 — also no boundary case. The
+        // in_memory_purge_older_than_pins_cutoff_equality_keep_arm
+        // sibling (added in an earlier autonomous slice) pins the
+        // equality arm on the InMemory backend; this pin mirrors that
+        // contract on the Jsonl surface so a refactor that lifts the
+        // predicate into a shared helper at one boundary cannot drift
+        // relative to the other without surfacing on at least one
+        // boundary pin.
+        //
+        // The pin also re-opens the log via a second JsonlAuditLog
+        // handle, which forces the read-back through the atomic-
+        // rewrite path's persisted state — the equality survival has
+        // to be observable AFTER the rewrite lands on disk, not just
+        // in the in-process state. verify_integrity is asserted at
+        // the end to confirm the chain rewrite is consistent with the
+        // purged-and-equality-kept event set.
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // cutoff=200 places the boundary on the middle event:
+        //   100 strictly less -> PURGED
+        //   200 equal          -> KEPT (the equality arm)
+        //   300 strictly more  -> KEPT
+        let purged = log.purge_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "Jsonl cutoff=200 must purge only the 100-stamped event \
+             (strictly less than 200); the 200-stamped event sits at \
+             the cutoff and the `>= before_ms` predicate keeps it. A \
+             refactor that flipped `>=` to `>` in the kept-predicate \
+             would purge BOTH 100 and 200, return 2 here, AND persist \
+             the regression to disk via the atomic rewrite — the next \
+             daemon restart would consume the truncated log with no \
+             signal that an event was silently lost. got: {purged}"
+        );
+
+        // Re-open via a second handle to force the survivors through
+        // the persisted-state read path; this proves the equality arm
+        // survives the tempfile+rename atomic-rewrite roundtrip, not
+        // just the in-process Vec retain.
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        let mut kept_ts: Vec<u64> = log2
+            .recent(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.timestamp_ms)
+            .collect();
+        kept_ts.sort();
+        assert_eq!(
+            kept_ts,
+            vec![200, 300],
+            "after cutoff=200 the persisted survivors must be the \
+             cutoff-equal event (200) and the strictly-greater event \
+             (300); the explicit survivor list catches both a strict-\
+             greater-only refactor (would leave [300]) and an \
+             inversion (would leave [100])",
+        );
+
+        // The chain rewrite must be consistent with the purge: every
+        // surviving event has a fresh anchor and the chain hashes
+        // verify against the new sequence. A refactor that purged the
+        // event but skipped its chain anchor (or vice versa) would
+        // surface here as verify_integrity reporting invalid=false or
+        // mismatched event/anchor counts.
+        let report = log2.verify_integrity().await.unwrap();
+        assert!(
+            report.valid,
+            "verify_integrity must report valid=true after a boundary-\
+             keeping purge — the chain rewrite re-anchors every \
+             surviving event and the integrity check must agree with \
+             the new sequence; if this fails the atomic-rewrite path \
+             dropped or skipped an anchor for the cutoff-equal event. \
+             report: {report:?}",
+        );
+        assert_eq!(report.events, 2);
+        assert_eq!(report.anchors, 2);
+    }
+
+    #[tokio::test]
     async fn jsonl_purge_rewrites_only_when_something_drops() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

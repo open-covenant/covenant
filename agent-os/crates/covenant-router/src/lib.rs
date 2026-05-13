@@ -462,6 +462,113 @@ optional = ["tool.summarize"]
     }
 
     #[test]
+    fn from_manifest_and_dir_pins_required_before_optional_order_name_id_distinction_and_manifest_preservation(
+    ) {
+        // AgentCard::from_manifest_and_dir (line 27-41) builds the
+        // routing-relevant projection: it chains
+        // m.capabilities.required.iter() THEN
+        // m.capabilities.optional.iter() and clones m.agent.id and
+        // m.agent.name independently (different manifest paths).
+        //
+        // from_manifest_collects_required_and_optional (line 443-462)
+        // checks card.id and uses .contains() for capabilities — it
+        // does NOT pin the required-before-optional ORDER, the
+        // card.name field separately from id, dedup-free behavior, or
+        // the manifest preservation. A refactor that swapped the chain
+        // order would silently change Router::route iteration order;
+        // a refactor that deduped capabilities would change scoring
+        // when an operator's agent.toml accidentally listed the same
+        // capability in both required and optional.
+        let toml = r#"
+[agent]
+id = "research-bot"
+name = "Research Bot Display Name"
+version = "0.1.0"
+runtime = "python3"
+entry = "main.py"
+
+[capabilities]
+required = ["tool.web_search", "memory.write"]
+optional = ["tool.summarize", "memory.write"]
+"#;
+        let m = Manifest::parse(toml).unwrap();
+        let card = AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/pkg"));
+
+        assert_eq!(
+            card.capabilities,
+            vec![
+                "tool.web_search".to_string(),
+                "memory.write".to_string(),
+                "tool.summarize".to_string(),
+                "memory.write".to_string(),
+            ],
+            "AgentCard::from_manifest_and_dir must concatenate required \
+             (in declared order) THEN optional (in declared order) with \
+             NO dedup or filtering — Router::route iterates this exact \
+             vec when scoring agents. A refactor that swapped the chain \
+             order would silently change debug! 'candidate' log order \
+             and any future score-weighting that favored early entries \
+             would shift routing; a refactor that deduped 'memory.write' \
+             (which intentionally appears in both required and optional \
+             here) would silently halve the scoring contribution and \
+             shift routing for any operator agent.toml that lists the \
+             same capability in both lists",
+        );
+
+        assert_eq!(
+            card.id, "research-bot",
+            "card.id must clone m.agent.id verbatim — the operator-facing \
+             routing identifier",
+        );
+        assert_eq!(
+            card.name, "Research Bot Display Name",
+            "card.name must clone m.agent.name verbatim — a SEPARATE \
+             field from card.id sourced from a different manifest path. \
+             A refactor that merged name into id (e.g., \
+             'id = format!(\"{{}}-{{}}\", m.agent.id, m.agent.name)') \
+             would silently let operator dashboards drift away from \
+             the manifest's declared agent.id and agent.name fields",
+        );
+        assert_ne!(
+            card.id, card.name,
+            "card.id and card.name must be independent values — pinning \
+             with distinct manifest inputs anchors that a refactor \
+             collapsing them into one field surfaces here regardless of \
+             which direction the merge went",
+        );
+
+        assert_eq!(
+            card.capabilities.len(),
+            4,
+            "card.capabilities.len() must equal required.len() + \
+             optional.len() — the duplicated 'memory.write' across \
+             both lists must survive the projection. A refactor that \
+             collected into a HashSet would surface here as len == 3, \
+             and the score-accumulation contract in Router::route \
+             that gives one point per iteration would silently shift",
+        );
+
+        assert_eq!(
+            card.manifest.agent.id, "research-bot",
+            "card.manifest must be preserved verbatim on the card — \
+             the runtime resolves manifest.agent.entry against \
+             card.package_dir at dispatch time, so a refactor that \
+             lossy-projected the manifest (e.g., stored only the \
+             capabilities-relevant fields) would silently break \
+             every Hermes/subprocess runner that consults the full \
+             manifest for sandbox, resources, and entry-point fields",
+        );
+        assert_eq!(
+            card.package_dir,
+            PathBuf::from("/tmp/pkg"),
+            "card.package_dir must be the path passed in — a refactor \
+             that re-derived it from manifest.agent.entry or similar \
+             would silently break runners that resolve relative paths \
+             against the original package directory",
+        );
+    }
+
+    #[test]
     fn load_agents_from_missing_dir_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");

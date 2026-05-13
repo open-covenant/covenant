@@ -1994,6 +1994,85 @@ mod tests {
     }
 
     #[test]
+    fn help_bindings_pins_eleven_exact_key_description_pairs_in_declaration_order() {
+        // HELP_BINDINGS (line 180-192) is the pub const both
+        // handle_browsing (line 659+) and the help renderer in main.rs
+        // (line 493-499) consume. The renderer formats each entry as
+        // `format!("  {key:<4}  {desc}")` and surfaces the overlay
+        // operators press `?` to view; declaration order IS the visual
+        // order operators learn.
+        //
+        // help_bindings_are_single_char_keys (above) iterates the slice
+        // and asserts each key is a single char and each description
+        // is non-empty, but does NOT pin the count, the exact (key,
+        // description) pairs, or the order. A refactor that removed
+        // an entry, renamed a binding (e.g., 'i' draft intent → 'I'
+        // for capitalization-consistency with 'A' a2a inbox),
+        // reordered the slice under a 'group by category' rationale,
+        // or rewrote a description (e.g., 'draft intent' → 'compose
+        // intent') would silently shift the operator-facing UI while
+        // the existing structural pin continued to pass.
+
+        assert_eq!(
+            HELP_BINDINGS.len(),
+            11,
+            "HELP_BINDINGS must contain exactly 11 entries — the \
+             documented operator-facing keybinding set (i, s, g, m, \
+             a, c, A, r, p, ?, q). A refactor that removed an entry \
+             would silently hide the documented action; a refactor \
+             that added one without coordinating with handle_browsing \
+             would silently advertise an inert binding. The count \
+             arm catches both regression classes before the exact-pair \
+             arm runs",
+        );
+
+        assert_eq!(
+            HELP_BINDINGS,
+            &[
+                ("i", "draft intent"),
+                ("s", "submit most recent draft"),
+                ("g", "grant capability"),
+                ("m", "memory tail"),
+                ("a", "audit tail"),
+                ("c", "capabilities tail"),
+                ("A", "a2a inbox"),
+                ("r", "chain receipts"),
+                ("p", "peers"),
+                ("?", "this help"),
+                ("q", "quit"),
+            ],
+            "HELP_BINDINGS must match the documented (key, description) \
+             pairs in declaration order. A refactor that reordered the \
+             slice (e.g., alphabetized by key) would silently shift \
+             the visual order operators learn from the overlay; a \
+             refactor that rewrote a description (e.g., 'draft intent' \
+             → 'compose intent') would silently shift user-facing \
+             terminology without coordinating with operator training \
+             material; a refactor that renamed a key (e.g., 'i' → 'I') \
+             without updating handle_browsing would silently break \
+             muscle memory while the existing structural pin still \
+             passes",
+        );
+
+        // Cross-bind: every key must be unique so handle_browsing's
+        // KeyCode::Char arms don't shadow each other and the rendered
+        // overlay doesn't show the same key twice with different
+        // actions.
+        let keys: std::collections::BTreeSet<&str> =
+            HELP_BINDINGS.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            keys.len(),
+            HELP_BINDINGS.len(),
+            "HELP_BINDINGS keys must be unique — a refactor that \
+             added a duplicate key (e.g., a second 'a' for 'audit \
+             archive') would silently shadow the original binding in \
+             handle_browsing's match cascade, surfacing one action \
+             twice in the overlay while the other action becomes \
+             inert",
+        );
+    }
+
+    #[test]
     fn map_socket_error_classifies_not_found_as_daemon_not_running() {
         use crate::ipc::{map_socket_error, IpcError};
         use std::io;

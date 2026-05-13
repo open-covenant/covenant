@@ -483,4 +483,56 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
             Some("http://127.0.0.1:8642/v1")
         );
     }
+
+    #[test]
+    fn config_error_io_and_toml_display_messages_pin_prefix_and_external_source_display_delegation()
+    {
+        let io_err = ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "mcp.toml missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "ConfigError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish mcp.toml disk faults from TOML syntax faults during MCP config load (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("mcp.toml missing"),
+            "ConfigError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "ConfigError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let toml_source = toml::from_str::<toml::Value>("not valid toml = =")
+            .expect_err("toml parse must fail");
+        let toml_err = ConfigError::Toml(toml_source);
+        let toml_message = format!("{toml_err}");
+        assert!(
+            toml_message.starts_with("toml: "),
+            "ConfigError::Toml must surface the literal 'toml: ' bootstrap-stage prefix so audit-log filters can distinguish mcp.toml syntax faults from disk faults during MCP config load (dropped-prefix regression class): {toml_message}"
+        );
+        assert!(
+            !toml_message.starts_with("toml parse:"),
+            "ConfigError::Toml must surface the 'toml: ' prefix (not 'toml parse: '); covenant_manifest::ManifestError::Parse intentionally uses 'toml parse: ' as a cross-crate discriminator between manifest-parse failures and MCP-config-parse failures. A 'harmonize TOML error prefixes' pass that aligned the two would silently break audit-log filters that grep exactly 'toml: ' for MCP config faults and exactly 'toml parse: ' for manifest faults (cross-crate-prefix-alignment regression class): {toml_message}"
+        );
+        assert!(
+            toml_message.contains("TOML parse error"),
+            "ConfigError::Toml must surface the inner toml::de::Error Display rendering after the colon ({{0}}, not {{0:?}}); toml v0.8 Display renders parse failures starting with 'TOML parse error at line N, column M', a Debug refactor on {{0}} would render 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {toml_message}"
+        );
+        assert!(
+            !toml_message.contains("TomlError {"),
+            "ConfigError::Toml must NOT surface the toml::de::Error Debug rendering; a Debug refactor on {{0}} would expose 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' internal struct fields (Debug-vs-Display formatting regression class on the {{0}} interpolation): {toml_message}"
+        );
+
+        assert_ne!(
+            io_message, toml_message,
+            "ConfigError::Io and ConfigError::Toml Display must not converge; merging the two prefixes would lose the disk-fault vs TOML-syntax-fault discriminator (prefix-convergence regression class): io={io_message} toml={toml_message}"
+        );
+        assert!(
+            !io_message.starts_with("toml:") && !toml_message.starts_with("io:"),
+            "ConfigError::Io must not start with 'toml:' and ConfigError::Toml must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} toml={toml_message}"
+        );
+    }
 }

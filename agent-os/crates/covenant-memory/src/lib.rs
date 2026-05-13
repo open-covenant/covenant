@@ -1973,11 +1973,7 @@ mod tests {
         };
 
         let cases = [
-            (
-                "null",
-                serde_json::Value::Null,
-                serde_json::Value::Null,
-            ),
+            ("null", serde_json::Value::Null, serde_json::Value::Null),
             (
                 "string",
                 serde_json::Value::String("legacy-tag".into()),
@@ -2048,6 +2044,171 @@ mod tests {
              — pins that the wrap is exclusive to the non-object \
              case",
         );
+    }
+
+    #[test]
+    fn plan_repair_detach_parent_pins_parent_mismatch_arms_and_field_composition() {
+        // covenant_memory::plan_repair (line 175-210), DetachParent arm
+        // (lines 180-193), guards on
+        //
+        //   if expected_parent.is_some() && record.parent != *expected_parent
+        //
+        // The guard implements a four-way input semantics:
+        //   (1) expected=None always passes (operator opts out of the
+        //       check) — the detach proceeds regardless of what parent
+        //       the record actually holds;
+        //   (2) expected=Some(X), actual=Some(X) passes (matched);
+        //   (3) expected=Some(X), actual=Some(Y) where X!=Y returns
+        //       Err(ParentMismatch { id, expected: Some(X), actual:
+        //       Some(Y) });
+        //   (4) expected=Some(X), actual=None returns
+        //       Err(ParentMismatch { id, expected: Some(X), actual:
+        //       None }).
+        //
+        // Of these four arms, only arm (3) is pinned today via
+        // repair_rejects_parent_mismatch (line 1642), and only via
+        // matches!(_, Err(MemoryError::ParentMismatch { .. })) — the
+        // existing pin does NOT inspect the ParentMismatch field
+        // values, so a refactor that swapped expected and actual under
+        // a 'sort fields alphabetically' rationale would silently flip
+        // operator-facing error messages while the existing pin still
+        // passes. Arms (1) and (4) have no direct test.
+        //
+        // A refactor that flipped the != to == under a 'simplify the
+        // negation' rationale would invert the entire mismatch
+        // contract — matching parents would error and mismatching
+        // parents would succeed; pinning the four-arm matrix means
+        // each input combination explicitly anchors which side returns
+        // Ok vs Err so a flipped check fails three of four arms.
+        let id = Uuid::new_v4();
+        let parent_a = Uuid::new_v4();
+        let parent_b = Uuid::new_v4();
+
+        let with_parent = |p: Option<Uuid>| {
+            let mut r = record(id, MemoryTier::Episodic, "child", 10);
+            r.parent = p;
+            r
+        };
+        let detach = |expected: Option<Uuid>| MemoryRepairCommand::DetachParent {
+            id,
+            expected_parent: expected,
+        };
+
+        // Arm 1a: expected=None, actual=None — guard short-circuits;
+        // detach proceeds.
+        let after = plan_repair(&with_parent(None), &detach(None))
+            .expect("expected=None must always pass; the guard short-circuits via expected_parent.is_some()")
+            .expect("DetachParent always returns Some(after) on success");
+        assert_eq!(
+            after.parent, None,
+            "arm 1a (expected=None, actual=None): detach proceeds; \
+             after.parent must be None — pins that DetachParent \
+             always sets parent to None on success regardless of the \
+             input combination",
+        );
+
+        // Arm 1b: expected=None, actual=Some(X) — guard short-circuits;
+        // detach proceeds even though the record HAS a parent. This is
+        // the documented 'I do not care what parent the record has'
+        // contract; a refactor that dropped the expected_parent.is_some()
+        // guard would silently turn this into ParentMismatch because
+        // record.parent (Some(X)) != *expected_parent (None) is true.
+        let after = plan_repair(&with_parent(Some(parent_a)), &detach(None))
+            .expect(
+                "expected=None must pass even when actual=Some(X); the \
+                 expected_parent.is_some() guard is the documented \
+                 'operator opts out of the parent check' contract — a \
+                 refactor that dropped the guard under a 'simplify the \
+                 boolean' rationale would silently turn this arm into \
+                 Err(ParentMismatch) because None != Some(X) is true",
+            )
+            .expect("DetachParent always returns Some(after) on success");
+        assert_eq!(after.parent, None, "arm 1b: parent cleared");
+
+        // Arm 2: expected=Some(X), actual=Some(X) — guard true, equality
+        // false, no error; detach proceeds.
+        let after = plan_repair(&with_parent(Some(parent_a)), &detach(Some(parent_a)))
+            .expect(
+                "matched expected/actual must pass — pins the equality semantics on the happy path",
+            )
+            .expect("DetachParent always returns Some(after) on success");
+        assert_eq!(after.parent, None, "arm 2: parent cleared on match");
+
+        // Arm 3: expected=Some(X), actual=Some(Y) where X!=Y — guard
+        // true, equality false (records differ), ParentMismatch fires.
+        // Inspect the FIELD VALUES so a refactor that swapped expected
+        // and actual fails the destructure assertion.
+        let err = plan_repair(&with_parent(Some(parent_b)), &detach(Some(parent_a))).expect_err(
+            "expected=Some(X), actual=Some(Y) with X!=Y must \
+                 return ParentMismatch — the existing \
+                 repair_rejects_parent_mismatch pin (line 1642) covers \
+                 this arm only at the matches!(_, Err(_)) level; this \
+                 destructure pins the field VALUES so a refactor that \
+                 swapped expected and actual cannot land silently",
+        );
+        match err {
+            MemoryError::ParentMismatch {
+                id: err_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(err_id, id, "ParentMismatch.id must equal record.id");
+                assert_eq!(
+                    expected,
+                    Some(parent_a),
+                    "ParentMismatch.expected must equal *expected_parent — \
+                     a refactor that swapped expected and actual under a \
+                     'sort fields alphabetically' rationale would surface \
+                     here as expected==Some(parent_b)",
+                );
+                assert_eq!(
+                    actual,
+                    Some(parent_b),
+                    "ParentMismatch.actual must equal record.parent — \
+                     paired with the expected assertion above, this \
+                     destructure makes the field-swap regression \
+                     fail BOTH arms instead of silently passing",
+                );
+            }
+            other => panic!("expected ParentMismatch, got {other:?}"),
+        }
+
+        // Arm 4: expected=Some(X), actual=None — guard true, equality
+        // false (None != Some(X)), ParentMismatch fires. This arm is
+        // not exercised by repair_rejects_parent_mismatch (which uses
+        // actual=Some(Y)). Field destructure pins the actual=None
+        // value explicitly.
+        let err = plan_repair(&with_parent(None), &detach(Some(parent_a))).expect_err(
+            "expected=Some(X), actual=None must return ParentMismatch — \
+             the guard fires because expected_parent.is_some() is true \
+             and record.parent (None) != *expected_parent (Some(X)) is \
+             true; this arm is not covered by \
+             repair_rejects_parent_mismatch which only exercises \
+             actual=Some(Y)",
+        );
+        match err {
+            MemoryError::ParentMismatch {
+                id: err_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(err_id, id);
+                assert_eq!(
+                    expected,
+                    Some(parent_a),
+                    "ParentMismatch.expected must equal *expected_parent on the actual=None arm",
+                );
+                assert_eq!(
+                    actual, None,
+                    "ParentMismatch.actual must equal record.parent (None) — \
+                     pinning the None arm explicitly catches a refactor \
+                     that special-cased actual=None to Some(Uuid::nil()) \
+                     for 'consistent typing' which would silently change \
+                     operator-facing error payloads",
+                );
+            }
+            other => panic!("expected ParentMismatch, got {other:?}"),
+        }
     }
 
     #[tokio::test]

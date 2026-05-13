@@ -1104,6 +1104,109 @@ mod tests {
     }
 
     #[test]
+    fn audit_error_chain_corruption_display_message_pins_prefix_count_slots_and_refusing_hint() {
+        // covenant_audit::AuditError::ChainCorruption (lib.rs lines
+        // 30-31) is the operator-facing security boundary diagnostic
+        // for a chain-file/events-file length mismatch. The format
+        // string is:
+        //
+        //   chain corruption: events file has {events} rows, chain
+        //   file has {chain}; refusing to rebuild
+        //
+        // Three load-bearing pieces: the 'chain corruption' prefix,
+        // the {events}/{chain} count slot bindings, and the 'refusing
+        // to rebuild' security-policy hint. The doc-comment at lines
+        // 517-523 explains why the daemon refuses rather than rebuilds:
+        // a rebuild would produce a chain matching tampered events,
+        // which is the attacker's goal. jsonl_record_pins_chain_corruption_on_length_mismatch_with_field_values
+        // (line 992) pins the field VALUES via destructure-and-assert
+        // but never format!('{err}'). A typo, a slot swap (mis-
+        // reporting which file was tampered in incident triage), or a
+        // dropped 'refusing to rebuild' hint would silently degrade
+        // the diagnostic.
+
+        // Distinct values so a {events}/{chain} slot swap surfaces.
+        let err = AuditError::ChainCorruption {
+            events: 5,
+            chain: 3,
+        };
+        let message = format!("{err}");
+
+        assert!(
+            message.contains("chain corruption"),
+            "ChainCorruption Display must keep the 'chain corruption' \
+             prefix — distinguishes this variant from Io/Serde \
+             wrappers in dashboards that group errors by message \
+             prefix: {message}"
+        );
+        assert!(
+            message.contains("events file has 5 rows"),
+            "ChainCorruption must bind {{events}} to the 'events file \
+             has' slot — pinning the slot ordering directly so a swap \
+             that bound {{chain}} here would surface as 'events file \
+             has 3 rows'; mis-reporting which file was tampered is \
+             precisely the attacker-favored regression the doc-comment \
+             at lines 517-523 warns against (an operator triaging a \
+             truncated chain would investigate the wrong file): \
+             {message}"
+        );
+        assert!(
+            message.contains("chain file has 3"),
+            "ChainCorruption must bind {{chain}} to the 'chain file \
+             has' slot — paired assertion with 'events file has 5 \
+             rows' above so a slot swap fails BOTH and the operator-\
+             facing diagnostic at lines 30-31 stays anchored. Note the \
+             format string omits 'rows' after the {{chain}} value \
+             (anchored separately below by the semicolon check): \
+             {message}"
+        );
+        assert!(
+            message.contains("chain file has 3;"),
+            "ChainCorruption must keep the semicolon between the \
+             {{chain}} value and 'refusing to rebuild' — pins the \
+             punctuation that separates the count-report from the \
+             policy hint. A refactor that swapped the semicolon for \
+             a comma or a period would silently shift dashboards \
+             that split the message at ';' to extract the policy \
+             suffix: {message}"
+        );
+        assert!(
+            message.contains("refusing to rebuild"),
+            "ChainCorruption must keep the 'refusing to rebuild' hint \
+             — the security-policy signal that distinguishes 'we \
+             won't rebuild' (intentional) from 'we couldn't rebuild' \
+             (bug). The doc-comment at lines 517-523 documents that \
+             rebuild would produce a chain matching tampered events; \
+             dropping the hint under a 'less verbose' pass would \
+             silently let operators try a different rebuild path: \
+             {message}"
+        );
+
+        // Negative-angle pin: the swapped form must NOT appear, so a
+        // refactor that drifted BOTH count-slot assertions in
+        // lockstep still surfaces from this second angle.
+        assert!(
+            !message.contains("events file has 3 rows"),
+            "ChainCorruption must NOT emit 'events file has 3 rows' \
+             — pins the slot ordering from the inverse angle. A swap \
+             that bound {{chain}} (3) to the 'events file has' slot \
+             AND {{events}} (5) to the 'chain file has' slot would \
+             still pass naive prefix/hint substring checks; this \
+             inverse assertion catches the swap: {message}"
+        );
+        assert!(
+            !message.contains("chain file has 5"),
+            "ChainCorruption must NOT emit 'chain file has 5' — \
+             paired with the inverse assertion above so a slot swap \
+             fails both inverse checks and the operator-facing \
+             diagnostic at lines 30-31 stays anchored from four \
+             independent positions. The 5 here would be the events \
+             count surfaced in the chain slot — exactly the swap \
+             this assertion catches: {message}"
+        );
+    }
+
+    #[test]
     fn hash_hex_pins_16_char_zero_padded_lowercase_hex_and_empty_input_safety() {
         // hash_hex (line 697-702) populates
         // AuditKind::IntentDispatched.result_hash_hex on every

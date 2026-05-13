@@ -2966,6 +2966,143 @@ mod tests {
     }
 
     #[test]
+    fn canonical_message_pins_exact_byte_layout_for_known_fixture() {
+        // canonical_message (line 986-1002) is the byte-level signed-
+        // message blob that ed25519 signing and verification operate
+        // on. Its layout is the cryptographic anchor for every
+        // SignedCapability written to disk or transmitted over IPC:
+        //
+        //   [32 bytes: subject.pubkey]
+        //   [4 bytes: action length, u32 big-endian]
+        //   [N bytes: action UTF-8]
+        //   [4 bytes: scope length, u32 big-endian]
+        //   [M bytes: scope JCS-encoded JSON]
+        //   [32 bytes: granted_by.pubkey]
+        //   [1 byte: expires_at presence flag — 1 for Some, 0 for None]
+        //   [8 bytes: expires_at value, u64 big-endian — 0 when None]
+        //
+        // The existing canonical_message_is_jcs_stable_across_scope_key_orderings
+        // pin (just below this test) covers JCS canonicalisation of
+        // the scope field but does NOT pin the surrounding byte
+        // format. A refactor that flipped the length prefixes from
+        // u32 BE to u32 LE, switched the expires_at encoding from
+        // flag-then-value to a u64::MAX sentinel for None, reordered
+        // the fields (e.g., put granted_by before scope), or shifted
+        // any field by even one byte would silently invalidate every
+        // existing signed capability — sign/verify pairs in unit
+        // tests still pass because both sides use the new layout,
+        // but operator-issued grants written under the prior daemon
+        // version stop verifying with BadSignature on the next
+        // restart and the operator has no parse-time or compile-time
+        // signal that the layout drifted.
+        let none_cap = Capability {
+            subject: AgentId::new("subject@local", [0u8; 32]),
+            action: "x".into(),
+            scope: serde_json::json!({}),
+            granted_by: AgentId::new("granter@local", [0u8; 32]),
+            expires_at: None,
+        };
+        let none_msg = canonical_message(&none_cap);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&[0u8; 32]);
+        expected.extend_from_slice(&1u32.to_be_bytes());
+        expected.push(b'x');
+        expected.extend_from_slice(&2u32.to_be_bytes());
+        expected.extend_from_slice(b"{}");
+        expected.extend_from_slice(&[0u8; 32]);
+        expected.push(0);
+        expected.extend_from_slice(&0u64.to_be_bytes());
+
+        assert_eq!(
+            none_msg.len(),
+            84,
+            "canonical_message must emit exactly 84 bytes for the \
+             known fixture (32 + 4 + 1 + 4 + 2 + 32 + 1 + 8); a \
+             refactor that shifted any field, swapped any length \
+             prefix width (e.g., u32 → u16 → u64), or added a new \
+             field would change this total and silently invalidate \
+             every persisted SignedCapability; got len {}",
+            none_msg.len(),
+        );
+        assert_eq!(
+            none_msg, expected,
+            "canonical_message must produce the documented byte \
+             sequence verbatim for the all-zero-pubkey, action='x', \
+             empty-scope, expires_at-None fixture; the prefix \
+             encoding is u32 big-endian (network byte order), the \
+             field order is subject|action|scope|granter|expires, \
+             and the expires_at-None case emits flag-byte 0 followed \
+             by 8 zero bytes for the value; a refactor that flipped \
+             the prefixes to little-endian, reordered the fields, \
+             or changed the expires_at-None encoding to a sentinel \
+             (e.g., u64::MAX) would break verify() on every signed \
+             capability written under the prior daemon version with \
+             no parse-time signal",
+        );
+
+        let some_cap = Capability {
+            subject: AgentId::new("subject@local", [0u8; 32]),
+            action: "x".into(),
+            scope: serde_json::json!({}),
+            granted_by: AgentId::new("granter@local", [0u8; 32]),
+            expires_at: Some(0x0102_0304_0506_0708),
+        };
+        let some_msg = canonical_message(&some_cap);
+
+        assert_eq!(
+            some_msg.len(),
+            84,
+            "expires_at-Some must keep the same total length as the \
+             expires_at-None case (the flag-then-value encoding uses \
+             1 + 8 bytes in both arms); a refactor that omitted the \
+             flag byte when expires_at is Some would shrink the \
+             total to 83 bytes and the asymmetric layout would \
+             break verify() on every time-bound grant",
+        );
+        let tail_start = some_msg.len() - 9;
+        assert_eq!(
+            some_msg[tail_start], 1,
+            "expires_at-Some must flip the presence flag byte from \
+             0 to 1; the rest of the blob is identical to the None \
+             case, so the only signal that the capability is \
+             time-bound is this one byte — a refactor that dropped \
+             the flag would let absent/present expiry blur together \
+             and verify_with_clock would silently treat None-encoded \
+             caps as Some(0) (always expired)",
+        );
+        assert_eq!(
+            &some_msg[tail_start + 1..],
+            &0x0102_0304_0506_0708u64.to_be_bytes(),
+            "expires_at-Some must encode the value as u64 big-endian \
+             (network byte order) in the trailing 8 bytes — a \
+             refactor to little-endian would flip the byte order and \
+             every persisted signed capability with a non-trivial \
+             expires_at would become BadSignature on restart, while \
+             expires_at=0 caps (which round-trip identically under \
+             either endianness) would still verify, masking the \
+             regression to time-bound grants only",
+        );
+
+        for (idx, (none_byte, some_byte)) in none_msg
+            .iter()
+            .zip(some_msg.iter())
+            .take(tail_start)
+            .enumerate()
+        {
+            assert_eq!(
+                none_byte, some_byte,
+                "the expires_at-None and expires_at-Some blobs must \
+                 share the leading 75 bytes (subject, action, scope, \
+                 granter) verbatim; only the trailing 9 bytes \
+                 (flag + value) differ — divergence at byte {idx} \
+                 would mean a non-expires field is implicated, \
+                 which violates the documented layout",
+            );
+        }
+    }
+
+    #[test]
     fn canonical_message_is_jcs_stable_across_scope_key_orderings() {
         // RFC 8785 (JCS) sorts keys lexicographically. A cap signed with one
         // scope ordering must verify after the scope has been round-tripped

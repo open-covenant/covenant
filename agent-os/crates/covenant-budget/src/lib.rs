@@ -2153,6 +2153,82 @@ mod tests {
         assert!(matches!(err, BudgetError::NoCapacity(_)));
     }
 
+    #[test]
+    fn budget_error_display_messages_pin_no_capacity_and_exhausted_format_strings() {
+        // BudgetError (lib.rs lines 63-85) has four variants. Two wrap
+        // external errors via #[from]; the two string-bearing variants
+        // emit operator-facing format strings that no existing test
+        // inspects. in_memory_try_debit_returns_no_capacity_for_unset_agent
+        // (line 2149) asserts NoCapacity via `matches!` which ignores
+        // the Display rendering. Exhausted has no test at all. The
+        // doc-comment at lines 73-77 documents that both Exhausted
+        // fields feed the pause-and-queue resume logic — a refactor
+        // that typo'd the message or swapped the field bindings would
+        // silently degrade both operator diagnostics and the resume-
+        // verb's wait floor.
+
+        let no_capacity = BudgetError::NoCapacity("stranger@local".into());
+        assert_eq!(
+            format!("{no_capacity}"),
+            "no capacity for stranger@local",
+            "BudgetError::NoCapacity Display must remain 'no capacity \
+             for <agent-display>' — the bound display string is the \
+             operator's actionable hint for which agent.toml needs a \
+             settlement.budget_credits_per_hour entry. A rewrite to \
+             'no capacity <agent>' (dropping 'for') under a 'less \
+             verbose' pass would silently break dashboards that grep \
+             'no capacity for' to identify per-agent misconfigurations"
+        );
+
+        // Distinct field values so a refactor that swapped
+        // {tokens_remaining} and {refill_eta_ms} bindings produces
+        // a different message than the pin asserts on.
+        let exhausted = BudgetError::Exhausted {
+            tokens_remaining: 3,
+            refill_eta_ms: 1234,
+        };
+        let exhausted_message = format!("{exhausted}");
+        assert!(
+            exhausted_message.contains("budget exhausted"),
+            "BudgetError::Exhausted must keep the 'budget exhausted' \
+             prefix — distinguishes this variant from NoCapacity in \
+             dashboards that group by message prefix: {exhausted_message}"
+        );
+        assert!(
+            exhausted_message.contains("3 tokens remaining"),
+            "BudgetError::Exhausted must bind {{tokens_remaining}} to \
+             the 'tokens remaining' slot — a #[error] format swap that \
+             bound {{refill_eta_ms}} to this position under an \
+             'alphabetize template variables' rationale would emit \
+             '1234 tokens remaining' (the swapped value) here. \
+             Operators reading the swapped form would see an impossibly \
+             large remaining-count and the pause-and-queue resume \
+             logic's snapshot would carry the swap into the budget \
+             pause checkpoint: {exhausted_message}"
+        );
+        assert!(
+            exhausted_message.contains("refill eta 1234 ms"),
+            "BudgetError::Exhausted must bind {{refill_eta_ms}} to the \
+             'refill eta' slot with the 'ms' unit suffix — the field \
+             is documented as epoch_ms in the variant doc-comment (line \
+             75); a refactor that dropped the 'ms' suffix under a 'less \
+             verbose' pass would silently let operators misinterpret a \
+             large epoch-ms value as seconds and wait absurdly long; a \
+             swap that bound {{tokens_remaining}} here would emit \
+             'refill eta 3 ms' (a near-instant value that contradicts \
+             the exhausted state). Both regressions surface here: \
+             {exhausted_message}"
+        );
+        assert!(
+            !exhausted_message.contains("3 ms"),
+            "BudgetError::Exhausted must NOT emit the tokens_remaining \
+             value (3) as a ms quantity — pins the field-binding \
+             asymmetry from a second angle so a swap regression that \
+             changed both substring positions in lockstep still surfaces: \
+             {exhausted_message}"
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_would_exceed_does_not_consume() {
         let l = InMemoryLedger::new();

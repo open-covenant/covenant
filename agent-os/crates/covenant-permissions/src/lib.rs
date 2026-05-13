@@ -5469,4 +5469,31 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn permission_error_crypto_source_delegation_pin_returns_inner_ed25519_signature_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let signature = ed25519_dalek::Signer::sign(&signing_key, b"original message");
+        let verifying_key = signing_key.verifying_key();
+        let inner = verifying_key
+            .verify_strict(b"different message", &signature)
+            .expect_err("verify_strict must fail on mismatched message");
+        let expected_display = format!("{inner}");
+        let err = PermissionError::Crypto(inner);
+        let source = err.source().expect(
+            "PermissionError::Crypto must surface the inner ed25519_dalek::SignatureError via std::error::Error::source so daemon-side capability-verification audit emitters can walk the error chain and downcast source() to ed25519_dalek::SignatureError for distinct triage of 'malformed pubkey bytes' (key-decode failure path) vs 'signature verification failed' (cryptographic mismatch path); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "PermissionError::Crypto source() Display must match a direct format!() of the same ed25519_dalek::SignatureError verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<ed25519_dalek::SignatureError>().is_some(),
+            "PermissionError::Crypto source() must downcast_ref to ed25519_dalek::SignatureError so daemon-side capability-verification audit emitters can extract the concrete crypto-failure type for triage; a refactor that wrapped the inner in a project-local newtype (e.g., PermissionCryptoError(ed25519_dalek::SignatureError) under a 'distinguish capability-verification crypto failures from sibling crypto-error sites' rationale) would silently break downcast_ref::<ed25519_dalek::SignatureError>() at every downstream callsite (concrete-source-type downcast regression class)"
+        );
+    }
 }

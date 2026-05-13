@@ -5155,6 +5155,32 @@ mod tests {
     }
 
     #[test]
+    fn a2a_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "mailbox.jsonl: writer dropped",
+        );
+        let expected_display = format!("{inner}");
+        let err = A2AError::Io(inner);
+        let source = err.source().expect(
+            "covenant_a2a::A2AError::Io must surface the inner std::io::Error via std::error::Error::source so daemon-side A2A retry-policy classifiers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct retry decisions on the mailbox JSONL store (Interrupted retries immediately, WouldBlock backs off briefly, BrokenPipe/UnexpectedEof on a fsync race escalates to operator-attention, NoSpace blocks new task acceptance, PermissionDenied escalates to operator-attention); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_a2a::A2AError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::BrokenPipe),
+            "covenant_a2a::A2AError::Io source() must downcast_ref to std::io::Error so daemon-side A2A retry-policy classifiers can extract io::ErrorKind for retry decisions on the mailbox JSONL store; a refactor that wrapped the inner in a project-local newtype (e.g., A2AIoError(std::io::Error) under a 'tag A2A mailbox IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies mailbox JSONL faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

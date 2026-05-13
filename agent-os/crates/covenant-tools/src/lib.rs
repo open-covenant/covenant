@@ -569,6 +569,95 @@ mod tests {
     }
 
     #[test]
+    fn search_error_display_messages_pin_three_string_variant_format_strings() {
+        // SearchError (lib.rs lines 26-41) has seven variants parallel
+        // to covenant_llm::ProviderError. Four wrap external errors via
+        // #[from]. The three string-literal variants emit operator-
+        // facing format strings that no existing test inspects.
+        // brave_without_key_returns_missing_key (line 553) and
+        // serpapi_without_key_returns_missing_key (line 562) assert
+        // MissingKey via `matches!` which ignores the Display rendering;
+        // Empty and Status have no test at all. The two error catalogs
+        // (covenant-tools SearchError and covenant-llm ProviderError)
+        // share parallel variant names but use INTENTIONALLY distinct
+        // phrasing — pinning anchors the intentional asymmetry so a
+        // 'unify cross-crate error wording' refactor surfaces here.
+
+        let empty = SearchError::Empty;
+        assert_eq!(
+            format!("{empty}"),
+            "search returned no hits",
+            "SearchError::Empty Display must remain 'search returned no \
+             hits' — intentionally distinct from ProviderError::Empty \
+             ('provider returned no content'). Operators read the \
+             search log separately from the LLM log; merging the \
+             phrasings under a 'unify error wording' pass would shift \
+             dashboards that grep specifically for 'no hits'"
+        );
+
+        let status = SearchError::Status {
+            status: 429,
+            body: "Too Many Requests".into(),
+        };
+        let status_message = format!("{status}");
+        assert!(
+            status_message.contains("(429)"),
+            "SearchError::Status Display must parenthesize the status \
+             code — operator dashboards grep for '\\(429\\)' to track \
+             rate-limit incidents; a swap to 'search error: 429, Too \
+             Many Requests' would silently break the convention: \
+             {status_message}"
+        );
+        assert!(
+            status_message.contains("Too Many Requests"),
+            "SearchError::Status must surface the body string — the \
+             body carries the upstream search provider's error reason: \
+             {status_message}"
+        );
+        assert!(
+            status_message.contains("search error"),
+            "SearchError::Status must keep the 'search error' prefix \
+             — intentionally distinct from ProviderError::Status's \
+             'provider error' prefix so dashboards distinguish search \
+             from chat failures: {status_message}"
+        );
+        assert!(
+            !status_message.contains("(Too Many Requests)"),
+            "SearchError::Status body must NOT appear in the \
+             parenthesized slot — a #[error] format swap binding {{body}} \
+             to the parens and {{status}} to the suffix would emit \
+             'search error (Too Many Requests): 429'. Pinning that the \
+             body does NOT appear in parens anchors the slot ordering: \
+             {status_message}"
+        );
+
+        let missing_brave = SearchError::MissingKey("brave");
+        assert_eq!(
+            format!("{missing_brave}"),
+            "missing api key for brave",
+            "SearchError::MissingKey Display must remain 'missing api \
+             key for <slug>' — INTENTIONALLY LACKS the 'for provider' \
+             qualifier that ProviderError::MissingKey uses ('missing \
+             api key for provider <slug>'). Search tools are not \
+             'providers' in the LLM-protocol sense; the asymmetry is \
+             documented. A refactor that added 'for provider' under a \
+             'match ProviderError phrasing for cross-crate consistency' \
+             rationale would silently shift dashboards that distinguish \
+             search-tool secrets from LLM-provider secrets"
+        );
+
+        let missing_serpapi = SearchError::MissingKey("serpapi");
+        assert_eq!(
+            format!("{missing_serpapi}"),
+            "missing api key for serpapi",
+            "SearchError::MissingKey must bind the slug verbatim \
+             without case transformation — the slug is the operator's \
+             actionable hint for which [search] api_key to populate \
+             in secrets.toml"
+        );
+    }
+
+    #[test]
     fn search_config_parses_brave_block() {
         let toml_src = r#"
 [search]

@@ -3298,6 +3298,107 @@ mod tests {
     }
 
     #[test]
+    fn verify_with_clock_pins_expires_at_equal_boundary_accepted() {
+        // verify_with_clock (line 1029-1037) is the only API the daemon
+        // calls to check capability expiry at dispatch time. The check is
+        //
+        //     if let Some(exp) = signed.capability.expires_at {
+        //         if now_ms > exp {
+        //             return Err(PermissionError::Expired(exp));
+        //         }
+        //     }
+        //
+        // — a STRICT greater-than that documents 'a capability with
+        // expires_at = T is valid through and including the wall-clock
+        // instant T (in epoch ms); it becomes Expired one millisecond
+        // later at T+1'.
+        //
+        // verify_with_clock_rejects_expired (above) covers the BEFORE arm
+        // (now_ms = 999 < exp = 1000 → Ok) and the AFTER arm (now_ms =
+        // 1001 > exp = 1000 → Expired(1000)) but never asserts the EQUAL
+        // arm (now_ms = 1000 == exp = 1000 → Ok). A refactor that
+        // swapped `>` for `>=` under a 'use canonical exclusive-upper-
+        // bound semantics' or 'half-open interval [valid_from,
+        // expires_at)' pass would silently shift every capability's
+        // effective expiry one millisecond earlier — caps with
+        // expires_at = T would start rejecting at exactly T instead of
+        // at T+1. The before/after arms in verify_with_clock_rejects_expired
+        // would still pass under either operator because they probe 999
+        // and 1001, not 1000.
+
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let signed = sign(
+            cap(
+                subject.clone(),
+                "tool.web_search",
+                issuer.agent_id(),
+                Some(1000),
+            ),
+            issuer.signing_key(),
+        );
+
+        // (1) Equality arm — the new pin. now_ms == expires_at must
+        // accept because the operator is strict greater-than. This is
+        // the minimum-distance probe of the `>` vs `>=` regression.
+        assert!(
+            verify_with_clock(&signed, 1000).is_ok(),
+            "now_ms == expires_at must verify as Ok — the operator is \
+             'if now_ms > exp', strictly greater-than, so the equality \
+             case is valid. A refactor that flipped to `>=` would \
+             silently reject every capability at exactly its expiry \
+             timestamp; rotation policies that issue a replacement cap \
+             with valid_from == old.expires_at would see a one-millisecond \
+             coverage gap at every rotation",
+        );
+
+        // (2) None-expiry arm. A cap with expires_at = None must accept
+        // at any clock value — the documented contract is 'no expiry'.
+        // A refactor that flattened the Option match to
+        // `.unwrap_or(0)` (the natural u64 default) would treat None as
+        // exp=0 and silently reject every None-expiry cap as
+        // Expired(0). u64::MAX is the only clock value that
+        // distinguishes the correct branched implementation from a
+        // .unwrap_or(0) regression while also surfacing a hypothetical
+        // .unwrap_or(u64::MAX) variant (which would shift behavior on
+        // any clock-skew tolerance refactor).
+        let no_expiry = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        assert!(
+            verify_with_clock(&no_expiry, u64::MAX).is_ok(),
+            "expires_at = None must verify as Ok at any clock value — \
+             a refactor that simplified the Option<u64> match to \
+             '.unwrap_or(0)' would silently reject every None-expiry \
+             capability as Expired(0); the audit log would surface \
+             these rejections with no signal that the Option handling \
+             drifted",
+        );
+
+        // (3) Cross-bind error-value arm. Duplicates the existing
+        // verify_with_clock_rejects_expired assertion to anchor the
+        // exact value wrapped in the Expired variant: the cap's
+        // expires_at, NOT now_ms. A refactor that changed
+        // Err(Expired(exp)) to Err(Expired(now_ms)) under a 'report
+        // rejection-time clock for forensics' rationale would silently
+        // break operator dashboards that key on the cap's stated
+        // expires_at to correlate alerts with the granted_capabilities
+        // ledger.
+        assert!(
+            matches!(
+                verify_with_clock(&signed, 1001),
+                Err(PermissionError::Expired(1000))
+            ),
+            "rejection error must wrap the cap's expires_at (1000), \
+             not now_ms (1001); a refactor that swapped the wrapped \
+             value would silently decorrelate audit-log alerts from \
+             the granted_capabilities ledger entries operators reconcile \
+             against",
+        );
+    }
+
+    #[test]
     fn verify_with_clock_and_trust_root_pins_trust_root_boundary() {
         let issuer = LocalIdentity::generate("authority@local");
         let stranger = LocalIdentity::generate("stranger@local");

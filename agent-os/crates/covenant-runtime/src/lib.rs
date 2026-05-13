@@ -2061,4 +2061,32 @@ cpu_ms_per_task = 5000
              (prefix-convergence regression class would merge remote-gateway with local-subprocess incidents)"
         );
     }
+
+    #[test]
+    fn runner_error_malformed_stdout_display_message_pins_prefix_agent_result_qualifier_and_display_formatted_source() {
+        let source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let err = RunnerError::MalformedStdout { source };
+        let message = format!("{err}");
+        assert!(
+            message.starts_with("agent stdout was not a valid AgentResult JSON line: "),
+            "RunnerError::MalformedStdout must surface the literal source-of-failure prefix 'agent stdout was not a valid AgentResult JSON line: ' so audit-log filters can group runner-subprocess malformed-output incidents separately from manifest or capability parse incidents (dropped-prefix / dropped-wire-shape-qualifier regression class): {message}"
+        );
+        assert!(
+            message.contains("agent stdout"),
+            "RunnerError::MalformedStdout must surface the 'agent stdout' source-of-failure qualifier so audit-log filters can distinguish agent-subprocess malformed-output from sibling parse rejections (dropped-source-of-failure-qualifier regression class): {message}"
+        );
+        assert!(
+            message.contains("AgentResult JSON line"),
+            "RunnerError::MalformedStdout must surface the 'AgentResult JSON line' wire-shape qualifier so operators know the expected wire shape is the AgentResult JSON struct, not arbitrary JSON or multi-line text (dropped-wire-shape-qualifier regression class): {message}"
+        );
+        assert!(
+            message.contains("expected"),
+            "RunnerError::MalformedStdout must surface the serde_json::Error's Display rendering after the colon (serde renders parse failures with 'expected ...'); a refactor from {{source}} to {{source:?}} would surface Debug-rendered struct fields like 'Error(' or 'line:' instead (Debug-vs-Display formatting regression class on the source interpolation): {message}"
+        );
+        assert!(
+            !message.contains("Error("),
+            "RunnerError::MalformedStdout must NOT surface the serde_json::Error's Debug rendering; a Debug-formatted source would expose internal struct fields like 'Error(\"...\", line: N, column: M)' that can leak buffer position structs into operator logs (Debug-vs-Display formatting regression class on the source interpolation): {message}"
+        );
+    }
 }

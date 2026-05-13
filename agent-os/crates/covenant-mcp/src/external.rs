@@ -924,4 +924,25 @@ mod tests {
             "BootstrapError::Transport must not converge with BootstrapError::DuplicateToolName prefix; the bootstrap-stage prefix discriminator must distinguish transport-layer failures from namespace-collision failures (sibling-variant prefix-convergence regression class): {message}"
         );
     }
+
+    #[test]
+    fn bootstrap_error_transport_source_delegation_pin_returns_inner_mcp_client_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+        let inner = McpClientError::Closed;
+        let expected_display = format!("{inner}");
+        let err = BootstrapError::Transport(inner);
+        let source = err.source().expect(
+            "BootstrapError::Transport must surface the inner McpClientError via std::error::Error::source so anyhow chain printers, tracing's source-walking emitters, and daemon-side bootstrap audit-log emitters that may downcast source() to McpClientError to classify Closed vs Io vs Serde vs Wire failures can render the wrapper context AND the inner cause; a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        let source_message = format!("{source}");
+        assert_eq!(
+            source_message, expected_display,
+            "BootstrapError::Transport source() Display must match a direct format!() of the same McpClientError variant verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> (under a 'support arbitrary transport error types' rationale) would silently break daemon-side downcasts to McpClientError used to extract the specific Closed/Io/Serde/Wire subkind for audit-log classification (concrete-source-type regression class)"
+        );
+        assert_eq!(
+            source_message, "transport closed",
+            "BootstrapError::Transport source() Display must remain the literal 'transport closed' — anchors the McpClientError::Closed Display verbatim through the wrapper so a cross-crate refactor that changed McpClientError::Closed's Display under a 'consistency with sibling variants' rationale would surface as a Transport pin failure (cross-crate-Display-drift regression class)"
+        );
+    }
 }

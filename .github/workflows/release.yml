@@ -1,0 +1,171 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: covenant-linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: covenant-darwin-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: covenant-darwin-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+        with:
+          workspaces: agent-os
+
+      - name: Build covenantd + covenant
+        working-directory: agent-os
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p covenantd -p covenant
+
+      - name: Stage tarball contents
+        env:
+          ASSET: ${{ matrix.asset }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          STAGE="dist/${ASSET}"
+          mkdir -p "${STAGE}"
+          cp "agent-os/target/${TARGET}/release/covenantd" "${STAGE}/"
+          cp "agent-os/target/${TARGET}/release/covenant" "${STAGE}/"
+          cp LICENSE README.md "${STAGE}/"
+
+      - name: Tarball
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          cd dist
+          tar -czf "${ASSET}.tar.gz" "${ASSET}"
+          shasum -a 256 "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}.tar.gz
+            dist/${{ matrix.asset }}.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  sign-and-publish:
+    name: sign and publish
+    needs: build
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts and build combined checksums
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find dist -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -exec cp {} out/ \;
+          cd out
+          cat *.tar.gz.sha256 > checksums.txt
+          rm -f *.tar.gz.sha256
+          ls -la
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign each artifact (keyless OIDC)
+        working-directory: out
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          for f in *.tar.gz checksums.txt; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "${f}"
+          done
+          ls -la
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="$(mktemp)"
+          cat > "${NOTES_FILE}" <<EOF
+          Covenant ${TAG}. See [CHANGELOG.md](./CHANGELOG.md#${TAG#v}---$(date -u +%Y-%m-%d)) for the full notes.
+
+          Each artifact is signed with cosign keyless OIDC. Verify with:
+
+          \`\`\`bash
+          cosign verify-blob \\
+            --certificate <artifact>.pem \\
+            --signature   <artifact>.sig \\
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \\
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \\
+            <artifact>
+          \`\`\`
+          EOF
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${TAG}" \
+            --notes-file "${NOTES_FILE}" \
+            out/*

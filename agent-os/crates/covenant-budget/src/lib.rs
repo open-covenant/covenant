@@ -1595,6 +1595,67 @@ mod tests {
     }
 
     #[test]
+    fn validate_resume_state_value_pins_top_level_machine_local_path_and_scalar_leaf_pass() {
+        // validate_resume_state_value is the recursive walker the
+        // pause-checkpoint validator routes every nested Value through
+        // before the checkpoint lands in the JSONL store. Four arms:
+        //   1. String + machine-local path → Err
+        //   2. Array → recurse on each value
+        //   3. Object → recurse via validate_resume_state_map
+        //   4. catch-all (Number, Bool, Null, non-machine-local String) → Ok
+        //
+        // validate_pause_checkpoint_pins_version_credits_and_resume_state
+        // exercises arms 2 and 3 by nesting a machine-local-path string
+        // inside an Array and inside an Object, and implicitly tests
+        // the non-machine-local String arm via the 'ok' siblings. This
+        // pin fills the complementary gap of arm 1 at the top-level
+        // value position (a checkpoint key directly binding a
+        // machine-local path) and arm 4's scalar leaf paths
+        // (Number, Bool, Null) which carry no String content for the
+        // looks_machine_local_path predicate to inspect.
+        let err = validate_resume_state_value(&serde_json::json!("/tmp/covenant-state"))
+            .expect_err(
+                "arm 1 at the top-level value position: a String value \
+                 matching looks_machine_local_path must be rejected; a \
+                 refactor that moved the check to a nested-only walker \
+                 would let a checkpoint key directly bind a machine-local \
+                 path and leak host-specific paths into the JSONL store",
+            );
+        match err {
+            BudgetCheckpointError::InvalidCheckpoint(msg) => assert!(
+                msg.contains("machine-local path"),
+                "arm 1 rejection message must name the guard: {msg}",
+            ),
+            other => panic!("expected InvalidCheckpoint, got {other:?}"),
+        }
+
+        validate_resume_state_value(&serde_json::json!("safe-string-value")).expect(
+            "arm 4 catch-all for non-machine-local String: a string that \
+             does not match looks_machine_local_path must pass — the \
+             machine-local-path predicate is the gate, not 'all strings'",
+        );
+        validate_resume_state_value(&serde_json::json!(42)).expect(
+            "arm 4 catch-all for Number: an integer leaf in resume_state \
+             ('step': 2) must pass; a refactor that swapped the catch-all \
+             for an explicit allow-list could silently reject Number leaves \
+             and break BudgetPauseCheckpoint payloads operators have \
+             already persisted",
+        );
+        validate_resume_state_value(&serde_json::json!(true)).expect(
+            "arm 4 catch-all for Bool: a boolean leaf in resume_state \
+             ('active': true) must pass; same regression class as the \
+             Number leaf — a checkpoint with structured leaf data would \
+             silently fail validation on daemon restart",
+        );
+        validate_resume_state_value(&serde_json::Value::Null).expect(
+            "arm 4 catch-all for Null: a null leaf in resume_state \
+             ('trace': null) must pass; same regression class as Number \
+             and Bool — operator checkpoints carrying explicit-null \
+             markers must remain decodable across daemon restart",
+        );
+    }
+
+    #[test]
     fn looks_machine_local_path_pins_unix_tilde_homevar_and_windows_prefixes_and_rejects_non_paths()
     {
         for s in [

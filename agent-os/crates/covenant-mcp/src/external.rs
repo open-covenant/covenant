@@ -374,6 +374,119 @@ mod tests {
     }
 
     #[test]
+    fn remote_tool_options_allows_pins_include_then_exclude_precedence_and_default_arms() {
+        // RemoteToolOptions::allows (line 91-104) is the per-tool
+        // admission gate that bootstrap_remote_tools_with_options
+        // (line 70) consults to decide whether each upstream MCP
+        // tools/list spec enters the operator's covenantd registry.
+        // The function encodes a documented include-then-exclude
+        // precedence: if include is non-empty the name must match at
+        // least one include pattern via matches_filter — otherwise
+        // default-deny on the include side; regardless of include,
+        // any matching exclude pattern denies.
+        //
+        // matches_filter_pins_star_exact_and_prefix_glob_branches
+        // (above) pins matches_filter itself. This pin closes the
+        // composition: how allows() chains include and exclude, the
+        // default-allow when both lists are empty, the include-as-
+        // allowlist when include is non-empty, and the exclude-wins
+        // arm when both match.
+        let default = RemoteToolOptions::default();
+        assert!(
+            default.allows("anything"),
+            "default options (include=[], exclude=[]) must allow every \
+             tool name — a refactor that defaulted to deny under a \
+             'least-privilege default' rationale would silently drop \
+             EVERY upstream MCP tool from EVERY registry on first \
+             deploy with no operator-visible signal",
+        );
+
+        let include_only = RemoteToolOptions {
+            tool_prefix: None,
+            include: vec!["exact".into()],
+            exclude: vec![],
+        };
+        assert!(
+            include_only.allows("exact"),
+            "a tool whose name matches a literal include pattern must \
+             be allowed when include is the only filter",
+        );
+        assert!(
+            !include_only.allows("other"),
+            "a tool whose name does NOT match any include pattern must \
+             be denied when include is non-empty — the include list is \
+             an allowlist gate, not an additive list. A refactor that \
+             treated non-empty include as informational would silently \
+             let unlisted tools through",
+        );
+
+        let exclude_only = RemoteToolOptions {
+            tool_prefix: None,
+            include: vec![],
+            exclude: vec!["banned".into()],
+        };
+        assert!(
+            !exclude_only.allows("banned"),
+            "exclude must apply even when include is empty — otherwise \
+             a deny-only configuration (the simpler 'block these few' \
+             setup most operators reach for first) would silently \
+             allow every tool",
+        );
+        assert!(
+            exclude_only.allows("other"),
+            "a tool whose name does not match any exclude pattern must \
+             be allowed when only exclude is set — the empty-include \
+             arm must default to allow, otherwise this configuration \
+             would deny everything despite having no allowlist",
+        );
+
+        let star_include_with_exclude = RemoteToolOptions {
+            tool_prefix: None,
+            include: vec!["*".into()],
+            exclude: vec!["banned".into()],
+        };
+        assert!(
+            !star_include_with_exclude.allows("banned"),
+            "exclude must win over include — even when include='*' \
+             matches every name, a matching exclude pattern must \
+             deny. A refactor that swapped the precedence so include \
+             was checked LAST and short-circuited on a match would \
+             silently let exclude entries leak through any catch-all \
+             include",
+        );
+        assert!(
+            star_include_with_exclude.allows("other"),
+            "the catch-all include must still allow non-excluded names \
+             — pinning that '*' is honored as a glob via matches_filter, \
+             not silently re-treated as a literal '*' that would only \
+             match the literal name '*'",
+        );
+
+        let glob_include = RemoteToolOptions {
+            tool_prefix: None,
+            include: vec!["foo*".into()],
+            exclude: vec![],
+        };
+        assert!(
+            glob_include.allows("foobar"),
+            "an include pattern with a trailing '*' must use the \
+             matches_filter glob path — a refactor that 'simplified' \
+             allows by replacing matches_filter with Vec::contains \
+             would silently drop this branch because Vec::contains \
+             does literal equality and 'foobar' is not equal to \
+             'foo*'",
+        );
+        assert!(
+            !glob_include.allows("bar"),
+            "an include pattern with a trailing '*' must NOT match \
+             unrelated names — pins that the glob is starts_with-only, \
+             not contains-anywhere, so an unrelated tool that happens \
+             to share a substring with the include prefix is still \
+             denied",
+        );
+    }
+
+    #[test]
     fn parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap(
     ) {
         let r = parse_tool_call_result(serde_json::json!({})).expect(

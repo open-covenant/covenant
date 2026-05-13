@@ -2,7 +2,7 @@
 
 import { useCallback, useState, type FormEvent } from "react";
 import { api, type Memory } from "@/lib/api";
-import { truncate } from "@/lib/format";
+import { stripDaemonEcho, truncate } from "@/lib/format";
 import { memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
@@ -126,8 +126,8 @@ export default function MemoryPage() {
                     <span>{memoryTierLabel(m.tier)}</span>
                   </div>
                   <div className="body">
-                    <strong>{truncate(m.text, 80)}</strong>
-                    <p>{truncate(m.text, 240)}</p>
+                    <strong>{truncate(stripDaemonEcho(m.text), 80)}</strong>
+                    <p>{truncate(stripDaemonEcho(m.text), 240)}</p>
                   </div>
                 </article>
               ))}
@@ -155,7 +155,7 @@ export default function MemoryPage() {
                   <span>{memoryTierLabel(m.tier)}</span>
                 </div>
                 <div className="body">
-                  <p>{truncate(m.text, 320)}</p>
+                  <p>{truncate(stripDaemonEcho(m.text), 320)}</p>
                 </div>
               </article>
             ))}

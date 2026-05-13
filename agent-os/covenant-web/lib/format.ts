@@ -93,6 +93,24 @@ export function truncate(value: string, length: number): string {
 }
 
 /**
+ * Strip the daemon's no-agent echo wrapper so memory snippets and task-result
+ * lines surface the user's actual content. The daemon's default stub returns
+ * `hello — you asked: 'X'` (current build) or `phase N echo (no agent matched): X`
+ * (older builds). Both are infrastructure plumbing that confuse first-time
+ * visitors when they leak into the operator console.
+ */
+export function stripDaemonEcho(text: string): string {
+  if (!text) return text;
+  const hello = text.match(
+    /^hello\s+[—-]\s+you asked:\s*['"]?(.+?)['"]?\.?(?:\s+Result:.*)?$/is,
+  );
+  if (hello) return hello[1].trim();
+  const phase = text.match(/^phase\s+\d+\s+echo\s*\(no agent matched\):\s*(.+)$/is);
+  if (phase) return phase[1].trim();
+  return text;
+}
+
+/**
  * Translate a capability scope object into one short sentence. Scope shapes
  * are heterogeneous coming off the daemon; we render the most common
  * forms inline and fall back to "specific scope" for anything we don't

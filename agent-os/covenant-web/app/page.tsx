@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
-import { formatRelative, formatTimestamp } from "@/lib/format";
+import { formatRelative, formatTimestamp, stripDaemonEcho } from "@/lib/format";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
@@ -39,7 +39,7 @@ export default function OverviewPage() {
       try {
         const r = await api.submitIntent(intent);
         if (r.kind === "intent_result") {
-          setLastResult(r.text);
+          setLastResult(stripDaemonEcho(r.text));
         } else {
           setLastError(r.message);
         }
@@ -99,7 +99,8 @@ export default function OverviewPage() {
   const livePeers = peers.filter((p) => p.revoked_at === null);
   const caps = data?.caps.capabilities ?? [];
   const memory = data?.memory.records ?? [];
-  const lastEvent = recent[0] ?? null;
+  const lastEvent =
+    recent.find((e) => e.kind.type !== "authentication_failed") ?? recent[0] ?? null;
   const lastLabel = lastEvent ? eventLabel(lastEvent) : null;
 
   return (

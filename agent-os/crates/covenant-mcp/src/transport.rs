@@ -1190,4 +1190,27 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn mcp_client_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdio pipe closed");
+        let expected_display = format!("{inner}");
+        let err = McpClientError::Io(inner);
+        let source = err.source().expect(
+            "covenant_mcp::transport::McpClientError::Io must surface the inner std::io::Error via std::error::Error::source so daemon-side MCP transport retry classifiers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct decisions on stdio-pipe IO (BrokenPipe stops the in-flight JSON-RPC call with retry-on-next-task semantics, NotFound stops bootstrap with operator-attention on a missing server binary, PermissionDenied escalates as security-sensitive on a non-executable MCP server, Interrupted retries the read immediately); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_mcp::transport::McpClientError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::BrokenPipe),
+            "covenant_mcp::transport::McpClientError::Io source() must downcast_ref to std::io::Error so daemon-side MCP transport retry classifiers can extract io::ErrorKind for retry decisions on stdio-pipe IO; a refactor that wrapped the inner in a project-local newtype (e.g., McpIoError(std::io::Error) under a 'tag MCP transport IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies MCP transport IO faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

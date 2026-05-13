@@ -265,6 +265,89 @@ mod tests {
     }
 
     #[test]
+    fn sign_pins_rfc8032_determinism_message_dependence_and_key_dependence() {
+        // LocalIdentity::sign (line 73-75) delegates to
+        // ed25519_dalek::SigningKey::sign which implements RFC 8032
+        // EdDSA — signatures are deterministic: signing the same
+        // message with the same key produces byte-identical bytes
+        // every call. Existing sign-related tests
+        // (generate_then_sign_and_verify_with_pubkey,
+        // verify_rejects_tampered_message,
+        // verify_with_pubkey_rejects_tampered_signature_and_wrong_pubkey)
+        // call sign() once each and exercise verify, never pinning
+        // determinism. Three independent regression classes are
+        // unpinned by the verify-side coverage:
+        //
+        // (1) determinism: a refactor that introduced per-call
+        //     entropy (e.g., randomized-nonce variant for
+        //     observability disambiguation) would still verify
+        //     successfully because RFC-conforming randomized
+        //     signatures verify, but every byte-equality check on
+        //     persisted capability tokens, every signature-cache
+        //     hit-rate metric, and every audit-row signature-
+        //     fingerprint comparison would silently regress.
+        //
+        // (2) message-dependence: a debug stub that returned a
+        //     constant signature regardless of message
+        //     ('return Signature::from_bytes(&[0u8; 64])') would
+        //     satisfy determinism while breaking the security
+        //     contract — message-dependence rules out that arm.
+        //
+        // (3) key-dependence: a refactor that returned a key-
+        //     independent signature ('return sha256(message)' or a
+        //     module-level captured SigningKey) would satisfy
+        //     determinism + message-dependence while letting any
+        //     holder of a message produce a valid signature for any
+        //     key — alice's signature would be indistinguishable
+        //     from bob's, opening every authorization boundary that
+        //     keys on signer identity.
+        let alice = LocalIdentity::generate("alice@local");
+        let bob = LocalIdentity::generate("bob@local");
+
+        let sig1 = alice.sign(b"covenant");
+        let sig2 = alice.sign(b"covenant");
+        assert_eq!(
+            sig1.to_bytes(),
+            sig2.to_bytes(),
+            "ed25519 signatures are deterministic per RFC 8032 — \
+             a refactor that introduced per-call entropy (e.g., \
+             randomized-nonce variant or a debug surface that \
+             added a counter to disambiguate concurrent signs) \
+             would silently break byte-equality of persisted \
+             capability tokens and audit-row signature \
+             fingerprints, while the verify-side tests would still \
+             pass because RFC-conforming randomized signatures \
+             verify",
+        );
+
+        let sig_y = alice.sign(b"y");
+        assert_ne!(
+            sig1.to_bytes(),
+            sig_y.to_bytes(),
+            "signatures must depend on the message — a debug stub \
+             that returned a constant signature regardless of \
+             message ('return Signature::from_bytes(&[0u8; 64])') \
+             would satisfy the determinism arm but every message \
+             would carry the same signature, breaking the security \
+             contract",
+        );
+
+        let bob_sig = bob.sign(b"covenant");
+        assert_ne!(
+            sig1.to_bytes(),
+            bob_sig.to_bytes(),
+            "signatures must depend on the signing key — a refactor \
+             that returned a key-independent signature ('return \
+             sha256(message)' or a module-level captured \
+             SigningKey) would satisfy the determinism and \
+             message-dependence arms while letting any holder of a \
+             message produce a valid signature for any key, \
+             opening every authorization boundary that keys on \
+             signer identity",
+        );
+    }
+
+    #[test]
     fn load_or_create_persists_then_returns_same_pubkey() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("identity").join("local.key");

@@ -599,6 +599,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn protocol_constants_pin_values_and_self_consistency() {
+        // covenant_ipc declares four public constants at line 67-70
+        // that define the negotiation handshake:
+        //
+        //   PROTOCOL_NAME = "covenant.ipc"
+        //   PROTOCOL_VERSION = 1
+        //   MIN_PROTOCOL_VERSION = 1
+        //   MAX_PROTOCOL_VERSION = PROTOCOL_VERSION
+        //
+        // protocol_info_serde_pins_four_required_fields pins the
+        // ProtocolInfo wire form but does not pin the literal values
+        // or the cross-constant alias and ordering invariants. A
+        // refactor that changed PROTOCOL_NAME would silently fail
+        // every CLI's negotiation handshake; a refactor that
+        // decoupled MAX_PROTOCOL_VERSION from PROTOCOL_VERSION (e.g.,
+        // MAX = PROTOCOL_VERSION + 1 to reserve the next slot) would
+        // let an in-development version > max_supported decode as
+        // valid before any daemon implements it; a refactor that
+        // lowered MIN_PROTOCOL_VERSION below 1 (e.g., to 0) would
+        // let an unversioned client decode as version-0 and skip the
+        // negotiation gate.
+
+        assert_eq!(
+            PROTOCOL_NAME, "covenant.ipc",
+            "PROTOCOL_NAME must remain 'covenant.ipc' — pins the \
+             literal name compared by every CLI negotiation \
+             handshake. A refactor that rebranded this to anything \
+             else under a 'rename the protocol surface' rationale \
+             would silently fail every existing CLI's connection \
+             with 'protocol mismatch' and no clear cause",
+        );
+
+        assert_eq!(
+            PROTOCOL_VERSION, 1,
+            "PROTOCOL_VERSION must remain 1 — pins the v1 wire \
+             contract that every existing fixture replay test \
+             depends on. A version bump to 2 must be a deliberate, \
+             audited change that updates the v1 fixture pins and \
+             ProtocolInfo consumers in the same PR; an unaudited bump \
+             would silently break v1 fixture replay against a daemon \
+             that no longer advertises v1 as the current",
+        );
+
+        assert_eq!(
+            MIN_PROTOCOL_VERSION, 1,
+            "MIN_PROTOCOL_VERSION must remain 1 — pins the negotiation \
+             floor. A refactor that lowered this to 0 under a 'be \
+             permissive about legacy clients' rationale would let an \
+             unversioned client decode as version-0 and skip the \
+             negotiation gate; the daemon would then serve a v0 \
+             client with a v1 wire form and produce silent parse \
+             errors on the client side",
+        );
+
+        assert_eq!(
+            MAX_PROTOCOL_VERSION, PROTOCOL_VERSION,
+            "MAX_PROTOCOL_VERSION must alias PROTOCOL_VERSION — pins \
+             the line-70 cross-constant invariant. A refactor that \
+             decoupled them (e.g., MAX_PROTOCOL_VERSION = \
+             PROTOCOL_VERSION + 1 to reserve the next version slot in \
+             development) would let an in-development version > \
+             max_supported decode as valid before any daemon \
+             implements it; consumers would then attempt to negotiate \
+             a version the daemon cannot serve",
+        );
+
+        assert!(
+            MIN_PROTOCOL_VERSION <= PROTOCOL_VERSION,
+            "well-ordering: MIN must be <= current PROTOCOL_VERSION. \
+             A refactor that introduced a separate min/current pair \
+             without preserving this invariant would let the daemon \
+             advertise a version that does not satisfy its own \
+             stated minimum",
+        );
+
+        assert!(
+            PROTOCOL_VERSION <= MAX_PROTOCOL_VERSION,
+            "well-ordering: current PROTOCOL_VERSION must be <= MAX. \
+             Currently MAX == PROTOCOL_VERSION (asserted above) so \
+             this is trivially satisfied, but the assertion anchors \
+             the invariant for any future refactor that decouples \
+             the two — a daemon advertising version > max_supported \
+             is a self-contradictory handshake",
+        );
+    }
+
+    #[test]
     fn default_recent_limit_and_default_verify_window_pin_documented_values() {
         // covenant_ipc::default_recent_limit (line 364-366) and
         // default_verify_window (line 368-370) are the foundation

@@ -833,6 +833,128 @@ mod tests {
         assert!(matches!(mapped, McpClientError::Closed));
     }
 
+    #[test]
+    fn from_jsonrpc_error_for_mcp_client_error_pins_closed_vs_rpc_boundary_arms() {
+        // covenant_mcp::transport::From<JsonRpcError> for McpClientError
+        // (line 93-103) routes a JSON-RPC error envelope into the
+        // McpClient error enum. Two arms with one load-bearing
+        // conjunction:
+        //
+        //   (1) e.code == TRANSPORT_CLOSED_CODE (-32099) AND
+        //       e.message == TRANSPORT_CLOSED_MESSAGE ("transport closed")
+        //       → McpClientError::Closed
+        //   (2) otherwise → McpClientError::Rpc { code, message }
+        //
+        // The AND-not-OR conjunction shapes connection-recovery logic:
+        // Closed routes to reconnection while Rpc surfaces as a
+        // client-visible error.
+        //
+        // transport_closed_error_maps_to_closed (line 825) pins arm 1
+        // exactly but leaves the conjunction boundary (code matches but
+        // message doesn't, or vice versa), the generic Rpc arm, and
+        // the field-preservation contract on the Rpc arm all unpinned.
+        // A refactor that loosened the conjunction from AND to OR
+        // under the rationale 'defensive about partial sentinels'
+        // would silently classify any -32099-coded server error as a
+        // transport closure and trigger reconnection logic on
+        // unrelated errors.
+
+        // (1) Boundary: code matches sentinel but message doesn't →
+        // must map to Rpc with code preserved.
+        let code_only = JsonRpcError {
+            code: TRANSPORT_CLOSED_CODE,
+            message: "different message".to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = code_only.into();
+        match mapped {
+            McpClientError::Rpc { code, message } => {
+                assert_eq!(
+                    code, TRANSPORT_CLOSED_CODE,
+                    "Rpc arm must preserve the original code verbatim — a refactor that wrapped code into a generic combined String during a 'simplify' pass would silently strip the protocol-specific error class, breaking downstream client code that reads code for -32601/-32602/etc. mapping",
+                );
+                assert_eq!(
+                    message, "different message",
+                    "Rpc arm must preserve the original message verbatim — the message is the operator-visible diagnostic surface and any rewrite would mask the original error category",
+                );
+            }
+            other => panic!(
+                "code-only sentinel match must route to Rpc, not Closed — a refactor that loosened the AND conjunction to OR on the code side would silently route every -32099-coded server error to Closed even when the message is an in-band rpc-specific error string; got: {other:?}",
+            ),
+        }
+
+        // (2) Boundary: message matches sentinel but code doesn't →
+        // must map to Rpc with code preserved.
+        let message_only = JsonRpcError {
+            code: -32601,
+            message: TRANSPORT_CLOSED_MESSAGE.to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = message_only.into();
+        match mapped {
+            McpClientError::Rpc { code, message } => {
+                assert_eq!(
+                    code, -32601,
+                    "Rpc arm must preserve the original code verbatim on the message-only boundary",
+                );
+                assert_eq!(message, TRANSPORT_CLOSED_MESSAGE);
+            }
+            other => panic!(
+                "message-only sentinel match must route to Rpc, not Closed — a refactor that loosened the AND conjunction to OR on the message side would silently route every 'transport closed' message string to Closed even when the code is a protocol-specific rpc error code; got: {other:?}",
+            ),
+        }
+
+        // (3) Generic non-sentinel error → must map to Rpc with both
+        // fields preserved verbatim. Pins the Rpc arm's field
+        // round-trip contract that downstream client code joins on
+        // for protocol-specific error classification.
+        let generic = JsonRpcError {
+            code: -32601,
+            message: "method not found".to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = generic.into();
+        match mapped {
+            McpClientError::Rpc { code, message } => {
+                assert_eq!(code, -32601);
+                assert_eq!(message, "method not found");
+            }
+            other => panic!("generic non-sentinel must route to Rpc; got: {other:?}"),
+        }
+
+        // (4) data field must be dropped in both arms — the McpClient
+        // error enum carries only code and message; e.data is
+        // intentionally absent from both McpClientError::Closed (no
+        // fields) and McpClientError::Rpc (only code and message).
+        // Pin this on a sentinel-match payload with a non-empty data
+        // field so the contract is observable.
+        let closed_with_data = JsonRpcError {
+            code: TRANSPORT_CLOSED_CODE,
+            message: TRANSPORT_CLOSED_MESSAGE.to_string(),
+            data: Some(serde_json::json!({"hint": "reconnect"})),
+        };
+        assert!(
+            matches!(closed_with_data.into(), McpClientError::Closed),
+            "sentinel-match with a non-empty data field must still route to Closed — data is intentionally absent from the McpClient enum; a refactor that gated the Closed arm on data.is_none() would silently break the contract for servers that emit closure breadcrumbs in data",
+        );
+
+        let rpc_with_data = JsonRpcError {
+            code: -32602,
+            message: "invalid params".to_string(),
+            data: Some(serde_json::json!({"field": "x"})),
+        };
+        let mapped: McpClientError = rpc_with_data.into();
+        match mapped {
+            McpClientError::Rpc { code, message } => {
+                assert_eq!(code, -32602);
+                assert_eq!(message, "invalid params");
+            }
+            other => panic!(
+                "non-sentinel error with data must route to Rpc and drop data; got: {other:?}"
+            ),
+        }
+    }
+
     #[tokio::test]
     async fn mock_client_dispatches_request_to_handler() {
         let c = MockMcpClient::new(|method, params| {

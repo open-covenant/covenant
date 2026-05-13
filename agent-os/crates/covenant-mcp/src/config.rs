@@ -558,4 +558,26 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
             "covenant_mcp::config::ConfigError::Io source() must downcast_ref to std::io::Error so daemon-side MCP config-load classifiers can extract io::ErrorKind for distinct decisions on mcp.toml disk faults; a refactor that wrapped the inner in a project-local newtype (e.g., McpConfigIoError(std::io::Error) under a 'tag MCP config IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies mcp.toml-load IO faults (concrete-source-type downcast regression class)"
         );
     }
+
+    #[test]
+    fn config_error_toml_source_delegation_pin_returns_inner_toml_de_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = toml::from_str::<toml::Value>("not valid toml = =")
+            .expect_err("toml parse must fail");
+        let expected_display = format!("{inner}");
+        let err = ConfigError::Toml(inner);
+        let source = err.source().expect(
+            "covenant_mcp::config::ConfigError::Toml must surface the inner toml::de::Error via std::error::Error::source so daemon-side mcp.toml diagnostics can walk the error chain and downcast source() to toml::de::Error to inspect span information for line/column-anchored operator hints (span points the operator at the offending mcp.toml region, message describes the parse expectation); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_mcp::config::ConfigError::Toml source() Display must match a direct format!() of the same toml::de::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<toml::de::Error>().is_some(),
+            "covenant_mcp::config::ConfigError::Toml source() must downcast_ref to toml::de::Error so daemon-side mcp.toml diagnostics can call toml::de::Error::span/message for line/column-anchored operator hints; a refactor that wrapped the inner in a project-local newtype (e.g., McpConfigParseError(toml::de::Error) under a 'consolidate all TOML errors into a single Config variant' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies mcp.toml syntax faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

@@ -140,6 +140,103 @@ args = []
     }
 
     #[test]
+    fn mcp_config_file_serde_pins_optional_mcp_section_default() {
+        // McpConfigFile is the top-level secrets.toml decoder for the
+        // [mcp] section. The struct carries a single field — mcp:
+        // Option<McpSection> — with field-level #[serde(default)] and a
+        // derived Default impl. McpConfigFile::from_path returns
+        // Self::default() when the file is missing, and
+        // McpConfigFile::servers() treats mcp.is_none() as the empty-
+        // slice fall-through.
+        //
+        // Mirror of the wrapper-pin contract pinned for ProviderConfig
+        // (covenant-llm), EmbedderConfig (covenant-llm), and
+        // SearchConfig (covenant-tools). No test pins the wrapper's
+        // field name, the None default on an empty TOML payload, or
+        // the parse contract when [mcp] is omitted but other root
+        // sections exist. A refactor that renamed McpConfigFile::mcp
+        // silently makes every operator's secrets.toml decode into
+        // McpConfigFile::default(), servers() returns an empty slice
+        // with no parse signal, and configured MCP tool servers
+        // silently disappear on next daemon restart — agents lose
+        // every registered external tool.
+        let empty: McpConfigFile = toml::from_str("").unwrap();
+        assert!(
+            empty.mcp.is_none(),
+            "McpConfigFile must decode an empty TOML payload as \
+             McpConfigFile::default() with mcp == None — \
+             McpConfigFile::from_path relies on this path for missing \
+             secrets.toml, and McpConfigFile::servers() relies on \
+             mcp.is_none() to return the empty slice",
+        );
+        assert!(
+            empty.servers().is_empty(),
+            "McpConfigFile::servers() on the empty-TOML decode must \
+             return the empty slice",
+        );
+
+        // No [mcp] section but other unknown root keys present —
+        // operators co-locate [llm]/[embed]/[search] blocks in the same
+        // secrets.toml. The wrapper does not carry
+        // #[serde(deny_unknown_fields)] and unrelated sections must
+        // parse without rejecting the file.
+        let other_root = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk"
+
+[embed]
+provider = "ollama"
+"#;
+        let cfg: McpConfigFile = toml::from_str(other_root).unwrap();
+        assert!(
+            cfg.mcp.is_none(),
+            "McpConfigFile must tolerate unknown root sections without \
+             refusing to parse — operators co-locate [llm]/[embed]/\
+             [search] blocks in the same secrets.toml and a refactor \
+             that added #[serde(deny_unknown_fields)] would break \
+             every co-resident secrets.toml at daemon start",
+        );
+        assert!(cfg.servers().is_empty());
+
+        // [[mcp.server]] populated — wrapper round-trips into the
+        // McpSection. Pin Some(McpSection) presence and a populated
+        // server list so a refactor that broke the wrapper's
+        // deserialization path would fail this assertion rather than
+        // landing on a misleading inner-field error.
+        let full = r#"
+[[mcp.server]]
+name = "filesystem"
+command = "npx"
+
+[[mcp.server]]
+name = "git"
+command = "node"
+"#;
+        let cfg: McpConfigFile = toml::from_str(full).unwrap();
+        assert!(
+            cfg.mcp.is_some(),
+            "McpConfigFile::mcp must surface as Some(McpSection) when \
+             [[mcp.server]] entries exist",
+        );
+        assert_eq!(cfg.servers().len(), 2);
+        assert_eq!(cfg.servers()[0].name, "filesystem");
+        assert_eq!(cfg.servers()[1].name, "git");
+
+        // McpConfigFile::default() must match the empty-TOML decode —
+        // pin this so a refactor that diverged the derived Default
+        // impl from the empty-TOML path would fail loud.
+        let default_cfg = McpConfigFile::default();
+        assert!(
+            default_cfg.mcp.is_none(),
+            "McpConfigFile::default() must have mcp == None to match \
+             the empty-TOML decode path that McpConfigFile::from_path \
+             relies on for missing secrets.toml",
+        );
+        assert!(default_cfg.servers().is_empty());
+    }
+
+    #[test]
     fn mcp_server_serde_pins_two_required_and_six_default_bearing_fields() {
         // McpServer is the [[mcp.server]] block operators write to
         // secrets.toml to register an external MCP tool server. Two

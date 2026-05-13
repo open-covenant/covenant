@@ -504,6 +504,90 @@ mod tests {
     }
 
     #[test]
+    fn build_receipt_batch_pins_batch_id_domain_separator_prefix() {
+        // covenant_settlement::build_receipt_batch (line 91) derives
+        // batch_id with:
+        //
+        //   hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into())
+        //
+        // The literal prefix 'covenant-receipts:' is a domain
+        // separator — it isolates the batch_id hash from the
+        // merkle_root hash (also a sha256 product) so an attacker
+        // cannot pre-compute one from the other under a length-
+        // extension or hash-collision attack on the same input
+        // domain. The prefix appears exactly ONCE in the crate (line
+        // 91) and no test references it.
+        //
+        // receipt_batch_uses_only_unsettled_receipts (line 482) pins
+        // 'batch.batch_id.len() == 64' (length, not content);
+        // receipt_batch_root_changes_with_memory_record_id (line 496)
+        // pins merkle_root inequality but not batch_id. A refactor
+        // that dropped the prefix, renamed to underscore form, or
+        // swapped the ':' separator for '/' would silently shift
+        // every batch_id and break on-chain anchoring against
+        // historical batches without parse-time signal.
+
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+        let mut c = receipt(3);
+        c.id = Uuid::from_u128(0xc);
+
+        let batch = build_receipt_batch(&[a.clone(), b.clone(), c.clone()]).expect(
+            "fixture batch must build — used as the input whose \
+             batch_id is checked against the manually computed \
+             'covenant-receipts:'||merkle_root sha256",
+        );
+
+        let expected =
+            hex32(Sha256::digest(format!("covenant-receipts:{}", batch.merkle_root)).into());
+        assert_eq!(
+            batch.batch_id, expected,
+            "batch.batch_id must equal hex32(sha256('covenant-receipts:'||merkle_root)) \
+             verbatim — anchors the literal domain-separator prefix. \
+             A refactor that dropped the prefix, renamed it (e.g., \
+             'covenant_receipts:' with underscore), or swapped the \
+             ':' separator for '/' would silently shift every \
+             batch_id and break on-chain anchoring against historical \
+             batches",
+        );
+
+        // Second batch with different receipts produces a different
+        // merkle_root; the prefix is constant across that, so the
+        // recomputation under the same prefix must still match. This
+        // anchors that the prefix is not accidentally tied to a
+        // specific merkle_root value.
+        let mut d = receipt(4);
+        d.id = Uuid::from_u128(0xd);
+        let mut e = receipt(5);
+        e.id = Uuid::from_u128(0xe);
+        let batch2 = build_receipt_batch(&[d, e]).expect("second batch must build");
+        assert_ne!(
+            batch.merkle_root, batch2.merkle_root,
+            "the two batches must have different merkle_roots — \
+             otherwise the test below trivially passes on identical \
+             inputs and does not anchor the prefix constancy",
+        );
+
+        let expected2 =
+            hex32(Sha256::digest(format!("covenant-receipts:{}", batch2.merkle_root)).into());
+        assert_eq!(
+            batch2.batch_id, expected2,
+            "the second batch_id must also equal hex32(sha256('covenant-receipts:'||merkle_root)) \
+             — anchors that the prefix is reused across different \
+             merkle_root inputs rather than being tied to a specific \
+             root value",
+        );
+        assert_ne!(
+            batch.batch_id, batch2.batch_id,
+            "the two batch_ids must differ because the underlying \
+             merkle_root differs — sanity check on the test \
+             distinctness",
+        );
+    }
+
+    #[test]
     fn build_receipt_batch_pins_odd_leaf_count_duplicates_last_leaf_convention() {
         // covenant_settlement::build_receipt_batch (line 63-98) computes
         // the Merkle root of all unsettled receipts in a batch. Line 81

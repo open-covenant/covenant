@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SiteFooter } from "../SiteFooter";
 import { Sidebar } from "./Sidebar";
 
 export const metadata: Metadata = {
@@ -27,17 +28,7 @@ export default function DocsLayout({
             {children}
           </article>
 
-          <footer className="mx-auto mt-24 flex max-w-[760px] items-center justify-between border-t border-neutral-800/80 pt-6 text-[11px] uppercase tracking-widest text-neutral-500">
-            <span>Apache 2.0 · open-covenant/covenant</span>
-            <a
-              href="https://github.com/open-covenant/covenant"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-neutral-200"
-            >
-              github ↗
-            </a>
-          </footer>
+          <SiteFooter className="mx-auto mt-24 max-w-[760px] border-t border-neutral-800/80 pt-6" />
         </main>
       </div>
     </div>

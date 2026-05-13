@@ -1,9 +1,13 @@
-// Brand constants and inline icons. Centralised so / and /roadmap (and
-// any future top-level page) share the same nav, X handle, and GitHub
-// repo without copy-paste drift.
+// Brand constants and inline icons. Centralised so /, /roadmap, /docs/*
+// (and any future top-level page) share the same nav, X handle, GitHub
+// repo, release date, and tagline without copy-paste drift.
 
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
+export const REPO_SLUG = "open-covenant/covenant";
+export const LICENSE = "Apache 2.0";
+export const TAGLINE = "Open infrastructure for agent-native computing";
+export const RELEASE_DATE = "ALPHA TARGET: 18.05.2026";
 
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },

@@ -2,9 +2,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { HeroMesh } from "./HeroMesh";
 import { MobileMenu } from "./MobileMenu";
+import { SiteFooter } from "./SiteFooter";
 import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "./_brand";
-
-const RELEASE_DATE = "ALPHA TARGET: 18.05.2026";
 
 export default function Page() {
   return (
@@ -90,19 +89,10 @@ export default function Page() {
         Try the sandbox →
       </a>
 
-      <footer
-        className="absolute inset-x-0 z-20 flex items-center justify-center gap-2.5 px-4 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]"
+      <SiteFooter
+        className="absolute inset-x-0 z-20"
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
-      >
-        <Image
-          src="/logomark.svg"
-          alt="covenant"
-          width={30}
-          height={15}
-          className="h-auto w-[30px] opacity-70"
-        />
-        <span>Covenant  ·  Open infrastructure for agent-native computing  ·  {RELEASE_DATE.toLowerCase()}</span>
-      </footer>
+      />
     </main>
   );
 }

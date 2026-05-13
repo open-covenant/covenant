@@ -781,6 +781,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_store_put_replaces_record_with_same_id() {
+        // covenant_memory::InMemoryStore::put (line 353-361) runs
+        // g.retain(|r| r.id != record.id) before g.push(record), making
+        // put behave as an upsert keyed by record.id — a second put
+        // with the same id REPLACES the previous record rather than
+        // appending a duplicate. Downstream callers (memory.update,
+        // memory.repair, the compaction planner) rely on id being a
+        // primary key.
+        //
+        // in_memory_put_get_recent_delete (next test) puts two
+        // DIFFERENT ids and does not exercise the upsert path. A
+        // refactor that dropped the retain line during a 'simplify by
+        // removing the duplicate-check' pass would silently let two
+        // records with the same id coexist; get() would return one
+        // non-deterministically; recent() and all() would surface
+        // both copies; the memory.repair and compaction planners
+        // would see phantom duplicates.
+        let s = InMemoryStore::new();
+        let id = Uuid::new_v4();
+
+        s.put(record(id, MemoryTier::Working, "first", 1))
+            .await
+            .unwrap();
+        s.put(record(id, MemoryTier::Working, "second", 2))
+            .await
+            .unwrap();
+
+        let got = s
+            .get(id)
+            .await
+            .unwrap()
+            .expect("upserted record must be retrievable by id");
+        assert_eq!(
+            got.text, "second",
+            "InMemoryStore::put must REPLACE the previous record when called \
+             with the same id — a refactor that dropped the retain line under \
+             the rationale that 'callers handle deduplication explicitly' \
+             would silently let the first record survive and get(id) would \
+             return one of the two non-deterministically; pinning the \
+             second-write-wins contract anchors the v0 upsert semantics",
+        );
+        assert_eq!(
+            got.created_at, 2,
+            "the replacement record's fields must overwrite the previous record \
+             verbatim — a refactor that merged fields from the previous record \
+             would silently surface partial state on every memory.update flow",
+        );
+
+        let all = s.all().await.unwrap();
+        assert_eq!(
+            all.len(),
+            1,
+            "InMemoryStore::all() must return exactly one record after two puts \
+             with the same id — a refactor that dropped the retain line would \
+             surface BOTH records here, breaking the primary-key contract that \
+             every MemoryStore caller depends on",
+        );
+        assert_eq!(
+            all[0].text, "second",
+            "the single surviving record in all() must be the second (most \
+             recent) write — pinning second-write-wins identically to get()",
+        );
+
+        let recent = s.recent(None, 10).await.unwrap();
+        assert_eq!(
+            recent.len(),
+            1,
+            "InMemoryStore::recent(None, 10) must return exactly one record \
+             — the upsert contract must propagate to recent() identically to \
+             all(); a refactor that diverged the two views would silently \
+             surface duplicate rows on operator dashboards while keeping \
+             get() consistent",
+        );
+        assert_eq!(recent[0].text, "second");
+    }
+
+    #[tokio::test]
     async fn in_memory_put_get_recent_delete() {
         let s = InMemoryStore::new();
         let id1 = Uuid::new_v4();

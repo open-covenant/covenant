@@ -853,6 +853,64 @@ mod tests {
     }
 
     #[test]
+    fn parse_tier_pins_canonical_tier_mapping_and_silent_catch_all_to_long_term() {
+        // SqliteStore::parse_tier is the reverse of SqliteStore::tier_str
+        // and is called from row_to_record on every memory record read.
+        // The forward mapping (tier_str) is exercised indirectly through
+        // every list_records/get_record round-trip test (sqlite_roundtrip,
+        // sqlite_recent_orders_by_created_at_desc), but parse_tier has no
+        // direct test pinning the three arms ('working' -> Working,
+        // 'episodic' -> Episodic, _ catch-all -> LongTerm). Pin each arm
+        // so a slug rename in tier_str-without-parse_tier (or vice versa)
+        // or a tightening of the catch-all to a strict match is caught
+        // at the parse_tier call site, distinct from the helper-internal
+        // round-trip tests.
+        assert_eq!(
+            SqliteStore::parse_tier("working"),
+            MemoryTier::Working,
+            "working arm: SqliteStore::tier_str(Working) emits 'working' \
+             so parse_tier must invert it; a slug rename in either \
+             direction without a matching update would silently route \
+             every Working record through the catch-all to LongTerm \
+             at SQLite read time"
+        );
+        assert_eq!(
+            SqliteStore::parse_tier("episodic"),
+            MemoryTier::Episodic,
+            "episodic arm: SqliteStore::tier_str(Episodic) emits \
+             'episodic' so parse_tier must invert it; a slug rename in \
+             either direction without a matching update would silently \
+             route every Episodic record through the catch-all to \
+             LongTerm at SQLite read time, breaking episodic-tier \
+             scoped reads and dashboards"
+        );
+        assert_eq!(
+            SqliteStore::parse_tier("longterm"),
+            MemoryTier::LongTerm,
+            "catch-all arm via canonical sibling: SqliteStore::tier_str \
+             (LongTerm) emits 'longterm' which is intentionally NOT an \
+             explicit match arm in parse_tier and routes through the \
+             underscore catch-all to LongTerm; a refactor that promoted \
+             'longterm' to an explicit arm would change the contract \
+             that documents the catch-all as the LongTerm route — \
+             future migrations relying on the catch-all to coerce \
+             unknown labels would silently regress"
+        );
+        assert_eq!(
+            SqliteStore::parse_tier("unknown-tier-from-future-migration"),
+            MemoryTier::LongTerm,
+            "catch-all arm via non-canonical value: any tier_s value not \
+             matching 'working' or 'episodic' must coerce to LongTerm \
+             so a manually-edited SQLite row, a mid-migration state, or \
+             a daemon downgrade reading a future tier label gracefully \
+             degrades to LongTerm; a refactor that tightened the \
+             catch-all to a panic or error would turn a graceful read \
+             path into a hard failure that takes down list_records and \
+             get_record for the entire SqliteStore"
+        );
+    }
+
+    #[test]
     fn validate_repair_request_pins_reason_and_backfill_provenance_arms() {
         let id = Uuid::new_v4();
         let detach = || MemoryRepairCommand::DetachParent {

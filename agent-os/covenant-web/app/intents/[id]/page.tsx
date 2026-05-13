@@ -92,12 +92,12 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
 
       {isLoading ? (
         <div className="panel">
-          <p className="empty">Loading the task's steps…</p>
+          <p className="empty">Loading the task&apos;s steps…</p>
         </div>
       ) : trace.length === 0 ? (
         <div className="panel">
           <p className="empty">
-            Can't find this task in the local log. It may be older than what's cached on this machine.
+            Can&apos;t find this task in the local log. It may be older than what&apos;s cached on this machine.
           </p>
         </div>
       ) : (

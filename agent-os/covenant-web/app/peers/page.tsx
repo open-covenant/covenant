@@ -95,7 +95,7 @@ export default function AgentsPage() {
       {rotatedToken && (
         <article className="token-card">
           <p className="eyebrow">your new sign-in key</p>
-          <p className="hint">Save this somewhere safe — you'll need it to connect from another shell or device.</p>
+          <p className="hint">Save this somewhere safe — you&apos;ll need it to connect from another shell or device.</p>
           <input readOnly value={rotatedToken} onFocus={(e) => e.currentTarget.select()} />
           <div className="actions">
             <button

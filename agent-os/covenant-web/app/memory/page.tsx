@@ -58,7 +58,7 @@ export default function MemoryPage() {
         <article className="metric">
           <span className="eyebrow">{memoryTierLabel("working").toLowerCase()}</span>
           <span className="value">{counts.working}</span>
-          <span className="caption">currently on the agent's mind</span>
+          <span className="caption">currently on the agent&apos;s mind</span>
         </article>
         <article className="metric">
           <span className="eyebrow">{memoryTierLabel("episodic").toLowerCase()}</span>

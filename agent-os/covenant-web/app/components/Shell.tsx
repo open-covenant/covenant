@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
+import { useDeveloperMode } from "@/lib/developerMode";
 import { CommandPalette } from "./CommandPalette";
 
 const NAV: ReadonlyArray<{ href: string; label: string }> = [
@@ -24,6 +25,7 @@ function isActive(pathname: string, href: string): boolean {
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
+  const [devMode, setDevMode] = useDeveloperMode();
 
   return (
     <div className="shell">
@@ -67,6 +69,15 @@ export function Shell({ children }: { children: ReactNode }) {
               <dd>tasks</dd>
             </div>
           </dl>
+          <button
+            type="button"
+            className={devMode ? "dev-toggle on" : "dev-toggle"}
+            onClick={() => setDevMode(!devMode)}
+            aria-pressed={devMode}
+          >
+            <span className="dev-dot" aria-hidden />
+            Developer mode
+          </button>
           <p className="hint">running on this machine</p>
         </div>
       </aside>
@@ -218,6 +229,43 @@ export function Shell({ children }: { children: ReactNode }) {
           font-family: var(--font-mono);
           font-size: 10px;
           letter-spacing: 0.08em;
+        }
+
+        .dev-toggle {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 0;
+          margin-top: 6px;
+          background: transparent;
+          border: 0;
+          color: var(--dim);
+          font-family: inherit;
+          font-size: 11.5px;
+          cursor: pointer;
+          transition: color 120ms ease;
+        }
+
+        .dev-toggle:hover {
+          color: var(--fg);
+        }
+
+        .dev-toggle .dev-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: transparent;
+          transition: background 120ms ease, border-color 120ms ease;
+        }
+
+        .dev-toggle.on .dev-dot {
+          background: var(--fg);
+          border-color: var(--fg);
+        }
+
+        .dev-toggle.on {
+          color: var(--fg);
         }
 
         @media (max-width: 900px) {

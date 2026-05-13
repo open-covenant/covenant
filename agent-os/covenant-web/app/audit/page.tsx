@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useDeveloperMode } from "@/lib/developerMode";
 import { formatDateTime, formatTimestamp, shortHash, shortPubkey } from "@/lib/format";
 import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
@@ -14,6 +15,7 @@ async function loadAudit() {
 
 export default function ActivityLogPage() {
   const { data, error, lastSyncMs } = usePoll(loadAudit, 3000);
+  const [devMode] = useDeveloperMode();
   const [filter, setFilter] = useState<string>("");
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{
@@ -134,6 +136,7 @@ export default function ActivityLogPage() {
                     <div className="ts">
                       {formatTimestamp(event.timestamp_ms)}
                       <em>{label.headline}</em>
+                      {devMode && <code className="dev-kind">{event.kind.type}</code>}
                     </div>
                     <div className="body">
                       <strong>{event.issuer.display}</strong>
@@ -377,6 +380,18 @@ export default function ActivityLogPage() {
         .record.selected {
           border-color: var(--fg);
           background: var(--panel-hover);
+        }
+
+        .dev-kind {
+          margin-left: 8px;
+          padding: 2px 6px;
+          border: 1px solid var(--border-soft);
+          border-radius: 4px;
+          background: var(--bg);
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.04em;
         }
       `}</style>
     </>

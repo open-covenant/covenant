@@ -163,7 +163,7 @@ export default function OverviewPage() {
             <div>
               <p className="eyebrow">recent activity</p>
               <h2>
-                What's been happening <span className="count">{recent.length}</span>
+                What&apos;s been happening <span className="count">{recent.length}</span>
               </h2>
             </div>
             <Link className="btn ghost" href="/audit">

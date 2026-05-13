@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
+import { useDeveloperMode } from "@/lib/developerMode";
 import {
   PEER_LOOKUP_LIMIT,
   expandA2aAction,
@@ -26,6 +27,7 @@ const SUGGESTIONS: Array<{ action: string; meta: PermissionMeta }> = [
 
 export default function PermissionsPage() {
   const { data, error, lastSyncMs, refresh } = usePoll(loadCapabilities, 4000);
+  const [devMode] = useDeveloperMode();
   const [action, setAction] = useState("");
   const [info, setInfo] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -158,6 +160,7 @@ export default function PermissionsPage() {
                     <div className="title-row">
                       <span className={`risk risk-${meta.risk}`}>{meta.risk}</span>
                       <strong>{meta.title}</strong>
+                      {devMode && <code className="dev-action">{cap.capability.action}</code>}
                     </div>
                     <p className="desc">{meta.description}</p>
                     <p className="meta-line">
@@ -352,6 +355,16 @@ export default function PermissionsPage() {
         .perm-sig {
           grid-column: 1 / -1;
           margin: 8px 0 0;
+        }
+
+        .dev-action {
+          padding: 2px 6px;
+          border: 1px solid var(--border-soft);
+          border-radius: 4px;
+          background: var(--bg);
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10.5px;
         }
 
         @media (max-width: 720px) {

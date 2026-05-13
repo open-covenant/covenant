@@ -744,6 +744,127 @@ entry = "./fake"
         assert!(r.sources.is_empty());
     }
 
+    #[tokio::test]
+    async fn mock_runner_run_pins_card_intent_independence_and_runtime_events_empty_default() {
+        // MockRunner::new (line 505-515) constructs an AgentResult with
+        // text=input, sources=empty Vec, runtime_events=empty Vec.
+        // MockRunner::run (line 518-522) clones this canned response on
+        // every call and intentionally ignores its _card and _intent
+        // arguments (the underscore prefix documents the intent).
+        //
+        // mock_runner_returns_canned_response covers text-pass-through
+        // and sources-empty for ONE card, ONE intent, ONE call. It
+        // does NOT cover the runtime_events default (a recently-added
+        // AgentResult field), card-independence, intent-independence,
+        // or the multi-call stability that test fixtures rely on.
+        // A refactor that began filtering by card.id would break every
+        // fixture that uses MockRunner as a stand-in across agents; a
+        // refactor that populated runtime_events with synthetic Hermes
+        // traces would leak fake audit rows into integration tests.
+        let dir = tempdir().unwrap();
+        let card_a = card_for(
+            r#"
+[agent]
+id = "alpha"
+name = "Alpha"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./alpha"
+"#,
+            dir.path().to_path_buf(),
+        );
+        let card_b = card_for(
+            r#"
+[agent]
+id = "beta"
+name = "Beta"
+version = "0.0.1"
+runtime = "python3"
+entry = "beta.py"
+
+[capabilities]
+required = ["tool.web_search"]
+"#,
+            dir.path().to_path_buf(),
+        );
+
+        let intent_a = Intent {
+            id: Uuid::new_v4(),
+            text: "first prompt".into(),
+            issuer: AgentId::new("user-a@local", [1u8; 32]),
+            issued_at: 1_000,
+            priority: covenant_types::Priority::Normal,
+            parent: None,
+        };
+        let intent_b = Intent {
+            id: Uuid::new_v4(),
+            text: "completely different prompt with different fields".into(),
+            issuer: AgentId::new("user-b@local", [2u8; 32]),
+            issued_at: 2_000,
+            priority: covenant_types::Priority::High,
+            parent: Some(Uuid::new_v4()),
+        };
+
+        let runner = MockRunner::new("canned response");
+
+        let result_card_a_intent_a = runner.run(&card_a, &intent_a).await.unwrap();
+        assert!(
+            result_card_a_intent_a.runtime_events.is_empty(),
+            "MockRunner::new must produce response.runtime_events as an \
+             empty Vec — a refactor that populated runtime_events with \
+             synthetic Hermes-style traces would silently leak fake \
+             audit rows into every integration test that folds \
+             runtime_events into the audit chain, eroding operator \
+             trust in the chain's accuracy; got runtime_events.len() = {}",
+            result_card_a_intent_a.runtime_events.len(),
+        );
+
+        let result_card_b_intent_a = runner.run(&card_b, &intent_a).await.unwrap();
+        assert_eq!(
+            result_card_a_intent_a, result_card_b_intent_a,
+            "two distinct AgentCards (alpha vs beta, different id, \
+             name, runtime, and capabilities) must yield byte-identical \
+             AgentResult — MockRunner's _card argument is intentionally \
+             ignored. A refactor that began filtering the canned \
+             response by card.id (e.g., to make MockRunner 'more \
+             realistic') would silently break every test fixture that \
+             uses MockRunner as a stand-in across multiple agents",
+        );
+
+        let result_card_a_intent_b = runner.run(&card_a, &intent_b).await.unwrap();
+        assert_eq!(
+            result_card_a_intent_a, result_card_a_intent_b,
+            "two distinct Intents (different id, text, issuer, \
+             issued_at, priority, parent) must yield byte-identical \
+             AgentResult — MockRunner's _intent argument is intentionally \
+             ignored. A refactor that began varying the response by \
+             intent.text would silently break the deterministic-stub \
+             contract that test fixtures depend on for cross-intent \
+             assertion stability",
+        );
+
+        let result_second_call = runner.run(&card_a, &intent_a).await.unwrap();
+        assert_eq!(
+            result_card_a_intent_a, result_second_call,
+            "two sequential calls on the same MockRunner with the same \
+             inputs must yield identical AgentResult — MockRunner \
+             clone()s self.response on every call (line 520). A \
+             refactor that swapped clone for take/replace under a \
+             'avoid the clone allocation' rationale would silently \
+             break every test fixture that calls .run twice and \
+             asserts the result is stable across calls; got \
+             first.text={:?} second.text={:?}",
+            result_card_a_intent_a.text, result_second_call.text,
+        );
+        assert_eq!(
+            result_second_call.text, "canned response",
+            "the second call's text must still be 'canned response' — \
+             cross-bind that the multi-call stability assertion above \
+             is not tautological (i.e., both calls returning a moved-out \
+             empty default would also assert equal)",
+        );
+    }
+
     /// Drop a tiny POSIX shell script into a tempdir, point the manifest at
     /// it, and run it through `SubprocessRunner`. Confirms the stdin/stdout
     /// JSON contract end-to-end with a real subprocess.

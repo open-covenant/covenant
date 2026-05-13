@@ -202,6 +202,69 @@ mod tests {
     }
 
     #[test]
+    fn verify_with_pubkey_rejects_tampered_signature_and_wrong_pubkey() {
+        // verify_with_pubkey (line 174-182) is the public verification
+        // entry point used by covenant_permissions::verify, audit-log
+        // integrity checks, and any future settlement-attestation
+        // flow. Three regression classes can break it: tampered
+        // message (already pinned by verify_rejects_tampered_message
+        // above), tampered signature (one bit flipped in a valid
+        // signature must still fail), and wrong pubkey (a signature
+        // produced by key A must fail to verify against key B's
+        // pubkey). This pin closes the second and third arms so the
+        // three-arm regression family is fully covered.
+        //
+        // A refactor that swapped vk.verify(message, signature) for a
+        // no-op success branch (e.g., during a debugging session)
+        // would pass the existing tampered-message pin because the
+        // no-op accepts everything. The tampered-signature arm
+        // catches that regression. A refactor that ignored the
+        // supplied pubkey and looked up a process-wide trust-store
+        // key would pass both tampered-message and tampered-signature
+        // pins; the wrong-pubkey arm catches that regression.
+        let alice = LocalIdentity::generate("alice@local");
+        let bob = LocalIdentity::generate("bob@local");
+        let message = b"covenant verification pin";
+
+        let sig = alice.sign(message);
+        verify_with_pubkey(alice.pubkey_bytes(), message, &sig).expect(
+            "happy path: a fresh signature must verify against the \
+             producing key's pubkey — pinning the baseline against \
+             which the tamper and wrong-pubkey arms diverge",
+        );
+
+        let mut sig_bytes = sig.to_bytes();
+        sig_bytes[32] ^= 0x01;
+        let tampered_sig = Signature::from_bytes(&sig_bytes);
+        assert!(
+            verify_with_pubkey(alice.pubkey_bytes(), message, &tampered_sig).is_err(),
+            "tampered signature must fail to verify: a refactor that \
+             swapped vk.verify(message, signature) for a no-op success \
+             branch (e.g., during a debugging session that got \
+             accidentally committed, or a short-circuit that bypassed \
+             the ed25519 verify call) would silently accept any \
+             signature against the original message + pubkey — \
+             pinning this arm catches the no-op regression that the \
+             existing tampered-message pin lets through (because a \
+             no-op also accepts tampered messages but the wrong-\
+             pubkey arm below catches the ignored-pubkey regression \
+             which the no-op also passes)",
+        );
+
+        assert!(
+            verify_with_pubkey(bob.pubkey_bytes(), message, &sig).is_err(),
+            "wrong-pubkey verification must fail: alice's signature \
+             must not verify against bob's pubkey — a refactor that \
+             ignored the supplied pubkey and looked up a process-\
+             wide trust-store key (or that accidentally used the \
+             signing-side cached pubkey) would let an attacker \
+             substitute their own granted_by pubkey on a capability \
+             and still pass verify, opening every authorization \
+             boundary",
+        );
+    }
+
+    #[test]
     fn load_or_create_persists_then_returns_same_pubkey() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("identity").join("local.key");

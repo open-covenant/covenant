@@ -2353,4 +2353,90 @@ mod tests {
             "error messages must not echo machine-local paths"
         );
     }
+
+    #[tokio::test]
+    async fn pause_checkpoint_pins_already_paused_and_not_found_rejection_branches() {
+        // JsonlPauseCheckpointStore enforces budget-pause accounting
+        // correctness via four BudgetCheckpointError rejection
+        // variants. Three are already pinned: AlreadyResumed
+        // (pause_checkpoint_records_resume_and_returns_state,
+        // pause_checkpoint_replays_resume_state_across_reopen,
+        // pause_checkpoint_replay_rejects_duplicate_claims) and
+        // InvalidCheckpoint (the InvalidCheckpoint-version tests near
+        // line 1550, plus
+        // pause_checkpoint_rejects_machine_local_resume_paths just
+        // above). Two rejection branches lacked direct test coverage
+        // until this pin:
+        //
+        // (1) AlreadyPaused at JsonlPauseCheckpointStore::save_pause
+        //     (line 482) when an intent_id already has a live (not
+        //     yet resumed) checkpoint. Prevents a daemon from
+        //     re-pausing an in-flight intent (e.g., because the
+        //     runtime mis-handled a state transition and emitted a
+        //     second pause) and silently overwriting the prior
+        //     tokens_remaining/requested_credits — budget accounting
+        //     would drift silently on the eventual resume.
+        //
+        // (2) NotFound at JsonlPauseCheckpointStore::claim_resume
+        //     (line 524) when claim_resume is called on an intent_id
+        //     that was never saved. Prevents an operator-typed
+        //     'covenant intents resume <wrong-uuid>' from surfacing a
+        //     misleading no-op success and prevents a daemon-bug
+        //     resume-for-unpaused-intent from silently succeeding
+        //     while the actual paused intent stays pending forever.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let store = JsonlPauseCheckpointStore::open(path).await.unwrap();
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(42);
+
+        let saved = checkpoint(&a, intent_id);
+        store.save_pause(saved.clone()).await.unwrap();
+
+        let err = store.save_pause(saved.clone()).await.unwrap_err();
+        match err {
+            BudgetCheckpointError::AlreadyPaused(id) => assert_eq!(
+                id, intent_id,
+                "AlreadyPaused must surface the conflicting intent_id \
+                 so the daemon and operator dashboards can correlate \
+                 the rejection back to the live checkpoint; a refactor \
+                 that returned AlreadyPaused with a different uuid (or \
+                 a Uuid::nil() placeholder) would silently break the \
+                 join between the rejection row and the live \
+                 checkpoint",
+            ),
+            other => panic!(
+                "duplicate save_pause for the same intent_id must \
+                 return Err(AlreadyPaused); a refactor that silently \
+                 overwrote the prior checkpoint would corrupt budget \
+                 accounting on the eventual resume; got {other:?}",
+            ),
+        }
+
+        let phantom_intent_id = Uuid::from_u128(99);
+        let err = store
+            .claim_resume(phantom_intent_id, &a, 5_000)
+            .await
+            .unwrap_err();
+        match err {
+            BudgetCheckpointError::NotFound(id) => assert_eq!(
+                id, phantom_intent_id,
+                "NotFound must surface the missing intent_id verbatim \
+                 so the operator can correlate the rejection back to \
+                 the command they typed; a refactor that returned \
+                 NotFound with a Uuid::nil() placeholder or substituted \
+                 a different uuid would break the operator's ability \
+                 to confirm 'this is the intent_id I asked about' \
+                 from the error alone",
+            ),
+            other => panic!(
+                "claim_resume on a never-saved intent_id must return \
+                 Err(NotFound); a refactor that fail-opened with a \
+                 synthetic checkpoint or returned Ok(()) on the \
+                 rationale that resuming an unknown intent is a no-op \
+                 would silently let the operator believe a phantom \
+                 resume succeeded; got {other:?}",
+            ),
+        }
+    }
 }

@@ -2447,6 +2447,105 @@ mod tests {
     }
 
     #[test]
+    fn ipc_error_display_messages_pin_three_remaining_variant_hints_and_paths() {
+        // IpcError (ipc.rs lines 32-51) has six variants. The existing
+        // ipc_error_daemon_not_running_message_includes_path_and_hint
+        // pins DaemonNotRunning; this pin covers the three remaining
+        // string-bearing variants whose #[error] format strings carry
+        // operator-facing recovery hints that the doc-comment at
+        // ipc.rs lines 22-30 explains but no test anchors. A thiserror
+        // format-string typo, a dropped hint, or a swapped field
+        // binding would all degrade operator diagnostics silently —
+        // each surfaces as the same generic Display string until an
+        // operator hits the error in production.
+        use crate::ipc::IpcError;
+        use std::io;
+        use std::path::PathBuf;
+
+        let err = IpcError::HomeNotSet;
+        let message = format!("{err}");
+        assert_eq!(
+            message, "HOME is not set; set $COVENANT_HOME or $HOME",
+            "HomeNotSet Display message must remain literal — the dual \
+             env-var hint is load-bearing because covenant_home() (ipc.rs \
+             line 189-195) tries COVENANT_HOME first then falls back to \
+             HOME, and an operator hitting this error needs both names \
+             surfaced verbatim. A typo that dropped the 'COVENANT_' \
+             prefix or that reordered the two env vars under a 'sort \
+             alphabetically' pass would silently send operators down the \
+             wrong recovery path"
+        );
+
+        let token_path = PathBuf::from("/tmp/covenant/peers/operator.token");
+        let err = IpcError::OperatorTokenEmpty {
+            path: token_path.clone(),
+        };
+        let message = format!("{err}");
+        assert!(
+            message.contains("/tmp/covenant/peers/operator.token"),
+            "OperatorTokenEmpty must surface the path: {message}"
+        );
+        assert!(
+            message.contains("empty"),
+            "OperatorTokenEmpty must call out the empty state — the \
+             variant exists specifically because a zero-byte token file \
+             is a corruption signal distinct from a missing or unreadable \
+             file: {message}"
+        );
+        assert!(
+            message.contains("rotate"),
+            "OperatorTokenEmpty must mention the 'rotate' recovery verb \
+             — the bootstrap recovery contract (rotate the token OR \
+             rebootstrap the daemon) lives only in this error string; \
+             a thiserror format rewrite that simplified to 'operator \
+             token is empty' under a 'less verbose error messages' pass \
+             would silently leave operators with no actionable hint: \
+             {message}"
+        );
+        assert!(
+            message.contains("rebootstrap"),
+            "OperatorTokenEmpty must also mention 'rebootstrap' — the \
+             alternative recovery path when rotation isn't possible \
+             (e.g., the daemon's identity key is also corrupted). Both \
+             verbs must remain because they branch to different \
+             recovery flows: {message}"
+        );
+
+        let err = IpcError::OperatorTokenRead {
+            path: token_path.clone(),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+        };
+        let message = format!("{err}");
+        assert!(
+            message.contains("/tmp/covenant/peers/operator.token"),
+            "OperatorTokenRead must surface the path in the path slot, \
+             not the source slot — a #[error] format swap that bound \
+             {{source}} to the path position would emit messages like \
+             'read operator token at denied: /tmp/...' instead of \
+             'read operator token at /tmp/...: denied', sending \
+             operators investigating filesystem state instead of the \
+             io::Error cause: {message}"
+        );
+        assert!(
+            message.contains("denied"),
+            "OperatorTokenRead must surface the wrapped io::Error \
+             message — the variant exists specifically to propagate \
+             the underlying cause (PermissionDenied, NotADirectory, \
+             InvalidData, etc.) to the operator with path context. A \
+             format-string refactor that dropped the {{source}} slot \
+             under a 'paths are enough context' pass would silently \
+             strip the io::Error reason: {message}"
+        );
+        assert!(
+            message.contains("read operator token"),
+            "OperatorTokenRead must keep the 'read operator token' \
+             prefix — distinguishes this variant from the other \
+             token-related variants (OperatorTokenEmpty) in operator \
+             dashboards that group errors by message prefix: {message}"
+        );
+    }
+
+    #[test]
     fn mode_name_is_kebab_case_and_nonempty_for_every_variant() {
         use covenant_types::AgentId;
         // Constructing every variant locally guarantees a compile error

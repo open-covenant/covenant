@@ -2192,4 +2192,27 @@ cpu_ms_per_task = 5000
             "covenant_runtime::RunnerError::Io source() must downcast_ref to std::io::Error so daemon-side runtime retry-policy classifiers can extract io::ErrorKind for retry decisions on subprocess IO; a refactor that wrapped the inner in a project-local newtype (e.g., RunnerIoError(std::io::Error) under a 'tag runner subprocess IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies subprocess IO faults (concrete-source-type downcast regression class)"
         );
     }
+
+    #[test]
+    fn runner_error_serde_source_delegation_pin_returns_inner_serde_json_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+
+        let inner = serde_json::from_str::<serde_json::Value>("not json")
+            .expect_err("parse must fail");
+        let expected_display = format!("{inner}");
+        let err = RunnerError::Serde(inner);
+        let source = err.source().expect(
+            "covenant_runtime::RunnerError::Serde must surface the inner serde_json::Error via std::error::Error::source so daemon-side runtime diagnostics can walk the error chain and downcast source() to serde_json::Error to inspect line/column or classify() for generic JSON-parse-failure triage on the non-AgentResult-stdout JSON paths (manifest fragments, subprocess control messages, dispatcher state); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class). RunnerError::MalformedStdout has its own #[source]-attributed serde_json::Error for the AgentResult-stdout parse path; this pin is for the sibling generic-JSON-parse variant",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_runtime::RunnerError::Serde source() Display must match a direct format!() of the same serde_json::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "covenant_runtime::RunnerError::Serde source() must downcast_ref to serde_json::Error so daemon-side runtime diagnostics can call serde_json::Error::line/column/classify for generic JSON-parse-fault triage; a refactor that wrapped the inner in a project-local newtype (e.g., RunnerSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant or merge with MalformedStdout' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies generic runtime JSON-parse faults AND would blur the AgentResult-stdout vs generic-JSON-parse discriminator pinned in runner_error_malformed_stdout_source_delegation_pin (concrete-source-type downcast regression class)"
+        );
+    }
 }

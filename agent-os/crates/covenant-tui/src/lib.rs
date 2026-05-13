@@ -2598,6 +2598,31 @@ mod tests {
     }
 
     #[test]
+    fn ipc_error_wire_source_delegation_pin_returns_inner_io_error_via_std_error_source() {
+        use crate::ipc::IpcError;
+        use std::error::Error;
+        use std::io;
+
+        let inner = io::Error::new(io::ErrorKind::BrokenPipe, "daemon socket closed mid-frame");
+        let expected_display = format!("{inner}");
+        let err = IpcError::Wire(inner);
+        let source = err.source().expect(
+            "covenant_tui::ipc::IpcError::Wire must surface the inner std::io::Error via std::error::Error::source so TUI-side retry-policy classifiers and anyhow chain printers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct recovery flows on the TUI<->daemon socket dialogue (BrokenPipe escalates to operator-attention with a 'daemon mid-rotation or crashed' hint, ConnectionReset suggests reconnecting on the next render tick, Interrupted retries immediately, PermissionDenied escalates as security-sensitive); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_tui::ipc::IpcError::Wire source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break TUI-side downcasts to std::io::Error used by the sibling map_socket_error classifier and the renderer's incident-triage path even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::BrokenPipe),
+            "covenant_tui::ipc::IpcError::Wire source() must downcast_ref to std::io::Error so TUI-side classifiers can extract io::ErrorKind for retry decisions on the TUI<->daemon socket (the sibling map_socket_error already pattern-matches on err.kind() before constructing IpcError::Wire; downstream chain walkers must be able to recover the same ErrorKind after wrapping); a refactor that wrapped the inner in a project-local newtype (e.g., TuiWireError(std::io::Error) under a 'tag TUI IO failures distinctly from sibling Wire variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies TUI wire IO faults including the map_socket_error pattern (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[test]
     fn ipc_error_wire_and_frame_and_other_display_messages_pin_prefix_and_external_source_display_delegation(
     ) {
         use crate::ipc::IpcError;

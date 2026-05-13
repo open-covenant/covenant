@@ -1842,4 +1842,117 @@ cpu_ms_per_task = 5000
             other => panic!("expected WrongRuntime, got {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn non_hermes_runners_reject_hermes_runtime_with_wrong_runtime_field_pins() {
+        // covenant_runtime documents two loud-fail safety nets at lib.rs
+        // lines 180-189 (SubprocessRunner::run) and lines 298-304
+        // (GvisorRunner::args_for). Both surfaces emit the SAME
+        // RunnerError::WrongRuntime shape for RuntimeKind::Hermes:
+        //
+        //   expected = "python3|node|rust-bin"
+        //   got      = "hermes"
+        //   agent    = card.id.clone()
+        //
+        // The doc comment on the SubprocessRunner arm reads: "Routed via
+        // CompositeRunner under normal operation. If SubprocessRunner is
+        // reached for a Hermes agent the wiring is broken — fail loud
+        // rather than silently." GvisorRunner::args_for carries the
+        // symmetric semantic for the gVisor sandbox dispatch path.
+        //
+        // Existing coverage pins the OPPOSITE direction
+        // (HermesRunner rejecting non-Hermes via WrongRuntime; see
+        // hermes_runner_rejects_non_hermes_runtime line 1822) and the
+        // happy-path arms of args_for (RustBin/Python3/Node at
+        // gvisor_args_for_pins_each_runtime_kind_interpreter_prefix
+        // line 1628 — the Hermes arm is explicitly skipped). The two
+        // non-Hermes-rejects-Hermes paths have no direct test, so a
+        // refactor that removed the early WrongRuntime branch under a
+        // 'composite already routes correctly, this is dead code'
+        // rationale would silently mute the loud-fail safety net.
+        let dir = tempdir().unwrap();
+        let card = card_for(&hermes_manifest(), dir.path().to_path_buf());
+
+        let runner = SubprocessRunner;
+        let err = runner.run(&card, &dummy_intent()).await.unwrap_err();
+        match err {
+            RunnerError::WrongRuntime {
+                agent,
+                expected,
+                got,
+            } => {
+                assert_eq!(
+                    agent, "hermes-research",
+                    "SubprocessRunner.run must populate agent with \
+                     card.id verbatim — a refactor that hard-coded a \
+                     constant agent name for diagnostics would silently \
+                     conflate WrongRuntime errors from different \
+                     misconfigured manifests in operator dashboards",
+                );
+                assert_eq!(
+                    expected, "python3|node|rust-bin",
+                    "SubprocessRunner.run must emit expected = \
+                     'python3|node|rust-bin' verbatim — a refactor that \
+                     swapped this for 'subprocess|gvisor' under a \
+                     'mirror the runner type rather than the runtime \
+                     kinds' rationale would silently break operator \
+                     dashboards that grep on the documented strings; \
+                     the symmetric GvisorRunner::args_for arm below \
+                     carries the same pair, so this pin anchors the \
+                     contract for one surface while the next arm \
+                     anchors it for the other",
+                );
+                assert_eq!(
+                    got, "hermes",
+                    "SubprocessRunner.run must emit got = 'hermes' \
+                     verbatim — the string is the operator-facing \
+                     diagnostic that points at the misconfigured \
+                     manifest runtime field. A refactor that wired \
+                     got from a debug-print of RuntimeKind would \
+                     surface here if the Debug impl ever drifts",
+                );
+            }
+            other => panic!(
+                "SubprocessRunner.run with a Hermes manifest must \
+                 surface RunnerError::WrongRuntime — the early branch \
+                 at line 184 is the documented loud-fail safety net; \
+                 a refactor that removed it under a 'composite already \
+                 routes, this is dead code' rationale would surface \
+                 here as an IO error or a successful spawn against a \
+                 non-existent entry path. Got {other:?}"
+            ),
+        }
+
+        let err = GvisorRunner::args_for(&card).unwrap_err();
+        match err {
+            RunnerError::WrongRuntime {
+                agent,
+                expected,
+                got,
+            } => {
+                assert_eq!(agent, "hermes-research");
+                assert_eq!(
+                    expected, "python3|node|rust-bin",
+                    "GvisorRunner::args_for must emit the same \
+                     expected string as SubprocessRunner.run — both \
+                     surfaces carry the documented loud-fail safety \
+                     net for the same set of supported runtimes; a \
+                     one-sided drift (e.g., one surface updated to \
+                     include a future runtime kind while the other is \
+                     forgotten) would surface here as a string \
+                     mismatch against the SubprocessRunner-side pin",
+                );
+                assert_eq!(got, "hermes");
+            }
+            other => panic!(
+                "GvisorRunner::args_for with a Hermes manifest must \
+                 surface RunnerError::WrongRuntime — the early branch \
+                 at line 298 mirrors the SubprocessRunner safety net; \
+                 a refactor that removed it would let the args_for \
+                 dispatch reach the end of the match without producing \
+                 a value, which the compiler would catch via the \
+                 exhaustive match. Got {other:?}"
+            ),
+        }
+    }
 }

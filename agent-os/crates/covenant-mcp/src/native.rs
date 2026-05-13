@@ -223,4 +223,66 @@ mod tests {
              catches both additions and removals in one assertion",
         );
     }
+
+    #[test]
+    fn echo_and_clock_tool_name_and_description_pin_operator_facing_strings() {
+        // EchoTool::name (line 16-18) and description (line 19-21), plus
+        // ClockTool::name (line 48-50) and description (line 51-53), are
+        // the four operator-facing strings every MCP client (Claude
+        // Desktop, downstream SDK wrappers, the Covenant TUI) reads
+        // out of tools/list to render the tool catalog. The names
+        // double as selectors operators type into commands; the
+        // descriptions are the tooltip operators consult to decide
+        // when to invoke the tool.
+        //
+        // registry_lists_tools_sorted_by_name (lib.rs line 463-468)
+        // pins the names indirectly via the sorted-output assertion
+        // ['clock', 'echo'], so a rename of either would surface there.
+        // But no test reads .description() and compares the literal
+        // string. A refactor that rewrote either description —
+        // 'Returns the provided text argument verbatim.' → 'Echo the
+        // input back.' for terseness, or 'Returns the current Unix
+        // time in milliseconds.' → 'Get current time.' for
+        // accessibility — would silently shift the operator-facing
+        // copy. echo_returns_text_argument (line 70) and
+        // clock_returns_recent_epoch_ms (line 88) probe call()
+        // behavior, not the description string.
+
+        assert_eq!(
+            EchoTool.name(),
+            "echo",
+            "EchoTool::name must remain 'echo' — the operator-typed \
+             selector and the registry sort key. A rename would break \
+             every operator command and the sort-order pin in \
+             registry_lists_tools_sorted_by_name",
+        );
+        assert_eq!(
+            EchoTool.description(),
+            "Returns the provided `text` argument verbatim.",
+            "EchoTool::description must remain the literal documented \
+             string — the backtick-wrapped 'text' identifier names the \
+             argument operators must pass, and a rewrite (e.g., 'Echo \
+             the input back.') would silently drop that pointer. The \
+             behavior tests probe call() return value, not the \
+             description, so they pass under any rewrite",
+        );
+        assert_eq!(
+            ClockTool.name(),
+            "clock",
+            "ClockTool::name must remain 'clock' — the operator-typed \
+             selector and the registry sort key paired with EchoTool::name",
+        );
+        assert_eq!(
+            ClockTool.description(),
+            "Returns the current Unix time in milliseconds.",
+            "ClockTool::description must remain the literal documented \
+             string — the 'milliseconds' unit specifier is load-bearing \
+             because operators consuming the epoch_ms return value need \
+             to know whether to convert to seconds, minutes, or use the \
+             value verbatim. A rewrite that dropped the unit (e.g., \
+             'Get current time.' or 'Return Unix time.') would silently \
+             let operators consume the value as seconds and parse the \
+             returned epoch as a date ~1000x earlier than intended",
+        );
+    }
 }

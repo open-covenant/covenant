@@ -396,6 +396,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mock_search_truncation_arms_pin_zero_equal_and_oversized_limits_and_query_independence(
+    ) {
+        // MockSearch::search (line 78-82) clones self.canned and calls
+        // Vec::truncate(limit), returning the truncated owned Vec. The
+        // existing mock_search_respects_limit test only pins the strict
+        // limit < canned.len() arm (limit=2 against canned.len()=3).
+        // Unpinned arms: limit=0 (returns empty), limit==canned.len()
+        // (returns all without truncation), limit>canned.len()
+        // (Vec::truncate is a no-op). The _query argument is intentionally
+        // ignored — pick_search's no-config fallback to MockSearch::stub
+        // must surface deterministic canned hits regardless of operator
+        // query.
+        //
+        // A refactor that swapped Vec::truncate for slice indexing
+        // (e.g., self.canned[..limit].to_vec()) would panic at runtime
+        // when limit > canned.len(); a refactor that began filtering by
+        // query would break the stub determinism every dashboard and
+        // agent context relies on; a refactor that returned a slice
+        // borrow would change the SearchProvider trait contract from
+        // owned Vec<SearchHit> to a borrow.
+        let canned = vec![
+            SearchHit {
+                title: "a".into(),
+                url: "u://a".into(),
+                snippet: "".into(),
+            },
+            SearchHit {
+                title: "b".into(),
+                url: "u://b".into(),
+                snippet: "".into(),
+            },
+            SearchHit {
+                title: "c".into(),
+                url: "u://c".into(),
+                snippet: "".into(),
+            },
+        ];
+        let s = MockSearch::new(canned.clone());
+
+        let zero = s.search("any-query", 0).await.unwrap();
+        assert!(
+            zero.is_empty(),
+            "limit=0 must surface an empty Vec — a refactor that swapped \
+             Vec::truncate for explicit slice indexing (canned[..0]) would \
+             still produce an empty slice, but a refactor that special-cased \
+             limit=0 to mean 'unbounded' would silently exfiltrate the full \
+             canned set to callers that intended to suppress results"
+        );
+
+        let exact = s.search("any-query", canned.len()).await.unwrap();
+        assert_eq!(
+            exact, canned,
+            "limit==canned.len()=3 must surface all three canned hits in \
+             insertion order — Vec::truncate(canned.len()) is a no-op, and \
+             a refactor that pre-checked `limit < canned.len()` before \
+             truncating would still pass this arm; a refactor that flipped \
+             the comparison to `<=` (e.g., to drop the boundary case as a \
+             defensive guard) would silently shrink the result by one when \
+             callers asked for exactly canned.len() hits"
+        );
+
+        let oversized = s.search("any-query", canned.len() + 7).await.unwrap();
+        assert_eq!(
+            oversized, canned,
+            "limit>canned.len() must surface all canned hits without \
+             panicking — Vec::truncate saturates when limit > Vec::len. A \
+             refactor that swapped Vec::truncate for explicit slice indexing \
+             (self.canned[..limit].to_vec()) would panic with \
+             'slice index out of range' on every MCP web_search call where \
+             the requested limit exceeded canned.len() — operators raising \
+             the request limit above three would see the daemon crash on \
+             every mock-mode call with no parse-time signal"
+        );
+
+        let first_query = s.search("alpha", 10).await.unwrap();
+        let second_query = s.search("beta-with-different-shape", 10).await.unwrap();
+        assert_eq!(
+            first_query, second_query,
+            "two distinct queries must surface identical canned results — \
+             the _query argument is intentionally underscore-prefixed and \
+             ignored so pick_search's no-config fallback stays deterministic. \
+             A refactor that began filtering canned by query (e.g., to make \
+             MockSearch 'more realistic' by matching the query string against \
+             titles/urls/snippets) would silently break stub determinism — \
+             agents issuing varied queries would receive partial or empty \
+             results when canned hits did not contain the query, masking \
+             real-provider misconfiguration as success"
+        );
+    }
+
+    #[tokio::test]
     async fn brave_without_key_returns_missing_key() {
         let s = BraveSearch::new("");
         assert!(matches!(

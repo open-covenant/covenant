@@ -2425,4 +2425,110 @@ mod tests {
              (prefix-convergence regression class would merge memory-compaction with memory-repair rejection paths)"
         );
     }
+
+    #[test]
+    fn memory_error_io_and_sqlite_and_serde_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
+        let io_err = MemoryError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "memory.sqlite missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "MemoryError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish memory-store disk faults from SQLite engine faults and JSON parse faults during read/write/repair/compaction (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("memory.sqlite missing"),
+            "MemoryError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "MemoryError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let sqlite_source = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory")
+            .execute("INSERT INTO nonexistent_table VALUES(1)", [])
+            .expect_err("sqlite must fail with no such table");
+        let sqlite_err = MemoryError::Sqlite(sqlite_source);
+        let sqlite_message = format!("{sqlite_err}");
+        assert!(
+            sqlite_message.starts_with("sqlite: "),
+            "MemoryError::Sqlite must surface the literal 'sqlite: ' bootstrap-stage prefix so audit-log filters can distinguish SQLite engine faults from disk faults and JSON parse faults during read/write/repair/compaction (dropped-prefix regression class): {sqlite_message}"
+        );
+        assert!(
+            sqlite_message.contains("no such table"),
+            "MemoryError::Sqlite must surface the inner rusqlite::Error Display rendering after the colon ({{0}}, not {{0:?}}); rusqlite v0.31 Display renders missing-table failures as 'no such table: ...', a Debug refactor on {{0}} would render 'SqliteFailure(Error {{ code: ..., extended_code: ... }}, Some(\"...\"))' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {sqlite_message}"
+        );
+        assert!(
+            !sqlite_message.contains("SqliteFailure(Error"),
+            "MemoryError::Sqlite must NOT surface the rusqlite::Error Debug rendering; a Debug refactor on {{0}} would expose 'SqliteFailure(Error {{ code: ..., extended_code: ... }}, Some(\"...\"))' internal struct fields and leak extended_code internals (Debug-vs-Display formatting regression class on the {{0}} interpolation): {sqlite_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = MemoryError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "MemoryError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish JSON parse faults from disk faults and SQLite engine faults during memory-record marshalling (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "MemoryError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "MemoryError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose 'Error(\"...\", line: N, column: M)' buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, sqlite_message,
+            "MemoryError::Io and MemoryError::Sqlite Display must not converge (prefix-convergence regression class): io={io_message} sqlite={sqlite_message}"
+        );
+        assert_ne!(
+            io_message, serde_message,
+            "MemoryError::Io and MemoryError::Serde Display must not converge (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert_ne!(
+            sqlite_message, serde_message,
+            "MemoryError::Sqlite and MemoryError::Serde Display must not converge (prefix-convergence regression class): sqlite={sqlite_message} serde={serde_message}"
+        );
+
+        assert!(
+            !io_message.starts_with("sqlite:") && !io_message.starts_with("serde:"),
+            "MemoryError::Io must not start with 'sqlite:' or 'serde:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): {io_message}"
+        );
+        assert!(
+            !sqlite_message.starts_with("io:") && !sqlite_message.starts_with("serde:"),
+            "MemoryError::Sqlite must not start with 'io:' or 'serde:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): {sqlite_message}"
+        );
+        assert!(
+            !serde_message.starts_with("io:") && !serde_message.starts_with("sqlite:"),
+            "MemoryError::Serde must not start with 'io:' or 'sqlite:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): {serde_message}"
+        );
+
+        let string_variant_prefixes = [
+            "worker:",
+            "memory record ",
+            "parent mismatch for memory",
+            "invalid memory repair request:",
+            "invalid memory compaction request:",
+        ];
+        for prefix in string_variant_prefixes {
+            assert!(
+                !io_message.starts_with(prefix),
+                "MemoryError::Io must not converge with the string-variant surface '{prefix}' pinned by memory_error_display_messages_pin_five_string_variant_format_strings; a disk fault must not be mis-routed as a structured store-invariant violation (string-surface-convergence regression class): {io_message}"
+            );
+            assert!(
+                !sqlite_message.starts_with(prefix),
+                "MemoryError::Sqlite must not converge with the string-variant surface '{prefix}' pinned by memory_error_display_messages_pin_five_string_variant_format_strings; a SQLite engine fault must not be mis-routed as a structured store-invariant violation (string-surface-convergence regression class): {sqlite_message}"
+            );
+            assert!(
+                !serde_message.starts_with(prefix),
+                "MemoryError::Serde must not converge with the string-variant surface '{prefix}' pinned by memory_error_display_messages_pin_five_string_variant_format_strings; a JSON parse fault must not be mis-routed as a structured store-invariant violation (string-surface-convergence regression class): {serde_message}"
+            );
+        }
+    }
 }

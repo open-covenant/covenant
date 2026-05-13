@@ -1664,6 +1664,128 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plan_compaction_stale_context_pins_non_object_metadata_under_previous_metadata() {
+        // covenant_memory::plan_compaction (line 212-317) marks
+        // LongTerm records stale when their created_at falls below
+        // mark_longterm_stale_before_ms. Lines 274-281 use the same
+        // non-object preservation pattern as plan_repair:
+        //
+        //   let mut metadata = match after.metadata {
+        //       serde_json::Value::Object(map) => map,
+        //       other => {
+        //           let mut map = serde_json::Map::new();
+        //           map.insert("previous_metadata".into(), other);
+        //           map
+        //       }
+        //   };
+        //
+        // Every existing compaction test uses record() (line 770)
+        // which seeds metadata = serde_json::json!({}); so they all
+        // hit the object-already arm at line 275. The 'other' arm
+        // (line 276-280) that handles legacy LongTerm records with
+        // null/string/array metadata is dead code from the test
+        // suite's perspective. A refactor that swapped the match for
+        // metadata.as_object_mut().unwrap() under a 'metadata is
+        // always an object' rationale would panic mid-compaction the
+        // first time a legacy record aged past
+        // mark_longterm_stale_before_ms.
+
+        let policy = MemoryCompactionPolicy {
+            mark_longterm_stale_before_ms: Some(100),
+            marked_at_ms: Some(150),
+            ..MemoryCompactionPolicy::default()
+        };
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy,
+            reason: "stale-context pin".into(),
+        };
+
+        let build = |metadata: serde_json::Value| {
+            let mut r = record(Uuid::new_v4(), MemoryTier::LongTerm, "legacy", 10);
+            r.metadata = metadata;
+            r
+        };
+
+        let cases = [
+            (
+                "null",
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+            ),
+            (
+                "string",
+                serde_json::Value::String("legacy-tag".into()),
+                serde_json::Value::String("legacy-tag".into()),
+            ),
+            (
+                "array",
+                serde_json::json!(["tag-a", "tag-b"]),
+                serde_json::json!(["tag-a", "tag-b"]),
+            ),
+        ];
+        for (label, initial, expected_previous) in cases {
+            let records = vec![build(initial)];
+            let (outcome, updates) = plan_compaction(&records, &request);
+            assert!(
+                outcome.changed,
+                "{label}: outcome.changed must be true in Apply mode \
+                 when the LongTerm record qualifies for stale marking",
+            );
+            assert_eq!(
+                updates.len(),
+                1,
+                "{label}: exactly one updated record must be returned \
+                 (the stale-marked LongTerm record); a refactor that \
+                 skipped writes for non-object metadata would surface \
+                 as an empty updates list",
+            );
+            let after = &updates[0];
+            assert_eq!(
+                after.metadata["previous_metadata"], expected_previous,
+                "{label}: the non-object metadata must be preserved \
+                 verbatim under previous_metadata — pins the 'other' \
+                 arm at line 276-280. A refactor that dropped the \
+                 wrap would surface as a missing previous_metadata \
+                 key; a refactor that swapped the match for \
+                 as_object_mut().unwrap() would have panicked before \
+                 reaching this assertion",
+            );
+            assert_eq!(
+                after.metadata["stale_context"]["marked_at_ms"], 150,
+                "{label}: stale_context.marked_at_ms must reflect the \
+                 policy field — pins that the stale_context write \
+                 happens AFTER the non-object wrap, not BEFORE",
+            );
+            assert_eq!(
+                after.metadata["stale_context"]["reason"], "stale-context pin",
+                "{label}: stale_context.reason must reflect the \
+                 request.reason — pins reason propagation through the \
+                 non-object preservation path",
+            );
+        }
+
+        let object_record = build(serde_json::json!({"source": "import"}));
+        let (outcome, updates) = plan_compaction(&[object_record], &request);
+        assert!(outcome.changed);
+        let after = &updates[0];
+        assert_eq!(
+            after.metadata["source"], "import",
+            "object-already arm: existing keys must survive the \
+             stale_context insert — pins the first match arm at line \
+             275. A refactor that always wrapped under \
+             previous_metadata would shadow the 'source' key",
+        );
+        assert_eq!(after.metadata["stale_context"]["marked_at_ms"], 150);
+        assert!(
+            after.metadata.get("previous_metadata").is_none(),
+            "object-already arm must NOT introduce previous_metadata \
+             — pins that the wrap is exclusive to the non-object \
+             case",
+        );
+    }
+
     #[tokio::test]
     async fn compaction_rejects_empty_policy_and_reason() {
         let s = InMemoryStore::new();

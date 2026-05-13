@@ -2362,4 +2362,67 @@ mod tests {
              halves of the .unwrap_or contract",
         );
     }
+
+    #[test]
+    fn memory_error_display_messages_pin_five_string_variant_format_strings() {
+        let worker = format!("{}", MemoryError::Worker("channel closed".into()));
+        assert_eq!(
+            worker, "worker: channel closed",
+            "MemoryError::Worker Display drifted (typo or dropped 'worker:' prefix regression class)"
+        );
+
+        let not_found = format!("{}", MemoryError::RecordNotFound(Uuid::nil()));
+        assert_eq!(
+            not_found, "memory record 00000000-0000-0000-0000-000000000000 not found",
+            "MemoryError::RecordNotFound Display drifted (typo or dropped qualifier regression class)"
+        );
+
+        let parent_mismatch = format!(
+            "{}",
+            MemoryError::ParentMismatch {
+                id: Uuid::nil(),
+                expected: Some(Uuid::from_u128(1)),
+                actual: Some(Uuid::from_u128(2)),
+            }
+        );
+        assert!(
+            parent_mismatch.contains("parent mismatch for memory 00000000-0000-0000-0000-000000000000"),
+            "MemoryError::ParentMismatch id slot drifted (typo regression class): {parent_mismatch}"
+        );
+        assert!(
+            parent_mismatch.contains("expected Some(") && parent_mismatch.contains("00000000-0000-0000-0000-000000000001"),
+            "MemoryError::ParentMismatch expected slot drifted (slot-swap or debug-vs-display regression class): {parent_mismatch}"
+        );
+        assert!(
+            parent_mismatch.contains("actual Some(") && parent_mismatch.contains("00000000-0000-0000-0000-000000000002"),
+            "MemoryError::ParentMismatch actual slot drifted (slot-swap or debug-vs-display regression class): {parent_mismatch}"
+        );
+        assert!(
+            !parent_mismatch.contains("expected Some(00000000-0000-0000-0000-000000000002"),
+            "MemoryError::ParentMismatch expected slot bound to actual value (slot-swap regression class): {parent_mismatch}"
+        );
+        assert!(
+            !parent_mismatch.contains("actual Some(00000000-0000-0000-0000-000000000001"),
+            "MemoryError::ParentMismatch actual slot bound to expected value (slot-swap regression class): {parent_mismatch}"
+        );
+
+        let invalid_repair = format!("{}", MemoryError::InvalidRepair("reason empty".into()));
+        assert_eq!(
+            invalid_repair, "invalid memory repair request: reason empty",
+            "MemoryError::InvalidRepair Display drifted (typo or dropped 'memory' qualifier regression class — \
+             would collide with A2AError::InvalidRepair)"
+        );
+
+        let invalid_compaction =
+            format!("{}", MemoryError::InvalidCompaction("window empty".into()));
+        assert_eq!(
+            invalid_compaction, "invalid memory compaction request: window empty",
+            "MemoryError::InvalidCompaction Display drifted (typo or prefix-convergence regression class)"
+        );
+        assert_ne!(
+            invalid_compaction, invalid_repair,
+            "MemoryError::InvalidCompaction must not converge with MemoryError::InvalidRepair \
+             (prefix-convergence regression class would merge memory-compaction with memory-repair rejection paths)"
+        );
+    }
 }

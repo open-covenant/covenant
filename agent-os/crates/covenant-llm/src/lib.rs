@@ -922,6 +922,96 @@ model = "deepseek-chat"
     }
 
     #[test]
+    fn openai_provider_constructors_pin_canonical_base_urls() {
+        // OpenAiProvider::openai (line 322) and OpenAiProvider::deepseek
+        // (line 326) are convenience constructors that hardcode the
+        // canonical API base URL for each provider. The existing
+        // provider_from_config pin observes that distinguishing the
+        // base URL via the Box<dyn Provider> trait object is not
+        // possible — but the struct's base_url is pub String, so direct
+        // construction lets a unit test pin the URL drift surface.
+        //
+        // A URL drift regression (mistyped tld, regional split,
+        // accidental version-path duplication) would silently break
+        // every openai- or deepseek-configured deployment at runtime
+        // with no parse-time signal — the daemon's ProviderError::Status
+        // arm fires with whatever status the new host returns and the
+        // operator must correlate the runtime failure back to the
+        // constructor.
+        let openai = OpenAiProvider::openai("k-openai", "gpt-4o");
+        assert_eq!(
+            openai.base_url, "https://api.openai.com",
+            "openai constructor must bind https://api.openai.com; a \
+             refactor that pointed it elsewhere (e.g., https://api.openai.io \
+             for an experimental endpoint, or https://api.openai.com/v1 \
+             redundantly prepending the version path that complete() \
+             appends) would break every openai-configured deployment at \
+             runtime with no parse-time signal"
+        );
+        assert_eq!(
+            openai.api_key, "k-openai",
+            "openai constructor must pass api_key through verbatim; a \
+             refactor that base64-encoded or rewrote the key inside the \
+             constructor would silently send a malformed Bearer token \
+             on every request and surface a generic 401 to operators"
+        );
+        assert_eq!(
+            openai.model, "gpt-4o",
+            "openai constructor must pass model through verbatim; a \
+             refactor that defaulted or rewrote the model name would \
+             silently send a different model identifier than the \
+             operator configured"
+        );
+        assert_eq!(
+            openai.name(),
+            "openai",
+            "openai constructor surfaces name='openai' — cross-binds the \
+             provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping \
+             pin that documents this shared identity contract"
+        );
+
+        let deepseek = OpenAiProvider::deepseek("k-deepseek", "deepseek-chat");
+        assert_eq!(
+            deepseek.base_url, "https://api.deepseek.com",
+            "deepseek constructor must bind https://api.deepseek.com; a \
+             refactor that pointed it elsewhere (e.g., \
+             https://api.deepseek.ai for a regional split, or \
+             https://deepseek.com/api/v1) would silently break every \
+             deepseek-configured deployment at runtime; the daemon's \
+             ProviderError::Status fires with whatever the new host \
+             returns and operators must correlate the failure back to \
+             the constructor"
+        );
+        assert_eq!(
+            deepseek.api_key, "k-deepseek",
+            "deepseek constructor must pass api_key through verbatim; \
+             same regression class as the openai arm"
+        );
+        assert_eq!(
+            deepseek.model, "deepseek-chat",
+            "deepseek constructor must pass model through verbatim; \
+             same regression class as the openai arm"
+        );
+        assert_eq!(
+            deepseek.name(),
+            "openai",
+            "deepseek constructor also surfaces name='openai' since \
+             both arms share the OpenAiProvider trait impl — cross-binds \
+             the existing provider_from_config pin comment that \
+             documents this shared identity (the deepseek arm's distinct \
+             identity is the base URL, not the provider name)"
+        );
+
+        assert_ne!(
+            openai.base_url, deepseek.base_url,
+            "the two constructors must bind distinct URLs; a refactor \
+             that merged openai and deepseek into a single canonical \
+             host would silently route deepseek-configured deployments \
+             to openai's API (and 401 on the wrong key) or vice versa"
+        );
+    }
+
+    #[test]
     fn provider_config_serde_pins_optional_llm_section_default() {
         // ProviderConfig is the top-level secrets.toml decoder for the
         // [llm] section. The struct carries a single field — llm:

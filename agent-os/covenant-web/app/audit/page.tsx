@@ -3,14 +3,8 @@
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api";
-import {
-  AUDIT_KIND_LABELS,
-  auditDetail,
-  auditTone,
-  eventIntentId,
-  short,
-  time,
-} from "@/lib/audit";
+import { formatDateTime, formatTimestamp, shortHash, shortPubkey } from "@/lib/format";
+import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -18,7 +12,7 @@ async function loadAudit() {
   return api.recentAudit(100);
 }
 
-export default function AuditPage() {
+export default function ActivityLogPage() {
   const { data, error, lastSyncMs } = usePoll(loadAudit, 3000);
   const [filter, setFilter] = useState<string>("");
   const [verifying, setVerifying] = useState(false);
@@ -55,33 +49,36 @@ export default function AuditPage() {
     return Array.from(set);
   }, [events]);
   const selectedEvent = selected ? events.find((e) => e.id === selected) : null;
+  const selectedLabel = selectedEvent ? eventLabel(selectedEvent) : null;
 
   return (
     <>
       <PageHeader
-        eyebrow="signed · hash-chained"
-        title="Audit"
-        subhead="Every state change is signed and hash-chained. The chain root is verifiable in one click."
+        eyebrow="signed activity"
+        title="Activity log"
+        subhead="Everything that happens on your daemon is signed and chained together so nothing can be quietly changed. One click verifies the whole log."
         syncMs={lastSyncMs}
         error={error}
         right={
           <button type="button" className="btn primary" onClick={verify} disabled={verifying}>
-            {verifying ? "verifying" : "verify chain"}
+            {verifying ? "Verifying" : "Verify log"}
           </button>
         }
       />
 
       {verifyResult && (
         <article className={`verify-card ${verifyResult.valid ? "ok" : "bad"}`}>
-          <div className="badge">{verifyResult.valid ? "VALID" : "INVALID"}</div>
+          <div className="badge">{verifyResult.valid ? "INTACT" : "TAMPERED"}</div>
           <div>
             <p>
-              {verifyResult.events} events across {verifyResult.anchors} anchors.{" "}
+              {verifyResult.events} signed steps across {verifyResult.anchors} checkpoints.{" "}
               {verifyResult.valid
-                ? "The chain is intact."
-                : `${verifyResult.failures.length} integrity failures detected.`}
+                ? "Nothing has been altered."
+                : `${verifyResult.failures.length} integrity ${
+                    verifyResult.failures.length === 1 ? "failure" : "failures"
+                  } found.`}
             </p>
-            <code>root · {verifyResult.root}</code>
+            <code>fingerprint · {shortHash(verifyResult.root, 16)}</code>
             {verifyResult.failures.length > 0 && (
               <ul>
                 {verifyResult.failures.slice(0, 5).map((failure, idx) => (
@@ -95,14 +92,14 @@ export default function AuditPage() {
 
       <section className="filter-row">
         <div className="filter-group">
-          <span className="eyebrow">filter by type</span>
+          <span className="eyebrow">show only</span>
           <div className="chips">
             <button
               type="button"
               className={!filter ? "chip active" : "chip"}
               onClick={() => setFilter("")}
             >
-              all <em>{events.length}</em>
+              everything <em>{events.length}</em>
             </button>
             {kinds.map((kind) => (
               <button
@@ -111,7 +108,7 @@ export default function AuditPage() {
                 className={filter === kind ? "chip active" : "chip"}
                 onClick={() => setFilter(kind)}
               >
-                {AUDIT_KIND_LABELS[kind as keyof typeof AUDIT_KIND_LABELS] ?? kind}{" "}
+                {KIND_PILL_LABELS[kind as keyof typeof KIND_PILL_LABELS] ?? kind}{" "}
                 <em>{events.filter((e) => e.kind.type === kind).length}</em>
               </button>
             ))}
@@ -122,33 +119,33 @@ export default function AuditPage() {
       <section className="explorer">
         <div className="list">
           {filtered.length === 0 ? (
-            <p className="empty">No events of this type yet.</p>
+            <p className="empty">Nothing matches this filter yet.</p>
           ) : (
             <div className="records">
               {filtered.map((event) => {
-                const intentId = eventIntentId(event);
+                const label = eventLabel(event);
                 const isSelected = selected === event.id;
                 return (
                   <article
                     key={event.id}
-                    className={`record clickable tone-${auditTone(event)} ${isSelected ? "selected" : ""} fade-up`}
+                    className={`record clickable tone-${label.tone} ${isSelected ? "selected" : ""} fade-up`}
                     onClick={() => setSelected(event.id)}
                   >
                     <div className="ts">
-                      {time(event.timestamp_ms)}
-                      <em>{AUDIT_KIND_LABELS[event.kind.type]}</em>
+                      {formatTimestamp(event.timestamp_ms)}
+                      <em>{label.headline}</em>
                     </div>
                     <div className="body">
                       <strong>{event.issuer.display}</strong>
-                      <p>{auditDetail(event)}</p>
+                      <p>{label.body}</p>
                     </div>
-                    {intentId && (
+                    {label.intentId && (
                       <Link
-                        href={`/intents/${intentId}`}
+                        href={`/intents/${label.intentId}`}
                         className="btn link"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        trace
+                        open task
                       </Link>
                     )}
                   </article>
@@ -158,39 +155,42 @@ export default function AuditPage() {
           )}
         </div>
         <aside className="detail">
-          {selectedEvent ? (
+          {selectedEvent && selectedLabel ? (
             <>
               <div className="panel-head">
                 <div>
-                  <p className="eyebrow">event detail</p>
-                  <h2>{AUDIT_KIND_LABELS[selectedEvent.kind.type]}</h2>
+                  <p className="eyebrow">details</p>
+                  <h2>{selectedLabel.headline}</h2>
                 </div>
                 <button type="button" className="btn ghost" onClick={() => setSelected(null)}>
                   close
                 </button>
               </div>
+              <p className="lead">{selectedLabel.body}</p>
               <dl className="meta">
                 <div>
-                  <dt>id</dt>
-                  <dd className="text-mono">{selectedEvent.id}</dd>
+                  <dt>when</dt>
+                  <dd>{formatDateTime(selectedEvent.timestamp_ms)}</dd>
                 </div>
                 <div>
-                  <dt>issuer</dt>
+                  <dt>by</dt>
                   <dd>
                     {selectedEvent.issuer.display}
-                    <em>{short(selectedEvent.issuer.pubkey, 22)}</em>
+                    <em>{shortPubkey(selectedEvent.issuer.pubkey)}</em>
                   </dd>
                 </div>
                 <div>
-                  <dt>timestamp</dt>
-                  <dd>{new Date(selectedEvent.timestamp_ms).toISOString()}</dd>
+                  <dt>kind</dt>
+                  <dd>{KIND_PILL_LABELS[selectedEvent.kind.type]}</dd>
                 </div>
               </dl>
-              <p className="eyebrow">type</p>
-              <pre className="result compact">{JSON.stringify(selectedEvent.kind, null, 2)}</pre>
+              <details>
+                <summary>raw json</summary>
+                <pre className="result compact">{JSON.stringify(selectedEvent.kind, null, 2)}</pre>
+              </details>
             </>
           ) : (
-            <p className="empty">Select an event to see its signed envelope and raw JSON.</p>
+            <p className="empty">Pick an entry to see the signed details.</p>
           )}
         </aside>
       </section>
@@ -274,9 +274,8 @@ export default function AuditPage() {
           border-radius: 999px;
           background: var(--panel);
           color: var(--dim);
-          font-size: 11px;
-          letter-spacing: 0.04em;
-          text-transform: lowercase;
+          font-size: 11.5px;
+          letter-spacing: 0.01em;
           transition: border-color 120ms ease, color 120ms ease;
         }
 
@@ -319,10 +318,17 @@ export default function AuditPage() {
           top: 24px;
         }
 
+        .lead {
+          margin: 0 0 18px;
+          color: var(--fg);
+          font-size: 13.5px;
+          line-height: 1.5;
+        }
+
         .meta {
           display: grid;
           gap: 12px;
-          margin: 18px 0;
+          margin: 0 0 18px;
         }
 
         .meta div {
@@ -352,6 +358,20 @@ export default function AuditPage() {
           font-family: var(--font-mono);
           font-size: 11px;
           font-style: normal;
+        }
+
+        details {
+          margin-top: 12px;
+        }
+
+        details summary {
+          cursor: pointer;
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.24em;
+          text-transform: uppercase;
+          padding: 8px 0;
         }
 
         .record.selected {

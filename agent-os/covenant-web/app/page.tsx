@@ -3,15 +3,8 @@
 import Link from "next/link";
 import { useCallback, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
-import {
-  auditDetail,
-  auditTone,
-  eventIntentId,
-  isReviewEvent,
-  short,
-  time,
-  AUDIT_KIND_LABELS,
-} from "@/lib/audit";
+import { formatRelative, formatTimestamp } from "@/lib/format";
+import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
 
@@ -35,6 +28,7 @@ export default function OverviewPage() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
+  const [verifyOk, setVerifyOk] = useState<boolean>(true);
 
   const onDispatch = useCallback(
     async (e: FormEvent) => {
@@ -65,13 +59,17 @@ export default function OverviewPage() {
     setVerifyMsg(null);
     try {
       const r = await api.verifyAudit();
+      setVerifyOk(r.report.valid);
       setVerifyMsg(
         r.report.valid
-          ? `chain valid · ${r.report.events} events / ${r.report.anchors} anchors · root ${short(r.report.root_hash_hex, 14)}`
-          : `chain INVALID · ${r.report.failures.length} failures`,
+          ? `Activity log verified. ${r.report.events} signed steps, all intact.`
+          : `Activity log tampered — ${r.report.failures.length} ${
+              r.report.failures.length === 1 ? "failure" : "failures"
+            } detected.`,
       );
     } catch (e) {
-      setVerifyMsg(`verify failed: ${e instanceof Error ? e.message : String(e)}`);
+      setVerifyOk(false);
+      setVerifyMsg(`Couldn't verify: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setVerifying(false);
     }
@@ -79,38 +77,37 @@ export default function OverviewPage() {
 
   const events = data?.audit.events ?? [];
   const recent = events.slice().reverse();
-  const reviewRows = recent.filter(isReviewEvent).slice(0, 4);
+  const reviewRows = recent.filter(isReviewWorthy).slice(0, 4);
   const peers = data?.peers.peers ?? [];
   const livePeers = peers.filter((p) => p.revoked_at === null);
   const caps = data?.caps.capabilities ?? [];
   const memory = data?.memory.records ?? [];
   const lastEvent = recent[0] ?? null;
+  const lastLabel = lastEvent ? eventLabel(lastEvent) : null;
 
   return (
     <>
       <PageHeader
         eyebrow="local control plane"
         title="Overview"
-        subhead="Dispatch intents, manage capabilities, and verify audit integrity. Everything is signed and hash-chained on this machine."
+        subhead="Send tasks to your agents, manage their permissions, and check that the activity log is intact. Everything happens on this machine."
         syncMs={lastSyncMs}
         error={error}
         right={
           <button type="button" className="btn" onClick={onVerify} disabled={verifying}>
-            {verifying ? "verifying" : "verify chain"}
+            {verifying ? "Verifying" : "Verify activity log"}
           </button>
         }
       />
 
       {verifyMsg && (
-        <pre className={`result compact ${verifyMsg.includes("INVALID") || verifyMsg.includes("failed") ? "error" : ""}`}>
-          {verifyMsg}
-        </pre>
+        <pre className={`result compact ${verifyOk ? "" : "error"}`}>{verifyMsg}</pre>
       )}
 
       <section className="dispatch-card">
         <form onSubmit={onDispatch}>
           <div className="row">
-            <p className="eyebrow">dispatch intent</p>
+            <p className="eyebrow">send a task</p>
             <span className="text-muted text-mono kbd-hint">⌘K to open the palette</span>
           </div>
           <textarea
@@ -121,41 +118,41 @@ export default function OverviewPage() {
           />
           <div className="actions">
             <button type="submit" className="btn primary" disabled={dispatching || !intent}>
-              {dispatching ? "dispatching" : "dispatch"}
+              {dispatching ? "Sending" : "Send"}
             </button>
-            {lastResult && <span className="result-line">→ {lastResult}</span>}
-            {lastError && <span className="result-line error">⚠ {lastError}</span>}
+            {lastResult && <span className="result-line">{lastResult}</span>}
+            {lastError && <span className="result-line error">{lastError}</span>}
           </div>
         </form>
       </section>
 
       <section className="metric-row">
         <article className="metric">
-          <span className="eyebrow">live peers</span>
+          <span className="eyebrow">connected agents</span>
           <span className="value">{livePeers.length}</span>
           <span className="caption">
             {peers.length - livePeers.length} revoked
           </span>
         </article>
         <article className="metric">
-          <span className="eyebrow">capabilities</span>
+          <span className="eyebrow">permissions</span>
           <span className="value">{caps.length}</span>
-          <span className="caption">active grants</span>
+          <span className="caption">currently granted</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">memory records</span>
+          <span className="eyebrow">memories</span>
           <span className="value">{memory.length}</span>
           <span className="caption">
-            {memory.filter((m) => m.tier === "working").length} working · {memory.filter((m) => m.tier === "episodic").length} episodic · {memory.filter((m) => m.tier === "longterm").length} long-term
+            {memory.filter((m) => m.tier === "working").length} {memoryTierLabel("working").toLowerCase()} ·{" "}
+            {memory.filter((m) => m.tier === "episodic").length} {memoryTierLabel("episodic").toLowerCase()} ·{" "}
+            {memory.filter((m) => m.tier === "longterm").length} {memoryTierLabel("longterm").toLowerCase()}
           </span>
         </article>
         <article className="metric">
-          <span className="eyebrow">last event</span>
-          <span className="value small">
-            {lastEvent ? AUDIT_KIND_LABELS[lastEvent.kind.type] : "—"}
-          </span>
+          <span className="eyebrow">last activity</span>
+          <span className="value small">{lastLabel ? lastLabel.headline : "—"}</span>
           <span className="caption">
-            {lastEvent ? `${time(lastEvent.timestamp_ms)} · ${short(lastEvent.id, 8)}` : "no events yet"}
+            {lastEvent ? formatRelative(lastEvent.timestamp_ms) : "nothing yet"}
           </span>
         </article>
       </section>
@@ -164,13 +161,13 @@ export default function OverviewPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">activity</p>
+              <p className="eyebrow">recent activity</p>
               <h2>
-                Recent audit events <span className="count">{recent.length}</span>
+                What's been happening <span className="count">{recent.length}</span>
               </h2>
             </div>
             <Link className="btn ghost" href="/audit">
-              all audit
+              see all
             </Link>
           </div>
           {recent.length === 0 ? (
@@ -178,32 +175,32 @@ export default function OverviewPage() {
           ) : (
             <div className="records">
               {recent.slice(0, 8).map((event) => {
-                const intentId = eventIntentId(event);
+                const label = eventLabel(event);
                 const RowInner = (
                   <>
                     <div className="ts">
-                      {time(event.timestamp_ms)}
-                      <em>{AUDIT_KIND_LABELS[event.kind.type]}</em>
+                      {formatTimestamp(event.timestamp_ms)}
+                      <em>{label.headline}</em>
                     </div>
                     <div className="body">
                       <strong>{event.issuer.display}</strong>
-                      <p>{auditDetail(event)}</p>
+                      <p>{label.body}</p>
                     </div>
                   </>
                 );
-                if (intentId) {
+                if (label.intentId) {
                   return (
                     <Link
                       key={event.id}
-                      href={`/intents/${intentId}`}
-                      className={`record clickable tone-${auditTone(event)} fade-up`}
+                      href={`/intents/${label.intentId}`}
+                      className={`record clickable tone-${label.tone} fade-up`}
                     >
                       {RowInner}
                     </Link>
                   );
                 }
                 return (
-                  <article key={event.id} className={`record tone-${auditTone(event)} fade-up`}>
+                  <article key={event.id} className={`record tone-${label.tone} fade-up`}>
                     {RowInner}
                   </article>
                 );
@@ -215,9 +212,9 @@ export default function OverviewPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">review</p>
+              <p className="eyebrow">attention</p>
               <h2>
-                Needs operator attention <span className="count">{reviewRows.length}</span>
+                Needs your review <span className="count">{reviewRows.length}</span>
               </h2>
             </div>
           </div>
@@ -225,18 +222,21 @@ export default function OverviewPage() {
             <p className="empty">All clear. Nothing needs your attention.</p>
           ) : (
             <div className="records">
-              {reviewRows.map((event) => (
-                <article key={event.id} className={`record tone-${auditTone(event)}`}>
-                  <div className="ts">
-                    {time(event.timestamp_ms)}
-                    <em>{AUDIT_KIND_LABELS[event.kind.type]}</em>
-                  </div>
-                  <div className="body">
-                    <strong>{event.issuer.display}</strong>
-                    <p>{auditDetail(event)}</p>
-                  </div>
-                </article>
-              ))}
+              {reviewRows.map((event) => {
+                const label = eventLabel(event);
+                return (
+                  <article key={event.id} className={`record tone-${label.tone}`}>
+                    <div className="ts">
+                      {formatTimestamp(event.timestamp_ms)}
+                      <em>{label.headline}</em>
+                    </div>
+                    <div className="body">
+                      <strong>{event.issuer.display}</strong>
+                      <p>{label.body}</p>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>

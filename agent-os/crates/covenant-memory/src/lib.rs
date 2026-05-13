@@ -1452,6 +1452,124 @@ mod tests {
         assert_eq!(got.metadata["provenance"], provenance);
     }
 
+    #[test]
+    fn plan_repair_backfill_provenance_pins_non_object_metadata_under_previous_metadata() {
+        // covenant_memory::plan_repair (line 175-210) handles
+        // MemoryRepairCommand::BackfillProvenance by reading the
+        // record's existing metadata. Line 197-204:
+        //
+        //   let mut metadata = match after.metadata {
+        //       serde_json::Value::Object(map) => map,
+        //       other => {
+        //           let mut map = serde_json::Map::new();
+        //           map.insert("previous_metadata".into(), other);
+        //           map
+        //       }
+        //   };
+        //   metadata.insert("provenance".into(), provenance.clone());
+        //
+        // The 'other' arm preserves any non-object metadata under a
+        // 'previous_metadata' key in a new object, so backfilling
+        // provenance on a legacy record with null/string/array
+        // metadata does not silently lose the prior value. The
+        // existing repair_backfills_provenance_metadata test
+        // (line 1425) only exercises the object-already arm.
+        //
+        // A refactor that replaces the match with
+        // metadata.as_object_mut().unwrap() under a 'metadata is
+        // always an object' rationale would panic on legacy records
+        // with non-object metadata. A refactor that drops the
+        // previous_metadata wrap and just sets metadata =
+        // json!({"provenance": ...}) would silently lose the prior
+        // non-object metadata value with no audit signal.
+
+        let provenance = serde_json::json!({"kind": "manual_backfill"});
+        let cmd = |id: Uuid| MemoryRepairCommand::BackfillProvenance {
+            id,
+            provenance: provenance.clone(),
+        };
+
+        let id = Uuid::new_v4();
+
+        let mut null_record = record(id, MemoryTier::LongTerm, "n", 1);
+        null_record.metadata = serde_json::Value::Null;
+        let after = plan_repair(&null_record, &cmd(id))
+            .expect("BackfillProvenance must not error on null metadata")
+            .expect("BackfillProvenance always returns Some(after)");
+        assert_eq!(
+            after.metadata["previous_metadata"],
+            serde_json::Value::Null,
+            "null metadata must be preserved verbatim under \
+             previous_metadata — pins the non-object arm at line 199. \
+             A refactor that dropped the wrap would surface here as a \
+             missing previous_metadata key, and a refactor that swapped \
+             the arm for as_object_mut().unwrap() would have panicked \
+             before reaching this assertion",
+        );
+        assert_eq!(
+            after.metadata["provenance"], provenance,
+            "provenance must be inserted into the new map alongside \
+             previous_metadata — pins that the provenance write happens \
+             AFTER the non-object wrap, not BEFORE (which would let \
+             previous_metadata shadow it if the key names ever \
+             collided)",
+        );
+
+        let mut string_record = record(id, MemoryTier::LongTerm, "s", 1);
+        string_record.metadata = serde_json::Value::String("legacy-tag".into());
+        let after = plan_repair(&string_record, &cmd(id))
+            .expect("BackfillProvenance must not error on string metadata")
+            .expect("BackfillProvenance always returns Some(after)");
+        assert_eq!(
+            after.metadata["previous_metadata"], "legacy-tag",
+            "string metadata must be preserved verbatim under \
+             previous_metadata — pins that the wrap is value-agnostic \
+             across primitive JSON types, not just null",
+        );
+        assert_eq!(after.metadata["provenance"], provenance);
+
+        let mut array_record = record(id, MemoryTier::LongTerm, "a", 1);
+        array_record.metadata = serde_json::json!(["tag-a", "tag-b"]);
+        let after = plan_repair(&array_record, &cmd(id))
+            .expect("BackfillProvenance must not error on array metadata")
+            .expect("BackfillProvenance always returns Some(after)");
+        assert_eq!(
+            after.metadata["previous_metadata"],
+            serde_json::json!(["tag-a", "tag-b"]),
+            "array metadata must be preserved verbatim under \
+             previous_metadata — pins that the wrap captures container \
+             values, not just scalars; a refactor that flattened the \
+             array into individual map keys under a 'merge legacy tags \
+             into provenance' rationale would surface here",
+        );
+        assert_eq!(after.metadata["provenance"], provenance);
+
+        let mut object_record = record(id, MemoryTier::LongTerm, "o", 1);
+        object_record.metadata = serde_json::json!({"source": "import", "rev": 7});
+        let after = plan_repair(&object_record, &cmd(id))
+            .expect("BackfillProvenance must not error on object metadata")
+            .expect("BackfillProvenance always returns Some(after)");
+        assert_eq!(
+            after.metadata["source"], "import",
+            "object metadata happy path: existing keys must be \
+             preserved without re-keying under previous_metadata — \
+             pins the first match arm at line 198. A refactor that \
+             accidentally fell through to the 'other' arm for objects \
+             would surface here as a missing 'source' key and an \
+             unexpected previous_metadata wrap",
+        );
+        assert_eq!(after.metadata["rev"], 7);
+        assert_eq!(after.metadata["provenance"], provenance);
+        assert!(
+            after.metadata.get("previous_metadata").is_none(),
+            "object-already arm must NOT introduce a previous_metadata \
+             key — pins that the wrap is exclusive to the non-object \
+             case; a refactor that always wrapped under \
+             previous_metadata would double-nest the object metadata \
+             and silently break callers reading the legacy keys",
+        );
+    }
+
     #[tokio::test]
     async fn compaction_dry_run_plans_without_mutating() {
         let s = InMemoryStore::new();

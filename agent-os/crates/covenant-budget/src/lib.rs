@@ -1717,6 +1717,69 @@ mod tests {
     }
 
     #[test]
+    fn refill_time_rewind_and_equal_now_are_noop() {
+        // refill's early-return guard:
+        //   if bucket.capacity == 0 || now <= bucket.last_refill_ms { return; }
+        // The capacity==0 arm is pinned by refill_zero_capacity_is_noop.
+        // This pin covers the time-side of the OR: now < last_refill_ms
+        // (clock skew / NTP correction) and now == last_refill_ms
+        // (same-instant call). Both must be noops, otherwise the
+        // subsequent `let elapsed = (now - last_refill_ms) as u128;`
+        // panics in debug builds and wraps near u64::MAX in release
+        // builds — silently filling buckets to capacity via the
+        // saturating_add tokens path.
+        let mut rewind = Bucket {
+            display: "x@y".into(),
+            capacity: 10,
+            tokens_remaining: 3,
+            last_refill_ms: 200_000,
+        };
+        refill(&mut rewind, 100_000);
+        assert_eq!(
+            rewind.tokens_remaining, 3,
+            "time-rewind arm: refill with now < last_refill_ms must not \
+             advance tokens; a regression that dropped the now <= guard \
+             would proceed to unsigned subtraction underflow which wraps \
+             to near u64::MAX, then saturating_add caps tokens at \
+             capacity — every clock-skew event silently fills the bucket"
+        );
+        assert_eq!(
+            rewind.last_refill_ms, 200_000,
+            "time-rewind arm: refill with now < last_refill_ms must NOT \
+             rewind last_refill_ms; a regression that wrote \
+             last_refill_ms = now would push the clock backwards, \
+             letting the next forward-in-time refill grant tokens for \
+             the already-credited time window"
+        );
+
+        let mut same_instant = Bucket {
+            display: "x@y".into(),
+            capacity: 10,
+            tokens_remaining: 7,
+            last_refill_ms: 500_000,
+        };
+        refill(&mut same_instant, 500_000);
+        assert_eq!(
+            same_instant.tokens_remaining, 7,
+            "same-instant arm: refill with now == last_refill_ms must \
+             not advance tokens; a refactor that swapped <= for < would \
+             still pass today (arm 2 add_u128==0 catches it) but loses \
+             the documented contract that the early guard covers both \
+             rewind and equal cases — a future refactor that removes \
+             the add_u128==0 arm would silently let the same-instant \
+             path proceed with elapsed=0, which currently writes \
+             last_refill_ms = last_refill_ms + 0 = last_refill_ms but \
+             could regress if intermediate math changes"
+        );
+        assert_eq!(
+            same_instant.last_refill_ms, 500_000,
+            "same-instant arm: last_refill_ms must remain at the original \
+             value; the early-return guard is the documented place where \
+             this idempotency contract is enforced"
+        );
+    }
+
+    #[test]
     fn refill_partial_elapsed_accumulates_in_clock() {
         // capacity 10/hr → 1 token per 360_000 ms. After 100 ms, refill
         // computes 0 tokens; the clock must NOT advance, so a later

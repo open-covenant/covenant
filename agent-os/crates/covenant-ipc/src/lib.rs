@@ -9396,4 +9396,27 @@ mod tests {
             "IpcError::Serde must not converge with the FrameTooLarge surface 'frame too large' pinned by ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value; a frame-JSON-parse fault must not be mis-routed as a frame-size violation (string-surface-convergence regression class): {serde_message}"
         );
     }
+
+    #[test]
+    fn ipc_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "daemon dropped");
+        let expected_display = format!("{inner}");
+        let err = IpcError::Io(inner);
+        let source = err.source().expect(
+            "covenant_ipc::IpcError::Io must surface the inner std::io::Error via std::error::Error::source so daemon-side IPC retry-policy classifiers and TUI-side IpcError::Frame wrappers (whose source-delegation chains through covenant_ipc::IpcError) can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct retry decisions (Interrupted retries immediately, WouldBlock backs off briefly, BrokenPipe escalates to operator-attention); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_ipc::IpcError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::BrokenPipe),
+            "covenant_ipc::IpcError::Io source() must downcast_ref to std::io::Error so daemon-side IPC retry-policy classifiers can extract io::ErrorKind for retry decisions; a refactor that wrapped the inner in a project-local newtype (e.g., IpcIoError(std::io::Error) under a 'tag IPC IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite, including the TUI's IpcError::Frame wrapper that chains through (concrete-source-type downcast regression class)"
+        );
+    }
 }

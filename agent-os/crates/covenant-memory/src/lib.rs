@@ -1248,6 +1248,163 @@ mod tests {
         assert_eq!(hits[0].text, "close");
     }
 
+    #[tokio::test]
+    async fn in_memory_search_similar_pins_strict_positive_filter_and_inclusive_floor_equal_boundary(
+    ) {
+        // InMemoryStore::search_similar (line 408-428) applies the paired
+        // predicate
+        //
+        //     .filter(|(s, _)| *s > 0.0 && *s >= floor)
+        //
+        // on line 424. The strict-positive `s > 0.0` arm drops degenerate
+        // zero-cosine records (zero-norm or mismatched-length embeddings;
+        // see cosine() line 321-337) and anchors the documented
+        // 'Records with empty embeddings get score 0 and are... dropped,
+        // depending on the impl' contract from the MemoryStore trait
+        // doc (line 63-64). The `s >= floor` arm pins the inclusive
+        // min_relevance semantic documented at line 65-66 ('records
+        // whose cosine score is strictly less than the threshold are
+        // dropped' — i.e., equality passes).
+        //
+        // The existing in_memory_search_min_relevance_drops_below_threshold
+        // (above) probes min_relevance=Some(0.5) against cosine ~0.099
+        // — both `>` and `>=` agree on this case, neither arm of the
+        // dual predicate is uniquely exercised. The existing
+        // in_memory_search_returns_closest_first (line 1198) uses
+        // limit=2 against 3 records so a zero-cosine record is silently
+        // dropped by limit-truncation rather than by the strict-positive
+        // filter. A refactor that changed `s > 0.0` to `s >= 0.0` under
+        // a 'simplify the dual predicate' rationale, or that changed
+        // `s >= floor` to `s > floor` under a 'use exclusive thresholds
+        // for consistency with the doc phrase strictly less than'
+        // rationale, would not surface in either existing test.
+
+        let s = InMemoryStore::new();
+        let mut exact = record(Uuid::new_v4(), MemoryTier::Working, "exact", 1);
+        exact.embedding = vec![1.0, 0.0, 0.0];
+        let mut orthogonal = record(Uuid::new_v4(), MemoryTier::Working, "orthogonal", 2);
+        orthogonal.embedding = vec![0.0, 1.0, 0.0];
+        let mut anti = record(Uuid::new_v4(), MemoryTier::Working, "anti", 3);
+        anti.embedding = vec![-1.0, 0.0, 0.0];
+        s.put(exact).await.unwrap();
+        s.put(orthogonal).await.unwrap();
+        s.put(anti).await.unwrap();
+
+        // (1) Strict-positive arm: limit much larger than the non-zero
+        // match count, no min_relevance set. The orthogonal record's
+        // cosine is exactly 0.0 — under `s > 0.0` it must be filtered;
+        // under a regressed `s >= 0.0` it would surface. The
+        // anti-parallel record's cosine is -1.0 — filtered by either
+        // operator on the strict-positive arm. Only 'exact' surfaces.
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "strict-positive filter `s > 0.0` must drop the orthogonal \
+             cosine-zero record even with abundant limit and no \
+             min_relevance set — a refactor to `s >= 0.0` would let \
+             zero-norm or mismatched-length embeddings (which v0's mock \
+             embedder and Ollama embedder cannot produce, but a future \
+             external embedder or corrupted SQLite blob could) pollute \
+             every search result silently",
+        );
+        assert_eq!(
+            hits[0].text, "exact",
+            "the only surviving record must be the cosine=1.0 match",
+        );
+
+        // (2) Inclusive-floor-equality arm: min_relevance = Some(1.0).
+        // The 'exact' record's cosine is exactly 1.0 (f32 arithmetic
+        // 1.0/(1.0*1.0) = 1.0) — under `s >= floor` it passes; under a
+        // regressed `s > floor` it would be rejected. Orthogonal is
+        // filtered by strict-positive; anti by strict-positive.
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, Some(1.0))
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "inclusive-floor `s >= floor` must accept a record whose \
+             cosine is exactly the min_relevance threshold — a refactor \
+             to `s > floor` would silently shift the documented \
+             inclusive semantic so operators tuning min_relevance to \
+             the cosine of their best-match record (a common \
+             calibration step after embedding upgrades) would see zero \
+             results returned with no signal that the comparison \
+             operator drifted",
+        );
+        assert_eq!(
+            hits[0].text, "exact",
+            "the exact-cosine record must surface at the equality boundary",
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_search_similar_pins_strict_positive_filter_and_inclusive_floor_equal_boundary()
+    {
+        // SqliteStore::search_similar (line 695-736) applies the same
+        // paired predicate as InMemoryStore on line 727:
+        //
+        //     if s > 0.0 && s >= floor {
+        //
+        // The two implementations must agree on the dual predicate so
+        // storage-tier choice (in-memory for tests/defaults vs SQLite
+        // for persistent daemon runs) doesn't change the search result
+        // set semantic. The parallel pin (in_memory_search_similar_pins_*
+        // above) anchors the contract on the InMemoryStore side; this
+        // pin anchors it on the SQLite side. A refactor that diverged
+        // the two implementations — e.g., dropped the strict-positive
+        // guard on SQLite under a 'rows controlled by put() can never
+        // have empty embeddings' rationale — would silently shift
+        // result sets when operators migrate from in-memory to SQLite
+        // with no audit signal.
+
+        let s = SqliteStore::open_in_memory().unwrap();
+        let mut exact = record(Uuid::new_v4(), MemoryTier::Working, "exact", 1);
+        exact.embedding = vec![1.0, 0.0, 0.0];
+        let mut orthogonal = record(Uuid::new_v4(), MemoryTier::Working, "orthogonal", 2);
+        orthogonal.embedding = vec![0.0, 1.0, 0.0];
+        let mut anti = record(Uuid::new_v4(), MemoryTier::Working, "anti", 3);
+        anti.embedding = vec![-1.0, 0.0, 0.0];
+        s.put(exact).await.unwrap();
+        s.put(orthogonal).await.unwrap();
+        s.put(anti).await.unwrap();
+
+        // (1) Strict-positive arm — same shape as the in-memory pin.
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "SqliteStore strict-positive filter must drop the \
+             orthogonal cosine-zero record — cross-binds the \
+             in_memory_search_similar_pins_strict_positive_filter_and_inclusive_floor_equal_boundary \
+             arm so the two implementations cannot diverge silently",
+        );
+        assert_eq!(hits[0].text, "exact");
+
+        // (2) Inclusive-floor-equality arm — same shape as the in-memory
+        // pin.
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], None, 10, Some(1.0))
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "SqliteStore inclusive-floor must accept a record at \
+             cosine exactly equal to the min_relevance threshold — \
+             cross-binds the in_memory pin's inclusive-equality arm",
+        );
+        assert_eq!(hits[0].text, "exact");
+    }
+
     #[test]
     fn sqlite_embedding_bytes_pins_round_trip_little_endian_and_trailing_partial_chunk_drop() {
         // SqliteStore::embedding_to_bytes (line 505-511) and

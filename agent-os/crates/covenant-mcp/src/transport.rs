@@ -649,6 +649,98 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_response_id_deserializer_pins_missing_null_empty_and_negative() {
+        // JsonRpcResponse::id is Option<u64> with #[serde(default,
+        // deserialize_with = "deserialize_jsonrpc_id")]. The custom
+        // deserializer is what allows MCP servers to send numeric,
+        // string-numeric, or whitespace-padded string ids while
+        // rejecting non-numeric strings. The existing happy-path tests
+        // (json_rpc_response_with_error_parses,
+        // json_rpc_response_with_numeric_string_id_parses,
+        // json_rpc_response_with_whitespace_string_id_parses) and the
+        // single rejection (json_rpc_response_with_non_numeric_string_id_errors)
+        // do not pin four meaningful edge cases that ride the custom
+        // visitor's None-emitting and negative-rejection branches:
+        //
+        // * Missing id field decodes to None via #[serde(default)] —
+        //   the visit_none path in the visitor is dead for this case
+        //   (#[serde(default)] short-circuits before invoking the
+        //   custom deserializer), but the contract that a missing id
+        //   reads as None is what MCP transport's request/response
+        //   correlation depends on for parse-error envelopes the
+        //   server emits before it can extract the request's id.
+        // * Explicit JSON null id decodes to None via the visitor's
+        //   visit_unit branch — defensive parsing for MCP servers
+        //   that emit "id": null on parse-error envelopes.
+        // * Empty or whitespace-only string id decodes to None via
+        //   the visitor's visit_str trimmed-empty branch — same
+        //   defensive parsing surface for misbehaving servers.
+        // * Negative integer id is rejected via the visitor's
+        //   visit_i64 negative-value branch — JSON-RPC 2.0 ids must
+        //   be non-negative integers; a relaxation that wraps to a
+        //   large unsigned value would silently break in-flight
+        //   request/response correlation.
+        //
+        // A refactor that swaps the custom deserializer for derived
+        // Option<u64> would drop branches (3) and (4) without
+        // breaking any existing test.
+        let missing: JsonRpcResponse =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","result":{"ok":true}}"#).expect(
+                "JsonRpcResponse with no id field must decode via #[serde(default)] \
+                 to id: None; a dropped default would refuse parse-error envelopes \
+                 from MCP servers that cannot extract the request id",
+            );
+        assert_eq!(
+            missing.id, None,
+            "missing id field must decode to None — JSON-RPC 2.0 parse-error \
+             envelopes routinely omit id and the transport layer's \
+             request/response correlation routes them as uncorrelated",
+        );
+
+        let null: JsonRpcResponse =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":null,"result":{"ok":true}}"#).expect(
+                "JsonRpcResponse with explicit \"id\": null must decode via the \
+                 visitor's visit_unit branch to id: None; a refactor that swapped \
+                 the custom deserializer for a derived Option<u64> still handles \
+                 null but a refactor that hardened the visitor to reject visit_unit \
+                 would break MCP servers emitting null ids on parse-error envelopes",
+            );
+        assert_eq!(null.id, None, "explicit JSON null id must decode to None");
+
+        let empty: JsonRpcResponse =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":"","result":{"ok":true}}"#).expect(
+                "JsonRpcResponse with \"id\": \"\" must decode via the visitor's \
+                 visit_str trimmed-empty branch to id: None; this is the \
+                 defensive-parsing surface a derived Option<u64> deserializer \
+                 would reject outright",
+            );
+        assert_eq!(empty.id, None, "empty-string id must decode to None");
+
+        let whitespace: JsonRpcResponse =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":"   ","result":{"ok":true}}"#).expect(
+                "JsonRpcResponse with whitespace-only \"id\": \"   \" must decode \
+                 via the visitor's visit_str trimmed-empty branch to id: None",
+            );
+        assert_eq!(
+            whitespace.id, None,
+            "whitespace-only string id must decode to None after trim",
+        );
+
+        assert!(
+            serde_json::from_str::<JsonRpcResponse>(
+                r#"{"jsonrpc":"2.0","id":-1,"result":{"ok":true}}"#
+            )
+            .is_err(),
+            "JsonRpcResponse with negative integer id must be rejected by the \
+             visitor's visit_i64 negative-value branch; JSON-RPC 2.0 ids are \
+             non-negative integers and a relaxation that wrapped -1 to \
+             0xFFFFFFFFFFFFFFFF would silently break in-flight request/response \
+             correlation by mapping the negative id to a wraparound u64 that \
+             does not match any positive numeric id the client issued",
+        );
+    }
+
+    #[test]
     fn json_rpc_error_serde_pins_two_required_and_data_skip_empty() {
         // JsonRpcError is the per-error payload riding inside
         // JsonRpcResponse::error. Three fields: code (i64, the

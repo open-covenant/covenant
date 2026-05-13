@@ -823,6 +823,107 @@ entry = "main.py"
     }
 
     #[test]
+    fn hermes_section_partial_block_independently_defaults_each_missing_field() {
+        // covenant_manifest::HermesAgent (line 155-171) has
+        // #[serde(default)] at the struct level so each missing
+        // field falls back independently to Default::default():
+        // tools_allowed -> Vec::new(), approval_policy ->
+        // HermesApprovalPolicy::OperatorPrompt (via the #[default]
+        // attribute on the OperatorPrompt variant at line 176).
+        //
+        // hermes_section_parses_and_defaults_when_omitted (line 768)
+        // only covers the two binary cases: full block with both
+        // fields, or no [hermes] block at all. The intermediate
+        // cases — [hermes] block present with only one of
+        // tools_allowed or approval_policy declared — are not tested.
+        // A refactor that dropped the struct-level #[serde(default)]
+        // would still parse the missing-block case (because
+        // Manifest::hermes uses HermesAgent::default() via its own
+        // #[serde(default)] elsewhere) but would silently start
+        // rejecting every legacy manifest with a partial [hermes]
+        // block.
+
+        let only_tools = r#"
+[agent]
+id = "hx"
+name = "hx"
+version = "0.1.0"
+runtime = "hermes"
+
+[hermes]
+tools_allowed = ["terminal"]
+"#;
+        let m = Manifest::parse(only_tools).expect(
+            "partial [hermes] block with only tools_allowed must parse \
+             — pins the struct-level #[serde(default)] on HermesAgent. \
+             A refactor that dropped serde(default) on the struct \
+             would surface here as a missing-field parse error",
+        );
+        assert_eq!(m.hermes.tools_allowed, vec!["terminal"]);
+        assert_eq!(
+            m.hermes.approval_policy,
+            HermesApprovalPolicy::OperatorPrompt,
+            "missing approval_policy must default to OperatorPrompt \
+             — pins the #[default] attribute on the OperatorPrompt \
+             variant at line 176. A refactor that removed #[default] \
+             or moved it to AutoDeny would silently flip the \
+             operator-prompt default and break the documented \
+             contract that an unset approval_policy blocks until an \
+             operator answers",
+        );
+
+        let only_policy = r#"
+[agent]
+id = "hx"
+name = "hx"
+version = "0.1.0"
+runtime = "hermes"
+
+[hermes]
+approval_policy = "auto-deny"
+"#;
+        let m = Manifest::parse(only_policy).expect(
+            "partial [hermes] block with only approval_policy must \
+             parse — pins the struct-level #[serde(default)] for the \
+             tools_allowed field. A refactor that swapped Vec<String> \
+             for a NonEmpty wrapper would surface here as a \
+             default-rejection error",
+        );
+        assert!(
+            m.hermes.tools_allowed.is_empty(),
+            "missing tools_allowed must default to empty Vec — pins \
+             the documentary-today contract that an unset \
+             tools_allowed places no constraint on Hermes-side tool \
+             use",
+        );
+        assert_eq!(m.hermes.approval_policy, HermesApprovalPolicy::AutoDeny);
+
+        let empty_block = r#"
+[agent]
+id = "hx"
+name = "hx"
+version = "0.1.0"
+runtime = "hermes"
+
+[hermes]
+"#;
+        let m = Manifest::parse(empty_block).expect(
+            "empty [hermes] block must parse — distinct from the \
+             missing-block case (covered by \
+             hermes_section_parses_and_defaults_when_omitted at line \
+             768) because the section header is present but fields \
+             are absent. Pins that the section-present + fields- \
+             absent case collapses to the same defaults as the \
+             section-absent case",
+        );
+        assert!(m.hermes.tools_allowed.is_empty());
+        assert_eq!(
+            m.hermes.approval_policy,
+            HermesApprovalPolicy::OperatorPrompt
+        );
+    }
+
+    #[test]
     fn hermes_runtime_omits_entry() {
         // Hermes-backed agents delegate to an external gateway and have
         // nothing on disk to execute. The manifest must therefore accept

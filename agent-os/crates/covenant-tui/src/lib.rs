@@ -1132,6 +1132,197 @@ mod tests {
     }
 
     #[test]
+    fn handle_terminal_view_pins_q_quits_with_browsing_return_while_esc_and_other_keys_dismiss_without_quit_across_four_modes(
+    ) {
+        // App::handle_terminal_view (lib.rs line 765-773) is the shared
+        // dismissal handler for the four terminal-view modes: Result and
+        // Error (routed at line 294) and GrantResult and GrantError
+        // (routed at line 374). The body has exactly two arms:
+        //
+        //   KeyCode::Char('q') => { self.exit = Some(UserQuit); Mode::Browsing }
+        //   _ => Mode::Browsing
+        //
+        // The doc-comment above the fn says "any key returns to
+        // Browsing" but does not document the asymmetry with
+        // handle_browsing (line 659-735), where `KeyCode::Char('q') |
+        // KeyCode::Esc` share the quit arm. Tests in this module pin
+        // each half separately — result_view_any_key_returns_to_browsing
+        // uses Enter and asserts mode (not exit_reason),
+        // error_view_q_returns_to_browsing_and_quits uses 'q' and asserts
+        // exit_reason (not mode). The 'q' arm is the only place
+        // self.exit is set inside handle_terminal_view; the wildcard
+        // arm must NOT set exit even though it returns the same Mode.
+        //
+        // This pin anchors three contracts across all four terminal-view
+        // modes simultaneously:
+        //   (a) 'q' both sets exit AND returns Mode::Browsing — a
+        //       refactor that dropped the Mode::Browsing return would
+        //       leave the renderer drawing the stale terminal view for
+        //       one frame before the event loop saw exit_reason.
+        //   (b) Esc returns to Browsing WITHOUT setting exit — pins
+        //       the asymmetry with handle_browsing; a refactor that
+        //       consolidated Char('q') | Esc into the quit arm would
+        //       silently quit on every Esc-dismissal of a Result, Error,
+        //       GrantResult, or GrantError view.
+        //   (c) Arbitrary non-q non-Esc chars return to Browsing WITHOUT
+        //       setting exit — a refactor that moved self.exit out of
+        //       the q-arm would silently quit on any key.
+
+        fn arrange_result() -> App {
+            let mut app = App::new();
+            app.on_key(press(KeyCode::Char('i')));
+            type_chars(&mut app, "x");
+            app.on_key(press(KeyCode::Enter));
+            app.on_key(press(KeyCode::Char('s')));
+            app.apply_submission_outcome(SubmissionOutcome::Accepted {
+                intent_id: Uuid::new_v4(),
+                status: "ok".into(),
+                text: "reply".into(),
+            });
+            assert!(matches!(app.mode(), Mode::Result { .. }));
+            assert_eq!(app.exit_reason(), None);
+            app
+        }
+
+        fn arrange_error() -> App {
+            let mut app = App::new();
+            app.on_key(press(KeyCode::Char('i')));
+            type_chars(&mut app, "x");
+            app.on_key(press(KeyCode::Enter));
+            app.on_key(press(KeyCode::Char('s')));
+            app.apply_submission_outcome(SubmissionOutcome::Failed {
+                message: "boom".into(),
+            });
+            assert!(matches!(app.mode(), Mode::Error { .. }));
+            assert_eq!(app.exit_reason(), None);
+            app
+        }
+
+        fn arrange_grant_result() -> App {
+            let mut app = App::new();
+            app.on_key(press(KeyCode::Char('g')));
+            type_chars(&mut app, "memory.read");
+            app.on_key(press(KeyCode::Enter));
+            let _ = app.take_pending_grant_submission();
+            app.apply_grant_outcome(GrantOutcome::Granted {
+                signature_b58: "sig".into(),
+                subject_display: "user@local".into(),
+                action: "memory.read".into(),
+            });
+            assert!(matches!(app.mode(), Mode::GrantResult { .. }));
+            assert_eq!(app.exit_reason(), None);
+            app
+        }
+
+        fn arrange_grant_error() -> App {
+            let mut app = App::new();
+            app.on_key(press(KeyCode::Char('g')));
+            type_chars(&mut app, "bogus.action");
+            app.on_key(press(KeyCode::Enter));
+            let _ = app.take_pending_grant_submission();
+            app.apply_grant_outcome(GrantOutcome::Failed {
+                message: "unknown action namespace".into(),
+            });
+            assert!(matches!(app.mode(), Mode::GrantError { .. }));
+            assert_eq!(app.exit_reason(), None);
+            app
+        }
+
+        let arrangers: [(&str, fn() -> App); 4] = [
+            ("Result", arrange_result),
+            ("Error", arrange_error),
+            ("GrantResult", arrange_grant_result),
+            ("GrantError", arrange_grant_error),
+        ];
+
+        for (mode_label, build) in arrangers {
+            // (a) 'q' must BOTH set exit AND return Mode::Browsing.
+            //     error_view_q_returns_to_browsing_and_quits only
+            //     asserts exit_reason for Error; this anchors both
+            //     halves of the quit arm across all four modes.
+            let mut app = build();
+            app.on_key(press(KeyCode::Char('q')));
+            assert_eq!(
+                app.mode(),
+                &Mode::Browsing,
+                "'q' in Mode::{mode_label} must return Mode::Browsing — \
+                 a refactor that omitted the Mode::Browsing return on \
+                 the quit arm (e.g., early-return after setting exit) \
+                 would leave the renderer drawing the stale terminal \
+                 view for one frame before the event loop noticed \
+                 exit_reason; error_view_q_returns_to_browsing_and_quits \
+                 only asserts exit_reason and would still pass"
+            );
+            assert_eq!(
+                app.exit_reason(),
+                Some(ExitReason::UserQuit),
+                "'q' in Mode::{mode_label} must set exit_reason to \
+                 UserQuit — the 'q' arm is the ONLY place \
+                 handle_terminal_view sets self.exit; a refactor that \
+                 moved or removed the assignment would silently break \
+                 the documented terminal-view dismissal contract"
+            );
+
+            // (b) Esc must dismiss to Browsing WITHOUT setting exit.
+            //     This is the load-bearing asymmetry: handle_browsing
+            //     (line 659-735) treats Char('q') | Esc as a single
+            //     quit arm. handle_terminal_view does not. A refactor
+            //     that consolidated the two handlers' quit semantics
+            //     "for consistency" would silently discard the
+            //     operator's TUI session on every Esc-dismissal of a
+            //     terminal view.
+            let mut app = build();
+            app.on_key(press(KeyCode::Esc));
+            assert_eq!(
+                app.mode(),
+                &Mode::Browsing,
+                "Esc in Mode::{mode_label} must return Mode::Browsing — \
+                 wildcard arm of handle_terminal_view"
+            );
+            assert_eq!(
+                app.exit_reason(),
+                None,
+                "Esc in Mode::{mode_label} must NOT quit — pins the \
+                 asymmetry with handle_browsing where Esc DOES quit; \
+                 a refactor that consolidated Char('q') | Esc into the \
+                 quit arm under an 'Esc-is-quit for consistency' \
+                 rationale would silently discard the operator's TUI \
+                 session on every Esc-dismissal of a terminal view. \
+                 result_view_any_key_returns_to_browsing uses Enter and \
+                 would still pass; the existing tests would not catch \
+                 the regression"
+            );
+
+            // (c) Arbitrary non-q non-Esc char must dismiss to Browsing
+            //     WITHOUT setting exit. Anchors that the wildcard arm
+            //     does not quit; a refactor that moved
+            //     `self.exit = Some(UserQuit)` outside the q-arm under
+            //     an 'any key dismisses and quits because terminal
+            //     views are terminal' rationale would silently quit on
+            //     every keystroke while inspecting a result or error.
+            let mut app = build();
+            app.on_key(press(KeyCode::Char('x')));
+            assert_eq!(
+                app.mode(),
+                &Mode::Browsing,
+                "non-q non-Esc char 'x' in Mode::{mode_label} must \
+                 return Mode::Browsing — wildcard arm"
+            );
+            assert_eq!(
+                app.exit_reason(),
+                None,
+                "non-q non-Esc char 'x' in Mode::{mode_label} must NOT \
+                 quit — a refactor that moved self.exit out of the \
+                 'q' arm to the wildcard or to a pre-match block would \
+                 silently quit on every keystroke; \
+                 result_view_any_key_returns_to_browsing only asserts \
+                 the mode is Browsing (which still holds) and would \
+                 not catch the regression"
+            );
+        }
+    }
+
+    #[test]
     fn pressing_m_enters_memory_tail_loading_and_arms_fetch() {
         let mut app = App::new();
         app.on_key(press(KeyCode::Char('m')));

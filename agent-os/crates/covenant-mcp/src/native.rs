@@ -134,21 +134,17 @@ mod tests {
              would break every MCP client's argument-validation entry path",
         );
 
-        let properties = obj
-            .get("properties")
-            .and_then(|v| v.as_object())
-            .expect("schema.properties must be a JSON object — MCP clients \
-                     traverse it to enumerate accepted arguments");
-        let text_spec = properties
-            .get("text")
-            .and_then(|v| v.as_object())
-            .expect(
-                "schema.properties.text must be an object with a type field — \
+        let properties = obj.get("properties").and_then(|v| v.as_object()).expect(
+            "schema.properties must be a JSON object — MCP clients \
+                     traverse it to enumerate accepted arguments",
+        );
+        let text_spec = properties.get("text").and_then(|v| v.as_object()).expect(
+            "schema.properties.text must be an object with a type field — \
                  a refactor that renamed properties.text (e.g., to message) \
                  without updating call()'s arguments.get('text') would silently \
                  break every operator-facing echo invocation because the daemon \
                  keeps reading the old key",
-            );
+        );
         assert_eq!(
             text_spec.get("type").and_then(|v| v.as_str()),
             Some("string"),
@@ -159,17 +155,14 @@ mod tests {
              missing-text",
         );
 
-        let required = obj
-            .get("required")
-            .and_then(|v| v.as_array())
-            .expect(
-                "schema.required must be a JSON array — a refactor that swapped \
+        let required = obj.get("required").and_then(|v| v.as_array()).expect(
+            "schema.required must be a JSON array — a refactor that swapped \
                  the array for a string 'text' under a 'simpler schema authoring' \
                  rationale would silently break MCP client validation that reads \
                  required as an array, and operator-facing inputs that omitted \
                  the text field would either fail with a confusing schema error \
                  or succeed unexpectedly through a permissive fallback",
-            );
+        );
         assert_eq!(
             required.len(),
             1,

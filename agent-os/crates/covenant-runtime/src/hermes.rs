@@ -1448,7 +1448,10 @@ mod tests {
              (e.g., 'treat null as opt-in') surfaces here",
         );
 
-        features.insert("run_submission".into(), Value::Array(vec![Value::Bool(true)]));
+        features.insert(
+            "run_submission".into(),
+            Value::Array(vec![Value::Bool(true)]),
+        );
         assert!(
             !feature_flag(&features, "run_submission"),
             "array value must yield false even when it contains a \

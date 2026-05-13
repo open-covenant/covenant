@@ -989,6 +989,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_record_pins_chain_corruption_on_length_mismatch_with_field_values() {
+        // covenant_audit::JsonlAuditLog::record (lib.rs around line
+        // 510-538) guards on chain-file length parity before
+        // appending a new event. The check at lines 524-528 reads:
+        //
+        //   if existing_chain.len() != existing_events.len() {
+        //       return Err(AuditError::ChainCorruption {
+        //           events: existing_events.len(),
+        //           chain: existing_chain.len(),
+        //       });
+        //   }
+        //
+        // The doc-comment at lines 517-523 documents the threat: the
+        // previous behaviour silently rebuilt over whatever the
+        // events file held, which is precisely what an attacker who
+        // tampered with both files wants — rebuild produces a chain
+        // that matches the tampered events, and verify_integrity
+        // passes afterwards. The check refuses instead, so the
+        // operator must run an external recovery to acknowledge the
+        // gap.
+        //
+        // No test fires the arm today. A refactor that removed the
+        // check under a 'silently rebuild is fine for the common
+        // case' rationale would re-open the documented threat
+        // surface. A refactor that flipped the equality to chain >
+        // events (one-directional) would silently let attackers
+        // truncate the chain without firing. A refactor that swapped
+        // events and chain field assignments under an 'alphabetize
+        // struct-field initializers' rationale would silently
+        // mis-report the counts in operator error messages and
+        // confuse incident triage.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+
+        // Seed two events so events.jsonl has 2 lines and chain.jsonl
+        // has 2 entries. The chain file lives next to events.jsonl
+        // with the .chain.jsonl extension.
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        let chain_path = path.with_extension("chain.jsonl");
+
+        // Externally truncate the chain file to a single entry — the
+        // attacker's tampered-rewrite scenario at half-completion.
+        let chain_raw = std::fs::read_to_string(&chain_path).unwrap();
+        let first_line = chain_raw
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .expect("seeded chain.jsonl must have at least one entry");
+        std::fs::write(&chain_path, format!("{first_line}\n")).unwrap();
+
+        let err = log.record(dummy(intent_kind("ok"))).await.expect_err(
+            "record must refuse to append when the chain file has \
+                 been externally truncated — the previous behaviour \
+                 silently rebuilt over whatever events held; the check \
+                 at lines 524-528 closes that threat (see doc-comment \
+                 at lines 517-523). A refactor that removed the check \
+                 under a 'silently rebuild is fine' rationale would \
+                 surface here as record returning Ok",
+        );
+
+        match err {
+            AuditError::ChainCorruption { events, chain } => {
+                assert_eq!(
+                    events, 2,
+                    "ChainCorruption.events must equal the actual \
+                     events.jsonl row count (2 — the two seeded \
+                     records). A refactor that swapped the field \
+                     assignments under a 'sort fields alphabetically' \
+                     rationale would surface here as events == 1 \
+                     (the truncated chain count) with no other \
+                     compile-time signal that operator-facing error \
+                     messages now mis-report which file was tampered",
+                );
+                assert_eq!(
+                    chain, 1,
+                    "ChainCorruption.chain must equal the truncated \
+                     chain.jsonl row count (1 — externally written \
+                     with a single line above). Paired with the \
+                     events assertion above, a field-swap regression \
+                     fails BOTH assertions and the operator-facing \
+                     error message diagnostic in lines 30-31 ('events \
+                     file has {{events}} rows, chain file has \
+                     {{chain}}') survives intact",
+                );
+            }
+            other => panic!(
+                "record with truncated chain.jsonl must return \
+                 AuditError::ChainCorruption (the equality check at \
+                 lines 524-528 fires on chain.len() != events.len() \
+                 in both directions); a one-directional comparison \
+                 (e.g., chain > events) would silently let this \
+                 truncated-chain case pass and the rebuild logic at \
+                 line 540 would silently produce a chain matching \
+                 the truncated state. Got: {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
     async fn jsonl_recent_on_missing_file_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

@@ -656,4 +656,29 @@ required = ["tool.web_search"]
              the order drifted from the documented manifest-id contract"
         );
     }
+
+    #[test]
+    fn router_error_manifest_display_message_pins_prefix_path_then_source_ordering_and_display_formatting_on_both_fields() {
+        let err = RouterError::Manifest {
+            path: PathBuf::from("/tmp/missing-agent/agent.toml"),
+            source: covenant_manifest::ManifestError::Validation("agent.id must not be empty".into()),
+        };
+        let message = format!("{err}");
+        assert_eq!(
+            message, "manifest at /tmp/missing-agent/agent.toml: validation: agent.id must not be empty",
+            "RouterError::Manifest Display drifted (typo, dropped 'manifest at' prefix, field-ordering swap, or Debug-vs-Display formatting regression class)"
+        );
+        assert!(
+            message.starts_with("manifest at "),
+            "RouterError::Manifest must surface the 'manifest at ' source-of-failure prefix so operators investigating a covenant daemon startup failure can locate the broken agent.toml file (dropped-prefix regression class): {message}"
+        );
+        assert!(
+            message.contains(": validation: agent.id must not be empty"),
+            "RouterError::Manifest must surface the inner ManifestError via its Display impl after the colon (path-then-source ordering); a refactor that put {{source}} before {{path}} would lose the file-locating context (field-ordering-swap regression class): {message}"
+        );
+        assert!(
+            !message.contains("\"/tmp/missing-agent/agent.toml\""),
+            "RouterError::Manifest must NOT surround the path with quotes; the {{path}} interpolation must render via Display (no surrounding quotes), not Debug; a refactor to {{path:?}} would surround the path with quotes and break operator-facing CLI documentation parity and audit-log scrapers that split on the colon-after-path (Debug-vs-Display formatting regression class on the {{path}} interpolation): {message}"
+        );
+    }
 }

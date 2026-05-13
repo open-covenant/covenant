@@ -962,6 +962,102 @@ filesystem = "host"
         );
     }
 
+    #[test]
+    fn gvisor_args_for_pins_each_runtime_kind_interpreter_prefix() {
+        // GvisorRunner::args_for (line 219-226) is the documented bridge
+        // from manifest RuntimeKind to the OCI process.args vector that
+        // gVisor's runsc hands to the sandboxed init process. Three arms:
+        //
+        //   RustBin → [/workspace/<entry>]
+        //   Python3 → ["python3", /workspace/<entry>]
+        //   Node    → ["node",    /workspace/<entry>]
+        //
+        // gvisor_runner_builds_restrictive_oci_config exercises the
+        // RustBin arm via `config["process"]["args"][0] ==
+        // "/workspace/agent.sh"`. The Python3 and Node arms — which
+        // prepend the interpreter so the OCI exec resolves the script
+        // through the language runtime rather than treating it as a
+        // native binary — are not pinned. SubprocessRunner carries the
+        // same three-arm dispatch (line 105-117) and only the RustBin
+        // arm is exercised end-to-end via subprocess_runner_executes_real_script.
+        //
+        // A refactor that swapped the Python3 and Node interpreter
+        // strings (e.g., during a code-style cleanup that touches both
+        // arms together) would silently run python agents through
+        // `node` and vice versa; the existing RustBin-only pin still
+        // passes; the regression surfaces only as a confusing
+        // 'command not found' deep inside runsc logs that operators
+        // cannot reproduce without a sandbox host. Pin each arm at the
+        // helper-function boundary so the dispatch contract is loud.
+        let dir = tempdir().unwrap();
+
+        let manifest_for = |runtime: &str| -> String {
+            format!(
+                r#"
+[agent]
+id = "sandboxed"
+name = "Sandboxed"
+version = "0.0.1"
+runtime = "{runtime}"
+entry = "./agent.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+network = "off"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "read-only-package"
+"#
+            )
+        };
+
+        let rust_card = card_for(&manifest_for("rust-bin"), dir.path().to_path_buf());
+        let py_card = card_for(&manifest_for("python3"), dir.path().to_path_buf());
+        let node_card = card_for(&manifest_for("node"), dir.path().to_path_buf());
+
+        assert_eq!(
+            GvisorRunner::args_for(&rust_card),
+            vec!["/workspace/agent.sh".to_string()],
+            "RustBin arm must surface the bare workspace-prefixed entry \
+             — a refactor that prepended an interpreter (e.g., 'cargo \
+             run' or '/bin/sh') would silently wrap every native-binary \
+             agent in an unwanted launcher and the gVisor OCI exec \
+             would try to resolve the launcher inside the read-only \
+             rootfs with no parse-time signal at the runner layer",
+        );
+
+        assert_eq!(
+            GvisorRunner::args_for(&py_card),
+            vec!["python3".to_string(), "/workspace/agent.sh".to_string()],
+            "Python3 arm must prepend the literal 'python3' before the \
+             workspace-prefixed entry — a refactor that swapped this \
+             arm with the Node arm (e.g., during a fan-out cleanup that \
+             touched both interpreter strings together) would silently \
+             run python agents through `node`; the existing RustBin-only \
+             pin gvisor_runner_builds_restrictive_oci_config would still \
+             pass and the regression would surface only as a confusing \
+             'command not found' inside runsc logs that operators \
+             cannot reproduce without a sandbox host",
+        );
+
+        assert_eq!(
+            GvisorRunner::args_for(&node_card),
+            vec!["node".to_string(), "/workspace/agent.sh".to_string()],
+            "Node arm must prepend the literal 'node' before the \
+             workspace-prefixed entry — a refactor that dropped the \
+             explicit prepend (e.g., to unify all arms on a single \
+             Command-style entry path during a cleanup) would make \
+             args_for return ['/workspace/agent.sh'] for Node even \
+             though no shebang resolution exists inside the \
+             read-only-package OCI rootfs that points the .js file at \
+             a JavaScript interpreter; the sandbox would try to exec \
+             the file as a native binary and gVisor would surface \
+             ENOEXEC with no parse-time signal at the runner layer",
+        );
+    }
+
     #[tokio::test]
     async fn gvisor_runner_cleans_bundle_when_runsc_is_missing() {
         let dir = tempdir().unwrap();

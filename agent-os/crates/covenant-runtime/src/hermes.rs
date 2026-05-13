@@ -1007,4 +1007,113 @@ mod tests {
              swap",
         );
     }
+
+    #[test]
+    fn feature_flag_pins_missing_key_and_non_bool_value_default_to_false() {
+        // covenant_runtime::hermes::feature_flag (line 511-513) is the
+        // only function probe_capabilities (line 147-161) consults to
+        // fold a hermes gateway's /capabilities features map into the
+        // typed HermesCapabilities struct. Its body is:
+        //
+        //   features.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+        //
+        // The contract is intentionally strict: only a JSON `true`
+        // counts as advertised. A missing key defaults to false (which
+        // is correct because hermes-agent < v0.12 deployments omit
+        // `run_approval_response` entirely, and the daemon must be
+        // able to distinguish "not advertised" from "advertised false"
+        // without that wrecking the covers_runner gate). A non-bool
+        // value (string, number, null, array, object) also defaults
+        // to false so a gateway that returns `{"run_submission": "true"}`
+        // as a string cannot silently bypass the typed gate.
+        //
+        // No test pins these arms today. A refactor that switched the
+        // `unwrap_or(false)` to `unwrap_or(true)` under an "optimistic
+        // defaults" rationale would silently pass covers_runner against
+        // any gateway that omits a flag entirely. A refactor that
+        // dropped `as_bool()` in favor of a truthy-coercion helper
+        // (e.g., `to_string().parse::<bool>()`) would let the same
+        // gateway advertise capabilities it cannot honor.
+
+        let mut features = serde_json::Map::new();
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "missing key must default to false — hermes-agent < v0.12 \
+             does not advertise run_approval_response at all, and the \
+             daemon must treat that as 'not advertised' rather than \
+             coerced-true. A refactor that switched unwrap_or(false) \
+             to unwrap_or(true) under an optimistic-defaults rationale \
+             would silently pass covers_runner against any gateway \
+             that omits a flag",
+        );
+
+        features.insert("run_submission".into(), Value::Bool(true));
+        assert!(
+            feature_flag(&features, "run_submission"),
+            "explicit JSON `true` is the only value that must yield \
+             true — pins the happy path so a refactor that inverted \
+             the as_bool result surfaces here",
+        );
+
+        features.insert("run_submission".into(), Value::Bool(false));
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "explicit JSON `false` must yield false — pins the \
+             explicit-negative case distinct from the missing-key \
+             case so a refactor that conflated the two (e.g., 'treat \
+             false as missing and default') surfaces here",
+        );
+
+        features.insert("run_submission".into(), Value::String("true".into()));
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "string \"true\" must NOT coerce to bool true — a refactor \
+             that swapped as_bool() for a truthy-coercion helper would \
+             let a malformed gateway advertise capabilities it cannot \
+             honor. The capability schema contract is strictly JSON \
+             bool, not stringly-typed",
+        );
+
+        features.insert(
+            "run_submission".into(),
+            Value::Number(serde_json::Number::from(1)),
+        );
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "numeric 1 must NOT coerce to bool true — pins that a \
+             gateway returning {{\"run_submission\": 1}} cannot bypass \
+             the typed gate under a 'non-zero is truthy' refactor",
+        );
+
+        features.insert("run_submission".into(), Value::Null);
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "explicit JSON null must yield false — distinct from the \
+             missing-key case at the wire level but must collapse to \
+             the same answer so a refactor that special-cased null \
+             (e.g., 'treat null as opt-in') surfaces here",
+        );
+
+        features.insert("run_submission".into(), Value::Array(vec![Value::Bool(true)]));
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "array value must yield false even when it contains a \
+             true element — pins that as_bool inspects the outer \
+             value, not nested ones; a refactor that recursed into \
+             container values under a 'be permissive' rationale would \
+             surface here",
+        );
+
+        features.insert(
+            "run_submission".into(),
+            Value::Object(serde_json::Map::new()),
+        );
+        assert!(
+            !feature_flag(&features, "run_submission"),
+            "object value must yield false — pins that the contract \
+             is a flat bool, not a nested capability descriptor; a \
+             refactor that switched to a structured feature schema \
+             without updating this helper would surface here",
+        );
+    }
 }

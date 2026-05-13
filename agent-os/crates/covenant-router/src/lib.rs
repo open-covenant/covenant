@@ -341,4 +341,54 @@ required = ["tool.web_search"]
         assert_eq!(cards[0].id, "research");
         assert_eq!(cards[0].package_dir, pkg);
     }
+
+    #[test]
+    fn load_agents_from_dir_sorts_multiple_packages_by_manifest_id() {
+        // load_agents_from_dir line 174:
+        //   cards.sort_by(|a, b| a.id.cmp(&b.id));
+        // documented as load-bearing:
+        //   "Sort by manifest id so routing ties resolve deterministically
+        //    across hosts; read_dir returns entries in filesystem order,
+        //    which varies."
+        // The existing load_agents_walks_package_subdirs test creates a
+        // single package so the sort is trivially deterministic. Pin the
+        // sort across three packages whose manifest ids alphabetize
+        // unambiguously to catch a sort_by removal or a sort-key swap.
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["renderer", "research", "analytics"] {
+            let pkg = dir.path().join(id);
+            std::fs::create_dir_all(&pkg).unwrap();
+            std::fs::write(
+                pkg.join("agent.toml"),
+                format!(
+                    r#"
+[agent]
+id = "{id}"
+name = "{id}"
+version = "0.1.0"
+runtime = "rust-bin"
+entry = "./{id}"
+
+[capabilities]
+required = ["tool.web_search"]
+"#
+                ),
+            )
+            .unwrap();
+        }
+
+        let cards = load_agents_from_dir(dir.path()).unwrap();
+        let ids: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["analytics", "renderer", "research"],
+            "load_agents_from_dir must return cards sorted by manifest id; \
+             a refactor that dropped the explicit cards.sort_by line as \
+             'redundant' would silently return cards in std::fs::read_dir \
+             filesystem order, which varies across hosts (APFS vs ext4 vs \
+             ntfs) and inode-creation history — operator routing decisions \
+             would diverge between machines with no parse-time signal that \
+             the order drifted from the documented manifest-id contract"
+        );
+    }
 }

@@ -1393,6 +1393,122 @@ provider = "made-up"
         );
     }
 
+    #[tokio::test]
+    async fn from_config_mock_arms_pin_canonical_default_canned_string_and_dim() {
+        // provider_from_config (line 434) and embedder_from_config
+        // (line 620) both carry parallel hardcoded mock-arm defaults
+        // that the existing discriminator pins
+        // (provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping
+        // and embedder_from_config_pins_mock_arm_and_unknown_provider_rejection)
+        // do not observe: MockProvider::new("mock from config") and
+        // MockEmbedder::new(768). The existing tests only assert
+        // .name() == "mock" through the Box<dyn _> trait object, so a
+        // refactor that bumped the dim to 384 to match a model rename,
+        // or that emptied the canned string while wiring through a
+        // richer breadcrumb in pick_provider, would silently shift
+        // operator-facing semantics with no parse-time or compile-time
+        // signal.
+        //
+        // Both values are observable through the trait object without
+        // downcasting: MockProvider::complete (line 100-108) returns
+        // self.canned.clone() regardless of messages, so the canned
+        // string surfaces verbatim through Provider::complete();
+        // MockEmbedder::embed (line 507-524) returns a Vec<f32> whose
+        // .len() equals self.dim regardless of input text, so the dim
+        // surfaces verbatim through Embedder::embed().len(). The same
+        // hardcoded values appear in pick_provider (line 479-481) and
+        // pick_embedder (line 644) auto-detect fallbacks — a divergence
+        // between config-driven mock and auto-detect-fallback mock
+        // would silently split operator dashboards (different
+        // breadcrumbs depending on secrets.toml presence) and split
+        // memory-store geometry (different dims depending on whether
+        // [embed] provider="mock" is present vs the section being
+        // absent).
+        let provider_mock_toml = r#"
+[llm]
+provider = "mock"
+"#;
+        let cfg: ProviderConfig = toml::from_str(provider_mock_toml).unwrap();
+        let p = provider_from_config(&cfg).expect(
+            "the mock arm must dispatch to MockProvider; cross-binds the \
+             existing provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping \
+             pin that documents this dispatch contract",
+        );
+        assert_eq!(
+            p.name(),
+            "mock",
+            "mock provider must surface name='mock' — cross-binds the \
+             existing discriminator pin's identity contract",
+        );
+        let canned = p.complete(&[ChatMessage::user("ignored")]).await.expect(
+            "MockProvider::complete must succeed regardless of \
+                 message contents — the canned response is the entire \
+                 contract surface and a future refactor that gated \
+                 complete() behind a non-empty messages check would \
+                 break the mock-mode test-fixture deployments \
+                 documented in the discriminator pin",
+        );
+        assert_eq!(
+            canned, "mock from config",
+            "provider_from_config mock arm must construct \
+             MockProvider::new(\"mock from config\") so the canned \
+             breadcrumb surfaces verbatim through complete(); a \
+             refactor that emptied the string or rewrote it to a \
+             generic 'stub' value would silently shift the operator-\
+             facing breadcrumb that distinguishes config-driven mock \
+             (provider=\"mock\" in secrets.toml) from auto-detect-\
+             fallback mock (pick_provider with no config and no \
+             reachable Ollama, which carries the distinct \"covenant-\
+             llm: no provider configured; using stub response\" \
+             breadcrumb at line 479-481) — operator dashboards that \
+             surface complete() output would lose the diagnostic that \
+             tells them which mock path they landed on",
+        );
+
+        let embedder_mock_toml = r#"
+[embed]
+provider = "mock"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(embedder_mock_toml).unwrap();
+        let e = embedder_from_config(&cfg).expect(
+            "the mock arm must dispatch to MockEmbedder; cross-binds \
+             the existing embedder_from_config_pins_mock_arm_and_unknown_provider_rejection \
+             pin that documents this dispatch contract",
+        );
+        assert_eq!(
+            e.name(),
+            "mock",
+            "mock embedder must surface name='mock' — cross-binds the \
+             existing discriminator pin's identity contract",
+        );
+        let vector = e.embed("any").await.expect(
+            "MockEmbedder::embed must succeed for arbitrary text — the \
+             FNV-1a hash + LCG path has no failure branch and a future \
+             refactor that introduced an empty-text rejection would \
+             break the deterministic mock-mode embedding contract \
+             documented in mock_embedder_is_deterministic_for_same_input",
+        );
+        assert_eq!(
+            vector.len(),
+            768,
+            "embedder_from_config mock arm must construct \
+             MockEmbedder::new(768) so embed() returns a 768-dim \
+             vector; a refactor that bumped the dim to 384 or 1536 to \
+             match a model-default rename or to mirror a separate \
+             Ollama embedding dimensionality would silently shift the \
+             geometry of mock-mode memory storage — existing memory-\
+             store data written under the 768-dim mock embedder \
+             becomes geometrically incompatible with new mock-mode \
+             reads, covenant-memory search_similar produces near-zero \
+             relevance for stored vectors, and the only signal an \
+             operator gets is the empty-result UX; pick_embedder's \
+             auto-detect fallback at line 644 also hardcodes 768, so a \
+             divergence between the two hardcoded sites would split \
+             memory geometry based on whether [embed] provider=\"mock\" \
+             is present in secrets.toml vs the section being absent",
+        );
+    }
+
     #[test]
     fn embedder_config_serde_pins_optional_embed_section_default() {
         // EmbedderConfig is the top-level secrets.toml decoder for the

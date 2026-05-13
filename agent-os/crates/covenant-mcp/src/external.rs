@@ -893,4 +893,34 @@ mod tests {
              (prefix-convergence regression class would merge protocol-stage failures with namespace-collision failures)"
         );
     }
+
+    #[test]
+    fn bootstrap_error_transport_display_message_pins_prefix_and_inner_mcp_client_error_display_delegation() {
+        let err = BootstrapError::Transport(McpClientError::Closed);
+        let message = format!("{err}");
+        assert_eq!(
+            message, "transport: transport closed",
+            "BootstrapError::Transport Display drifted (typo, dropped bootstrap-stage prefix, sibling-variant prefix convergence, or Debug-vs-Display formatting regression class on the {{0}} interpolation)"
+        );
+        assert!(
+            message.starts_with("transport: "),
+            "BootstrapError::Transport must surface the 'transport: ' bootstrap-stage prefix so audit-log filters can distinguish MCP-bootstrap-transport-failures from BootstrapError::BadList (protocol-layer) and BootstrapError::DuplicateToolName (namespace-collision) (dropped-bootstrap-stage-prefix regression class): {message}"
+        );
+        assert!(
+            message.contains("transport closed"),
+            "BootstrapError::Transport must surface the inner McpClientError via its Display impl ('transport closed' for Closed); a refactor to {{0:?}} would surface the Debug rendering ('Closed' as the bare variant name) instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+        );
+        assert_ne!(
+            message, "transport: Closed",
+            "BootstrapError::Transport must NOT surface the bare variant name 'Closed' (the McpClientError Debug rendering); the {{0}} interpolation must use Display, not Debug (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+        );
+        assert!(
+            !message.starts_with("malformed tools/list response:"),
+            "BootstrapError::Transport must not converge with BootstrapError::BadList prefix; the bootstrap-stage prefix discriminator must distinguish transport-layer failures from protocol-layer failures (sibling-variant prefix-convergence regression class): {message}"
+        );
+        assert!(
+            !message.starts_with("duplicate remote tool name after MCP prefixing:"),
+            "BootstrapError::Transport must not converge with BootstrapError::DuplicateToolName prefix; the bootstrap-stage prefix discriminator must distinguish transport-layer failures from namespace-collision failures (sibling-variant prefix-convergence regression class): {message}"
+        );
+    }
 }

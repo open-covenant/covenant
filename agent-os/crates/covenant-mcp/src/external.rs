@@ -487,6 +487,104 @@ mod tests {
     }
 
     #[test]
+    fn remote_tool_options_advertised_name_pins_none_empty_trimmed_and_format_arms() {
+        // RemoteToolOptions::advertised_name (line 106-116) decides
+        // the registry-facing name for each remote MCP tool. The
+        // function maps tool_prefix Option through three documented
+        // arms: None -> verbatim upstream_name; Some(s) where
+        // s.trim().is_empty() -> verbatim upstream_name; Some(non-
+        // empty after trim) -> "mcp_<sanitize_prefix(trimmed)>_
+        // <upstream_name>".
+        //
+        // sanitize_prefix_maps_non_alnum_to_underscore_trims_edges_
+        // and_falls_back_to_remote (above) pins sanitize_prefix
+        // itself. This pin closes the composition: the trim-and-
+        // fallback short-circuit, the literal "mcp_" prefix on the
+        // wrap branch, and the sanitize_prefix wiring on the prefix
+        // (but NOT on the upstream name — upstream passes verbatim).
+        let none = RemoteToolOptions::default();
+        assert_eq!(
+            none.advertised_name("foo"),
+            "foo",
+            "None tool_prefix must return upstream_name verbatim — a \
+             refactor that always wrapped (e.g., \
+             'format!(\"mcp_{{}}_{{}}\", \
+             sanitize_prefix(prefix.unwrap_or_default()), \
+             upstream_name)' under a 'tool names should always be \
+             qualified' rationale) would silently rename every tool \
+             from 'foo' to 'mcp_remote_foo' on operators with no \
+             prefix configured (the empty string passed to \
+             sanitize_prefix falls back to the literal 'remote'), \
+             breaking every existing tools/call wire-name reference",
+        );
+
+        let empty = RemoteToolOptions {
+            tool_prefix: Some(String::new()),
+            include: vec![],
+            exclude: vec![],
+        };
+        assert_eq!(
+            empty.advertised_name("foo"),
+            "foo",
+            "Some('') tool_prefix must return upstream_name verbatim \
+             — empty after trim must short-circuit to the same path \
+             as None, otherwise an operator who set tool_prefix='' \
+             expecting it to be a no-op would see every tool renamed \
+             to 'mcp_remote_<name>'",
+        );
+
+        let whitespace = RemoteToolOptions {
+            tool_prefix: Some("   ".into()),
+            include: vec![],
+            exclude: vec![],
+        };
+        assert_eq!(
+            whitespace.advertised_name("foo"),
+            "foo",
+            "Some('   ') tool_prefix must return upstream_name \
+             verbatim — whitespace-only after trim must short-circuit \
+             to the same path as None and empty, pinning that the \
+             trim-then-is_empty filter applies before the wrap branch",
+        );
+
+        let plain = RemoteToolOptions {
+            tool_prefix: Some("myserver".into()),
+            include: vec![],
+            exclude: vec![],
+        };
+        assert_eq!(
+            plain.advertised_name("foo"),
+            "mcp_myserver_foo",
+            "Some('myserver') tool_prefix must wrap as \
+             'mcp_<prefix>_<upstream>' — pins the literal 'mcp_' \
+             prefix on the wrap branch. A refactor that swapped the \
+             format string from 'mcp_{{}}_{{}}' to '{{}}_{{}}' under \
+             a 'drop the redundant mcp_ prefix' rationale would \
+             silently break tool-namespace collision handling, since \
+             two MCP servers with the same prefix 'fs' would both \
+             produce 'fs_read' instead of distinct 'mcp_fs_read' \
+             names",
+        );
+
+        let dashed = RemoteToolOptions {
+            tool_prefix: Some("my-server".into()),
+            include: vec![],
+            exclude: vec![],
+        };
+        assert_eq!(
+            dashed.advertised_name("foo"),
+            "mcp_my_server_foo",
+            "Some('my-server') tool_prefix must wrap with the dash \
+             mapped to underscore via sanitize_prefix — pins that \
+             the sanitize_prefix composition is wired through \
+             advertised_name. A refactor that bypassed sanitize_prefix \
+             and called the prefix verbatim under a 'sanitize_prefix \
+             is overcautious' rationale would produce \
+             'mcp_my-server_foo' and surface here",
+        );
+    }
+
+    #[test]
     fn parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap(
     ) {
         let r = parse_tool_call_result(serde_json::json!({})).expect(

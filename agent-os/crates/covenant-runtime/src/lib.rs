@@ -989,6 +989,175 @@ cpu_ms_per_task = 5000
     }
 
     #[test]
+    fn gvisor_ensure_allowed_pins_filesystem_and_network_arm_reasons() {
+        // GvisorRunner::ensure_allowed (line 193-217) rejects manifests
+        // that select gVisor but violate the v0 filesystem or network
+        // policy. Each arm carries a unique load-bearing reason string:
+        //
+        //   (1) backend != LinuxGvisor       -> "manifest does not select linux-gvisor"
+        //   (2) filesystem != ReadOnlyPackage -> "initial gVisor runner only supports read-only-package filesystem policy"
+        //   (3) resources.network != Off      -> "initial gVisor runner only supports network=off"
+        //
+        // gvisor_ensure_allowed_pins_backend_mismatch_arm_with_reason
+        // (line 884) pins arm 1's reason substring.
+        // gvisor_runner_rejects_unenforced_policies (line 828) exercises
+        // arms 2 and 3 but only asserts the error variant via matches!()
+        // — the reason strings themselves remain unpinned. This pin
+        // closes both arms with a substring match identical in shape to
+        // the existing arm-1 pin so a refactor that consolidates the
+        // three reason strings into a generic 'unsupported sandbox
+        // policy' template (during a DRY-cleanup fan-out) cannot ship
+        // without breaking the operator-dashboard grep contract.
+        //
+        // The first fixture isolates arm 2 by satisfying arm 3
+        // (network=off is the [resources] default but pinned explicitly
+        // here so a future default change cannot silently shift which
+        // arm fires); the second fixture isolates arm 3 by satisfying
+        // arm 2 (filesystem=read-only-package).
+        let dir = tempdir().unwrap();
+        let rootfs = tempdir().unwrap();
+        let scratch = tempdir().unwrap();
+        let runner = GvisorRunner::with_paths("runsc", rootfs.path(), scratch.path());
+
+        // Arm 2: filesystem=host violates ReadOnlyPackage; backend and
+        // network are both compliant so this is the ONLY arm that can
+        // fire inside ensure_allowed.
+        let host_fs = card_for(
+            r#"
+[agent]
+id = "host-fs-agent"
+name = "Host FS Agent"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[resources]
+network = "off"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "host"
+"#,
+            dir.path().to_path_buf(),
+        );
+        match runner.oci_config(&host_fs) {
+            Err(RunnerError::UnsupportedSandboxPolicy {
+                agent,
+                backend,
+                reason,
+            }) => {
+                assert_eq!(
+                    agent, "host-fs-agent",
+                    "UnsupportedSandboxPolicy.agent must carry the offending \
+                     agent.id for filesystem-arm rejections — operator \
+                     dashboards group sandbox-policy failures by agent.id \
+                     to attribute the misconfiguration to a specific \
+                     manifest; cross-binds the identical assertion on the \
+                     backend-mismatch arm pin",
+                );
+                assert_eq!(
+                    backend,
+                    SandboxBackend::LinuxGvisor,
+                    "UnsupportedSandboxPolicy.backend must surface the \
+                     RUNNER's required backend (LinuxGvisor), not the \
+                     manifest's filesystem policy that triggered the \
+                     rejection — the field is documented as the runner-\
+                     side expectation across all three arms; cross-binds \
+                     the identical assertion on the backend-mismatch arm \
+                     pin",
+                );
+                assert!(
+                    reason.contains(
+                        "initial gVisor runner only supports read-only-package filesystem policy"
+                    ),
+                    "the filesystem-arm reason must contain the substring \
+                     'initial gVisor runner only supports read-only-\
+                     package filesystem policy' — a refactor that \
+                     consolidated the three rejection arms into a generic \
+                     'unsupported sandbox policy: filesystem = host, \
+                     expected read-only-package' template (during a DRY-\
+                     cleanup pass) would silently break on-call alerting \
+                     that grep's this substring to classify and route \
+                     filesystem-policy violations to the sandbox-policy \
+                     runbook; the variant-only ancestor in \
+                     gvisor_runner_rejects_unenforced_policies (line 828) \
+                     would still pass because it never reads the reason. \
+                     got: {reason}"
+                );
+            }
+            other => panic!(
+                "expected RunnerError::UnsupportedSandboxPolicy with the \
+                 filesystem-arm reason for filesystem=host; a refactor \
+                 that dropped the filesystem equality check inside \
+                 ensure_allowed (line 201-208) would silently let \
+                 oci_config canonicalize paths and write a host-fs OCI \
+                 bundle that bypasses the v0 read-only-package \
+                 invariant; got: {other:?}"
+            ),
+        }
+
+        // Arm 3: network=outbound-https-only violates Off; backend and
+        // filesystem are both compliant so this is the ONLY arm that
+        // can fire inside ensure_allowed.
+        let networked = card_for(
+            r#"
+[agent]
+id = "networked-agent"
+name = "Networked Agent"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[resources]
+network = "outbound-https-only"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "read-only-package"
+"#,
+            dir.path().to_path_buf(),
+        );
+        match runner.oci_config(&networked) {
+            Err(RunnerError::UnsupportedSandboxPolicy {
+                agent,
+                backend,
+                reason,
+            }) => {
+                assert_eq!(agent, "networked-agent");
+                assert_eq!(backend, SandboxBackend::LinuxGvisor);
+                assert!(
+                    reason.contains("initial gVisor runner only supports network=off"),
+                    "the network-arm reason must contain the substring \
+                     'initial gVisor runner only supports network=off' — \
+                     a refactor that consolidated the three rejection \
+                     arms into a generic 'unsupported sandbox policy: \
+                     network = outbound-https-only, expected off' \
+                     template would silently break the on-call grep that \
+                     distinguishes network-policy violations from \
+                     filesystem-policy and backend-mismatch failures, \
+                     even though the variant-only ancestor in \
+                     gvisor_runner_rejects_unenforced_policies would \
+                     still pass. got: {reason}"
+                );
+            }
+            other => panic!(
+                "expected RunnerError::UnsupportedSandboxPolicy with the \
+                 network-arm reason for network=outbound-https-only; a \
+                 refactor that dropped the network equality check inside \
+                 ensure_allowed (line 209-215) would silently let \
+                 oci_config write an OCI bundle whose linux.namespaces \
+                 still includes the network namespace but whose [resources] \
+                 declared outbound HTTPS — gVisor would honor the \
+                 namespace isolation but the v0 contract that 'gVisor runs \
+                 only network=off agents' would be silently violated; got: \
+                 {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn gvisor_runner_redacts_host_paths_from_stderr() {
         let package = PathBuf::from("/tmp/covenant-agent-package");
         let bundle = PathBuf::from("/tmp/covenant-agent-bundle");

@@ -140,6 +140,154 @@ args = []
     }
 
     #[test]
+    fn mcp_server_serde_pins_two_required_and_six_default_bearing_fields() {
+        // McpServer is the [[mcp.server]] block operators write to
+        // secrets.toml to register an external MCP tool server. Two
+        // strictly required fields (name, command) with no serde
+        // attributes, and six default-bearing fields:
+        //   * args: Vec<String>             #[serde(default)] -> []
+        //   * enabled: bool                 #[serde(default = "default_enabled")] -> true
+        //   * tool_prefix: Option<String>   #[serde(default)] -> None
+        //   * include: Vec<String>          #[serde(default)] -> []
+        //   * exclude: Vec<String>          #[serde(default)] -> []
+        //   * env: BTreeMap<String, String> #[serde(default)] -> empty
+        //
+        // default_enabled returning true is the most load-bearing default
+        // in the file. A refactor that flipped it to false would silently
+        // disable every operator's MCP server block that does not write
+        // an explicit `enabled = true` line; the daemon's tool registry
+        // would collapse to the native EchoTool/ClockTool floor on next
+        // restart with no parse-time signal and agents would lose every
+        // registered external tool. The existing parses_server_hygiene_
+        // fields test exercises a happy path with enabled = false but
+        // does NOT pin the default = true contract for an omitted field.
+        let full = r#"
+[[mcp.server]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/work"]
+enabled = false
+tool_prefix = "fs"
+include = ["read_file"]
+exclude = ["write_file"]
+env = { FOO = "bar", BAZ = "qux" }
+"#;
+        let cfg: McpConfigFile = toml::from_str(full).unwrap();
+        let srv = &cfg.servers()[0];
+        assert_eq!(srv.name, "filesystem");
+        assert_eq!(srv.command, "npx");
+        assert_eq!(
+            srv.args,
+            vec![
+                "-y".to_string(),
+                "@modelcontextprotocol/server-filesystem".to_string(),
+                "/work".to_string()
+            ],
+        );
+        assert!(!srv.enabled);
+        assert_eq!(srv.tool_prefix.as_deref(), Some("fs"));
+        assert_eq!(srv.include, vec!["read_file".to_string()]);
+        assert_eq!(srv.exclude, vec!["write_file".to_string()]);
+        assert_eq!(srv.env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(srv.env.get("BAZ").map(String::as_str), Some("qux"));
+
+        // Minimal block — only the two required fields. Every default-
+        // bearing field must fall through to its documented default.
+        let minimal = r#"
+[[mcp.server]]
+name = "tiny"
+command = "node"
+"#;
+        let cfg: McpConfigFile = toml::from_str(minimal).unwrap();
+        let srv = &cfg.servers()[0];
+        assert_eq!(srv.name, "tiny");
+        assert_eq!(srv.command, "node");
+        assert!(
+            srv.args.is_empty(),
+            "McpServer::args default must be the empty Vec",
+        );
+        assert!(
+            srv.enabled,
+            "McpServer::enabled default MUST be true — the default_enabled \
+             function returning true is the load-bearing default for every \
+             [[mcp.server]] block that omits an explicit enabled key; a \
+             refactor that flipped default_enabled to false silently \
+             disables every operator's MCP server on next daemon restart \
+             with no parse-time signal and the daemon's tool registry \
+             collapses to the native EchoTool/ClockTool floor",
+        );
+        assert!(
+            srv.tool_prefix.is_none(),
+            "McpServer::tool_prefix default must be None",
+        );
+        assert!(
+            srv.include.is_empty(),
+            "McpServer::include default must be the empty Vec",
+        );
+        assert!(
+            srv.exclude.is_empty(),
+            "McpServer::exclude default must be the empty Vec",
+        );
+        assert!(
+            srv.env.is_empty(),
+            "McpServer::env default must be the empty BTreeMap",
+        );
+
+        // Each strictly-required field must reject omission so a future
+        // #[serde(default)] regression on name or command does not let
+        // operator deployments boot with empty-string identifiers — the
+        // daemon's MCP audit rows correlate on (server name, tool
+        // invocation) and an empty name silently collapses every server
+        // into one audit bucket.
+        for (label, toml_src) in [
+            (
+                "name",
+                r#"
+[[mcp.server]]
+command = "node"
+"#,
+            ),
+            (
+                "command",
+                r#"
+[[mcp.server]]
+name = "tiny"
+"#,
+            ),
+        ] {
+            assert!(
+                toml::from_str::<McpConfigFile>(toml_src).is_err(),
+                "McpServer must reject a block missing {label:?}; a \
+                 refactor that gave the field a #[serde(default)] would \
+                 silently let the block parse with an empty-string \
+                 default and operator MCP audit correlation would break",
+            );
+        }
+
+        // env BTreeMap deterministic ordering — operators writing env
+        // keys in arbitrary order must see them surface in BTreeMap-
+        // sorted order on iteration. A refactor that swapped BTreeMap
+        // for HashMap silently breaks fixture-based audit/JSON output
+        // tests that depend on stable key ordering.
+        let ordered = r#"
+[[mcp.server]]
+name = "ordered"
+command = "node"
+env = { ZULU = "z", ALPHA = "a", MIKE = "m" }
+"#;
+        let cfg: McpConfigFile = toml::from_str(ordered).unwrap();
+        let keys: Vec<&str> = cfg.servers()[0].env.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["ALPHA", "MIKE", "ZULU"],
+            "McpServer::env must iterate in BTreeMap-sorted key order \
+             — a refactor swapping BTreeMap for HashMap silently breaks \
+             fixture-based audit and JSON output tests that depend on \
+             stable key ordering",
+        );
+    }
+
+    #[test]
     fn parses_server_hygiene_fields() {
         let s = r#"
 [[mcp.server]]

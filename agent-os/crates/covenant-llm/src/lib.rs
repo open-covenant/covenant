@@ -1173,6 +1173,63 @@ model = "nomic-embed-text"
     }
 
     #[test]
+    fn embedder_from_config_pins_mock_arm_and_unknown_provider_rejection() {
+        // embedder_from_config matches EmbedSection.provider against
+        // two exact slugs (mock, ollama) and falls through to None for
+        // any other value. The existing test pins the ollama arm; the
+        // mock arm and the unknown-provider rejection arm are not
+        // pinned. Mirrors the just-added
+        // provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping
+        // coverage shape and the existing
+        // search_config_unknown_provider_returns_none rejection pin.
+        //
+        // A refactor that renamed the 'mock' slug would silently send
+        // mock-configured deployments through the unknown-provider arm;
+        // pick_embedder would then fall through to the
+        // Ollama-or-MockEmbedder ladder and bind a real Ollama
+        // embedder against test data in environments where Ollama is
+        // reachable, breaking deterministic test-fixture deployments.
+        // A refactor that relaxed the unknown-provider rejection to
+        // return Some(MockEmbedder::default()) would silently mask
+        // configuration typos as successful mock-binding.
+        let mock_toml = r#"
+[embed]
+provider = "mock"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(mock_toml).unwrap();
+        let e = embedder_from_config(&cfg).expect(
+            "the mock arm must dispatch to MockEmbedder; a slug rename \
+             (e.g., to 'stub' or 'fake') would silently fall through \
+             into the auto-detect ladder and bind a real Ollama \
+             embedder against test data in environments where Ollama \
+             is reachable",
+        );
+        assert_eq!(
+            e.name(),
+            "mock",
+            "mock embedder must surface name='mock' so vector-search \
+             dashboards can identify deterministic test-fixture \
+             deployments at a glance",
+        );
+
+        let unknown_toml = r#"
+[embed]
+provider = "made-up"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(unknown_toml).unwrap();
+        assert!(
+            embedder_from_config(&cfg).is_none(),
+            "embedder_from_config must reject an unknown provider slug \
+             with None so misspellings ('olama' / 'ollam') surface as \
+             explicit None at the parse boundary; a refactor that \
+             relaxed this arm to fail-open with MockEmbedder::default() \
+             would silently bind a 768-dim mock embedder for typos and \
+             vector search would regress to constant-distance results \
+             with no parse-time signal",
+        );
+    }
+
+    #[test]
     fn embedder_config_serde_pins_optional_embed_section_default() {
         // EmbedderConfig is the top-level secrets.toml decoder for the
         // [embed] section. The struct carries a single field — embed:

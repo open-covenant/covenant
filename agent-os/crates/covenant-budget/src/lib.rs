@@ -2040,6 +2040,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ms_per_hour_pins_three_six_million_milliseconds_and_unit_math() {
+        // covenant_budget::MS_PER_HOUR (line 61) is the load-bearing
+        // arithmetic constant the entire credit-refill mechanism
+        // depends on. The module doc-comment at line 14 documents
+        // 'Refill rate is capacity / 3_600_000 tokens', and three
+        // private functions consume it:
+        //
+        //   refill (line 213): elapsed * capacity / MS_PER_HOUR
+        //   refill (line 224): add * MS_PER_HOUR / capacity
+        //   refill_eta_ms (line 244): (needed * MS_PER_HOUR).div_ceil(capacity)
+        //
+        // The constant has no direct test pinning its value. The
+        // sibling refill_eta_ms_pins_div_ceil pin (above) uses derived
+        // values (514_286 from 3_600_000/7, 327_273 from
+        // 3_600_000/11) that shift silently if MS_PER_HOUR changes —
+        // catching the regression at the assertion site but not in a
+        // place a reader auditing the unit contract can find. Mirrors
+        // the covenant_settlement::INTENT_DISPATCH_CREDITS pin pattern
+        // (covenant-settlement/src/lib.rs line 873) for v0 floor
+        // constants with documented refactor risk.
+
+        assert_eq!(
+            MS_PER_HOUR, 3_600_000u128,
+            "MS_PER_HOUR must equal the literal 3_600_000 ms — the \
+             documented per-hour unit the module doc-comment at line \
+             14 commits to ('Refill rate is capacity / 3_600_000 \
+             tokens'). A refactor to 1000 under a 'simplify unit math \
+             to per-second' rationale would drain every operator's \
+             budget ~3600x faster; a refactor to 86_400_000 under a \
+             'budget windows align to daily quotas' rationale would \
+             make refill 24x slower than the documented per-hour \
+             cadence",
+        );
+
+        assert_eq!(
+            MS_PER_HOUR,
+            60u128 * 60u128 * 1000u128,
+            "MS_PER_HOUR must equal 60 minutes per hour times 60 \
+             seconds per minute times 1000 ms per second — pins the \
+             unit-math interpretation so a refactor that changed the \
+             literal in lockstep with this redundant computation \
+             (e.g., a search-replace hitting both sites) would still \
+             surface via the divergence from the documented \
+             'per-hour' contract. The cross-bind anchors the \
+             intent of the constant separately from its byte-level \
+             value",
+        );
+
+        assert_eq!(
+            std::mem::size_of_val(&MS_PER_HOUR),
+            std::mem::size_of::<u128>(),
+            "MS_PER_HOUR must remain u128-wide — the refill_eta_ms \
+             arithmetic (needed * MS_PER_HOUR).div_ceil(capacity) can \
+             produce intermediate values that exceed u64::MAX (≈ \
+             1.84e19) when needed approaches u64::MAX / 3_600_000 ≈ \
+             5.13e12. A refactor that swapped to u64 under a 'no \
+             operation overflows u64' rationale would silently wrap \
+             at the high credit-shortfall end, producing tiny ETAs in \
+             pathological cases where operators with very large \
+             capacity caps run dry",
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_set_capacity_seeds_full_bucket() {
         let l = InMemoryLedger::new();

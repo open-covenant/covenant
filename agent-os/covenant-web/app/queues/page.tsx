@@ -1,7 +1,7 @@
 "use client";
 
 import { api, type ContentBlock } from "@/lib/api";
-import { short, truncate } from "@/lib/audit";
+import { shortHash, truncate } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -15,13 +15,28 @@ async function loadQueues() {
 
 function summary(content: ContentBlock[]): string {
   const text = content
-    .map((b) => (b.type === "text" ? b.text : `<json:${JSON.stringify(b.value).slice(0, 80)}…>`))
+    .map((b) => (b.type === "text" ? b.text : `<data>`))
     .join(" ")
     .trim();
-  return truncate(text || "(empty)", 220);
+  return truncate(text || "(no reply yet)", 220);
 }
 
-export default function QueuesPage() {
+function statusWord(status: string): string {
+  switch (status) {
+    case "ok":
+      return "Done";
+    case "error":
+      return "Failed";
+    case "pending":
+      return "Pending";
+    case "running":
+      return "Running";
+    default:
+      return status[0].toUpperCase() + status.slice(1);
+  }
+}
+
+export default function MessagesPage() {
   const { data, error, lastSyncMs } = usePoll(loadQueues, 3000);
   const tasks = data?.tasks ?? [];
   const results = data?.results ?? [];
@@ -29,9 +44,9 @@ export default function QueuesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="agent-to-agent"
-        title="Queues"
-        subhead="Tasks in flight between agents, and results waiting to be claimed. Every message is gated by a signed capability."
+        eyebrow="agents talking to each other"
+        title="Messages"
+        subhead="Tasks one agent has handed off to another, and the replies coming back. Every message needs a signed permission from you."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -40,20 +55,20 @@ export default function QueuesPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">tasks</p>
+              <p className="eyebrow">in flight</p>
               <h2>
-                Queued tasks <span className="count">{tasks.length}</span>
+                Outgoing tasks <span className="count">{tasks.length}</span>
               </h2>
             </div>
           </div>
           {tasks.length === 0 ? (
-            <p className="empty">No tasks in flight.</p>
+            <p className="empty">No tasks in flight between your agents.</p>
           ) : (
             <div className="records">
               {tasks.map((t) => (
                 <article key={t.id} className="record fade-up">
                   <div className="ts">
-                    <span>{short(t.id, 10)}</span>
+                    <span>{shortHash(t.id, 10)}</span>
                   </div>
                   <div className="body">
                     <strong>
@@ -70,23 +85,26 @@ export default function QueuesPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">results</p>
+              <p className="eyebrow">replies</p>
               <h2>
-                Results pending <span className="count">{results.length}</span>
+                Incoming replies <span className="count">{results.length}</span>
               </h2>
             </div>
           </div>
           {results.length === 0 ? (
-            <p className="empty">No results pending.</p>
+            <p className="empty">No replies yet.</p>
           ) : (
             <div className="records">
               {results.map((r) => (
-                <article key={r.task_id} className={`record fade-up ${r.status !== "ok" ? "tone-warn" : ""}`}>
+                <article
+                  key={r.task_id}
+                  className={`record fade-up ${r.status !== "ok" ? "tone-warn" : ""}`}
+                >
                   <div className="ts">
-                    <span>{r.status}</span>
+                    <span>{statusWord(r.status)}</span>
                   </div>
                   <div className="body">
-                    <strong>task {short(r.task_id, 10)}</strong>
+                    <strong>Reply to task {shortHash(r.task_id, 10)}</strong>
                     <p>
                       {summary(r.content)}
                       {r.error_message && ` · error: ${r.error_message}`}

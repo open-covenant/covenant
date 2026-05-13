@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { api } from "@/lib/api";
-import { short, time } from "@/lib/audit";
+import { formatTimestamp, shortPubkey } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -12,7 +12,7 @@ async function loadPeers(prefix: string, status: Status) {
   return api.listPeers(50, prefix || undefined, status || undefined);
 }
 
-export default function PeersPage() {
+export default function AgentsPage() {
   const [prefix, setPrefix] = useState("");
   const [status, setStatus] = useState<Status>("");
   const fetcher = useCallback(() => loadPeers(prefix, status), [prefix, status]);
@@ -28,7 +28,12 @@ export default function PeersPage() {
   const active = peers.filter((p) => p.revoked_at === null);
 
   async function onRotate() {
-    if (typeof window !== "undefined" && !window.confirm("Rotate the operator token? Old token is revoked and any shell holding it must re-read peers/operator.token.")) {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        "Rotate your sign-in key? Your old key stops working right away — anything still using it will need the new one.",
+      )
+    ) {
       return;
     }
     setRotating(true);
@@ -49,16 +54,20 @@ export default function PeersPage() {
   }
 
   async function onRevoke(tokenPrefix: string, display: string) {
-    if (typeof window !== "undefined" && !window.confirm(`Revoke ${display} (token ${tokenPrefix}...)? This is irreversible.`)) return;
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(`Revoke ${display}? They won't be able to connect again. This can't be undone.`)
+    )
+      return;
     setRevoking(tokenPrefix);
     setErrMsg(null);
     try {
       const r = await api.revokePeer(tokenPrefix);
       if (r.kind === "error") setErrMsg(r.message);
       else if (r.outcome.type === "ambiguous") {
-        setErrMsg(`prefix ${tokenPrefix} matched multiple peers; use a longer prefix.`);
+        setErrMsg(`Couldn't tell which agent you meant — try a longer key prefix.`);
       } else if (r.outcome.type === "not_found") {
-        setErrMsg(`prefix ${tokenPrefix} matched no peers`);
+        setErrMsg(`Couldn't find an agent with that key prefix.`);
       }
       refresh();
     } catch (e) {
@@ -71,25 +80,34 @@ export default function PeersPage() {
   return (
     <>
       <PageHeader
-        eyebrow="identity mesh"
-        title="Peers"
-        subhead="Trusted identities on this daemon. Each peer carries a signing key and a bearer token; revocations are preserved, not deleted."
+        eyebrow="who you trust"
+        title="Agents"
+        subhead="Agents connected to this machine. Each one has a signing key so it can prove who it is. Revoked agents stay listed so the record is intact."
         syncMs={lastSyncMs}
         error={error}
         right={
           <button type="button" className="btn" onClick={onRotate} disabled={rotating}>
-            {rotating ? "rotating" : "rotate operator token"}
+            {rotating ? "Rotating" : "Rotate your sign-in key"}
           </button>
         }
       />
 
       {rotatedToken && (
         <article className="token-card">
-          <p className="eyebrow">new operator token</p>
+          <p className="eyebrow">your new sign-in key</p>
+          <p className="hint">Save this somewhere safe — you'll need it to connect from another shell or device.</p>
           <input readOnly value={rotatedToken} onFocus={(e) => e.currentTarget.select()} />
           <div className="actions">
-            <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(rotatedToken)}>copy</button>
-            <button type="button" className="btn ghost" onClick={() => setRotatedToken(null)}>dismiss</button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => navigator.clipboard?.writeText(rotatedToken)}
+            >
+              Copy
+            </button>
+            <button type="button" className="btn ghost" onClick={() => setRotatedToken(null)}>
+              dismiss
+            </button>
           </div>
         </article>
       )}
@@ -98,55 +116,66 @@ export default function PeersPage() {
 
       <section className="filter-row panel">
         <div className="filter-group">
-          <p className="eyebrow">filter</p>
+          <p className="eyebrow">find</p>
           <div className="filters">
             <input
               value={prefix}
               onChange={(e) => setPrefix(e.target.value)}
-              placeholder="filter by public-key prefix"
+              placeholder="Search by key prefix"
             />
             <select value={status} onChange={(e) => setStatus(e.target.value as Status)}>
               <option value="">all</option>
-              <option value="live">live</option>
+              <option value="live">active</option>
               <option value="revoked">revoked</option>
             </select>
           </div>
         </div>
         <div className="filter-stats">
-          <span><strong>{active.length}</strong> live</span>
-          <span><strong>{peers.length - active.length}</strong> revoked</span>
+          <span>
+            <strong>{active.length}</strong> active
+          </span>
+          <span>
+            <strong>{peers.length - active.length}</strong> revoked
+          </span>
         </div>
       </section>
 
       {peers.length === 0 ? (
-        <p className="empty">No peers match this filter.</p>
+        <p className="empty">No agents match your filter.</p>
       ) : (
         <div className="peer-grid">
           {peers.map((peer) => {
             const isSelf = operatorPubkey !== "" && peer.agent_id.pubkey === operatorPubkey;
             const live = peer.revoked_at === null;
             return (
-              <article key={`${peer.token_prefix}:${peer.registered_at}`} className={live ? "peer live" : "peer revoked"}>
+              <article
+                key={`${peer.token_prefix}:${peer.registered_at}`}
+                className={live ? "peer live" : "peer revoked"}
+              >
                 <div className="head">
                   <div className="avatar">{peer.agent_id.display.slice(0, 1).toUpperCase()}</div>
                   <div>
                     <strong>{peer.agent_id.display}</strong>
-                    <p className="text-mono">{short(peer.agent_id.pubkey, 28)}</p>
+                    <p className="text-mono">{shortPubkey(peer.agent_id.pubkey)}</p>
                   </div>
                 </div>
                 <dl>
                   <div>
-                    <dt>token</dt>
+                    <dt>key</dt>
                     <dd className="text-mono">{peer.token_prefix}…</dd>
                   </div>
                   <div>
-                    <dt>registered</dt>
-                    <dd>{time(peer.registered_at)}</dd>
+                    <dt>connected</dt>
+                    <dd>{formatTimestamp(peer.registered_at)}</dd>
                   </div>
                 </dl>
                 <footer>
                   <span className={`badge ${live ? "live" : "revoked"}`}>
-                    {live ? (isSelf ? "operator" : "live") : `revoked · ${time(peer.revoked_at ?? 0)}`}
+                    {live
+                      ? isSelf
+                        ? "you"
+                        : "active"
+                      : `revoked · ${formatTimestamp(peer.revoked_at ?? 0)}`}
                   </span>
                   {live && !isSelf && (
                     <button
@@ -165,7 +194,11 @@ export default function PeersPage() {
         </div>
       )}
 
-      {truncated && <p className="text-muted text-mono" style={{ marginTop: 12 }}>Showing first {peers.length}. Narrow with a prefix to see more.</p>}
+      {truncated && (
+        <p className="text-muted text-mono" style={{ marginTop: 12 }}>
+          Showing the first {peers.length}. Narrow with a key prefix to see more.
+        </p>
+      )}
 
       <style jsx>{`
         .token-card {
@@ -177,7 +210,13 @@ export default function PeersPage() {
         }
 
         .token-card .eyebrow {
+          margin: 0 0 8px;
+        }
+
+        .token-card .hint {
           margin: 0 0 10px;
+          color: var(--dim);
+          font-size: 12.5px;
         }
 
         .token-card input {
@@ -217,7 +256,6 @@ export default function PeersPage() {
         .filter-stats {
           display: flex;
           gap: 18px;
-          font-family: var(--font-mono);
           font-size: 12px;
           color: var(--muted);
         }

@@ -2,7 +2,8 @@
 
 import { useCallback, useState, type FormEvent } from "react";
 import { api, type Memory } from "@/lib/api";
-import { truncate } from "@/lib/audit";
+import { truncate } from "@/lib/format";
+import { memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -46,55 +47,55 @@ export default function MemoryPage() {
   return (
     <>
       <PageHeader
-        eyebrow="agent state"
+        eyebrow="what your agents remember"
         title="Memory"
-        subhead="Three tiers — working, episodic, and long-term. Agents read and write here under signed capabilities."
+        subhead="Three kinds — what's currently top of mind, this session's notes, and the long-term store. Agents read and write here when you give them permission."
         syncMs={lastSyncMs}
         error={error}
       />
 
       <section className="metric-row">
         <article className="metric">
-          <span className="eyebrow">working</span>
+          <span className="eyebrow">{memoryTierLabel("working").toLowerCase()}</span>
           <span className="value">{counts.working}</span>
-          <span className="caption">active context</span>
+          <span className="caption">currently on the agent's mind</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">episodic</span>
+          <span className="eyebrow">{memoryTierLabel("episodic").toLowerCase()}</span>
           <span className="value">{counts.episodic}</span>
-          <span className="caption">scoped to a task or session</span>
+          <span className="caption">tied to a task or chat</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">longterm</span>
+          <span className="eyebrow">{memoryTierLabel("longterm").toLowerCase()}</span>
           <span className="value">{counts.longterm}</span>
-          <span className="caption">persistent across runs</span>
+          <span className="caption">kept across sessions</span>
         </article>
         <article className="metric">
           <span className="eyebrow">total</span>
           <span className="value">{records.length}</span>
-          <span className="caption">showing {records.length} of {40}</span>
+          <span className="caption">showing {records.length} most recent</span>
         </article>
       </section>
 
       <section className="search-card">
         <form onSubmit={onSearch}>
           <div className="row">
-            <p className="eyebrow">semantic search</p>
+            <p className="eyebrow">search memory</p>
             <select value={tier} onChange={(e) => setTier(e.target.value as Tier)}>
-              <option value="">all tiers</option>
-              <option value="working">working</option>
-              <option value="episodic">episodic</option>
-              <option value="longterm">longterm</option>
+              <option value="">all</option>
+              <option value="working">{memoryTierLabel("working")}</option>
+              <option value="episodic">{memoryTierLabel("episodic")}</option>
+              <option value="longterm">{memoryTierLabel("longterm")}</option>
             </select>
           </div>
           <div className="row controls">
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search memory"
+              placeholder="What are you looking for?"
             />
             <button type="submit" className="btn primary" disabled={!query || searching}>
-              {searching ? "searching" : "search"}
+              {searching ? "Searching" : "Search"}
             </button>
           </div>
         </form>
@@ -111,16 +112,18 @@ export default function MemoryPage() {
                 Search results <span className="count">{hits.length}</span>
               </h2>
             </div>
-            <button type="button" className="btn ghost" onClick={() => setHits(null)}>clear</button>
+            <button type="button" className="btn ghost" onClick={() => setHits(null)}>
+              clear
+            </button>
           </div>
           {hits.length === 0 ? (
-            <p className="empty">No matches.</p>
+            <p className="empty">Nothing matched your search.</p>
           ) : (
             <div className="records">
               {hits.map((m) => (
                 <article key={m.id} className="record">
                   <div className="ts">
-                    <span>{m.tier}</span>
+                    <span>{memoryTierLabel(m.tier)}</span>
                   </div>
                   <div className="body">
                     <strong>{truncate(m.text, 80)}</strong>
@@ -136,20 +139,20 @@ export default function MemoryPage() {
       <section className="panel">
         <div className="panel-head">
           <div>
-            <p className="eyebrow">recent</p>
+            <p className="eyebrow">recently saved</p>
             <h2>
-              Records <span className="count">{records.length}</span>
+              All memories <span className="count">{records.length}</span>
             </h2>
           </div>
         </div>
         {records.length === 0 ? (
-          <p className="empty">No records yet.</p>
+          <p className="empty">Nothing saved yet. Memories appear here as your agents make notes.</p>
         ) : (
           <div className="records">
             {records.map((m) => (
               <article key={m.id} className="record fade-up">
                 <div className="ts">
-                  <span>{m.tier}</span>
+                  <span>{memoryTierLabel(m.tier)}</span>
                 </div>
                 <div className="body">
                   <p>{truncate(m.text, 320)}</p>

@@ -324,6 +324,70 @@ entry = "./tiny"
 "#;
 
     #[test]
+    fn reserved_namespaces_pins_exact_entries_count_order_and_trailing_dot_invariant() {
+        // RESERVED_NAMESPACES (line 183) is the public capability-namespace
+        // whitelist consumed by Manifest::validate at line 263. The const
+        // is an &[&str] of five entries — 'intent.', 'memory.', 'identity.',
+        // 'tool.', 'agent.' — each ending with a literal '.' that is
+        // load-bearing for the starts_with() prefix match.
+        //
+        // validate_rejects_bad_optional_capability_namespace and
+        // rejects_bad_capability_namespace pin REJECTION through the
+        // 'unknown.thing' fixture, but neither test pins the literal
+        // whitelist contents. A refactor that dropped 'identity.' would
+        // silently break manifests declaring identity.publish_key; a
+        // refactor that dropped the trailing '.' from 'tool.' would
+        // silently widen the match so 'toolkit.scope_creep' slips
+        // through; a refactor that added an unscoped namespace (e.g.,
+        // 'experimental.') would silently let manifests bind
+        // experimental.foo at parse time even though the daemon has no
+        // dispatch path for it.
+        assert_eq!(
+            RESERVED_NAMESPACES.len(),
+            5,
+            "RESERVED_NAMESPACES must contain exactly five entries — \
+             intent., memory., identity., tool., agent.; a refactor that \
+             added or removed an entry without coordinating with the \
+             capability-action dispatch path would split the failure \
+             across manifest-accept and dispatch-reject surfaces",
+        );
+
+        assert_eq!(
+            RESERVED_NAMESPACES,
+            &["intent.", "memory.", "identity.", "tool.", "agent."],
+            "RESERVED_NAMESPACES must be the exact ordered slice \
+             [intent., memory., identity., tool., agent.] — pinning the \
+             literal contents so a refactor that dropped 'identity.' \
+             under a 'fold into agent.' rationale surfaces here loud \
+             rather than via every operator's identity.publish_key \
+             manifest suddenly failing validate. The iteration order is \
+             the public order documented for admin UI and docs \
+             generators that enumerate reserved prefixes",
+        );
+
+        for entry in RESERVED_NAMESPACES {
+            assert!(
+                entry.ends_with('.'),
+                "RESERVED_NAMESPACES entry {entry:?} must end with '.' — \
+                 the trailing dot is load-bearing for the starts_with() \
+                 prefix match at line 263; a refactor that emitted \
+                 'tool' (no dot) would silently let 'toolkit.scope_creep' \
+                 or 'agentic.bypass' slip through validation, widening \
+                 the operator-facing capability surface beyond the \
+                 documented namespaces with no parse-time signal",
+            );
+            assert!(
+                !entry.is_empty() && *entry != ".",
+                "RESERVED_NAMESPACES entry {entry:?} must be a non-empty \
+                 namespace followed by '.' — a defensive guard against \
+                 an accidental '' or '.' that would match every \
+                 capability string under starts_with() and silently \
+                 disable the whitelist entirely",
+            );
+        }
+    }
+
+    #[test]
     fn runtime_serde_pins_each_variant_slug() {
         // Runtime carries rename_all = lowercase AND an explicit
         // #[serde(rename = "rust-bin")] for RustBin. Every agent package

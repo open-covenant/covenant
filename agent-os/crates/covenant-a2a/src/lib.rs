@@ -4719,6 +4719,264 @@ mod tests {
     }
 
     #[test]
+    fn compute_droppable_task_ids_pins_event_accumulator_arms() {
+        // covenant_a2a::compute_droppable_task_ids (line 1416-1460) is
+        // the pure-function classifier the JsonlMailbox::compact path
+        // consumes to decide which task_ids are safe to drop from the
+        // on-disk JSONL log. It walks a slice of MailboxEvents and
+        // updates four collections (seen / delivered / posted / drained)
+        // per nine match arms, then filters seen task_ids by the
+        // conjunction: in delivered AND posted count > 0 AND
+        // posted == drained.
+        //
+        // The function is currently tested only INDIRECTLY through
+        // JsonlMailbox::compact integration tests (line 5672 onwards).
+        // event_belongs_to_droppable_pins_each_variant_lookup_and_idempotency_cache_invariant
+        // (line 4624) covers the per-variant droppable lookup but NOT
+        // the per-event accumulator updates inside compute_droppable_task_ids
+        // — specifically the no-op arms (TaskRequeued,
+        // IdempotencyResultCached) and the triple-counting arm
+        // (IdempotencyResultReplayed inserts into seen, delivered, AND
+        // posted simultaneously).
+        //
+        // Pin each accumulator update at the unit-test boundary so a
+        // refactor that converted a no-op arm into an accumulator
+        // update, that dropped one of the three IdempotencyResultReplayed
+        // inserts, or that loosened the final filter from
+        // posted == drained to posted >= drained fails loud here.
+        let task_id = Uuid::from_u128(1);
+        let other_id = Uuid::from_u128(2);
+        let lease_id = Uuid::from_u128(3);
+
+        let mut task_a = dummy_task();
+        task_a.id = task_id;
+
+        let result_a = A2ATaskResult::ok(task_id, vec![]);
+        let task_recv_a = MailboxEvent::TaskRecv { task_id };
+        let result_recv_a = MailboxEvent::ResultRecv { task_id };
+        let task_sent_a = MailboxEvent::TaskSent {
+            task: task_a.clone(),
+        };
+        let task_leased_a = MailboxEvent::TaskLeased {
+            task_id,
+            lease_id,
+            leased_to: task_a.recipient.clone(),
+            leased_at_ms: 0,
+            attempt: 0,
+        };
+
+        // (1) Empty events → empty droppable set.
+        let empty = compute_droppable_task_ids(&[]);
+        assert!(
+            empty.is_empty(),
+            "compute_droppable_task_ids(&[]) must yield empty set — a refactor that seeded one of the accumulators with a default value would surface a phantom droppable id here",
+        );
+
+        // (2) TaskSent alone → not droppable (in seen but not delivered).
+        let only_sent = compute_droppable_task_ids(&[task_sent_a.clone()]);
+        assert!(
+            only_sent.is_empty(),
+            "TaskSent alone must NOT make a task_id droppable — without a TaskRecv/TaskLeased/IdempotencyResultReplayed event the task is not in delivered; a refactor that treated TaskSent as self-delivering would silently classify every queued task as droppable on next compaction",
+        );
+
+        // (3) TaskSent + TaskRecv → not droppable (no result posted).
+        let sent_recv = compute_droppable_task_ids(&[task_sent_a.clone(), task_recv_a.clone()]);
+        assert!(
+            sent_recv.is_empty(),
+            "TaskSent + TaskRecv must NOT be droppable — the posted count is zero and the filter rejects posted == 0; a refactor that swapped posted > 0 for posted >= 0 would silently classify every received-but-unprocessed task as droppable, erasing the receiver's in-flight history on next compaction",
+        );
+
+        // (4) TaskSent + TaskRecv + ResultPosted → not droppable (not drained).
+        let sent_recv_posted = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+        ]);
+        assert!(
+            sent_recv_posted.is_empty(),
+            "TaskSent + TaskRecv + ResultPosted must NOT be droppable — the result has been posted but not drained by the sender; a refactor that loosened posted == drained to posted >= drained would silently classify this as droppable, erasing the result-in-flight evidence before the sender's ResultRecv lands",
+        );
+
+        // (5) Full lifecycle: Sent → Recv → ResultPosted → ResultRecv → droppable.
+        let full_recv_lifecycle = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            full_recv_lifecycle.contains(&task_id),
+            "full TaskRecv-based lifecycle must be droppable — the documented happy path for non-leased delivery; a refactor that broke the final filter conjunction would fail here",
+        );
+        assert_eq!(
+            full_recv_lifecycle.len(),
+            1,
+            "full lifecycle for one task_id must yield exactly one droppable id — a refactor that double-counted would surface a phantom entry",
+        );
+
+        // (6) TaskLeased alternative: Sent → Leased → ResultPosted → ResultRecv → droppable.
+        let leased_lifecycle = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_leased_a.clone(),
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            leased_lifecycle.contains(&task_id),
+            "TaskLeased must count as delivery identically to TaskRecv — a refactor that removed the delivered.insert from TaskLeased would silently keep every leased-then-completed task in the JSONL log forever, breaking compaction for the lease-flow path",
+        );
+
+        // (7) TaskForceErrored alternative: Sent → Recv → ForceErrored → ResultRecv → droppable.
+        let forced_lifecycle = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::TaskForceErrored {
+                task_id,
+                lease_id,
+                result: result_a.clone(),
+                reason: "operator forced".into(),
+                forced_at_ms: 0,
+                attempt: 0,
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            forced_lifecycle.contains(&task_id),
+            "TaskForceErrored must count as a posted result identically to ResultPosted — a refactor that removed the posted accumulator update from TaskForceErrored would silently keep every operator-forced-error task in the JSONL log forever",
+        );
+
+        // (8) TaskRequeued must be a no-op accumulator. A sequence with
+        // a TaskRequeued in place of TaskRecv would have an empty
+        // delivered set and must NOT be droppable. This is the
+        // load-bearing pin against a refactor that adds
+        // delivered.insert to the TaskRequeued arm.
+        let requeued_in_place_of_recv = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            MailboxEvent::TaskRequeued {
+                task_id,
+                lease_id,
+                reason: "operator".into(),
+                duplicate_risk: A2ADuplicateRisk::Idempotent,
+                requeued_at_ms: 0,
+                attempt: 0,
+            },
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            requeued_in_place_of_recv.is_empty(),
+            "TaskRequeued alone must NOT contribute to delivered — a refactor that added delivered.insert(*task_id) to the TaskRequeued arm under the rationale that 'requeued tasks should drop too' would silently classify this sequence as droppable, the JSONL log would lose the TaskSent history for the requeued task, and operator audit would lose the requeue evidence on next compaction; the existing indirect compact tests do not exercise this exact regression because they always pair TaskRequeued with a real delivery event",
+        );
+
+        // (9) IdempotencyResultCached must be a no-op accumulator. A
+        // sequence with the cached event in place of ResultPosted has
+        // posted count zero and must NOT be droppable. Pins the
+        // accumulator no-op contract.
+        let cache_key = A2AIdempotencyCacheKey {
+            sender_pubkey_b58: task_a.sender.pubkey_base58(),
+            recipient_pubkey_b58: task_a.recipient.pubkey_base58(),
+            task_kind: task_a.intent_text.clone(),
+            key: "k".into(),
+        };
+        let cached_result = A2AIdempotencyCachedResult {
+            source_task_id: task_id,
+            status: A2ATaskStatus::Ok,
+            content: vec![],
+            error_message: None,
+        };
+        let cached_in_place_of_posted = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::IdempotencyResultCached {
+                cache_key: cache_key.clone(),
+                result: cached_result.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            cached_in_place_of_posted.is_empty(),
+            "IdempotencyResultCached alone must NOT contribute to posted — a refactor that added a posted accumulator update to the IdempotencyResultCached arm would silently classify this sequence as droppable, dropping the cache-row provenance from the JSONL log; the cached row is operator-visible replay evidence and must not be auto-compacted",
+        );
+
+        // (10) IdempotencyResultReplayed triple-count contract: inserts
+        // task.id into BOTH seen and delivered, AND increments
+        // posted[result.task_id]. A single Replayed event + ResultRecv
+        // must produce a droppable task. This is the load-bearing pin
+        // against a refactor that drops any of the three accumulator
+        // updates inside the Replayed arm.
+        let replayed_only = compute_droppable_task_ids(&[
+            MailboxEvent::IdempotencyResultReplayed {
+                task: task_a.clone(),
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            replayed_only.contains(&task_id),
+            "IdempotencyResultReplayed alone (with a matching ResultRecv) must produce a droppable task — the variant's three simultaneous accumulator updates (seen.insert(task.id), delivered.insert(task.id), posted[result.task_id] += 1) are the load-bearing contract; a 'simplify the triple insert into one accumulator field' refactor that dropped seen or delivered would silently keep cache-replayed tasks from becoming droppable and the JSONL log would grow unbounded across daemon restarts for every cache-replay event",
+        );
+
+        // (11) posted > drained must NOT be droppable. The final filter
+        // is posted == drained (with posted > 0), not posted >=
+        // drained. This pin defends against a refactor that loosened
+        // the equality to greater-than-or-equal under the rationale
+        // that 'the receiver moved on without a ResultRecv'.
+        let posted_more_than_drained = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+        ]);
+        assert!(
+            posted_more_than_drained.is_empty(),
+            "posted > drained (here 2 > 1) must NOT be droppable — the final filter is posted == drained, not posted >= drained; a refactor that loosened the equality (e.g., 'the receiver moved on without ResultRecv so we can drop anyway') would silently widen the droppable set to include posted-but-not-fully-drained tasks, erasing the in-flight evidence for tasks whose final ResultRecv had not yet been written",
+        );
+
+        // (12) Single droppable id among multiple tasks: the function
+        // must isolate the fully-drained task_id and leave the
+        // partially-drained one in flight.
+        let mut task_b = dummy_task();
+        task_b.id = other_id;
+        let mixed = compute_droppable_task_ids(&[
+            task_sent_a.clone(),
+            task_recv_a.clone(),
+            MailboxEvent::ResultPosted {
+                result: result_a.clone(),
+            },
+            result_recv_a.clone(),
+            // task_b is sent and received but never gets a ResultPosted.
+            MailboxEvent::TaskSent { task: task_b },
+            MailboxEvent::TaskRecv { task_id: other_id },
+        ]);
+        assert!(
+            mixed.contains(&task_id),
+            "fully-drained task_a must be droppable in the mixed scenario",
+        );
+        assert!(
+            !mixed.contains(&other_id),
+            "partially-drained task_b (no ResultPosted) must NOT be droppable in the mixed scenario — a refactor that crossed wires between the four accumulator maps would surface a phantom droppable id here",
+        );
+        assert_eq!(
+            mixed.len(),
+            1,
+            "exactly one droppable id in the mixed scenario — a refactor that broke isolation between task_ids in the four accumulators would surface multiple ids here",
+        );
+    }
+
+    #[test]
     fn assert_lease_match_pins_expected_actual_and_none_paths() {
         let task_id = Uuid::new_v4();
         let lease_a = Uuid::new_v4();

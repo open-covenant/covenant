@@ -739,6 +739,152 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_recent_pins_saturating_sub_zero_limit_and_full_tail_boundary_arms() {
+        // covenant_audit::InMemoryAuditLog::recent (line 668-672):
+        //
+        //   async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError> {
+        //       let g = self.events.lock().await;
+        //       let start = g.len().saturating_sub(limit);
+        //       Ok(g[start..].to_vec())
+        //   }
+        //
+        // Four boundary arms:
+        //   (1) limit == 0       -> start == g.len() -> g[g.len()..] -> empty
+        //   (2) limit == g.len() -> start == 0       -> g[0..]       -> all events
+        //   (3) limit  > g.len() -> saturating_sub clamps to 0       -> all events,
+        //                          NOT panic on integer underflow
+        //   (4) limit  < g.len() -> tail-view of the last `limit` events,
+        //                          NOT head-view of the first `limit`
+        //
+        // in_memory_record_and_recent (line 728) only exercises arm 4
+        // with three events and limit=2, and never reads last_two[0]
+        // — only last_two[1] is asserted ('error'), so a refactor that
+        // swapped the slice for the FIRST `limit` events would let the
+        // existing test fail only on the [1] index; pinning BOTH ends of
+        // the tail (last_two[0]=='b' AND last_two[1]=='c' below)
+        // forecloses any single-index rewrite.
+        // jsonl_recent_on_missing_file_is_empty (line 810) exercises
+        // limit=10 against a missing JsonlAuditLog file, which never
+        // enters the populated-state saturating_sub branch on InMemory.
+        //
+        // A refactor that swapped .saturating_sub(limit) for plain
+        // 'g.len() - limit' under a 'remove defensive arithmetic'
+        // rationale would silently panic on arm 3 — exactly the request
+        // shape an operator dashboard fires on a freshly-started daemon
+        // with five events and the default 'recent 100' parameter.
+
+        let log = InMemoryAuditLog::new();
+        log.record(dummy(intent_kind("a"))).await.unwrap();
+        log.record(dummy(intent_kind("b"))).await.unwrap();
+        log.record(dummy(intent_kind("c"))).await.unwrap();
+
+        fn status_of(event: &AuditEvent) -> &str {
+            match &event.kind {
+                AuditKind::IntentDispatched { status, .. } => status.as_str(),
+                other => panic!("expected IntentDispatched; got {other:?}"),
+            }
+        }
+
+        // Arm 1: limit == 0. saturating_sub gives start == g.len() so
+        // the slice is empty. Pinning the empty Vec contract here
+        // forecloses a refactor that promoted limit=0 to a Default
+        // ('treat 0 as unlimited' or 'treat 0 as 1') — both common
+        // ergonomic shortcuts that would silently widen the response.
+        let zero = log.recent(0).await.unwrap();
+        assert!(
+            zero.is_empty(),
+            "recent(0) must return an empty Vec — a refactor that \
+             promoted limit=0 to 'unlimited' or 'treat as 1' under an \
+             ergonomic-default rationale would silently widen every \
+             operator query whose UI default sends 0 for an unset \
+             field; the saturating_sub arithmetic guarantees this \
+             behavior today (start == g.len() so g[g.len()..] is the \
+             empty slice). got len={}",
+            zero.len(),
+        );
+
+        // Arm 2: limit == g.len(). saturating_sub gives start == 0 so
+        // the slice is the full event log. Pin every index so a
+        // refactor that reversed the order would surface here.
+        let exact = log.recent(3).await.unwrap();
+        assert_eq!(exact.len(), 3, "limit == len must return all events");
+        assert_eq!(
+            status_of(&exact[0]),
+            "a",
+            "recent(len) must preserve insertion order at index 0 — the \
+             first inserted event ('a') is at the head of the result; \
+             a refactor that reversed the slice would surface here \
+             without depending on saturating_sub",
+        );
+        assert_eq!(status_of(&exact[1]), "b");
+        assert_eq!(
+            status_of(&exact[2]),
+            "c",
+            "recent(len) must preserve insertion order at index len-1 \
+             — the last inserted event ('c') is at the tail; pinning \
+             both ends forecloses an off-by-one or reverse-order \
+             refactor that the existing in_memory_record_and_recent \
+             single-index assertion would let through",
+        );
+
+        // Arm 3: limit > g.len(). saturating_sub clamps the would-be
+        // underflow (3 - 10 = -7 as i64; saturating as usize gives 0)
+        // so the slice is the full event log without panicking. This
+        // is the defensive contract that a non-saturating refactor
+        // would silently lose.
+        let oversized = log.recent(10).await.unwrap();
+        assert_eq!(
+            oversized.len(),
+            3,
+            "recent(limit) with limit > len must return all events \
+             without panicking — a refactor that swapped \
+             .saturating_sub(limit) for 'g.len() - limit' under a \
+             'clippy says use checked_sub' rationale would silently \
+             panic on this exact input shape (3 events, default UI \
+             'recent 100'); the underflow surfaces only at runtime on \
+             specific operator queries, with no compile-time signal. \
+             got len={}",
+            oversized.len(),
+        );
+        assert_eq!(
+            status_of(&oversized[0]),
+            "a",
+            "oversized-limit must NOT change the surface order — same \
+             insertion-order contract as the limit==len arm",
+        );
+        assert_eq!(status_of(&oversized[2]), "c");
+
+        // Arm 4: limit < g.len(). The existing in_memory_record_and_recent
+        // pins last_two[1] only; pin both ends here so a refactor that
+        // returned the FIRST `limit` events instead of the LAST would
+        // surface on the [0] index even if a co-author updated the
+        // existing test's [1] assertion.
+        let last_two = log.recent(2).await.unwrap();
+        assert_eq!(last_two.len(), 2);
+        assert_eq!(
+            status_of(&last_two[0]),
+            "b",
+            "recent(limit) with limit < len must be tail-view: the \
+             SECOND-to-last inserted event ('b') is at index 0 of the \
+             result. A refactor that swapped g[start..] for \
+             g[..limit.min(g.len())] (head-view) would surface 'a' \
+             here while the existing in_memory_record_and_recent's [1] \
+             check on 'error' could be co-edited to 'a' under the \
+             rationale 'first limit events are the recent ones'. \
+             Pinning the index-0 tail value forecloses the head-vs-\
+             tail flip even under a coordinated test rewrite",
+        );
+        assert_eq!(
+            status_of(&last_two[1]),
+            "c",
+            "tail-view's index 1 is the LAST inserted event ('c'), \
+             cross-binds the existing in_memory_record_and_recent \
+             assertion on last_two[1].status without depending on the \
+             specific 'error'/'ok' fixture choice",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_round_trip_through_a_real_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

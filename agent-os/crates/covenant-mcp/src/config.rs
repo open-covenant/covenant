@@ -535,4 +535,27 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
             "ConfigError::Io must not start with 'toml:' and ConfigError::Toml must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} toml={toml_message}"
         );
     }
+
+    #[test]
+    fn config_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "mcp.toml denied");
+        let expected_display = format!("{inner}");
+        let err = ConfigError::Io(inner);
+        let source = err.source().expect(
+            "covenant_mcp::config::ConfigError::Io must surface the inner std::io::Error via std::error::Error::source so daemon-side MCP config-load classifiers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct decisions on mcp.toml disk faults (NotFound proceeds with default config because mcp.toml is optional, PermissionDenied escalates as operator-attention on a config file present but unreadable, other ErrorKinds surface with the underlying OS context); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_mcp::config::ConfigError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::PermissionDenied),
+            "covenant_mcp::config::ConfigError::Io source() must downcast_ref to std::io::Error so daemon-side MCP config-load classifiers can extract io::ErrorKind for distinct decisions on mcp.toml disk faults; a refactor that wrapped the inner in a project-local newtype (e.g., McpConfigIoError(std::io::Error) under a 'tag MCP config IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies mcp.toml-load IO faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

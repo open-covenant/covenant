@@ -5069,7 +5069,10 @@ mod tests {
             "A2AError::LeaseMismatch actual slot bound to expected value (slot-swap regression class): {mismatch}"
         );
 
-        let invalid_task = format!("{}", A2AError::InvalidTask("reason must not be empty".into()));
+        let invalid_task = format!(
+            "{}",
+            A2AError::InvalidTask("reason must not be empty".into())
+        );
         assert_eq!(
             invalid_task, "invalid task: reason must not be empty",
             "A2AError::InvalidTask Display drifted (typo or prefix-convergence regression class)"

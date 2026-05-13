@@ -1132,6 +1132,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn handle_terminal_view_pins_q_quits_with_browsing_return_while_esc_and_other_keys_dismiss_without_quit_across_four_modes(
     ) {
         // App::handle_terminal_view (lib.rs line 765-773) is the shared

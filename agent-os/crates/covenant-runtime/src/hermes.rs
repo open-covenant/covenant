@@ -697,6 +697,84 @@ mod tests {
     }
 
     #[test]
+    fn find_boundary_pins_crlf_priority_when_both_crlf_and_lf_lf_present_in_same_buffer() {
+        // find_boundary (line 340-348) checks CRLF-CRLF FIRST via
+        // find_subseq(buf, b"\r\n\r\n") and only falls back to LF-LF
+        // when CRLF-CRLF is absent. The existing
+        // find_boundary_prefers_crlf_crlf_over_lf_lf test exercises
+        // CRLF-only, LF-only, and no-boundary buffers independently —
+        // none of those arms covers the BOTH-PRESENT case where LF-LF
+        // appears BEFORE CRLF-CRLF in the same buffer. Hermes's
+        // aiohttp gateway emits CRLF-CRLF for spec-strict SSE clients,
+        // but mixed line endings can survive intermediate proxies; a
+        // buffer carrying 'pre\n\nbody\r\n\r\nrest' must surface the
+        // CRLF-CRLF boundary at byte 9, NOT the LF-LF boundary at
+        // byte 3 — otherwise the parser splits on the wrong byte and
+        // parse_sse_frame discards the malformed leading 'frame'
+        // silently.
+        //
+        // A refactor that swapped the if-else order to check LF-LF
+        // first 'for speed' would silently regress strict-SSE
+        // compatibility; a refactor that collapsed both checks into a
+        // single .find() pattern would silently pick the
+        // earliest-by-position match rather than the CRLF-CRLF
+        // priority match.
+        let mixed = b"pre\n\nbody\r\n\r\nrest";
+        // LF-LF starts at byte 3 ("pre" is 3 bytes long).
+        // CRLF-CRLF starts at byte 9 ("pre\n\nbody" is 9 bytes long).
+        assert_eq!(
+            find_subseq(mixed, b"\n\n"),
+            Some(3),
+            "fixture-sanity: LF-LF must be at byte 3 so the priority \
+             assertion below tests the both-present case where LF-LF \
+             appears strictly earlier than CRLF-CRLF in the buffer",
+        );
+        assert_eq!(
+            find_subseq(mixed, b"\r\n\r\n"),
+            Some(9),
+            "fixture-sanity: CRLF-CRLF must be at byte 9 so the priority \
+             assertion below tests the both-present case where CRLF-CRLF \
+             appears strictly later than LF-LF in the buffer",
+        );
+        assert_eq!(
+            find_boundary(mixed),
+            Some(9),
+            "find_boundary must return the CRLF-CRLF position (byte 9) \
+             even when LF-LF appears earlier (byte 3) — strict-SSE \
+             priority is the documented invariant. A refactor that \
+             swapped the if-else order to check LF-LF first would \
+             return Some(3) here and silently split parse_sse_frame on \
+             the wrong byte, discarding the malformed leading 'frame' \
+             and routing the actual frame's payload through a parser \
+             call that sees only the trailing bytes",
+        );
+
+        // Cross-bind: confirm the CRLF-only and LF-only arms still
+        // surface their respective positions. Anchors that the
+        // priority-arm pin above is not accidentally specific to the
+        // both-present buffer shape.
+        let crlf_only = b"head\r\n\r\ntail";
+        assert_eq!(
+            find_boundary(crlf_only),
+            Some(4),
+            "CRLF-only buffer must surface the CRLF-CRLF position — \
+             cross-bind for the priority pin so a refactor that broke \
+             the CRLF-CRLF branch entirely surfaces here regardless of \
+             whether LF-LF is also present",
+        );
+        let lf_only = b"head\n\ntail";
+        assert_eq!(
+            find_boundary(lf_only),
+            Some(4),
+            "LF-only buffer must surface the LF-LF position — cross-bind \
+             for the priority pin so a refactor that removed the LF-LF \
+             fallback under a 'strict CRLF-only mode' rationale surfaces \
+             here and operators running through non-CRLF proxies still \
+             see frame boundaries",
+        );
+    }
+
+    #[test]
     fn hermes_runner_new_pins_greedy_trim_of_trailing_slashes_on_base_url() {
         // covenant_runtime::hermes::HermesRunner::new (line 63-75)
         // normalizes base_url on line 71 with:

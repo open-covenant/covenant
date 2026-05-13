@@ -2364,4 +2364,30 @@ mod tests {
         // snake_case slug "dry_run" (memory_repair_mode_serde_pins_snake_case_wire_form).
         assert_eq!(wire.get("mode").unwrap(), &serde_json::json!("dry_run"));
     }
+
+    #[test]
+    fn agent_id_error_invalid_display_display_message_pins_prefix_namespace_qualifier_and_debug_formatted_payload() {
+        let err = AgentIdError::InvalidDisplay("local@bad host".into());
+        let message = format!("{err}");
+        assert_eq!(
+            message, "invalid AgentId.display: \"local@bad host\"",
+            "AgentIdError::InvalidDisplay Display drifted (typo, dropped namespace qualifier, separator swap, or Debug-vs-Display formatting regression class)"
+        );
+        assert!(
+            message.contains("invalid AgentId.display"),
+            "AgentIdError::InvalidDisplay must surface the 'AgentId.display' namespace qualifier so audit-log filters can distinguish wire-derived AgentId rejections from sibling 'display' or 'agent id' rejections (dropped-qualifier regression class): {message}"
+        );
+        assert!(
+            message.contains("\"local@bad host\""),
+            "AgentIdError::InvalidDisplay must surface the payload with surrounding double quotes (the {{0:?}} Debug-formatting), so a refactor to {{0}} that would let control bytes inject into log lines surfaces immediately (log-injection / Debug-vs-Display regression class): {message}"
+        );
+        assert!(
+            !message.ends_with(": local@bad host"),
+            "AgentIdError::InvalidDisplay must NOT end with the unquoted payload; the {{0:?}} Debug-formatting must preserve the surrounding quotes (Debug-vs-Display formatting regression class): {message}"
+        );
+        assert!(
+            !message.contains(": local@bad host\""),
+            "AgentIdError::InvalidDisplay must NOT surface a missing-leading-quote variant; both opening and closing quotes from {{0:?}} Debug-formatting must be intact (partial-quote regression class): {message}"
+        );
+    }
 }

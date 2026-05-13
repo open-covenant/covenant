@@ -756,6 +756,104 @@ provider = "made-up"
     }
 
     #[test]
+    fn provider_config_serde_pins_optional_llm_section_default() {
+        // ProviderConfig is the top-level secrets.toml decoder for the
+        // [llm] section. The struct carries a single field — llm:
+        // Option<LlmSection> — with field-level #[serde(default)] and a
+        // derived Default impl. ProviderConfig::from_path returns
+        // Self::default() when the file is missing, and pick_provider
+        // treats llm.is_none() as the fall-through to the documented
+        // Ollama/mock ladder.
+        //
+        // LlmSection itself is pinned by
+        // llm_section_serde_pins_required_provider_and_option_defaults
+        // but no test pins the wrapper's field name, the None default
+        // on an empty TOML payload, or the parse contract when [llm] is
+        // omitted but other root keys exist. A refactor that renamed
+        // ProviderConfig::llm (or applied #[serde(rename)] in either
+        // direction) would silently make every operator's secrets.toml
+        // decode into ProviderConfig::default(), pick_provider would
+        // fall through to Ollama/mock with no parse signal, and
+        // configured Anthropic/OpenAI/DeepSeek deployments would
+        // silently lose their provider on next daemon restart.
+        let empty: ProviderConfig = toml::from_str("").unwrap();
+        assert!(
+            empty.llm.is_none(),
+            "ProviderConfig must decode an empty TOML payload as \
+             ProviderConfig::default() with llm == None — \
+             ProviderConfig::from_path relies on this path to return \
+             Self::default() for missing secrets.toml, and pick_provider \
+             relies on llm.is_none() to fall through to the Ollama/mock \
+             ladder"
+        );
+
+        // No [llm] section but other unknown root keys present — the
+        // top-level deserializer must still produce llm == None rather
+        // than rejecting the unknown key (the struct does not carry
+        // #[serde(deny_unknown_fields)]).
+        let other_root = r#"
+[unrelated]
+key = "value"
+"#;
+        let cfg: ProviderConfig = toml::from_str(other_root).unwrap();
+        assert!(
+            cfg.llm.is_none(),
+            "ProviderConfig must tolerate unknown root sections without \
+             refusing to parse — operators write [embed]/[search] blocks \
+             into the same secrets.toml and a refactor that added \
+             #[serde(deny_unknown_fields)] would break every co-resident \
+             secrets.toml at daemon start"
+        );
+
+        // [llm] fully populated — wrapper round-trips into the
+        // LlmSection. Pin one field from the inner section so a refactor
+        // that broke the wrapper's deserialization path (e.g., renamed
+        // the wrapper field) would fail this assertion rather than
+        // landing on a misleading inner-field error.
+        let full = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+model = "claude-haiku-4-5"
+endpoint = "https://api.example/v1"
+"#;
+        let cfg: ProviderConfig = toml::from_str(full).unwrap();
+        let llm = cfg
+            .llm
+            .as_ref()
+            .expect("[llm] block must surface through ProviderConfig.llm");
+        assert_eq!(llm.provider, "anthropic");
+        assert_eq!(llm.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(llm.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(llm.endpoint.as_deref(), Some("https://api.example/v1"));
+
+        // [llm] with only the strictly-required provider field — the
+        // inner section's Option defaults must surface through the
+        // wrapper so partial secrets.toml stays forward-compatible.
+        let minimal = r#"
+[llm]
+provider = "ollama"
+"#;
+        let cfg: ProviderConfig = toml::from_str(minimal).unwrap();
+        let llm = cfg.llm.as_ref().unwrap();
+        assert_eq!(llm.provider, "ollama");
+        assert!(llm.api_key.is_none());
+        assert!(llm.model.is_none());
+        assert!(llm.endpoint.is_none());
+
+        // ProviderConfig::default() must match the empty-TOML decode —
+        // pin this so a refactor that diverged the derived Default impl
+        // from the empty-TOML path would fail loud.
+        let default_cfg = ProviderConfig::default();
+        assert!(
+            default_cfg.llm.is_none(),
+            "ProviderConfig::default() must have llm == None to match \
+             the empty-TOML decode path that ProviderConfig::from_path \
+             relies on for missing secrets.toml"
+        );
+    }
+
+    #[test]
     fn llm_section_serde_pins_required_provider_and_option_defaults() {
         // LlmSection is the [llm] block operators write to secrets.toml
         // to pick the chat provider. The contract is asymmetric: provider

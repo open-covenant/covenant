@@ -1,15 +1,15 @@
 # Source Install
 
-Covenant alpha releases are source-built local infrastructure releases. The source installer builds the daemon and CLI from the local checkout and copies them into an operator-selected prefix.
+The source installer builds the daemon and CLI from the local checkout and copies them into an operator-selected prefix. It is the recommended path when you want to build from a specific commit, when you are developing against the repo, or when no signed release exists yet for your platform.
 
-It is not a package-manager release, signed artifact, SDK stability commitment, or automatic upgrade path.
+For tagged releases with signed prebuilt binaries, see [RELEASES.md](../RELEASES.md) and the GitHub Releases page. Source install is not a package-manager release, SDK stability commitment, or automatic upgrade path.
 
 ## Dry Run
 
 Preview the write plan without building or copying files:
 
 ```bash
-node agent-os/scripts/install-source.mjs --prefix /tmp/covenant-alpha --dry-run --json
+node agent-os/scripts/install-source.mjs --prefix /tmp/covenant --dry-run --json
 ```
 
 The dry-run output uses schema `covenant.source-install.v1` and lists only three writes under the prefix:
@@ -23,7 +23,7 @@ The dry-run output uses schema `covenant.source-install.v1` and lists only three
 From the repository root:
 
 ```bash
-node agent-os/scripts/install-source.mjs --prefix /tmp/covenant-alpha --profile release
+node agent-os/scripts/install-source.mjs --prefix /tmp/covenant --profile release
 ```
 
 The installer runs:
@@ -41,7 +41,7 @@ The manifest records schema, source commit, build profile, binary names, crate n
 Inspect a prefix before reinstalling over an existing source install:
 
 ```bash
-node agent-os/scripts/source-install-upgrade-plan.mjs --prefix /tmp/covenant-alpha --json
+node agent-os/scripts/source-install-upgrade-plan.mjs --prefix /tmp/covenant --json
 ```
 
 The report uses schema `covenant.source-install-upgrade-plan.v1`. It reuses the installer dry-run plan, reads the existing install manifest when present, checks whether planned binary replacements match the recorded manifest digests, and classifies the prefix as:
@@ -64,13 +64,13 @@ share/covenant/backups/<checkpoint-id>/
 The new install manifest records a `rollback_checkpoint` with prefix-relative backup paths, byte counts, SHA-256 digests, and file modes. Restore the checkpoint with a dry run first:
 
 ```bash
-node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant-alpha --json
+node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant --json
 ```
 
 Apply the rollback only after the dry run reports `ready: true`:
 
 ```bash
-node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant-alpha --apply --json
+node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant --apply --json
 ```
 
 Rollback verifies every backup digest before copying files back into place. Applied rollback writes local evidence under `share/covenant/rollback-reports/`. This is local source-install rollback, not package-manager rollback, signed release rollback, or public upgrade policy.

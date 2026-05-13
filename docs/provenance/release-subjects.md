@@ -18,7 +18,7 @@ This document defines the **subject schema** for that future release envelope wi
 
 ## Definitions
 
-- **Release id**: a repository-scoped identifier such as a Git tag (`v0.1.0-alpha.1`) or a build id chosen by the release operator.
+- **Release id**: a repository-scoped identifier such as a Git tag (`v0.1.0`) or a build id chosen by the release operator.
 - **Artifact**: a release output such as a source tarball, prebuilt binary, container digest, SBOM, or checksums file.
 - **Digest**: a cryptographic hash over the artifact bytes (SHA-256 for v1).
 
@@ -70,13 +70,13 @@ The release-subject verifier checks schema, repository, release id, commit, arti
   "subject": {
     "kind": "release_bundle",
     "repository": "open-covenant/covenant",
-    "releaseId": "v0.1.0-alpha.1",
-    "tag": "v0.1.0-alpha.1",
+    "releaseId": "v0.1.0",
+    "tag": "v0.1.0",
     "commit": "<40-hex>",
     "artifacts": [
       {
         "name": "covenant-source",
-        "filename": "covenant-v0.1.0-alpha.1.tar.gz",
+        "filename": "covenant-v0.1.0.tar.gz",
         "sha256": "<64-hex>",
         "sizeBytes": 123456
       },

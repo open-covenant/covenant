@@ -3100,4 +3100,62 @@ mod tests {
             &["choice", "intent_id", "resolved", "run_id"],
         );
     }
+
+    #[test]
+    fn zero_chain_hash_pins_64_char_all_zero_string() {
+        // ZERO_CHAIN_HASH (line 386) is the genesis seed every audit
+        // hash chain uses for its first event's previous_hash_hex.
+        // The value '0' * 64 matches the conventional zero/genesis
+        // form that Bitcoin's coinbase parent hash, audit-log replay
+        // tools, and any independent SHA-256 verifier expect when
+        // seeding the chain replay from the first event.
+        // build_chain_entries (line 420), the JsonlAuditLog::verify
+        // path (line 635), and the root_hash_hex defaulting paths
+        // (line 544, 727) all reference this constant.
+        //
+        // chain_hash_pins_separator_and_sha256_composition (line 1088
+        // sibling) uses ZERO_CHAIN_HASH on BOTH sides of its
+        // composition assertion, so the constant's value is a
+        // reference, not a target — a refactor that changed
+        // ZERO_CHAIN_HASH to a different 64-char string (e.g., the
+        // SHA-256 of empty input 'e3b0c44...' under a 'use a
+        // meaningful genesis' rationale, or 'f' * 64 under an
+        // 'anti-zero genesis' rationale) would make both sides drift
+        // together and the existing pin would silently pass while
+        // every operator's persisted audit chain became unreplayable
+        // with external tools.
+
+        assert_eq!(
+            ZERO_CHAIN_HASH, "0000000000000000000000000000000000000000000000000000000000000000",
+            "ZERO_CHAIN_HASH must remain the literal 64-character \
+             all-zero string. Operators running independent SHA-256 \
+             replay tools (the documented external-verification \
+             contract documented at sha256_hex_pins_nist_vectors_and_lowercase_output) \
+             seed their chain replay with this exact value; a \
+             refactor that changed it under any rationale would \
+             silently shift the chain's genesis and produce mismatches \
+             at index 0 of every operator's audit JSONL",
+        );
+        assert_eq!(
+            ZERO_CHAIN_HASH.len(),
+            64,
+            "ZERO_CHAIN_HASH must remain exactly 64 hex characters \
+             (32 bytes * 2 nibbles per byte) — the SHA-256 output \
+             length. A refactor that swapped the underlying digest \
+             to SHA-1 (40 hex chars) or SHA-512 (128 hex chars) \
+             would require this length to change in lockstep; the \
+             length pin surfaces the algorithm swap before external \
+             verifiers silently desync",
+        );
+        assert!(
+            ZERO_CHAIN_HASH.chars().all(|c| c == '0'),
+            "ZERO_CHAIN_HASH must contain only the ASCII digit '0' \
+             — a refactor that introduced a '0x' prefix for hex-string \
+             consistency with Solana/Ethereum conventions, uppercased \
+             to '0X' or 'F', or substituted the letter 'O' for the \
+             digit would silently shift the canonical format. The \
+             all-chars-zero pin cross-binds the lowercase-hex contract \
+             pinned by sha256_hex_pins_nist_vectors_and_lowercase_output",
+        );
+    }
 }

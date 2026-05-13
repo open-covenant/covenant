@@ -1667,6 +1667,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_memory_scope_rejects_invalid_before_ms_shapes() {
+        // validate_memory_scope binds before_ms to
+        // optional_non_negative_integer_or_null. The helper test
+        // optional_non_negative_integer_or_null_pins_absent_null_zero_positive_negative_and_non_integer
+        // pins non-integer and negative rejection at the helper
+        // level, but a regression at the validate_memory_scope call
+        // site that swapped the helper (e.g., to
+        // optional_string_or_null for ISO-8601 timestamp forward-compat,
+        // or to optional_non_negative_integer dropping the or_null
+        // variant) would not be caught by the helper test alone.
+        // sibling call sites pin this arm: validate_audit_scope
+        // pins before_ms='bad' at audit.verify and validate_peer_scope
+        // pins before_ms=-1 at peers.revoke. Pin both shapes at the
+        // memory.write call site to cross-bind both regression vectors.
+        assert_invalid_scope(
+            "memory.write",
+            serde_json::json!({ "version": 1, "before_ms": "bad" }),
+        );
+        assert_invalid_scope(
+            "memory.write",
+            serde_json::json!({ "version": 1, "before_ms": -1 }),
+        );
+    }
+
+    #[test]
     fn validate_a2a_scope_rejects_invalid_task_id_and_lease_id_shapes() {
         assert_invalid_scope(
             "a2a.requeue",

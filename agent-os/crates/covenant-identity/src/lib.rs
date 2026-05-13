@@ -758,4 +758,71 @@ mod tests {
              bytes and the seed would round-trip wrong",
         );
     }
+
+    #[test]
+    fn identity_error_io_and_crypto_display_messages_pin_prefix_and_external_source_display_delegation() {
+        let io_err = IdentityError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "identity.key missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "IdentityError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish daemon-identity-file disk faults from crypto/key faults and from the three security-relevant field-bearing surfaces (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("identity.key missing"),
+            "IdentityError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}) (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "IdentityError::Io must NOT surface the std::io::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        // Produce a SignatureError via verify_strict failure — the
+        // construction used in covenant-permissions for the same reason
+        // (VerifyingKey::from_bytes is unreliable as a fixture because
+        // most byte patterns happen to decode to a valid Edwards point).
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let signature = Signer::sign(&signing_key, b"original message");
+        let verifying_key = signing_key.verifying_key();
+        let crypto_source = verifying_key
+            .verify_strict(b"different message", &signature)
+            .expect_err("verify_strict must fail on mismatched message");
+        let crypto_err = IdentityError::Crypto(crypto_source);
+        let crypto_message = format!("{crypto_err}");
+        assert!(
+            crypto_message.starts_with("ed25519: "),
+            "IdentityError::Crypto must surface the literal 'ed25519: ' bootstrap-stage prefix so audit-log filters can distinguish identity crypto faults (malformed seed/keypair, signature verification failure) from disk faults and from the three security-relevant field-bearing surfaces (dropped-prefix regression class): {crypto_message}"
+        );
+        assert!(
+            crypto_message.len() > "ed25519: ".len(),
+            "IdentityError::Crypto must surface the inner ed25519_dalek::SignatureError Display rendering after the colon ({{0}}, not {{0:?}}); a refactor that dropped the {{0}} would leave only the prefix (dropped-source-rendering regression class on the {{0}} interpolation): {crypto_message}"
+        );
+
+        assert_ne!(
+            io_message, crypto_message,
+            "IdentityError::Io and IdentityError::Crypto Display must not converge (prefix-convergence regression class): io={io_message} crypto={crypto_message}"
+        );
+        assert!(
+            !io_message.starts_with("ed25519:") && !crypto_message.starts_with("io:"),
+            "IdentityError::Io must not start with 'ed25519:' and IdentityError::Crypto must not start with 'io:' (sibling-prefix-swap regression class): io={io_message} crypto={crypto_message}"
+        );
+
+        let security_surfaces = [
+            "has wrong size: expected 32 bytes",
+            "has insecure permissions",
+            "is a symlink; refusing to follow",
+        ];
+        for surface in security_surfaces {
+            assert!(
+                !io_message.contains(surface),
+                "IdentityError::Io must not converge with the security-relevant field-bearing surface '{surface}' (security-surface-convergence regression class): {io_message}"
+            );
+            assert!(
+                !crypto_message.contains(surface),
+                "IdentityError::Crypto must not converge with the security-relevant field-bearing surface '{surface}' (security-surface-convergence regression class): {crypto_message}"
+            );
+        }
+    }
 }

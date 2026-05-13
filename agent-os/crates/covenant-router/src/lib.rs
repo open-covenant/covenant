@@ -686,6 +686,34 @@ required = ["tool.web_search"]
     }
 
     #[test]
+    fn router_error_manifest_source_delegation_pin_returns_inner_manifest_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+        let err = RouterError::Manifest {
+            path: PathBuf::from("/tmp/missing-agent/agent.toml"),
+            source: covenant_manifest::ManifestError::Validation(
+                "agent.id must not be empty".into(),
+            ),
+        };
+        let source = err.source().expect(
+            "RouterError::Manifest must surface the inner ManifestError via std::error::Error::source so anyhow chain printers and tracing's source-walking emitters can render the wrapper context AND the inner cause; a thiserror refactor that dropped the #[source] attribute on the source field (e.g., field rename without re-annotation, or attribute conversion #[source]→#[from]) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        let source_message = format!("{source}");
+        assert!(
+            source_message.starts_with("validation: "),
+            "RouterError::Manifest source() must return an error whose Display starts with 'validation: ' — the inner ManifestError::Validation Display prefix; a refactor that wrapped the source in a different type (e.g., Box<dyn Error>) and dropped the literal prefix would silently mute the structural validation discriminator in chain-walked output (concrete-source-type regression class): {source_message}"
+        );
+        assert_eq!(
+            source_message,
+            format!(
+                "{}",
+                covenant_manifest::ManifestError::Validation("agent.id must not be empty".into())
+            ),
+            "RouterError::Manifest source() Display must match a direct format!() of the same ManifestError::Validation variant verbatim; a refactor that swapped the source field type to Box<dyn Error> or any other wrapper would silently break callsite downcasts to the concrete ManifestError type (concrete-source-type regression class)"
+        );
+    }
+
+    #[test]
     fn router_error_io_display_message_pins_prefix_and_external_source_display_delegation() {
         let err = RouterError::Io(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,

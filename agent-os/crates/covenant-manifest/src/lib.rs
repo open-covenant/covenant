@@ -520,6 +520,116 @@ entry = "x.js"
     }
 
     #[test]
+    fn validate_pins_empty_rejection_for_name_version_and_entry_fields() {
+        // Manifest::validate (line 152) iterates over four (field-name,
+        // value) tuples and returns Err(Validation) on any empty value:
+        //   ("agent.id", &self.agent.id),
+        //   ("agent.name", &self.agent.name),
+        //   ("agent.version", &self.agent.version),
+        //   ("agent.entry", &self.agent.entry),
+        //
+        // rejects_empty_id pins the id tuple. The name, version, and
+        // entry tuples are not individually pinned at the validate call
+        // site. A refactor that drops one tuple from the iteration would
+        // silently let a manifest with that field empty parse through
+        // Manifest::parse and persist through load_agents_from_dir,
+        // breaking downstream consumers that treat the field as
+        // load-bearing. Pin each remaining arm so an arm-removal
+        // regression is caught at the validate call site, mirroring the
+        // covenant_types::validate_agent_id_display_pins_each_rejection_arm
+        // and covenant_budget::validate_resume_state_value pin shapes.
+        let empty_name = r#"
+[agent]
+id = "x"
+name = ""
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#;
+        match Manifest::parse(empty_name) {
+            Err(ManifestError::Validation(msg)) => {
+                assert!(
+                    msg.contains("agent.name"),
+                    "name arm: the validation error must name 'agent.name' \
+                     so operators can locate the offending field; a refactor \
+                     that dropped the ('agent.name', ...) tuple would either \
+                     parse successfully (silent regression) or report a \
+                     different field name (misleading regression). got: {msg}"
+                );
+                assert!(
+                    !msg.contains("agent.id")
+                        && !msg.contains("agent.version")
+                        && !msg.contains("agent.entry"),
+                    "name arm: a copy-paste regression that pointed the \
+                     ('agent.name', ...) tuple at a different field value \
+                     would report the wrong field name; got: {msg}"
+                );
+            }
+            other => panic!("expected validation error for empty name, got {other:?}"),
+        }
+
+        let empty_version = r#"
+[agent]
+id = "x"
+name = "x"
+version = ""
+runtime = "node"
+entry = "x.js"
+"#;
+        match Manifest::parse(empty_version) {
+            Err(ManifestError::Validation(msg)) => {
+                assert!(
+                    msg.contains("agent.version"),
+                    "version arm: a refactor that dropped the \
+                     ('agent.version', ...) tuple ('version is for docs \
+                     only, not enforced') would silently let manifests \
+                     with empty version persist through load_agents_from_dir, \
+                     breaking downstream tooling that pattern-matches version \
+                     for compatibility decisions. got: {msg}"
+                );
+                assert!(
+                    !msg.contains("agent.id")
+                        && !msg.contains("agent.name")
+                        && !msg.contains("agent.entry"),
+                    "version arm: must name only 'agent.version'. got: {msg}"
+                );
+            }
+            other => panic!("expected validation error for empty version, got {other:?}"),
+        }
+
+        let empty_entry = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = ""
+"#;
+        match Manifest::parse(empty_entry) {
+            Err(ManifestError::Validation(msg)) => {
+                assert!(
+                    msg.contains("agent.entry"),
+                    "entry arm: a refactor that dropped the \
+                     ('agent.entry', ...) tuple on the assumption that \
+                     rejects_entry_outside_package covers it would silently \
+                     accept empty entry; the existing test only covers \
+                     absolute paths and parent-component traversal, not \
+                     empty strings — the SubprocessRunner would later \
+                     attempt to launch an empty entry path with ENOENT \
+                     instead of failing at manifest parse time. got: {msg}"
+                );
+                assert!(
+                    !msg.contains("agent.id")
+                        && !msg.contains("agent.name")
+                        && !msg.contains("agent.version"),
+                    "entry arm: must name only 'agent.entry'. got: {msg}"
+                );
+            }
+            other => panic!("expected validation error for empty entry, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_entry_outside_package() {
         for entry in ["/bin/sh", "../agent.sh", "subdir/../../agent.sh"] {
             let bad = format!(

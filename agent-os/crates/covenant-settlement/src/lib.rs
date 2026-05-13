@@ -1253,4 +1253,30 @@ mod tests {
         assert_eq!(none_receipt.slot, None);
         assert_eq!(none_receipt.confirmed_at, None);
     }
+
+    #[test]
+    fn settlement_error_empty_batch_display_message_pins_exact_phrase_and_no_io_or_serde_prefix_convergence() {
+        let err = SettlementError::EmptyBatch;
+        let message = format!("{err}");
+        assert_eq!(
+            message, "no unsettled receipts",
+            "SettlementError::EmptyBatch Display drifted (typo, pluralization swap, dropped qualifier, or prefix-convergence regression class)"
+        );
+        assert!(
+            message.contains("unsettled"),
+            "SettlementError::EmptyBatch must surface the 'unsettled' qualifier so audit-log filters can distinguish a fully-flushed-ledger no-op from a missing-receipt-log incident (dropped-qualifier regression class): {message}"
+        );
+        assert!(
+            message.contains("receipts"),
+            "SettlementError::EmptyBatch must surface the plural noun 'receipts' so operator-facing CLI documentation parity and incident-triage scrapers that grep for the literal phrase stay aligned (pluralization-swap regression class): {message}"
+        );
+        assert!(
+            !message.starts_with("io:"),
+            "SettlementError::EmptyBatch must not converge with SettlementError::Io prefix; a benign 'nothing to flush' must not be mis-routed as a disk-IO incident (prefix-convergence regression class): {message}"
+        );
+        assert!(
+            !message.starts_with("serde:"),
+            "SettlementError::EmptyBatch must not converge with SettlementError::Serde prefix; a benign 'nothing to flush' must not be mis-routed as a JSON-parse incident (prefix-convergence regression class): {message}"
+        );
+    }
 }

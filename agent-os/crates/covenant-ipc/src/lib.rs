@@ -9308,4 +9308,34 @@ mod tests {
         let r: Result<Request, _> = read_frame(&mut b).await;
         assert!(matches!(r, Err(IpcError::FrameTooLarge { .. })));
     }
+
+    #[test]
+    fn ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value() {
+        let err = IpcError::FrameTooLarge { got: 9_999_999 };
+        let message = format!("{err}");
+        assert_eq!(
+            message, "frame too large: 9999999 bytes (max 8388608)",
+            "IpcError::FrameTooLarge Display drifted (typo, slot-swap, hardcoded-MAX_FRAME, or dropped-prefix regression class)"
+        );
+        assert!(
+            message.contains("frame too large"),
+            "IpcError::FrameTooLarge must surface the 'frame too large' prefix (audit-log discriminator regression class): {message}"
+        );
+        assert!(
+            message.contains("9999999"),
+            "IpcError::FrameTooLarge must surface the got value in the got-slot: {message}"
+        );
+        assert!(
+            message.contains("8388608"),
+            "IpcError::FrameTooLarge must surface the MAX_FRAME literal so a hardcoded-MAX_FRAME refactor would surface as a desync between wire-level cap and operator-facing rendering: {message}"
+        );
+        assert!(
+            !message.contains("max 9999999"),
+            "IpcError::FrameTooLarge must not surface got in the max-slot (slot-swap regression class): {message}"
+        );
+        assert!(
+            !message.contains("frame too large: 8388608"),
+            "IpcError::FrameTooLarge must not surface MAX_FRAME in the got-slot (slot-swap regression class): {message}"
+        );
+    }
 }

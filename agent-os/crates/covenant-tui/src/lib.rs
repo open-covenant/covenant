@@ -2209,6 +2209,165 @@ mod tests {
     }
 
     #[test]
+    fn mode_name_pins_exact_discriminant_string_for_each_of_sixteen_variants() {
+        use covenant_types::AgentId;
+        // Mode::name (lib.rs line 148-167) maps every Mode variant to a
+        // stable kebab-case discriminant string the binary's status bar
+        // reads. The kebab-case test above pins SHAPE (charset,
+        // non-empty, uniqueness across its variants vec) and silently
+        // omits Mode::PeersTail from that vec, so PeersTail never
+        // participates in the shape gate. The only direct
+        // exact-string anchors elsewhere are two indirect assertions
+        // for "peers-tail" (lines 1828, 1871); the other fifteen
+        // variants have no per-variant exact-string pin.
+        //
+        // A rename like "audit-tail" -> "audittail" passes the
+        // kebab-case shape gate; a "consolidate Result and Error into
+        // outcome" refactor collapses two distinct discriminants until
+        // the uniqueness arm fires. The renames are precisely the
+        // silent-status-bar-drift regressions the shape gate was
+        // designed for — the missing piece is the exact-string anchor
+        // that prevents either arm from drifting independently.
+        let cases: Vec<(Mode, &'static str)> = vec![
+            (Mode::Browsing, "browsing"),
+            (
+                Mode::Editing {
+                    buffer: String::new(),
+                },
+                "editing",
+            ),
+            (Mode::Submitting { text: "x".into() }, "submitting"),
+            (
+                Mode::Result {
+                    intent_id: Uuid::nil(),
+                    status: "ok".into(),
+                    text: "x".into(),
+                },
+                "result",
+            ),
+            (
+                Mode::Error {
+                    message: "x".into(),
+                },
+                "error",
+            ),
+            (
+                Mode::MemoryTail {
+                    loading: false,
+                    records: Vec::new(),
+                    error: None,
+                },
+                "memory-tail",
+            ),
+            (
+                Mode::AuditTail {
+                    loading: false,
+                    events: Vec::new(),
+                    error: None,
+                },
+                "audit-tail",
+            ),
+            (
+                Mode::CapabilitiesTail {
+                    loading: false,
+                    capabilities: Vec::new(),
+                    error: None,
+                },
+                "capabilities-tail",
+            ),
+            (
+                Mode::A2aTail {
+                    loading: false,
+                    tasks: Vec::new(),
+                    error: None,
+                },
+                "a2a-tail",
+            ),
+            (
+                Mode::ReceiptsTail {
+                    loading: false,
+                    receipts: Vec::new(),
+                    error: None,
+                },
+                "receipts-tail",
+            ),
+            (
+                Mode::PeersTail {
+                    loading: false,
+                    peers: Vec::new(),
+                    truncated: false,
+                    error: None,
+                },
+                "peers-tail",
+            ),
+            (
+                Mode::GrantEditor {
+                    buffer: String::new(),
+                },
+                "grant-editor",
+            ),
+            (
+                Mode::GrantSubmitting { action: "x".into() },
+                "grant-submitting",
+            ),
+            (
+                Mode::GrantResult {
+                    action: "x".into(),
+                    subject_display: AgentId::new("user@local", [0u8; 32]).display,
+                    signature_b58: "x".into(),
+                },
+                "grant-result",
+            ),
+            (
+                Mode::GrantError {
+                    message: "x".into(),
+                },
+                "grant-error",
+            ),
+            (Mode::Help, "help"),
+        ];
+
+        assert_eq!(
+            cases.len(),
+            16,
+            "Mode has 16 declared variants — a new variant added without \
+             a corresponding (variant, expected_name) pair in this test \
+             would silently let its Mode::name arm drift without an \
+             exact-string anchor. The exhaustive match inside Mode::name \
+             produces a compile error first; this count arm produces a \
+             test failure second so an author who hand-wrote the new arm \
+             without updating this pin gets a clear signal here",
+        );
+
+        for (variant, expected) in &cases {
+            assert_eq!(
+                variant.name(),
+                *expected,
+                "Mode::{variant:?} must surface name() == {expected:?} — \
+                 the kebab-case shape gate above would still accept a \
+                 rename like \"audit-tail\" -> \"audittail\" (still \
+                 kebab-allowed charset) or a \"consolidate Result and \
+                 Error into outcome\" collapse (until the uniqueness \
+                 check fires). The exact-string contract is the \
+                 operator-facing status-bar identifier; downstream \
+                 dashboards, screenshots, and operator scripts anchor \
+                 on these literals",
+            );
+        }
+
+        let expected_unique: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(_, n)| *n).collect();
+        assert_eq!(
+            expected_unique.len(),
+            cases.len(),
+            "the (variant, expected_name) cases above must list 16 \
+             distinct expected strings — a duplicate would indicate a \
+             test-side typo that masks a real Mode::name collision \
+             (e.g., two arms expected to map to \"result\")",
+        );
+    }
+
+    #[test]
     fn drafts_are_capped_at_max_drafts_oldest_drops_first() {
         let mut app = App::new();
         for n in 0..MAX_DRAFTS + 5 {

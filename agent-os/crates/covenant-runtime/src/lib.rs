@@ -881,6 +881,114 @@ filesystem = "host"
     }
 
     #[test]
+    fn gvisor_ensure_allowed_pins_backend_mismatch_arm_with_reason() {
+        // GvisorRunner::ensure_allowed (line 193-217) is the
+        // defensive-second-line check that rejects manifests the gVisor
+        // runner cannot execute safely. Three rejection arms, each with
+        // a unique reason string:
+        //
+        //   (1) backend != LinuxGvisor → "manifest does not select linux-gvisor"
+        //   (2) filesystem != ReadOnlyPackage → "initial gVisor runner only supports read-only-package filesystem policy"
+        //   (3) resources.network != Off → "initial gVisor runner only supports network=off"
+        //
+        // gvisor_runner_rejects_unenforced_policies covers arms 2 and 3
+        // but pins only that the error variant is
+        // RunnerError::UnsupportedSandboxPolicy { .. } without
+        // verifying any reason string, and arm 1 (backend mismatch) is
+        // not covered at all. SandboxBackend::TrustedLocal is the
+        // documented default (line 99-101) — a manifest with no
+        // [sandbox] section parses as a valid manifest with
+        // backend=TrustedLocal; the manifest-level guard
+        // rejects_required_trusted_local_sandbox (covenant-manifest)
+        // refuses the combined-failure case (sandbox.required=true +
+        // backend=trusted-local), but a non-required TrustedLocal
+        // manifest is a valid input that, if ever routed to GvisorRunner
+        // via a dispatch-layer regression or a new code path that
+        // bypassed runner selection, would be silently wrapped in the
+        // OCI bundle if this defensive check ever dropped the backend
+        // equality. Pin the arm explicitly with the load-bearing reason
+        // substring so a refactor that consolidates the three arms into
+        // a generic 'unsupported' template fails loud here.
+        let dir = tempdir().unwrap();
+        let rootfs = tempdir().unwrap();
+        let scratch = tempdir().unwrap();
+        let runner = GvisorRunner::with_paths("runsc", rootfs.path(), scratch.path());
+
+        // Minimal manifest: no [sandbox] section -> backend defaults to
+        // TrustedLocal, sandbox.required defaults to false (so manifest
+        // validation passes); filesystem default is ReadOnlyPackage and
+        // network default is Off, so arms 2 and 3 cannot fire — the
+        // only possible rejection inside ensure_allowed is the backend
+        // mismatch arm we are pinning.
+        let card = card_for(
+            r#"
+[agent]
+id = "trusted-locale"
+name = "Trusted Locale"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+"#,
+            dir.path().to_path_buf(),
+        );
+
+        match runner.oci_config(&card) {
+            Err(RunnerError::UnsupportedSandboxPolicy {
+                agent,
+                backend,
+                reason,
+            }) => {
+                assert_eq!(
+                    agent, "trusted-locale",
+                    "UnsupportedSandboxPolicy must carry the offending \
+                     agent.id so operator dashboards can attribute the \
+                     routing failure to a specific manifest; a refactor \
+                     that dropped the agent field or substituted a \
+                     generic placeholder would silently break audit \
+                     correlation on misrouted manifests",
+                );
+                assert_eq!(
+                    backend,
+                    SandboxBackend::LinuxGvisor,
+                    "UnsupportedSandboxPolicy.backend must surface the \
+                     RUNNER's required backend (LinuxGvisor), not the \
+                     manifest's declared backend (TrustedLocal); the \
+                     field is documented as the runner-side expectation \
+                     for operator triage — a refactor that flipped it \
+                     to the manifest's value would silently invert the \
+                     meaning of every existing UnsupportedSandboxPolicy \
+                     diagnostic and break dashboards that group by \
+                     expected runner",
+                );
+                assert!(
+                    reason.contains("manifest does not select linux-gvisor"),
+                    "the backend-mismatch arm's reason string must \
+                     contain the substring 'manifest does not select \
+                     linux-gvisor' — a refactor that consolidated the \
+                     three rejection arms into a generic 'unsupported \
+                     backend' template (e.g., during a DRY-cleanup fan-\
+                     out) would break operator-dashboard grep workflows \
+                     that distinguish backend-mismatch routing errors \
+                     from filesystem-policy or network-policy mismatches \
+                     and break on-call alerting that classifies sandbox-\
+                     policy failures by reason category. got: {reason}",
+                );
+            }
+            other => panic!(
+                "expected RunnerError::UnsupportedSandboxPolicy for a \
+                 TrustedLocal-backed manifest routed through GvisorRunner; \
+                 a refactor that dropped the backend equality check inside \
+                 ensure_allowed (line 194-200) would silently let \
+                 oci_config canonicalize paths and write the OCI bundle \
+                 for a non-gVisor manifest; got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn gvisor_runner_redacts_host_paths_from_stderr() {
         let package = PathBuf::from("/tmp/covenant-agent-package");
         let bundle = PathBuf::from("/tmp/covenant-agent-bundle");

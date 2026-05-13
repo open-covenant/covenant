@@ -671,6 +671,50 @@ required = ["unknown.thing"]
     }
 
     #[test]
+    fn validate_rejects_bad_optional_capability_namespace() {
+        // Manifest::validate iterates capability namespaces via:
+        //   self.capabilities.required.iter()
+        //       .chain(self.capabilities.optional.iter())
+        // (line 195-199). rejects_bad_capability_namespace pins the
+        // required-list arm. The chained optional-list arm is not
+        // pinned. Use empty required + an unreserved optional entry so
+        // the test isolates the optional iteration arm — a refactor that
+        // dropped the .chain(self.capabilities.optional.iter()) clause
+        // would still pass rejects_bad_capability_namespace but fail
+        // this pin loud.
+        let bad = r#"
+[agent]
+id = "x"
+name = "x"
+version = "0.0.1"
+runtime = "python3"
+entry = "x.py"
+
+[capabilities]
+required = []
+optional = ["unknown.thing"]
+"#;
+        match Manifest::parse(bad) {
+            Err(ManifestError::Validation(msg)) => {
+                assert!(
+                    msg.contains("unknown.thing"),
+                    "optional-list arm: a refactor that dropped the \
+                     .chain(self.capabilities.optional.iter()) clause \
+                     would silently let manifests bind an optional \
+                     capability with an unreserved namespace; the daemon's \
+                     capability dispatch would reject the unknown action \
+                     at runtime instead of at manifest parse time, \
+                     splitting the audit trail into 'manifest accepted \
+                     but capability never resolves'. got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected validation error for optional capability with unreserved namespace, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn rejects_invalid_runtime_at_parse_time() {
         let bad = r#"
 [agent]

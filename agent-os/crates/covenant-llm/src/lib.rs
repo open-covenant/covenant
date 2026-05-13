@@ -1314,6 +1314,95 @@ model = "x"
     }
 
     #[tokio::test]
+    async fn mock_embedder_output_components_lie_in_minus_one_to_one_inclusive_range() {
+        // covenant_llm::MockEmbedder::embed (line 507-525) produces
+        // deterministic per-text embedding vectors used by tests that
+        // exercise cosine similarity over memory records. Line 521 is
+        // the component formula:
+        //
+        //   let f = ((state >> 32) as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        //
+        // The upper 32 bits of the LCG state scale into [0.0, 1.0],
+        // then the linear remap '* 2.0 - 1.0' shifts to [-1.0, 1.0].
+        // The bounded zero-centered range is what makes cosine
+        // similarity over MockEmbedder vectors well-defined and
+        // numerically stable.
+        //
+        // mock_embedder_is_deterministic_for_same_input (just below)
+        // pins the length and same-input determinism. Neither it nor
+        // any other test pins the COMPONENT RANGE. A refactor that
+        // dropped '* 2.0 - 1.0' (leaving values in [0.0, 1.0]) under
+        // a 'simplify to non-negative' rationale, or that expanded to
+        // '* 4.0 - 2.0' under an 'expand range for stronger gradient'
+        // rationale, would silently shift cosine-similarity score
+        // distributions across every test that consumes MockEmbedder
+        // without a parse-time signal.
+
+        let e = MockEmbedder::new(256);
+        let first = e
+            .embed("sample text for range pin")
+            .await
+            .expect("MockEmbedder::embed must not fail on a non-empty input");
+        assert_eq!(
+            first.len(),
+            256,
+            "MockEmbedder::new(256) must produce a 256-component vector — \
+             a length mismatch here would indicate the dim wiring \
+             changed and the range assertions below are operating on \
+             unexpected vector shape",
+        );
+
+        for (i, f) in first.iter().enumerate() {
+            assert!(
+                (-1.0..=1.0).contains(f),
+                "first sample component {i} = {f} must lie in \
+                 [-1.0, 1.0] inclusive — a refactor that dropped the \
+                 '* 2.0 - 1.0' remap would silently leave components \
+                 in [0.0, 1.0], or that widened to '* 4.0 - 2.0' \
+                 would silently produce values outside this range",
+            );
+        }
+
+        let second = e
+            .embed("another anchor for range pin")
+            .await
+            .expect("MockEmbedder::embed must not fail on a non-empty input");
+        for (i, f) in second.iter().enumerate() {
+            assert!(
+                (-1.0..=1.0).contains(f),
+                "second sample component {i} = {f} must lie in \
+                 [-1.0, 1.0] inclusive — anchors that the bound is \
+                 not accidentally specific to the first sample's hash \
+                 path; a refactor where the range invariant only held \
+                 for some hash seeds would surface here",
+            );
+        }
+
+        let union: Vec<f32> = first.iter().chain(second.iter()).copied().collect();
+        let any_strictly_negative = union.iter().any(|&f| f < 0.0);
+        let any_strictly_positive = union.iter().any(|&f| f > 0.0);
+        assert!(
+            any_strictly_negative,
+            "at least one component across the two samples must be \
+             strictly negative (< 0.0) — a refactor that dropped the \
+             '* 2.0 - 1.0' linear remap would silently leave every \
+             component in [0.0, 1.0]; the range-inclusive assertions \
+             above would still pass because [0.0, 1.0] is a subset of \
+             [-1.0, 1.0], but pinning the zero-crossing here catches \
+             the dropped-remap regression directly",
+        );
+        assert!(
+            any_strictly_positive,
+            "at least one component across the two samples must be \
+             strictly positive (> 0.0) — anchors that the linear \
+             remap produces both signs, not just negative; a refactor \
+             that flipped the remap to '1.0 - * 2.0' would silently \
+             invert the sign distribution while still satisfying the \
+             range bound",
+        );
+    }
+
+    #[tokio::test]
     async fn mock_embedder_is_deterministic_for_same_input() {
         let e = MockEmbedder::new(64);
         let a = e.embed("hello").await.unwrap();

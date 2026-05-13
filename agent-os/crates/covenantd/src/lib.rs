@@ -5139,6 +5139,155 @@ required = {caps:?}
     }
 
     #[test]
+    fn runtime_trace_to_audit_kind_pins_each_variant_mapping_preview_redaction_and_responded_to_resolved_rename(
+    ) {
+        // runtime_trace_to_audit_kind (line 302-346) is the bridge that
+        // lifts every covenant_runtime::RuntimeTrace variant into the
+        // matching covenant_audit::AuditKind row when the daemon folds
+        // Hermes traces into the audit chain. No direct test today.
+        //
+        // Two arms are load-bearing security/operator invariants:
+        //   (1) HermesToolInvoked → preview is HASHED into
+        //       preview_hash_hex via covenant_audit::hash_hex, NEVER
+        //       persisted verbatim. The docstring at covenant-runtime
+        //       line 53-55 documents 'the daemon hashes it before
+        //       persisting so the chain never embeds raw tool input'.
+        //   (2) HermesApprovalResponded → AuditKind::HermesApprovalResolved
+        //       (the trace variant 'Responded' is renamed to the audit
+        //       variant 'Resolved' at this boundary). Every operator
+        //       dashboard joining on HermesApprovalResolved depends on
+        //       this rename surviving refactors.
+        use covenant_runtime::RuntimeTrace;
+
+        let intent_id = Uuid::new_v4();
+
+        let preview = "ls -la /workspace";
+        let invoked = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesToolInvoked {
+                run_id: "run-1".into(),
+                tool: "terminal".into(),
+                preview: preview.into(),
+            },
+        );
+        match invoked {
+            AuditKind::HermesToolInvoked {
+                intent_id: stamped,
+                run_id,
+                tool,
+                preview_hash_hex,
+            } => {
+                assert_eq!(
+                    stamped, intent_id,
+                    "HermesToolInvoked must stamp the function-argument intent_id so the audit row ties back to the parent intent — a refactor that dropped the intent_id stamping would strand every Hermes tool invocation from the broader intent context",
+                );
+                assert_eq!(run_id, "run-1");
+                assert_eq!(tool, "terminal");
+                assert_eq!(
+                    preview_hash_hex,
+                    hash_hex(preview.as_bytes()),
+                    "HermesToolInvoked must hash preview into preview_hash_hex via covenant_audit::hash_hex — the redaction invariant documented at covenant-runtime line 53-55. A refactor that 'simplified' by passing the raw preview through (e.g., under a 'preview already operator-facing' rationale) would silently leak every Hermes tool-input preview verbatim into the persisted audit chain",
+                );
+                assert_ne!(
+                    preview_hash_hex, preview,
+                    "preview_hash_hex must NOT equal the raw preview string — a refactor that bypassed hash_hex entirely (e.g., by setting preview_hash_hex = preview directly) would silently break the redaction floor; this independent assertion catches that case without relying on hash_hex returning anything in particular",
+                );
+            }
+            other => panic!(
+                "HermesToolInvoked trace must map to AuditKind::HermesToolInvoked, got {other:?}"
+            ),
+        }
+
+        let completed = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesToolCompleted {
+                run_id: "run-2".into(),
+                tool: "fs".into(),
+                duration_ms: 1_234,
+                error: true,
+            },
+        );
+        match completed {
+            AuditKind::HermesToolCompleted {
+                intent_id: stamped,
+                run_id,
+                tool,
+                duration_ms,
+                error,
+            } => {
+                assert_eq!(stamped, intent_id);
+                assert_eq!(run_id, "run-2");
+                assert_eq!(tool, "fs");
+                assert_eq!(
+                    duration_ms, 1_234,
+                    "HermesToolCompleted must pass duration_ms through verbatim — the audit row carries the latency budget operators key on; a refactor that coerced to a different width or unit would silently shift every Hermes latency dashboard",
+                );
+                assert!(
+                    error,
+                    "HermesToolCompleted must pass error through verbatim — the audit row's error flag is what distinguishes a tool-raised failure from a successful tool whose downstream pipeline later failed; a refactor that defaulted to false would silently mask every tool failure as success",
+                );
+            }
+            other => panic!(
+                "HermesToolCompleted trace must map to AuditKind::HermesToolCompleted, got {other:?}"
+            ),
+        }
+
+        let requested = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesApprovalRequested {
+                run_id: "run-3".into(),
+                choices: vec!["allow".into(), "deny".into()],
+            },
+        );
+        match requested {
+            AuditKind::HermesApprovalRequested {
+                intent_id: stamped,
+                run_id,
+                choices,
+            } => {
+                assert_eq!(stamped, intent_id);
+                assert_eq!(run_id, "run-3");
+                assert_eq!(
+                    choices,
+                    vec!["allow".to_string(), "deny".to_string()],
+                    "HermesApprovalRequested must pass choices through verbatim in order — operator approval UIs render the choice list in the audit-supplied order so a sort or dedup pass here would change every operator's approval prompt order",
+                );
+            }
+            other => panic!(
+                "HermesApprovalRequested trace must map to AuditKind::HermesApprovalRequested, got {other:?}"
+            ),
+        }
+
+        let responded = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesApprovalResponded {
+                run_id: "run-4".into(),
+                choice: "allow".into(),
+                resolved: 2,
+            },
+        );
+        match responded {
+            AuditKind::HermesApprovalResolved {
+                intent_id: stamped,
+                run_id,
+                choice,
+                resolved,
+            } => {
+                assert_eq!(stamped, intent_id);
+                assert_eq!(run_id, "run-4");
+                assert_eq!(choice, "allow");
+                assert_eq!(
+                    resolved, 2,
+                    "HermesApprovalResolved must pass resolved through verbatim — covenant-runtime line 76-78 documents 'kept as u64 so an upstream change to the counter width never silently truncates an audit row'; a refactor that coerced to a different width here would defeat the upstream pin",
+                );
+            }
+            other => panic!(
+                "HermesApprovalResponded trace must map to AuditKind::HermesApprovalResolved (note the rename: Responded → Resolved), got {other:?}. A refactor that 'aligned' the variant names by renaming AuditKind::HermesApprovalResolved back to HermesApprovalResponded would break every operator dashboard joining on the documented Resolved name",
+            ),
+        }
+    }
+
+    #[test]
     fn parse_env_bool_accepts_documented_spellings_and_rejects_unknown() {
         for v in ["1", "true", "yes", "on"] {
             assert!(

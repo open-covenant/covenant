@@ -436,6 +436,74 @@ provider = "made-up"
     }
 
     #[test]
+    fn search_from_config_pins_mock_and_serpapi_discriminator_mapping() {
+        // search_from_config matches SearchSection.provider against
+        // three exact slugs (mock, brave, serpapi) and falls through
+        // to None for any other value. The existing tests pin the
+        // brave arm (search_config_parses_brave_block) and the
+        // unknown-provider rejection arm
+        // (search_config_unknown_provider_returns_none); the mock and
+        // serpapi arms are not pinned. Mirrors the just-integrated
+        // covenant_llm::provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping
+        // and embedder_from_config_pins_mock_arm_and_unknown_provider_rejection
+        // coverage shape.
+        //
+        // A refactor that renamed the 'serpapi' slug would silently
+        // send paid-SerpAPI deployments through the unknown-provider
+        // arm; pick_search would degrade to MockSearch::stub() and
+        // operators expecting paid Google search results via SerpAPI
+        // would silently receive mock stub results with no parse-time
+        // signal. A refactor that renamed the 'mock' slug would
+        // silently send mock-configured deployments through the same
+        // fallback path — same end-state outcome but via an
+        // unintentional fallback that masks misconfiguration as
+        // success.
+        let mock_toml = r#"
+[search]
+provider = "mock"
+"#;
+        let cfg: SearchConfig = toml::from_str(mock_toml).unwrap();
+        let s = search_from_config(&cfg).expect(
+            "the mock arm must dispatch to MockSearch; a slug rename \
+             (e.g., to 'stub' or 'fake') would silently fall through \
+             into the auto-detect ladder and pick_search would land on \
+             MockSearch::stub() — same outcome as the configured intent \
+             but via an unintentional fallback path that masks the \
+             slug-rename regression as success",
+        );
+        assert_eq!(
+            s.name(),
+            "mock",
+            "mock search provider must surface name='mock' so search \
+             dashboards can identify deterministic test-fixture \
+             deployments at a glance",
+        );
+
+        let serpapi_toml = r#"
+[search]
+provider = "serpapi"
+api_key = "serpapi-test"
+"#;
+        let cfg: SearchConfig = toml::from_str(serpapi_toml).unwrap();
+        let s = search_from_config(&cfg).expect(
+            "the serpapi arm must dispatch to SerpApiSearch; a slug \
+             rename (e.g., to 'serpapi.com' or 'google-serpapi') would \
+             silently fall through search_from_config's unknown-provider \
+             arm and pick_search would degrade paid SerpAPI search to \
+             MockSearch::stub() with no parse-time signal — operators \
+             expecting paid Google search results would silently \
+             receive mock stub responses",
+        );
+        assert_eq!(
+            s.name(),
+            "serpapi",
+            "serpapi-configured provider must surface name='serpapi' so \
+             search dashboards can distinguish paid Google search from \
+             the brave and mock paths",
+        );
+    }
+
+    #[test]
     fn search_config_serde_pins_optional_search_section_default() {
         // SearchConfig is the top-level secrets.toml decoder for the
         // [search] section. The struct carries a single field — search:

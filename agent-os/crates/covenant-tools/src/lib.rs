@@ -752,4 +752,105 @@ api_key = "BSA-test"
         let p = pick_search(&nope);
         assert_eq!(p.name(), "mock");
     }
+
+    #[test]
+    fn pick_search_falls_back_to_mock_for_malformed_toml_and_unknown_provider() {
+        // covenant_tools::pick_search (line 292-299) has THREE distinct
+        // fallback paths to MockSearch::stub():
+        //
+        //   pub fn pick_search(secrets_path: &Path) -> Box<dyn SearchProvider> {
+        //       if let Ok(cfg) = SearchConfig::from_path(secrets_path) {
+        //           if let Some(p) = search_from_config(&cfg) {
+        //               return p;
+        //           }
+        //       }
+        //       Box::new(MockSearch::stub())
+        //   }
+        //
+        //   A. secrets.toml missing       -> from_path returns Self::default with
+        //                                    search=None -> search_from_config None
+        //                                    -> outer fallback fires
+        //   B. secrets.toml malformed     -> from_path returns Err(Toml(_)) -> the
+        //                                    `if let Ok` branch fails -> outer fallback
+        //                                    fires WITHOUT entering search_from_config
+        //   C. secrets.toml has unknown   -> from_path returns Ok -> search_from_config
+        //      provider slug                 returns None on the catch-all match arm
+        //                                    -> outer fallback fires
+        //
+        // pick_search_falls_back_to_mock_when_no_file (line 748) pins
+        // path A. Path B is NOT pinned by any test
+        // (search_config_unknown_provider_returns_none and
+        // search_from_config_pins_mock_and_serpapi_discriminator_mapping
+        // pin the helper search_from_config, never the boundary error-
+        // swallowing semantics of pick_search itself). Path C is pinned
+        // at the helper level via search_config_unknown_provider_returns_none
+        // but NOT at the pick_search boundary.
+        //
+        // A refactor that swapped `if let Ok(cfg) = ...` for `.unwrap()`
+        // or `.expect("secrets.toml must parse")` under a 'surface config
+        // errors loudly' rationale would silently turn malformed
+        // secrets.toml into a daemon panic at search-tool resolution;
+        // pick_search_falls_back_to_mock_when_no_file passes (file is
+        // missing, not malformed) while every operator with a typo in
+        // secrets.toml hits a covenantd boot panic.
+        //
+        // A refactor that changed the unknown-provider catch-all in
+        // search_from_config from None to e.g.
+        // `Some(Box::new(BraveSearch::new("")))` as a "safer
+        // placeholder" would land between the helper pin and the
+        // missing-file pin — operators with a typo'd provider slug
+        // would silently route through Brave with an empty API key and
+        // every search would return MissingKey("brave").
+
+        // Path B: malformed TOML. SearchConfig::from_path returns
+        // Err(SearchError::Toml(_)); pick_search must swallow it and
+        // return MockSearch, not panic.
+        let dir = std::env::temp_dir();
+        let malformed_path = dir.join("covenant-malformed-search-7c9f.toml");
+        std::fs::write(&malformed_path, "this is not = valid toml ::: garbage\n[[")
+            .expect("temp dir is writable in tests");
+        let p = pick_search(&malformed_path);
+        assert_eq!(
+            p.name(),
+            "mock",
+            "pick_search MUST swallow the Err arm of SearchConfig::from_path \
+             and degrade to MockSearch — a refactor that swapped the `if let \
+             Ok(cfg)` branch for .unwrap() or .expect() would silently turn \
+             a malformed secrets.toml into a covenantd boot panic at search-\
+             tool resolution time, taking down the entire daemon before the \
+             operator could see the parse error; a refactor that bubbled \
+             the error via Result<Box<dyn SearchProvider>, SearchError> \
+             would shift error-handling onto every caller and break the \
+             documented infallible-fallback contract",
+        );
+        let _ = std::fs::remove_file(&malformed_path);
+
+        // Path C: valid TOML but unknown provider slug.
+        // SearchConfig::from_path returns Ok; search_from_config returns
+        // None on the catch-all arm; pick_search must enter the outer
+        // fallback.
+        let unknown_path = dir.join("covenant-unknown-provider-search-7c9f.toml");
+        std::fs::write(
+            &unknown_path,
+            "[search]\nprovider = \"bogus-future-provider\"\napi_key = \"x\"\n",
+        )
+        .expect("temp dir is writable in tests");
+        let p = pick_search(&unknown_path);
+        assert_eq!(
+            p.name(),
+            "mock",
+            "pick_search MUST fall back to MockSearch when search_from_config \
+             returns None on the unknown-provider catch-all — pinning this \
+             at the pick_search boundary (not just at search_from_config) \
+             catches a refactor that promoted the unknown-provider arm \
+             from None to e.g. Some(Box::new(BraveSearch::new(\"\"))) as a \
+             'safer placeholder', which would land between the existing \
+             helper-level pin (search_config_unknown_provider_returns_none) \
+             and the missing-file pin (pick_search_falls_back_to_mock_when_no_file) \
+             — operators with a typo'd provider slug would silently route \
+             through Brave with an empty API key and every search call would \
+             fail with SearchError::MissingKey(\"brave\")",
+        );
+        let _ = std::fs::remove_file(&unknown_path);
+    }
 }

@@ -682,6 +682,73 @@ mod tests {
     }
 
     #[test]
+    fn validate_agent_id_display_pins_each_rejection_arm() {
+        // validate_agent_id_display gates every wire-derived AgentId.display
+        // string from HTTP/IPC, agent manifest TOML, and A2A tasks. The
+        // validator has seven arms:
+        //   1. Missing '@' separator → InvalidDisplay
+        //   2. Empty local part ("") → InvalidDisplay
+        //   3. Empty host part ("") → InvalidDisplay
+        //   4. host.contains('@') (multi-@) → InvalidDisplay
+        //   5. local segment_ok with bad char → InvalidDisplay
+        //   6. host segment_ok with bad char → InvalidDisplay
+        //   7. all-pass → Ok
+        //
+        // agent_id_deserialize_rejects_invalid_display covers arm 5 (the
+        // local-segment invalid-character path via a ';' punctuation
+        // test); arms 1, 2, 3, 4, and 6 are not individually pinned.
+        // A relaxation of any of these arms — e.g., dropped multi-@
+        // guard for forward-compat with email-style displays, accepted
+        // empty-host strings, or removed the explicit @ requirement —
+        // would silently let a malformed AgentId.display decode through
+        // every wire boundary and route through the capability system
+        // as if it were a well-formed identity.
+        assert_eq!(
+            validate_agent_id_display("no-at-separator"),
+            Err(AgentIdError::InvalidDisplay("no-at-separator".into())),
+            "arm 1: a display string with no '@' separator must be rejected; \
+             a refactor that defaulted split_once('@') to Some((s, \"\")) \
+             would silently let bare-name displays decode as valid identities \
+             with empty hosts",
+        );
+        assert_eq!(
+            validate_agent_id_display("@host"),
+            Err(AgentIdError::InvalidDisplay("@host".into())),
+            "arm 2: an empty local part must be rejected; a relaxation \
+             treating '@host' as syntactic sugar for the daemon identity \
+             would mask the routing target on operator audit dashboards",
+        );
+        assert_eq!(
+            validate_agent_id_display("local@"),
+            Err(AgentIdError::InvalidDisplay("local@".into())),
+            "arm 3: an empty host part must be rejected; a relaxation \
+             treating 'local@' as a default-host shorthand would mask \
+             the routing target on operator audit dashboards",
+        );
+        assert_eq!(
+            validate_agent_id_display("local@host@extra"),
+            Err(AgentIdError::InvalidDisplay("local@host@extra".into())),
+            "arm 4: host containing additional '@' must be rejected; a \
+             refactor that relaxed this guard for email-style displays \
+             would let 'evil@a.com@victim.b.com' decode as a single \
+             AgentId.display — operator eyeball-grep treats it as \
+             'evil@a.com' but the capability-action whitelist treats it \
+             as one opaque identifier (an authority-confusion vector)",
+        );
+        assert_eq!(
+            validate_agent_id_display("local@bad host"),
+            Err(AgentIdError::InvalidDisplay("local@bad host".into())),
+            "arm 6: host segment with an invalid character (space) must \
+             be rejected; segment_ok rejects anything outside \
+             [A-Za-z0-9_.-], so a relaxation here would let arbitrary \
+             punctuation into the host slot and split the cap-action \
+             whitelist's destructuring assumptions",
+        );
+        validate_agent_id_display("research@local")
+            .expect("arm 7: a well-formed 'name@host' display must pass the whitelist");
+    }
+
+    #[test]
     fn agent_id_deserialize_accepts_valid_display() {
         let valid_pubkey = bs58::encode([0u8; 32]).into_string();
         let good = format!(r#"{{"display":"orch@local","pubkey":"{valid_pubkey}"}}"#);

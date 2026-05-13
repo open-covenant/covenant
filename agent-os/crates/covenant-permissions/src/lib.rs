@@ -1648,6 +1648,37 @@ mod tests {
     }
 
     #[test]
+    fn validate_a2a_scope_rejects_unsupported_duplicate_risk_and_non_string_peer_pubkey() {
+        // validate_a2a_scope checks four optional fields:
+        //   peer_pubkey_b58 (string-or-null), task_id (string-or-null),
+        //   lease_id (string-or-null), duplicate_risk (string-enum from
+        //   ['idempotent', 'operator-accepted', 'operator_accepted']).
+        //
+        // validate_a2a_scope_rejects_invalid_task_id_and_lease_id_shapes
+        // pins the non-string rejection for task_id and lease_id, and
+        // validate_scope_accepts_known_versioned_shapes pins the happy
+        // path with duplicate_risk='idempotent'. But two rejection arms
+        // at the validate_a2a_scope call site are not pinned: the
+        // duplicate_risk enum-miss path (an unsupported value like
+        // 'best_effort' or 'safe' must reject so a regression that
+        // broadened the allowed list — silently authorizing unsupported
+        // duplicate-handling on A2A repair flows the daemon mailbox
+        // does not implement — is caught loud), and the peer_pubkey_b58
+        // non-string rejection path (a regression that swapped
+        // optional_string_or_null for an opaque-Value validator
+        // wouldn't let arbitrary scope payloads through the cap-action
+        // whitelist).
+        assert_invalid_scope(
+            "a2a.requeue",
+            serde_json::json!({ "version": 1, "duplicate_risk": "best_effort" }),
+        );
+        assert_invalid_scope(
+            "a2a.requeue",
+            serde_json::json!({ "version": 1, "peer_pubkey_b58": 42 }),
+        );
+    }
+
+    #[test]
     fn validate_tool_scope_rejects_non_string_tool_and_non_object_arguments() {
         assert_invalid_scope(
             "tool.call.echo",

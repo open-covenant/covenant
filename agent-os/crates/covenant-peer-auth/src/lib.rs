@@ -2912,4 +2912,60 @@ mod tests {
             "PeerError::BadTokenB58 must surface the 'base58' encoding qualifier so a future encoding migration is forced to update the error message in lockstep: {message}"
         );
     }
+
+    #[test]
+    fn peer_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation()
+    {
+        let io_err = PeerError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "peers.jsonl missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "PeerError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish peer-registry disk faults from JSON-parse faults during peer registration, revocation, and persistence rotation (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("peers.jsonl missing"),
+            "PeerError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "PeerError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = PeerError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "PeerError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish peer-registry JSON-parse faults from disk faults (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "PeerError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "PeerError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose 'Error(\"...\", line: N, column: M)' buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "PeerError::Io and PeerError::Serde Display must not converge; merging the two prefixes would lose the disk-fault vs JSON-parse-fault discriminator (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !serde_message.starts_with("io:"),
+            "PeerError::Io must not start with 'serde:' and PeerError::Serde must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("invalid token base58:"),
+            "PeerError::Io must not converge with the BadTokenB58 surface 'invalid token base58:' pinned by peer_error_bad_token_b58_display_message_pins_prefix_encoding_qualifier_and_payload; a disk-fault must not be mis-routed as a token-format incident (string-surface-convergence regression class): {io_message}"
+        );
+        assert!(
+            !serde_message.starts_with("invalid token base58:"),
+            "PeerError::Serde must not converge with the BadTokenB58 surface 'invalid token base58:' pinned by peer_error_bad_token_b58_display_message_pins_prefix_encoding_qualifier_and_payload; a JSON-parse fault must not be mis-routed as a token-format incident (string-surface-convergence regression class): {serde_message}"
+        );
+    }
 }

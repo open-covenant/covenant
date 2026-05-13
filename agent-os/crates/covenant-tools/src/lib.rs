@@ -658,6 +658,93 @@ api_key = "BSA-test"
     }
 
     #[test]
+    fn mock_search_stub_pins_canonical_canned_title_url_and_snippet() {
+        // MockSearch::stub (line 60-70) hardcodes a one-element
+        // Vec<SearchHit> that surfaces in two places: pick_search's
+        // no-config fallback (line 298) and search_from_config's mock
+        // arm (line 276). The snippet is an operator-facing breadcrumb
+        // — it lands in the LLM agent's reasoning context whenever the
+        // web_search tool runs against the mock fallback, and in any
+        // dashboard that renders search results. The breadcrumb tells
+        // operators exactly which file to edit (~/.covenant/secrets.toml)
+        // and exactly which section to add ([search] with a real
+        // provider) so unconfigured deployments degrade with a
+        // self-diagnostic instead of silently returning empty or
+        // generic stub text.
+        //
+        // Existing tests partially cover this surface:
+        // mock_search_returns_canned_hits only asserts the result is
+        // non-empty and the first URL starts with "stub://";
+        // mock_search_respects_limit observes the limit-truncation
+        // behavior, not the source canned length;
+        // search_from_config_pins_mock_and_serpapi_discriminator_mapping
+        // and pick_search_falls_back_to_mock_when_no_file observe
+        // name=="mock" through the trait object but not the canned
+        // content. None of these tests pin the exact title, exact
+        // full url, exact snippet text, or single-element length, so a
+        // refactor that rewrote the snippet to a generic "stub" value,
+        // expanded the stub to a multi-element fixture, or changed the
+        // url scheme would silently degrade the operator signal with
+        // no parse-time or compile-time error.
+        let stub = MockSearch::stub();
+        assert_eq!(
+            stub.canned.len(),
+            1,
+            "MockSearch::stub must return exactly one canned hit — \
+             a refactor that expanded the stub to a multi-element \
+             fixture (for richer LLM-agent multi-result coverage) \
+             would silently shift mock_search_respects_limit's \
+             truncate semantics and the documented single-hit \
+             contract that surfaces nowhere outside the source; \
+             got len={}",
+            stub.canned.len(),
+        );
+        let hit = &stub.canned[0];
+        assert_eq!(
+            hit.title, "stub result",
+            "MockSearch::stub title must be \"stub result\" — pinning \
+             the canonical breadcrumb title that operator dashboards \
+             use to identify the mock-mode fallback at a glance",
+        );
+        assert_eq!(
+            hit.url, "stub://no-real-search",
+            "MockSearch::stub url must be exactly \"stub://no-real-search\" \
+             — the existing mock_search_returns_canned_hits prefix \
+             check (url.starts_with(\"stub://\")) accepts any path \
+             after the scheme but the canonical full URL is the \
+             durable diagnostic; a refactor that changed the url to \
+             a real https:// URL pointing at a project landing page \
+             or to a placeholder example.com URL would silently \
+             collapse the stub:// scheme discriminator that downstream \
+             consumers (including the LLM agent if it inspects URL \
+             scheme) rely on to detect mock-mode without inspecting \
+             content",
+        );
+        assert_eq!(
+            hit.snippet,
+            "covenant-tools mock — configure a real provider in ~/.covenant/secrets.toml",
+            "MockSearch::stub snippet must contain the verbatim \
+             operator breadcrumb pointing at ~/.covenant/secrets.toml; \
+             a refactor that emptied or rewrote the snippet would \
+             silently degrade the diagnostic that tells operators \
+             which file to edit and which section to add — agents \
+             that surface search results in their reasoning context \
+             lose the actionable guidance, and operators have to \
+             read the source to figure out why search returns are \
+             uninformative",
+        );
+        assert_eq!(
+            stub.name(),
+            "mock",
+            "MockSearch must surface name=='mock' — cross-binds \
+             search_from_config_pins_mock_and_serpapi_discriminator_mapping \
+             and pick_search_falls_back_to_mock_when_no_file pins \
+             that observe this identity contract through the trait \
+             object",
+        );
+    }
+
+    #[test]
     fn pick_search_falls_back_to_mock_when_no_file() {
         let dir = std::env::temp_dir();
         let nope = dir.join("covenant-no-search.toml");

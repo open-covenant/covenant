@@ -602,4 +602,80 @@ mod tests {
         // No boundary yet — buffer still mid-frame.
         assert!(find_boundary(b"data: x").is_none());
     }
+
+    #[test]
+    fn truncate_pins_ellipsis_character_and_inclusive_length_boundary() {
+        // covenant_runtime::hermes::truncate (line 471-477) bounds the
+        // Hermes remote-error text that feeds RunnerError::Remote
+        // messages at line 115 and line 135 (both with max=512). Two
+        // arms:
+        //
+        //   if s.len() <= max { s.to_string() }
+        //   else { format!("{}…", &s[..max]) }
+        //
+        // The '…' is U+2026 (horizontal ellipsis, three UTF-8 bytes:
+        // 0xE2 0x80 0xA6) — the documented single-codepoint truncation
+        // marker operators grep dashboards for. A refactor that swapped
+        // it for the ASCII three-dots '...' under a 'log-friendly
+        // ASCII-only' rationale would silently change every truncated
+        // Hermes error message; dashboards that scan for '…' would
+        // lose every truncation signal. The boundary is INCLUSIVE
+        // (<= max passes through verbatim); a refactor flipping the
+        // comparison to strict '<' would silently truncate strings
+        // whose length exactly equals max (e.g., a 512-byte response
+        // would gain an ellipsis suffix indistinguishable from genuine
+        // overflow). No existing test in this module exercises
+        // truncate.
+
+        assert_eq!(
+            truncate("abc", 5),
+            "abc",
+            "len < max must pass through verbatim — the helper only \
+             appends the ellipsis on the strictly-larger arm, and a \
+             refactor that prepended a leading marker for 'short' \
+             messages would silently change every passthrough output",
+        );
+
+        assert_eq!(
+            truncate("abcde", 5),
+            "abcde",
+            "len == max must pass through verbatim — anchors the \
+             inclusive '<= max' boundary against a refactor to strict \
+             '<', which would silently truncate exactly-at-max strings \
+             and append an ellipsis to messages that already fit (a \
+             512-byte Hermes response that fits cleanly would gain a \
+             '…' suffix indistinguishable from a 513+ byte truncation)",
+        );
+
+        assert_eq!(
+            truncate("abcdef", 5),
+            "abcde\u{2026}",
+            "len > max must return the first max bytes followed by the \
+             U+2026 horizontal-ellipsis character specifically — NOT \
+             three ASCII dots '...', NOT the U+22EF midline-ellipsis \
+             '⋯', NOT a bare cut. A refactor swapping '…' for '...' \
+             under a 'log-friendly ASCII' rationale would silently \
+             change every truncated Hermes error message and break \
+             operator dashboards that grep for the single-codepoint \
+             marker",
+        );
+
+        // Byte-level pin so a refactor that swapped the literal for a
+        // visually similar but differently-encoded character (e.g.,
+        // U+22EF midline ellipsis at 0xE2 0x8B 0xAF) would surface
+        // even if the assert_eq! comparison was somehow defeated by a
+        // future trait swap on the right-hand side.
+        let out = truncate("abcdef", 5);
+        let suffix = &out.as_bytes()[out.len() - 3..];
+        assert_eq!(
+            suffix,
+            &[0xE2, 0x80, 0xA6],
+            "the truncation suffix's last three bytes must be the \
+             UTF-8 encoding of U+2026 (0xE2 0x80 0xA6); a refactor to \
+             a similar-looking but differently-encoded glyph would \
+             silently shift the byte layout while a string-equality \
+             test could conceivably accept it under a future trait \
+             swap",
+        );
+    }
 }

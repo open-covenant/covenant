@@ -2547,6 +2547,79 @@ mod tests {
     }
 
     #[test]
+    fn ipc_error_wire_and_frame_and_other_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
+        use crate::ipc::IpcError;
+
+        let wire_err = IpcError::Wire(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        let wire_message = format!("{wire_err}");
+        assert!(
+            wire_message.starts_with("IPC wire error: "),
+            "IpcError::Wire must surface the literal 'IPC wire error: ' bootstrap-stage prefix so audit-log filters can distinguish raw stdio-stream IO failures from frame-protocol failures during the TUI<->daemon dialogue (dropped-prefix regression class): {wire_message}"
+        );
+        assert!(
+            wire_message.contains("connection reset"),
+            "IpcError::Wire must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: ConnectionReset, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {wire_message}"
+        );
+        assert!(
+            !wire_message.contains("Custom {") && !wire_message.contains("Os {"),
+            "IpcError::Wire must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {wire_message}"
+        );
+
+        let frame_err =
+            IpcError::Frame(covenant_ipc::IpcError::FrameTooLarge { got: 9_999_999 });
+        let frame_message = format!("{frame_err}");
+        assert!(
+            frame_message.starts_with("IPC framing error: "),
+            "IpcError::Frame must surface the literal 'IPC framing error: ' bootstrap-stage prefix so audit-log filters can distinguish frame-protocol decode failures from raw stdio-stream IO failures (dropped-prefix regression class): {frame_message}"
+        );
+        assert!(
+            frame_message.contains("frame too large"),
+            "IpcError::Frame must surface the inner covenant_ipc::IpcError Display rendering after the colon ({{0}}, not {{0:?}}); covenant_ipc::IpcError::FrameTooLarge Display renders 'frame too large: <got> bytes (max <MAX_FRAME>)', a Debug refactor on {{0}} would render 'FrameTooLarge {{ got: ... }}' as the bare variant name instead (Debug-vs-Display formatting regression class on the {{0}} interpolation; cross-crate Display delegation regression class): {frame_message}"
+        );
+        assert!(
+            !frame_message.contains("FrameTooLarge {"),
+            "IpcError::Frame must NOT surface the covenant_ipc::IpcError Debug rendering; a Debug refactor on {{0}} would expose 'FrameTooLarge {{ got: ... }}' bare variant fields (Debug-vs-Display formatting regression class on the {{0}} interpolation): {frame_message}"
+        );
+
+        let other_err = IpcError::Other("renderer-provided message".to_string());
+        let other_message = format!("{other_err}");
+        assert_eq!(
+            other_message, "renderer-provided message",
+            "IpcError::Other Display must equal the inner string verbatim with no prefix or suffix; the variant exists specifically because the renderer feeds already-formatted operator-facing text into it, and a thiserror format rewrite that injected a prefix ('IPC other: {{0}}', 'tui: {{0}}') under a 'consistent error prefixes' pass would silently duplicate the prefix on the TUI status line whenever the renderer's own message already carries one (prefix-injection regression class)"
+        );
+        assert!(
+            !other_message.starts_with("IPC wire error:")
+                && !other_message.starts_with("IPC framing error:"),
+            "IpcError::Other must not start with the Wire or Frame bootstrap-stage prefix; a prefix-injection refactor that aligned Other with the wrapper variants would silently duplicate prefixes on renderer-provided messages (prefix-injection regression class): {other_message}"
+        );
+
+        assert_ne!(
+            wire_message, frame_message,
+            "IpcError::Wire and IpcError::Frame Display must not converge; merging the two prefixes would lose the stdio-IO-fault vs frame-protocol-fault discriminator (prefix-convergence regression class): wire={wire_message} frame={frame_message}"
+        );
+        assert_ne!(
+            wire_message, other_message,
+            "IpcError::Wire and IpcError::Other Display must not converge (prefix-convergence regression class): wire={wire_message} other={other_message}"
+        );
+        assert_ne!(
+            frame_message, other_message,
+            "IpcError::Frame and IpcError::Other Display must not converge (prefix-convergence regression class): frame={frame_message} other={other_message}"
+        );
+        assert!(
+            !wire_message.starts_with("IPC framing error:"),
+            "IpcError::Wire must not start with the IpcError::Frame prefix; a sibling-prefix swap would silently mis-route incident triage between raw IO faults and frame-protocol faults (sibling-prefix-swap regression class): {wire_message}"
+        );
+        assert!(
+            !frame_message.starts_with("IPC wire error:"),
+            "IpcError::Frame must not start with the IpcError::Wire prefix; a sibling-prefix swap would silently mis-route incident triage between frame-protocol faults and raw IO faults (sibling-prefix-swap regression class): {frame_message}"
+        );
+    }
+
+    #[test]
     fn mode_name_is_kebab_case_and_nonempty_for_every_variant() {
         use covenant_types::AgentId;
         // Constructing every variant locally guarantees a compile error

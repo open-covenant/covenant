@@ -5024,6 +5024,68 @@ mod tests {
     }
 
     #[test]
+    fn a2a_error_display_messages_pin_five_string_variant_format_strings() {
+        let closed = format!("{}", A2AError::Closed);
+        assert_eq!(
+            closed, "mailbox closed",
+            "A2AError::Closed Display drifted (typo regression class)"
+        );
+
+        let task_id = Uuid::nil();
+        let not_in_flight = format!("{}", A2AError::TaskNotInFlight(task_id));
+        assert_eq!(
+            not_in_flight, "task 00000000-0000-0000-0000-000000000000 is not currently leased",
+            "A2AError::TaskNotInFlight Display drifted (typo or qualifier-drop regression class)"
+        );
+
+        let expected = Uuid::from_u128(1);
+        let actual = Uuid::from_u128(2);
+        let mismatch = format!(
+            "{}",
+            A2AError::LeaseMismatch {
+                task_id,
+                expected: Some(expected),
+                actual: Some(actual),
+            }
+        );
+        assert!(
+            mismatch.contains("lease mismatch for task 00000000-0000-0000-0000-000000000000"),
+            "A2AError::LeaseMismatch task_id slot drifted (typo regression class): {mismatch}"
+        );
+        assert!(
+            mismatch.contains("expected Some(") && mismatch.contains("00000000-0000-0000-0000-000000000001"),
+            "A2AError::LeaseMismatch expected slot drifted (slot-swap or debug-vs-display regression class): {mismatch}"
+        );
+        assert!(
+            mismatch.contains("actual Some(") && mismatch.contains("00000000-0000-0000-0000-000000000002"),
+            "A2AError::LeaseMismatch actual slot drifted (slot-swap or debug-vs-display regression class): {mismatch}"
+        );
+        assert!(
+            !mismatch.contains("expected Some(00000000-0000-0000-0000-000000000002"),
+            "A2AError::LeaseMismatch expected slot bound to actual value (slot-swap regression class): {mismatch}"
+        );
+        assert!(
+            !mismatch.contains("actual Some(00000000-0000-0000-0000-000000000001"),
+            "A2AError::LeaseMismatch actual slot bound to expected value (slot-swap regression class): {mismatch}"
+        );
+
+        let invalid_task = format!("{}", A2AError::InvalidTask("reason must not be empty".into()));
+        assert_eq!(
+            invalid_task, "invalid task: reason must not be empty",
+            "A2AError::InvalidTask Display drifted (typo or prefix-convergence regression class)"
+        );
+
+        let invalid_repair = format!(
+            "{}",
+            A2AError::InvalidRepair("reason must not be empty".into())
+        );
+        assert_eq!(
+            invalid_repair, "invalid repair request: reason must not be empty",
+            "A2AError::InvalidRepair Display drifted (typo or prefix-convergence regression class)"
+        );
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

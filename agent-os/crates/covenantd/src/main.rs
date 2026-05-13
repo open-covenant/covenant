@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    for arg in std::env::args().skip(1) {
+    if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
             "--version" | "-V" => {
                 println!("covenantd {}", env!("CARGO_PKG_VERSION"));

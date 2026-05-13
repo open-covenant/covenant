@@ -2793,8 +2793,10 @@ impl Server {
             .await;
         if !write_check.passed {
             return Response::Error {
-                message: "intent dispatch requires capability \"memory.write\" because successful dispatch writes working memory. \
-                     Grant it with `covenant capabilities grant memory.write`."
+                message: "to send a task, your agents need permission to save to memory \
+                     (requires capability \"memory.write\"). \
+                     Run `covenant bootstrap` to grant the defaults, or \
+                     `covenant capabilities grant memory.write`."
                     .into(),
             };
         }
@@ -2854,7 +2856,9 @@ impl Server {
             if !check.passed {
                 return Response::Error {
                     message: format!(
-                        "agent {} is missing capabilities: {:?}. Grant them with `covenant capabilities grant <action>`.",
+                        "the agent \"{}\" isn't allowed to handle this task yet (missing capabilities: {:?}). \
+                         Run `covenant bootstrap` to grant the defaults, or \
+                         `covenant capabilities grant <action>` for each one.",
                         card.id, check.missing
                     ),
                 };

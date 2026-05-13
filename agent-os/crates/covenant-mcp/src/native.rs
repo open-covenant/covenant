@@ -99,4 +99,128 @@ mod tests {
         // A sanity floor: any time after 2024-01-01.
         assert!(ms > 1_704_067_200_000);
     }
+
+    #[test]
+    fn echo_input_schema_pins_required_text_string_property_and_additional_properties_false() {
+        // EchoTool::input_schema (line 22-31) overrides Tool::input_schema's
+        // empty-object default with the documented MCP-tools/list schema:
+        //
+        //   {
+        //     "type": "object",
+        //     "properties": { "text": { "type": "string" } },
+        //     "required": ["text"],
+        //     "additionalProperties": false
+        //   }
+        //
+        // The schema is what every MCP client (Claude Desktop, downstream
+        // wrappers, generated SDK clients) reads to validate operator
+        // inputs before sending them to the daemon. echo_returns_text_argument
+        // and echo_rejects_missing_text cover the call() runtime path but
+        // no test pins the schema shape itself. A refactor that flipped
+        // additionalProperties to true would silently let MCP clients send
+        // arbitrary extra fields; a refactor that renamed properties.text
+        // to message without updating call()'s arguments.get('text') would
+        // silently break every operator-facing echo invocation.
+        let schema = EchoTool.input_schema();
+        let obj = schema
+            .as_object()
+            .expect("EchoTool::input_schema must emit a JSON object");
+
+        assert_eq!(
+            obj.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "EchoTool::input_schema must declare type=object — a refactor \
+             that changed the top-level type to anything else (e.g., array) \
+             would break every MCP client's argument-validation entry path",
+        );
+
+        let properties = obj
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("schema.properties must be a JSON object — MCP clients \
+                     traverse it to enumerate accepted arguments");
+        let text_spec = properties
+            .get("text")
+            .and_then(|v| v.as_object())
+            .expect(
+                "schema.properties.text must be an object with a type field — \
+                 a refactor that renamed properties.text (e.g., to message) \
+                 without updating call()'s arguments.get('text') would silently \
+                 break every operator-facing echo invocation because the daemon \
+                 keeps reading the old key",
+            );
+        assert_eq!(
+            text_spec.get("type").and_then(|v| v.as_str()),
+            Some("string"),
+            "EchoTool::input_schema.properties.text.type must declare 'string' \
+             — call() uses Value::as_str on arguments.get('text'), so a schema \
+             that declared anything else (e.g., 'integer' or 'array') would \
+             let MCP clients pass values that the daemon path treats as \
+             missing-text",
+        );
+
+        let required = obj
+            .get("required")
+            .and_then(|v| v.as_array())
+            .expect(
+                "schema.required must be a JSON array — a refactor that swapped \
+                 the array for a string 'text' under a 'simpler schema authoring' \
+                 rationale would silently break MCP client validation that reads \
+                 required as an array, and operator-facing inputs that omitted \
+                 the text field would either fail with a confusing schema error \
+                 or succeed unexpectedly through a permissive fallback",
+            );
+        assert_eq!(
+            required.len(),
+            1,
+            "schema.required must be exactly one element — a refactor that \
+             added a second required field (e.g., metadata) without updating \
+             call()'s extraction path would silently let every echo call \
+             surface a confusing missing-arg error on inputs that historically \
+             validated",
+        );
+        assert_eq!(
+            required[0].as_str(),
+            Some("text"),
+            "schema.required[0] must be the string 'text' — pinning the \
+             exact field name so a refactor that renamed properties.text \
+             and the required entry together (but not call()'s arguments.get) \
+             still surfaces here, and the cross-binding with the call()-side \
+             literal stays anchored",
+        );
+
+        let additional = obj.get("additionalProperties").unwrap_or_else(|| {
+            panic!(
+                "schema.additionalProperties must be present — a refactor \
+                 that dropped the field under a 'JSON Schema default is \
+                 false anyway' rationale would silently let some MCP \
+                 clients (whose defaults are true) accept extra fields the \
+                 daemon ignores"
+            )
+        });
+        assert_eq!(
+            additional,
+            &Value::Bool(false),
+            "schema.additionalProperties must be the JSON bool false (not the \
+             string 'false', not the number 0, not null) — a refactor that \
+             flipped this to true to support a future optional field without \
+             bumping the schema would silently let MCP clients send arbitrary \
+             extra fields, and SDK clients generated from the schema would \
+             lose the closed-world invariant the daemon's call() path relies \
+             on for argument shape stability",
+        );
+
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["additionalProperties", "properties", "required", "type"],
+            "EchoTool::input_schema must surface EXACTLY four top-level keys \
+             (type, properties, required, additionalProperties) — a refactor \
+             that added a fifth field (e.g., 'title' or '$schema') without \
+             coordinating the MCP wire-form expectations would silently shift \
+             the schema shape across every client; pinning the exact key set \
+             catches both additions and removals in one assertion",
+        );
+    }
 }

@@ -419,7 +419,8 @@ async fn main() -> Result<()> {
             // every successful dispatch, so without it the first intent
             // fails before any agent code runs.
             let agents_dir = home.join("agents");
-            let mut required: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            let mut required: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
             required.insert("memory.write".to_string());
             if agents_dir.exists() {
                 for entry in std::fs::read_dir(&agents_dir)
@@ -432,9 +433,8 @@ async fn main() -> Result<()> {
                     }
                     let raw = std::fs::read_to_string(&manifest_path)
                         .with_context(|| format!("read {}", manifest_path.display()))?;
-                    let manifest = covenant_manifest::Manifest::parse(&raw).with_context(|| {
-                        format!("parse manifest {}", manifest_path.display())
-                    })?;
+                    let manifest = covenant_manifest::Manifest::parse(&raw)
+                        .with_context(|| format!("parse manifest {}", manifest_path.display()))?;
                     for action in manifest.capabilities.required.iter() {
                         required.insert(action.clone());
                     }
@@ -442,11 +442,7 @@ async fn main() -> Result<()> {
             }
 
             // Skip what's already granted so re-running bootstrap is a no-op.
-            write_frame(
-                &mut stream,
-                &Request::RecentCapabilities { limit: 512 },
-            )
-            .await?;
+            write_frame(&mut stream, &Request::RecentCapabilities { limit: 512 }).await?;
             let existing: std::collections::HashSet<String> =
                 match read_frame::<_, Response>(&mut stream).await? {
                     Response::Capabilities { capabilities } => capabilities
@@ -1052,10 +1048,15 @@ async fn main() -> Result<()> {
                                         Some(ms) => format!("expires {ms}"),
                                         None => "perpetual".into(),
                                     };
-                                    let action_label = match covenant_permissions::friendly_action_title(&c.capability.action) {
-                                        Some(title) => format!("{title} ({})", c.capability.action),
-                                        None => c.capability.action.clone(),
-                                    };
+                                    let action_label =
+                                        match covenant_permissions::friendly_action_title(
+                                            &c.capability.action,
+                                        ) {
+                                            Some(title) => {
+                                                format!("{title} ({})", c.capability.action)
+                                            }
+                                            None => c.capability.action.clone(),
+                                        };
                                     println!(
                                         "{} → {} ({}) [{}]",
                                         c.capability.subject.display,
@@ -1162,10 +1163,11 @@ async fn main() -> Result<()> {
                                     ))?
                                 );
                             } else {
-                                let action_label = match covenant_permissions::friendly_action_title(&action) {
-                                    Some(title) => format!("{title} ({action})"),
-                                    None => action.clone(),
-                                };
+                                let action_label =
+                                    match covenant_permissions::friendly_action_title(&action) {
+                                        Some(title) => format!("{title} ({action})"),
+                                        None => action.clone(),
+                                    };
                                 println!("granted: {subject_display} → {action_label}");
                                 println!("signature: {signature_b58}");
                             }

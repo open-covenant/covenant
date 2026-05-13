@@ -4,6 +4,13 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+const DEMO_INTENTS = [
+  "Say hi and tell me what you can do.",
+  "Summarize what just happened in the activity log.",
+  "Write a one-line haiku about agents.",
+];
+
 type Action = {
   id: string;
   label: string;
@@ -91,8 +98,17 @@ export function CommandPalette() {
     }
   }, []);
 
-  const baseActions = useMemo<Action[]>(
-    () => [
+  const baseActions = useMemo<Action[]>(() => {
+    const sampleIntents: Action[] = DEMO_MODE
+      ? DEMO_INTENTS.map((text, i) => ({
+          id: `demo-intent-${i}`,
+          label: `Send sample · "${text}"`,
+          hint: "demo task",
+          run: () => dispatchIntent(text),
+        }))
+      : [];
+    return [
+      ...sampleIntents,
       { id: "nav-overview", label: "Go to Overview", hint: "home", run: () => navigate("/") },
       { id: "nav-intents", label: "Go to Tasks", hint: "what you've sent", run: () => navigate("/intents") },
       { id: "nav-audit", label: "Go to Activity log", hint: "signed events", run: () => navigate("/audit") },
@@ -102,9 +118,8 @@ export function CommandPalette() {
       { id: "nav-memory", label: "Go to Memory", hint: "what they remember", run: () => navigate("/memory") },
       { id: "nav-settlement", label: "Go to Spending", hint: "credits used", run: () => navigate("/settlement") },
       { id: "verify", label: "Verify activity log", hint: "check nothing was altered", run: verifyChain },
-    ],
-    [navigate, verifyChain],
-  );
+    ];
+  }, [navigate, verifyChain, dispatchIntent]);
 
   const dynamicActions = useMemo<Action[]>(() => {
     const trimmed = query.trim();

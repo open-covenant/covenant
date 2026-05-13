@@ -8,6 +8,10 @@ import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+const SAMPLE_INTENT =
+  process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() || "Say hi and tell me what you can do.";
+
 type OverviewSnapshot = Awaited<ReturnType<typeof loadOverview>>;
 
 async function loadOverview() {
@@ -30,14 +34,14 @@ export default function OverviewPage() {
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [verifyOk, setVerifyOk] = useState<boolean>(true);
 
-  const onDispatch = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-      if (!intent) return;
+  const sendIntent = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
       setDispatching(true);
       setLastError(null);
       try {
-        const r = await api.submitIntent(intent);
+        const r = await api.submitIntent(trimmed);
         if (r.kind === "intent_result") {
           setLastResult(stripDaemonEcho(r.text));
         } else {
@@ -51,8 +55,18 @@ export default function OverviewPage() {
         setDispatching(false);
       }
     },
-    [intent, refresh],
+    [refresh],
   );
+
+  const onDispatch = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      return sendIntent(intent);
+    },
+    [intent, sendIntent],
+  );
+
+  const onTrySample = useCallback(() => sendIntent(SAMPLE_INTENT), [sendIntent]);
 
   const onVerify = useCallback(async () => {
     setVerifying(true);
@@ -122,6 +136,13 @@ export default function OverviewPage() {
         <pre className={`result compact ${verifyOk ? "" : "error"}`}>{verifyMsg}</pre>
       )}
 
+      {DEMO_MODE && (
+        <p className="sandbox-intro">
+          This is a live Covenant daemon. Dispatch a task below and watch it get signed,
+          audited, and stored — everything runs in a safe sandbox.
+        </p>
+      )}
+
       <section className="dispatch-card">
         <form onSubmit={onDispatch}>
           <div className="row">
@@ -138,6 +159,16 @@ export default function OverviewPage() {
             <button type="submit" className="btn primary" disabled={dispatching || !intent}>
               {dispatching ? "Sending" : "Send"}
             </button>
+            {DEMO_MODE && (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={onTrySample}
+                disabled={dispatching}
+              >
+                Try a sample task
+              </button>
+            )}
             {lastResult && <span className="result-line">{lastResult}</span>}
             {lastError && <span className="result-line error">{lastError}</span>}
           </div>
@@ -261,6 +292,14 @@ export default function OverviewPage() {
       </section>
 
       <style jsx>{`
+        .sandbox-intro {
+          margin: 18px 0 0;
+          color: var(--dim);
+          font-size: 13.5px;
+          line-height: 1.55;
+          max-width: 64ch;
+        }
+
         .dispatch-card {
           margin: 22px 0;
           padding: 22px;

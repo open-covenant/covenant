@@ -2007,4 +2007,27 @@ model = "nomic-embed-text"
             "covenant_llm::ProviderError::Io source() must downcast_ref to std::io::Error so provider retry-policy classifiers can extract io::ErrorKind for retry decisions on provider config/secrets IO; a refactor that wrapped the inner in a project-local newtype (e.g., ProviderIoError(std::io::Error) under a 'tag provider IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies provider IO faults (concrete-source-type downcast regression class)"
         );
     }
+
+    #[test]
+    fn provider_error_serde_source_delegation_pin_returns_inner_serde_json_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+
+        let inner = serde_json::from_str::<serde_json::Value>("not json")
+            .expect_err("parse must fail");
+        let expected_display = format!("{inner}");
+        let err = ProviderError::Serde(inner);
+        let source = err.source().expect(
+            "covenant_llm::ProviderError::Serde must surface the inner serde_json::Error via std::error::Error::source so LLM provider response-body diagnostics can walk the error chain and downcast source() to serde_json::Error to inspect line/column or classify() for malformed-response identification (line/column points the operator at the offending provider response byte offset, classify() distinguishes Syntax-vs-Data-vs-EOF for incident triage on a corrupted LLM provider response payload); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_llm::ProviderError::Serde source() Display must match a direct format!() of the same serde_json::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "covenant_llm::ProviderError::Serde source() must downcast_ref to serde_json::Error so LLM provider response-body diagnostics can call serde_json::Error::line/column/classify for malformed-response identification; a refactor that wrapped the inner in a project-local newtype (e.g., ProviderSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies LLM provider response parse faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

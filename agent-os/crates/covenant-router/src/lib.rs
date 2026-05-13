@@ -681,4 +681,29 @@ required = ["tool.web_search"]
             "RouterError::Manifest must NOT surround the path with quotes; the {{path}} interpolation must render via Display (no surrounding quotes), not Debug; a refactor to {{path:?}} would surround the path with quotes and break operator-facing CLI documentation parity and audit-log scrapers that split on the colon-after-path (Debug-vs-Display formatting regression class on the {{path}} interpolation): {message}"
         );
     }
+
+    #[test]
+    fn router_error_io_display_message_pins_prefix_and_external_source_display_delegation() {
+        let err = RouterError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "agents dir not readable",
+        ));
+        let message = format!("{err}");
+        assert!(
+            message.starts_with("io: "),
+            "RouterError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish router package-directory IO failures from manifest-parse failures (dropped-prefix regression class): {message}"
+        );
+        assert!(
+            message.contains("agents dir not readable"),
+            "RouterError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: PermissionDenied, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+        );
+        assert!(
+            !message.contains("Custom {") && !message.contains("Os {"),
+            "RouterError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+        );
+        assert!(
+            !message.starts_with("manifest at "),
+            "RouterError::Io must not converge with RouterError::Manifest 'manifest at ' prefix; a package-directory-walk fault must not be mis-routed as a manifest-parse fault (Manifest-convergence regression class): {message}"
+        );
+    }
 }

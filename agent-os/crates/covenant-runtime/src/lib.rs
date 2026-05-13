@@ -2014,4 +2014,51 @@ cpu_ms_per_task = 5000
             "RunnerError::HermesUnconfigured Display drifted (typo or dropped 'HERMES_API_BASE_URL' env-var name regression class)"
         );
     }
+
+    #[test]
+    fn runner_error_execution_display_messages_pin_four_string_variant_format_strings() {
+        let timeout = format!("{}", RunnerError::Timeout(Duration::from_secs(30)));
+        assert!(
+            timeout.contains("timed out after") && timeout.contains("30s"),
+            "RunnerError::Timeout Display drifted (typo or {{0:?}} → {{0}} regression class): {timeout}"
+        );
+
+        let non_zero = format!(
+            "{}",
+            RunnerError::NonZeroExit {
+                status: 137,
+                stderr: "killed".into(),
+            }
+        );
+        assert_eq!(
+            non_zero, "agent exited non-zero: status=137, stderr=killed",
+            "RunnerError::NonZeroExit Display drifted (typo or slot-swap regression class — \
+             status= must precede stderr= and they must be separated by ', ')"
+        );
+
+        let not_executable = format!("{}", RunnerError::NotExecutable("researcher@local".into()));
+        assert_eq!(
+            not_executable,
+            "agent researcher@local has no manifest or package_dir set; cannot execute",
+            "RunnerError::NotExecutable Display drifted (typo or dropped 'no manifest or package_dir set' field-name hint regression class)"
+        );
+
+        let remote = format!(
+            "{}",
+            RunnerError::Remote {
+                status: 503,
+                message: "gateway unavailable".into(),
+            }
+        );
+        assert_eq!(
+            remote, "remote runtime: status=503 message=gateway unavailable",
+            "RunnerError::Remote Display drifted (typo or dropped 'remote runtime:' prefix regression class — \
+             would lose the local-vs-remote disambiguator)"
+        );
+        assert_ne!(
+            remote, non_zero,
+            "RunnerError::Remote must not converge with RunnerError::NonZeroExit \
+             (prefix-convergence regression class would merge remote-gateway with local-subprocess incidents)"
+        );
+    }
 }

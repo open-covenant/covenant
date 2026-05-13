@@ -1045,4 +1045,84 @@ mod tests {
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].0, "notifications/initialized");
     }
+
+    #[test]
+    fn mcp_client_error_display_messages_pin_four_string_variant_format_strings() {
+        // McpClientError (transport.rs lines 77-91) has six variants.
+        // Two wrap external errors via #[from] (Io, Serde); the four
+        // string-bearing variants emit operator-facing format strings
+        // that no existing test inspects via Display. The
+        // transport_closed_constants_pin (line 837) pins the
+        // TRANSPORT_CLOSED_MESSAGE const but the McpClientError::Closed
+        // #[error] attribute is a SEPARATE thiserror compilation — a
+        // drift between the const and the Display attribute would
+        // silently desync. The other three string variants (Rpc,
+        // Timeout, ServerCrashed) have no existing Display pin.
+
+        let rpc = McpClientError::Rpc {
+            code: -32603,
+            message: "internal".into(),
+        };
+        assert_eq!(
+            format!("{rpc}"),
+            "rpc error -32603: internal",
+            "McpClientError::Rpc Display must remain 'rpc error \
+             <code>: <message>' — the 'rpc error' prefix distinguishes \
+             upstream MCP protocol failures from transport-level Closed \
+             events in dashboards that group by prefix. A typo that \
+             dropped 'error' ('rpc <code>: <message>') would break the \
+             grep contract"
+        );
+
+        let closed = McpClientError::Closed;
+        assert_eq!(
+            format!("{closed}"),
+            "transport closed",
+            "McpClientError::Closed Display must remain 'transport \
+             closed' — cross-binds with TRANSPORT_CLOSED_MESSAGE (const \
+             at line 75) which is already pinned by \
+             transport_closed_constants_pin_minus_32099_code_and_transport_closed_message. \
+             The const pin asserts the CONST value, not the #[error] \
+             attribute compiled into Display; a drift between Display \
+             ('transport-closed' with hyphen) and the const ('transport \
+             closed' with space) would silently desync operator-facing \
+             log scraping from the wire-level boundary check"
+        );
+
+        let timeout = McpClientError::Timeout(Duration::from_secs(30));
+        let timeout_message = format!("{timeout}");
+        assert!(
+            timeout_message.contains("timeout after"),
+            "McpClientError::Timeout must keep the 'timeout after' \
+             prefix — a refactor to 'timed out:' or 'request timeout' \
+             would break dashboards that grep 'timeout after' to \
+             correlate request-timeout incidents with the documented \
+             DEFAULT_REQUEST_TIMEOUT (30s): {timeout_message}"
+        );
+        assert!(
+            timeout_message.contains("30s"),
+            "McpClientError::Timeout must surface Duration in Debug \
+             format ('30s' for 30 seconds) — the #[error] attribute \
+             uses {{0:?}} (Debug) because Duration does NOT impl \
+             Display; a refactor that wrapped Duration in a manual \
+             Display impl emitting decimals (e.g., '30.000000000') \
+             would silently shift the operator-facing duration string. \
+             The pin's '30s' substring catches the format change: \
+             {timeout_message}"
+        );
+
+        let crashed = McpClientError::ServerCrashed;
+        assert_eq!(
+            format!("{crashed}"),
+            "server crashed before responding",
+            "McpClientError::ServerCrashed Display must keep the \
+             'before responding' qualifier — distinguishes a mid-\
+             request crash (no response coming) from a clean shutdown \
+             after responding (Closed). Operators triaging request-\
+             correlation failures need the qualifier to know whether \
+             to retry the request or abandon it. A rewrite to 'server \
+             crashed' would silently merge with hypothetical other \
+             crash diagnostics"
+        );
+    }
 }

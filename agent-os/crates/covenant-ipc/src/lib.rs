@@ -599,6 +599,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_recent_limit_and_default_verify_window_pin_documented_values() {
+        // covenant_ipc::default_recent_limit (line 364-366) and
+        // default_verify_window (line 368-370) are the foundation
+        // constants used by #[serde(default = "...")] across 13+ IPC
+        // request fields: Memory recent limits, Audit recent limits,
+        // Audit verify window, etc. They establish the silent default
+        // when an IPC caller omits these fields.
+        //
+        // No prior test pins the literal values. A refactor that
+        // changed default_recent_limit from 10 to 0 under a 'be
+        // explicit, require callers to set limits' rationale would
+        // silently collapse every IPC request omitting the limit
+        // field to a zero-row response — daemon dashboards, CLI
+        // commands, and HTTP gateway clients that rely on the default
+        // would surface as empty pages with no clear cause. A
+        // refactor that changed default_verify_window from 100 to 0
+        // would make audit verify scan zero rows by default;
+        // operators would see a silent green light verifying nothing,
+        // weakening the audit chain integrity guarantee at the IPC
+        // boundary.
+
+        assert_eq!(
+            default_recent_limit(),
+            10,
+            "default_recent_limit() must remain 10 — pins the silent \
+             default for every Request variant that has \
+             #[serde(default = \"default_recent_limit\")] on its \
+             limit field. 10 matches the documented CLI/HTTP 'recent' \
+             page size that operator dashboards and the covenant CLI \
+             expect. A refactor that lowered this to 0 would collapse \
+             every IPC request omitting the limit field to a zero-row \
+             response with no parse-time signal; a refactor that \
+             raised it to a much larger value would silently push \
+             unbounded payloads through the IPC and HTTP responses",
+        );
+
+        assert_eq!(
+            default_verify_window(),
+            100,
+            "default_verify_window() must remain 100 — pins the \
+             silent default for AuditVerify-shaped requests that omit \
+             the window field. 100 matches the audit verify window \
+             the integrity report consumers expect when no explicit \
+             window is set. A refactor that lowered this to 0 would \
+             make audit verify scan zero rows by default and report a \
+             silent green light verifying nothing, weakening the \
+             audit-chain integrity guarantee at the IPC boundary",
+        );
+    }
+
+    #[test]
     fn request_ping_serde_pins_unit_variant() {
         // Request::Ping is the unit variant the CLI sends as a
         // liveness probe to confirm the daemon's IPC loop is

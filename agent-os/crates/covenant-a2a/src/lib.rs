@@ -5089,6 +5089,72 @@ mod tests {
     }
 
     #[test]
+    fn a2a_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation()
+    {
+        let io_err = A2AError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "mailbox.jsonl missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "A2AError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish mailbox-file disk faults from JSONL row-parse faults in the leased-queue serve loop (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("mailbox.jsonl missing"),
+            "A2AError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "A2AError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = A2AError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "A2AError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish JSONL row-parse faults from disk faults in the leased-queue serve loop (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "A2AError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "A2AError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose 'Error(\"...\", line: N, column: M)' buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "A2AError::Io and A2AError::Serde Display must not converge; merging the two prefixes would lose the disk-fault vs JSONL-row-parse-fault discriminator (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !serde_message.starts_with("io:"),
+            "A2AError::Io must not start with 'serde:' and A2AError::Serde must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} serde={serde_message}"
+        );
+
+        let string_variant_prefixes = [
+            "mailbox closed",
+            "task ",
+            "lease mismatch for task",
+            "invalid task:",
+            "invalid repair request:",
+        ];
+        for prefix in string_variant_prefixes {
+            assert!(
+                !io_message.starts_with(prefix),
+                "A2AError::Io must not converge with the string-variant surface '{prefix}' pinned by a2a_error_display_messages_pin_five_string_variant_format_strings; a disk fault must not be mis-routed as a structured leased-queue invariant violation (string-surface-convergence regression class): {io_message}"
+            );
+            assert!(
+                !serde_message.starts_with(prefix),
+                "A2AError::Serde must not converge with the string-variant surface '{prefix}' pinned by a2a_error_display_messages_pin_five_string_variant_format_strings; a JSONL row-parse fault must not be mis-routed as a structured leased-queue invariant violation (string-surface-convergence regression class): {serde_message}"
+            );
+        }
+    }
+
+    #[test]
     fn result_status_serialises_snake_case() {
         let r = A2ATaskResult::ok(Uuid::new_v4(), vec![]);
         let s = serde_json::to_string(&r).unwrap();

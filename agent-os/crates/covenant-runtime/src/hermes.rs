@@ -1009,6 +1009,116 @@ mod tests {
     }
 
     #[test]
+    fn map_hermes_event_pins_missing_event_and_run_id_fields_return_none() {
+        // covenant_runtime::hermes::map_hermes_event (line 393-453) is
+        // the final step of the SSE pipeline that folds a parsed JSON
+        // value into a typed RuntimeTrace. It opens with two
+        // question-mark guards:
+        //
+        //   let event = value.get("event")?.as_str()?;
+        //   let run_id = value.get("run_id")?.as_str()?.to_string();
+        //
+        // Each '?' silently drops the frame if the field is absent or
+        // not a string. parse_sse_frame tests only feed well-formed
+        // JSON through serde_json::from_str, so neither guard arm is
+        // exercised directly today.
+        //
+        // The run_id guard is especially load-bearing: a refactor that
+        // swapped the '?' for unwrap_or("") under a 'be permissive
+        // about gateway payloads' rationale would silently fold every
+        // malformed payload as a typed trace with an empty run_id,
+        // breaking audit-row correlation with no parse-time signal.
+        // A refactor that swapped the event '?' for unwrap_or with
+        // any default that matches a real arm (e.g., "tool.started")
+        // would silently populate the audit chain with stale defaults.
+
+        let no_event = serde_json::json!({
+            "run_id": "r-x",
+            "tool": "terminal"
+        });
+        assert!(
+            map_hermes_event(&no_event).is_none(),
+            "Value with no 'event' field must yield None — the first \
+             '?' fires here. A refactor that swapped it for \
+             unwrap_or(\"tool.started\") under a 'default to the \
+             most common event' rationale would silently route this \
+             frame into the tool.started arm and emit a typed \
+             HermesToolInvoked with stale defaults",
+        );
+
+        let event_not_str = serde_json::json!({
+            "event": 1,
+            "run_id": "r-x"
+        });
+        assert!(
+            map_hermes_event(&event_not_str).is_none(),
+            "Value where 'event' is a number must yield None — the \
+             '.as_str()?' on line 394 fires here. A refactor that \
+             loosened to to_string() would let a numeric 'event' \
+             value stringify to '1' which falls through to the '_' \
+             arm and returns None anyway; the more dangerous refactor \
+             is one that special-cases numeric event codes (e.g., \
+             '1 means tool.started') and starts emitting typed traces \
+             from numeric inputs",
+        );
+
+        let no_run_id = serde_json::json!({
+            "event": "tool.started",
+            "tool": "terminal"
+        });
+        assert!(
+            map_hermes_event(&no_run_id).is_none(),
+            "Value with 'event' but no 'run_id' must yield None — the \
+             '?' on line 395 fires here. A refactor that swapped this \
+             for unwrap_or(\"\") would silently fold the frame as \
+             HermesToolInvoked {{ run_id: \"\", tool: \"terminal\", ... }} \
+             — empty-string run_ids break audit-row correlation \
+             because every malformed payload would land in the same \
+             phantom bucket. This is the highest-value pin in this \
+             test",
+        );
+
+        let run_id_null = serde_json::json!({
+            "event": "tool.started",
+            "run_id": null,
+            "tool": "terminal"
+        });
+        assert!(
+            map_hermes_event(&run_id_null).is_none(),
+            "Value where 'run_id' is explicit JSON null must yield \
+             None — the '.as_str()?' on line 395 fires here. Distinct \
+             from the missing-key case at the wire level but must \
+             collapse to the same answer, so a refactor that \
+             special-cased null (e.g., 'treat null run_id as anonymous \
+             and emit an empty-string trace') surfaces here",
+        );
+
+        let happy = serde_json::json!({
+            "event": "tool.started",
+            "run_id": "r-happy",
+            "tool": "terminal",
+            "preview": "ls"
+        });
+        match map_hermes_event(&happy).expect(
+            "the happy path: a well-formed tool.started Value must \
+             fold to HermesToolInvoked. If this fires, both guard \
+             arms have been over-tightened and the function rejects \
+             valid frames",
+        ) {
+            RuntimeTrace::HermesToolInvoked {
+                run_id,
+                tool,
+                preview,
+            } => {
+                assert_eq!(run_id, "r-happy");
+                assert_eq!(tool, "terminal");
+                assert_eq!(preview, "ls");
+            }
+            other => panic!("expected HermesToolInvoked, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn find_subseq_pins_empty_needle_and_short_haystack_return_none() {
         // covenant_runtime::hermes::find_subseq (line 350-357) is the
         // search primitive find_boundary (line 340-348) uses to locate

@@ -373,6 +373,70 @@ mod tests {
         assert!(r[0].url.starts_with("stub://"));
     }
 
+    #[test]
+    fn mock_search_stub_pins_single_hit_with_operator_facing_secrets_path_hint() {
+        // MockSearch::stub (line 60-70) is the no-config fallback the
+        // daemon returns from pick_search and search_from_config when
+        // no real search provider is configured. Its single canned
+        // SearchHit is the operator-facing surface that tells
+        // operators where to configure a real provider — title,
+        // url, and snippet together form an inline 'why is search
+        // broken and how do I fix it' breadcrumb.
+        //
+        // mock_search_returns_canned_hits (above) asserts !r.is_empty()
+        // and r[0].url.starts_with('stub://') but never pins the exact
+        // shape, count, or operator-facing snippet content. This pin
+        // closes the help-text contract so a refactor that strips the
+        // secrets.toml path or switches to multiple hits surfaces as
+        // a parse-time test failure rather than a silent operator-UX
+        // degradation.
+        let s = MockSearch::stub();
+        assert_eq!(
+            s.canned.len(),
+            1,
+            "MockSearch::stub must produce exactly one hit — a refactor \
+             that switched to multiple canned hits under a 'demonstrate \
+             the search result shape' rationale would silently change \
+             the response shape so downstream consumers expecting one \
+             hit on the no-config path (e.g., a CLI banner that prints \
+             'using stub fallback' iff results.len() == 1) would \
+             surface as multi-hit anomalies",
+        );
+        assert_eq!(
+            s.canned[0].title, "stub result",
+            "title must be the exact string 'stub result' so operator-\
+             facing dashboards and support tickets can grep for it as \
+             the canonical no-config marker",
+        );
+        assert_eq!(
+            s.canned[0].url, "stub://no-real-search",
+            "url must be the exact string 'stub://no-real-search' — \
+             a refactor that swapped the scheme to 'mock://' under an \
+             'align with the provider name' rationale would silently \
+             break every operator-facing dashboard that grep'd for the \
+             exact url, even though the existing starts_with('stub://') \
+             test would still pass",
+        );
+        assert!(
+            s.canned[0].snippet.contains("~/.covenant/secrets.toml"),
+            "snippet must contain the secrets.toml path so an operator \
+             seeing the stub result has the exact path to update — a \
+             refactor that 'cleaned up' the snippet by removing the \
+             internal config path would silently strip the breadcrumb \
+             that converts a 'why is search broken' question into a \
+             self-service fix; got snippet: {snippet:?}",
+            snippet = s.canned[0].snippet,
+        );
+        assert!(
+            s.canned[0].snippet.contains("covenant-tools mock"),
+            "snippet must contain the 'covenant-tools mock' identifier \
+             so operators can grep for the exact string in support \
+             tickets and unambiguously identify the no-config fallback; \
+             got snippet: {snippet:?}",
+            snippet = s.canned[0].snippet,
+        );
+    }
+
     #[tokio::test]
     async fn mock_search_respects_limit() {
         let s = MockSearch::new(vec![

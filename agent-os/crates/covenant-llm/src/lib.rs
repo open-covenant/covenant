@@ -792,6 +792,108 @@ mod tests {
     }
 
     #[test]
+    fn provider_error_display_messages_pin_three_string_variant_format_strings() {
+        // ProviderError (lib.rs lines 58-74) has seven variants. Five
+        // wrap external errors via #[from]; the three string-literal
+        // variants (Empty, Status, MissingKey) emit operator-facing
+        // format strings that no existing test inspects.
+        // anthropic_without_key_returns_missing_key (line 781) and
+        // openai_without_key_returns_missing_key (line 788) assert
+        // MissingKey via `matches!` which ignores the Display rendering;
+        // Empty and Status have no test at all. A thiserror format-
+        // string typo or a swapped {status}/{body} binding would
+        // silently degrade operator diagnostics with no parse-time
+        // signal — operators reading daemon logs would see a different
+        // shape than the dashboards that grep for the documented
+        // wording grep for.
+
+        let empty = ProviderError::Empty;
+        assert_eq!(
+            format!("{empty}"),
+            "provider returned no content",
+            "ProviderError::Empty Display must remain the literal \
+             'provider returned no content' — fires when the wire \
+             response decoded successfully but the content array was \
+             empty (Anthropic line 288, OpenAI line 392, Ollama line \
+             175). A refactor that rewrote it to 'provider returned \
+             no body' under a 'match the Status body slot wording' \
+             rationale would silently shift dashboards that grep for \
+             'no content' to the new phrasing"
+        );
+
+        let status = ProviderError::Status {
+            status: 401,
+            body: "Unauthorized".into(),
+        };
+        let status_message = format!("{status}");
+        assert!(
+            status_message.contains("(401)"),
+            "ProviderError::Status Display must parenthesize the status \
+             code as '(401)' — the documented format 'provider error \
+             ({{status}}): {{body}}' puts the status in parentheses so \
+             dashboards can grep for '\\(401\\)' to filter by HTTP code; \
+             a swap to 'provider error: 401, Unauthorized' under an \
+             'alphabetize template variables' rationale would silently \
+             break the parenthesized-status convention: {status_message}"
+        );
+        assert!(
+            status_message.contains("Unauthorized"),
+            "ProviderError::Status must surface the body string — the \
+             body carries the upstream provider's error reason, and a \
+             refactor that dropped the {{body}} slot under a 'too \
+             noisy' pass would strip the operator's only diagnostic \
+             into the upstream provider's reasoning: {status_message}"
+        );
+        assert!(
+            status_message.contains("provider error"),
+            "ProviderError::Status must keep the 'provider error' \
+             prefix — distinguishes this variant from Empty and \
+             MissingKey in dashboards that group by message prefix: \
+             {status_message}"
+        );
+        assert!(
+            !status_message.contains("(Unauthorized)"),
+            "ProviderError::Status body must NOT appear in the \
+             parenthesized slot — a #[error] format swap binding {{body}} \
+             to the parenthesized slot and {{status}} to the suffix \
+             would emit 'provider error (Unauthorized): 401' instead of \
+             'provider error (401): Unauthorized'. Operators reading \
+             the swapped form would scan for an HTTP code in the parens \
+             and find the body text; pinning that the body does NOT \
+             appear in parentheses anchors the slot ordering: \
+             {status_message}"
+        );
+
+        let missing = ProviderError::MissingKey("anthropic");
+        assert_eq!(
+            format!("{missing}"),
+            "missing api key for provider anthropic",
+            "ProviderError::MissingKey Display must remain the literal \
+             'missing api key for provider <slug>' — the 'for provider' \
+             prefix is the semantic anchor distinguishing 'missing api \
+             key' from other missing-thing errors; dashboards parse the \
+             slug to identify which secrets.toml entry the operator \
+             must populate. A rewrite to 'missing api key anthropic' \
+             under a 'less verbose' pass would silently break the parse \
+             contract"
+        );
+
+        // Anchor that the slug parameter is bound verbatim so a refactor
+        // that wrapped or transformed the slug in the format string
+        // (e.g., uppercasing it) surfaces here as well.
+        let missing_openai = ProviderError::MissingKey("openai");
+        assert_eq!(
+            format!("{missing_openai}"),
+            "missing api key for provider openai",
+            "ProviderError::MissingKey must bind the slug verbatim \
+             without case transformation — a refactor that uppercased \
+             the slug (e.g., '{{0:upper}}' if thiserror supported it, \
+             or a manual Display impl) would silently shift dashboards \
+             grep for 'provider openai' to 'provider OPENAI'"
+        );
+    }
+
+    #[test]
     fn provider_config_parses_anthropic_block() {
         let toml_src = r#"
 [llm]

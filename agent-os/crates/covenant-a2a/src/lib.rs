@@ -5168,6 +5168,134 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a2a_task_result_constructors_pin_status_binding_content_shape_and_error_message_asymmetry() {
+        // A2ATaskResult::ok (line 390-397) and ::error (line 399-406)
+        // are the constructor pair the daemon uses to convert tool
+        // execution outcomes into A2A wire responses. Both bind
+        // task_id verbatim and set status — ok() sets
+        // A2ATaskStatus::Ok with operator-supplied content and
+        // error_message=None; error() sets A2ATaskStatus::Error with
+        // content=Vec::new() (ALWAYS EMPTY, regardless of message)
+        // and error_message=Some(message). The asymmetry is
+        // documented behavior: error responses carry the failure in
+        // error_message and leave content empty so the receiver-side
+        // idempotency cache and parser don't accidentally treat error
+        // text as tool output.
+        //
+        // a2a_task_result_serde_pins_content_default_and_error_message_skip_empty
+        // and a2a_task_result_serde_pins_strict_required_fields_reject_on_omission
+        // (above) cover the wire form, but NOT the constructor
+        // composition. A refactor that 'for consistency' made error()
+        // populate content with Content::text(message.clone()) would
+        // silently change the wire shape, and any downstream consumer
+        // that distinguishes content-presence as success would
+        // regress. A refactor that swapped status to Ok in error()
+        // would silently break covenantd's status-driven dispatch
+        // and audit-row classification.
+        let task_id = Uuid::new_v4();
+
+        // (1) ok() with non-empty content
+        let ok_result = A2ATaskResult::ok(task_id, vec![Content::text("hello")]);
+        assert_eq!(
+            ok_result.status,
+            A2ATaskStatus::Ok,
+            "A2ATaskResult::ok must set status to A2ATaskStatus::Ok; \
+             a refactor that flipped the bound status would silently \
+             let ok responses surface as errors in covenantd's status-\
+             driven dispatch path",
+        );
+        assert_eq!(
+            ok_result.content,
+            vec![Content::text("hello")],
+            "ok() must pass content through verbatim; a refactor that \
+             normalized or wrapped the content (e.g., always set to \
+             a single text block under a 'flatten content for downstream \
+             consumers' rationale) would silently change the wire shape",
+        );
+        assert_eq!(
+            ok_result.error_message, None,
+            "ok() must leave error_message as None; a refactor that \
+             populated it with an empty string would silently let \
+             receiver-side parsers that distinguish None vs Some(\"\") \
+             treat every ok response as carrying an unread error tag",
+        );
+        assert_eq!(
+            ok_result.task_id, task_id,
+            "ok() must preserve task_id verbatim — a refactor that \
+             generated a fresh Uuid would silently break the \
+             request/response correlation that send_task and \
+             recv_result rely on for routing",
+        );
+
+        // (2) ok() with empty content — zero-length content is still
+        // an Ok, NOT an automatic conversion to error.
+        let ok_empty = A2ATaskResult::ok(task_id, vec![]);
+        assert_eq!(ok_empty.status, A2ATaskStatus::Ok);
+        assert!(
+            ok_empty.content.is_empty(),
+            "ok() with empty input content must produce empty content; \
+             a refactor that injected a placeholder Content::text(\"\") \
+             under a 'never emit empty content arrays' rationale would \
+             silently let receiver-side caches keyed on content presence \
+             match every empty Ok response",
+        );
+        assert_eq!(ok_empty.error_message, None);
+
+        // (3) error() with non-empty message: status=Error,
+        // error_message=Some(message), content=Vec::new() (ALWAYS
+        // EMPTY — the documented asymmetry).
+        let err_result = A2ATaskResult::error(task_id, "boom");
+        assert_eq!(
+            err_result.status,
+            A2ATaskStatus::Error,
+            "A2ATaskResult::error must set status to A2ATaskStatus::Error; \
+             a refactor that swapped status to Ok under an 'always return \
+             Ok and let receivers check error_message' rationale (the \
+             JSON-RPC 'always 200' anti-pattern) would silently break \
+             covenantd's status-driven dispatch path that keys on \
+             A2ATaskStatus::Error to mark intents Failed in the audit chain",
+        );
+        assert_eq!(
+            err_result.error_message,
+            Some("boom".to_string()),
+            "error() must wrap the message in Some — pinning that \
+             error_message is a populated Optional, not threaded through \
+             the content surface",
+        );
+        assert!(
+            err_result.content.is_empty(),
+            "error() must leave content empty; a refactor that 'for \
+             consistency' populated content with Content::text(message) \
+             under a 'reduce two surfaces (content vs error_message) to \
+             one' rationale would silently change the wire shape so \
+             receiver-side caches keyed on (task_kind, content) would \
+             suddenly match error responses they should ignore — and \
+             any tooling UI that renders content as success surface \
+             would render error text as tool output",
+        );
+        assert_eq!(err_result.task_id, task_id);
+
+        // (4) error() with empty message: empty string still goes
+        // into Some, not None. The trim/empty filter belongs to
+        // validate_repair_request, NOT to A2ATaskResult::error.
+        let err_empty = A2ATaskResult::error(task_id, "");
+        assert_eq!(err_empty.status, A2ATaskStatus::Error);
+        assert_eq!(
+            err_empty.error_message,
+            Some(String::new()),
+            "error() with empty message must still produce \
+             error_message=Some(\"\") — a refactor that 'cleaned up' \
+             empty Optionals by mapping Some(\"\") to None under a \
+             'don't carry empty fields' rationale would silently let \
+             receiver-side code that distinguishes 'unset error_message' \
+             (Ok-shaped result with status accidentally set to Error) \
+             from 'empty error_message' (intentional empty failure tag) \
+             lose the disambiguation",
+        );
+        assert!(err_empty.content.is_empty());
+    }
+
     #[tokio::test]
     async fn in_memory_mailbox_round_trips_a_task() {
         let m = InMemoryMailbox::new();

@@ -699,6 +699,76 @@ mod tests {
         assert!(serde_json::from_str::<Role>("\"USER\"").is_err());
     }
 
+    #[test]
+    fn chat_message_serde_pins_two_required_fields_and_embedded_role_slug() {
+        // ChatMessage is the public struct embedded into every outbound
+        // chat-API request body via `messages: &[ChatMessage]` —
+        // OllamaChatRequest, OpenAiRequest, and the Anthropic flow all
+        // serialise this exact shape. Two strictly required fields
+        // (role: Role, content: String) with no serde attributes; a
+        // stray #[serde(default)] on content would silently let an
+        // upstream API echo back an empty message, a rename of either
+        // key would break every provider without a compile error, and
+        // an added #[serde(skip_serializing_if = ...)] field would
+        // mutate the wire shape that strict APIs reject.
+        let msg = ChatMessage::user("hello");
+
+        let wire = serde_json::to_value(&msg).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("ChatMessage serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> = ["role", "content"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "ChatMessage wire form must be exactly two keys (role, \
+             content); a skip_serializing_if on either field would \
+             silently shift the envelope and strict chat APIs may \
+             reject the truncated body",
+        );
+
+        // Cross-bind to role_serde_and_chat_message_constructors_pin_wire_contract:
+        // the embedded Role enum still serialises as a lowercase slug.
+        assert_eq!(obj.get("role"), Some(&serde_json::json!("user")));
+        assert_eq!(obj.get("content"), Some(&serde_json::json!("hello")));
+
+        // Round-trip pins the PartialEq + Eq derive contract callers
+        // (and tests like mock_provider_returns_canned_text) rely on.
+        let back: ChatMessage = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, msg);
+
+        // Each strictly-required field must reject when omitted. A
+        // #[serde(default)] regression on either would let a malformed
+        // upstream payload decode with an empty string / default Role
+        // and silently bypass the boundary.
+        for required in ["role", "content"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<ChatMessage>(serde_json::Value::Object(missing)).is_err(),
+                "ChatMessage wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        // Empty content must still surface on the wire — pinning that
+        // String::is_empty is NOT skipped. The provider may legitimately
+        // send an assistant turn with empty content (the parser maps
+        // that to ProviderError::Empty), and a skip_serializing_if =
+        // String::is_empty would silently drop the field for the
+        // empty-body path so the receiver sees a missing-field error
+        // instead of the intended empty-string semantic.
+        let empty = ChatMessage::assistant("");
+        let empty_wire = serde_json::to_value(&empty).unwrap();
+        let empty_obj = empty_wire.as_object().unwrap();
+        assert!(
+            empty_obj.contains_key("content"),
+            "empty content must remain present on the wire — a \
+             skip_serializing_if = String::is_empty would silently \
+             drop the field for the empty-body path",
+        );
+        assert_eq!(empty_obj.get("content").unwrap(), &serde_json::json!(""));
+    }
+
     #[tokio::test]
     async fn mock_provider_returns_canned_text() {
         let p = MockProvider::new("hi");

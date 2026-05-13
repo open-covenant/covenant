@@ -1687,6 +1687,108 @@ mod tests {
         }
     }
 
+    #[test]
+    fn checkpoint_key_pins_pubkey_only_and_display_independence_and_tuple_order() {
+        // checkpoint_key (line 557-559) is the JsonlPauseCheckpointStore
+        // HashMap-keying function: (intent_id, agent.pubkey). The store
+        // keys self.checkpoints on the returned tuple, so the function's
+        // contract decides whether two AgentId values with identical
+        // pubkeys but different display strings collide on the same
+        // checkpoint slot. The pubkey is the cryptographic identity; the
+        // display is operator ergonomics that can be renamed without
+        // changing the underlying keypair.
+        //
+        // A refactor that included agent.display in the key would break
+        // resume semantics on any rename; a refactor that swapped the
+        // tuple order would silently mis-key every event-replay path;
+        // a refactor that keyed off display instead of pubkey would let
+        // colliding display strings cross-claim resume credits without
+        // holding the corresponding ed25519 private key.
+        let intent_a = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111);
+        let intent_b = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222);
+        let pk_a = [0x11u8; 32];
+        let pk_b = [0x22u8; 32];
+
+        let agent_a = AgentId::new("alpha@host", pk_a);
+        let agent_a_dup = AgentId::new("alpha@host", pk_a);
+        assert_eq!(
+            checkpoint_key(intent_a, &agent_a),
+            checkpoint_key(intent_a, &agent_a_dup),
+            "same (intent_id, agent) input must produce the same key — \
+             determinism is the precondition for JsonlPauseCheckpointStore::\
+             active_pause and claim_resume to locate the prior pause; a \
+             non-deterministic key (e.g., a refactor that hashed with a \
+             random nonce for 'collision resistance') would make every \
+             resume claim land on a fresh slot and surface NotFound for \
+             what is logically the same identity",
+        );
+
+        let key_intent_a = checkpoint_key(intent_a, &agent_a);
+        let key_intent_b = checkpoint_key(intent_b, &agent_a);
+        assert_ne!(
+            key_intent_a, key_intent_b,
+            "different intent_id with identical agent must produce distinct \
+             keys — two pauses on the same agent for different intents must \
+             not collide; a refactor that dropped intent_id from the key \
+             (e.g., keyed only on agent.pubkey) would silently let a second \
+             pause overwrite the first, and the operator would lose recovery \
+             evidence for one of the two intents",
+        );
+
+        let agent_b = AgentId::new("beta@host", pk_b);
+        let key_agent_a = checkpoint_key(intent_a, &agent_a);
+        let key_agent_b = checkpoint_key(intent_a, &agent_b);
+        assert_ne!(
+            key_agent_a, key_agent_b,
+            "different agent.pubkey with identical intent_id must produce \
+             distinct keys — two agents pausing on the same intent_id must \
+             not cross-claim each other's resume credits; a refactor that \
+             dropped agent.pubkey from the key (e.g., keyed only on \
+             intent_id) would let one agent steal another's resume \
+             checkpoint without holding the corresponding ed25519 private \
+             key",
+        );
+
+        let agent_same_pk_renamed = AgentId::new("alpha-renamed@host", pk_a);
+        let key_original_display = checkpoint_key(intent_a, &agent_a);
+        let key_renamed_display = checkpoint_key(intent_a, &agent_same_pk_renamed);
+        assert_eq!(
+            key_original_display, key_renamed_display,
+            "two AgentId values with identical pubkey but distinct display \
+             strings must produce the SAME key — the cryptographic identity \
+             is the pubkey, not the human-readable display string. A \
+             refactor that included agent.display in the key would silently \
+             break resume semantics whenever an operator renamed an agent: \
+             the resume claim would consult a different HashMap slot from \
+             the original pause and surface NotFound for what is logically \
+             the same keypair",
+        );
+
+        let key = checkpoint_key(intent_a, &agent_a);
+        assert_eq!(
+            key.0, intent_a,
+            "key.0 must be the intent_id — the tuple order is \
+             (Uuid, [u8; 32]). A refactor that swapped the tuple order to \
+             ([u8; 32], Uuid) would still typecheck because HashMap is \
+             parameterized over the tuple type, but every event-replay path \
+             in JsonlPauseCheckpointStore::open reconstructs the key from \
+             BudgetCheckpointEvent fields in this exact order — a \
+             tuple-order regression would silently mis-key every stored \
+             checkpoint and every claim_resume call would surface NotFound \
+             on daemon restart",
+        );
+        assert_eq!(
+            key.1, pk_a,
+            "key.1 must be the agent.pubkey 32-byte array — a refactor that \
+             returned agent.display.as_bytes() (e.g., to make the key \
+             debug-friendly) would silently let two agents with colliding \
+             display strings cross-claim each other's pause checkpoints, \
+             and the type signature (Uuid, [u8; 32]) is the contract every \
+             call site relies on to construct the lookup tuple from raw \
+             event fields",
+        );
+    }
+
     fn checkpoint(agent: &AgentId, intent_id: Uuid) -> BudgetPauseCheckpoint {
         let mut resume_state = serde_json::Map::new();
         resume_state.insert("cursor".to_string(), json!({"step": 2, "unit": "compile"}));

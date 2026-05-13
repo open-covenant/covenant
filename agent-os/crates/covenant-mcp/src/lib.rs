@@ -249,6 +249,62 @@ mod tests {
     }
 
     #[test]
+    fn tool_spec_serde_pins_strict_required_fields_reject_on_omission() {
+        // tool_spec_serde_pins_camel_case_round_trip pins the camelCase
+        // wire form, the snake_case rejection, and the missing-inputSchema
+        // rejection. It does NOT assert a closed three-key wire set and
+        // it does NOT reject missing name or description — a stray
+        // #[serde(default)] on either of those would silently let a
+        // malformed external tools/list payload decode with an
+        // empty-string default, and the MCP transport would advertise a
+        // half-populated ToolSpec without any boundary signal. Pin all
+        // three required keys here so a future refactor that drops any
+        // one of them forces an explicit migration decision instead of
+        // silently shrinking the wire shape.
+        let spec = ToolSpec {
+            name: "echo".into(),
+            description: "echoes input".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+
+        let wire = serde_json::to_value(&spec).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("ToolSpec serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["name", "description", "inputSchema"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "ToolSpec wire form must be exactly three keys (name, \
+             description, inputSchema); an added skip_serializing_if \
+             field would silently expand the wire shape and strict \
+             external MCP servers may reject the unexpected key, \
+             breaking tools/list round-trips through the stdio transport",
+        );
+
+        let back: ToolSpec = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, spec,
+            "ToolSpec must round-trip through serde_json verbatim — the \
+             PartialEq derive is the contract every MCP tools/list \
+             consumer leans on",
+        );
+
+        for required in ["name", "description", "inputSchema"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<ToolSpec>(serde_json::Value::Object(missing)).is_err(),
+                "ToolSpec wire form must reject a payload missing {required:?}; \
+                 a stray #[serde(default)] would silently let a malformed \
+                 external tools/list payload decode with an empty default \
+                 and the LLM agent would route through an unidentifiable tool",
+            );
+        }
+    }
+
+    #[test]
     fn content_variants_serialise_with_type_tag() {
         let t = Content::text("hi");
         let json = serde_json::to_string(&t).unwrap();

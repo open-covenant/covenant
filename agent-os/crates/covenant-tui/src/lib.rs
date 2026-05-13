@@ -2547,6 +2547,34 @@ mod tests {
     }
 
     #[test]
+    fn ipc_error_operator_token_read_source_delegation_pin_returns_inner_io_error_via_std_error_source(
+    ) {
+        use crate::ipc::IpcError;
+        use std::error::Error;
+        use std::io;
+        use std::path::PathBuf;
+
+        let inner = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let expected_display = format!("{inner}");
+        let err = IpcError::OperatorTokenRead {
+            path: PathBuf::from("/tmp/covenant/peers/operator.token"),
+            source: inner,
+        };
+        let source = err.source().expect(
+            "IpcError::OperatorTokenRead must surface the inner io::Error via std::error::Error::source so anyhow chain printers in the TUI binary, daemon-side bootstrap audit-log emitters, and downstream tooling that downcasts source() to io::Error to classify io::ErrorKind (PermissionDenied vs NotFound vs InvalidData) for distinct recovery flows can render the wrapper context AND the inner cause; a thiserror refactor that dropped the #[source] attribute on the source field (e.g., field rename without re-annotation) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        let source_message = format!("{source}");
+        assert!(
+            source_message.contains("denied"),
+            "IpcError::OperatorTokenRead source() must return an error whose Display contains 'denied' — the io::Error Display rendering for a PermissionDenied with custom message; a refactor that wrapped the source in a different type (e.g., Box<dyn Error + Send + Sync>) and dropped the literal io::Error Display would silently mute the structural filesystem-failure discriminator in chain-walked output (concrete-source-type regression class): {source_message}"
+        );
+        assert_eq!(
+            source_message, expected_display,
+            "IpcError::OperatorTokenRead source() Display must match a direct format!() of the same io::Error verbatim; a refactor that swapped the source field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break TUI-side downcasts to io::Error used to extract io::ErrorKind for recovery-flow classification ('rotate the token' vs 'rebootstrap the daemon' vs 'check filesystem corruption') (concrete-source-type regression class)"
+        );
+    }
+
+    #[test]
     fn ipc_error_wire_and_frame_and_other_display_messages_pin_prefix_and_external_source_display_delegation(
     ) {
         use crate::ipc::IpcError;

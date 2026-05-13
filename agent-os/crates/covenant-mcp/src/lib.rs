@@ -467,6 +467,105 @@ mod tests {
         assert_eq!(names, vec!["clock".to_string(), "echo".to_string()]);
     }
 
+    #[test]
+    fn tool_default_input_schema_pins_type_object_properties_empty_additional_properties_false() {
+        // covenant_mcp::Tool::input_schema (line 90-92) is the default
+        // implementation inherited by every Tool that does not override
+        // input_schema. The default emits:
+        //
+        //   { "type": "object", "properties": {}, "additionalProperties": false }
+        //
+        // — the no-args MCP schema operator-facing clients read out of
+        // tools/list when a tool takes zero arguments. covenant_mcp::
+        // native::ClockTool (native.rs line 44-63) is the canonical
+        // no-arg tool; it inherits the default.
+        //
+        // clock_returns_recent_epoch_ms (native.rs line 88) and
+        // registry_lists_tools_sorted_by_name (line 463) exercise the
+        // default-schema path through ClockTool but assert only on
+        // behavior and tool names — NOT on the published schema bytes.
+        // tool_spec_uses_camel_case_on_the_wire (line 188) and
+        // tool_spec_serde_pins_strict_required_fields_reject_on_omission
+        // (line 252) pin the OUTER ToolSpec envelope keys, not the
+        // INNER default schema content. A refactor that loosened the
+        // default to {"type": "object"} or {} under a
+        // "be permissive by default" rationale would silently weaken
+        // every no-arg tool's tools/list entry, and MCP-client
+        // tool-arg validation UIs that respect additionalProperties or
+        // walk properties.* would silently let users pass arbitrary
+        // arguments to no-arg tools — the call() validation would
+        // still reject the args, but the operator-facing schema would
+        // mismatch the runtime contract.
+        let clock = native::ClockTool;
+        let schema = clock.input_schema();
+
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            "Tool::input_schema default must emit exactly \
+             {{type:object, properties:{{}}, additionalProperties:false}} — \
+             the verbatim shape every MCP client reads out of \
+             tools/list for a no-arg tool. A refactor that loosened \
+             this default would silently weaken every inheriting \
+             tool's published schema with no parse-time signal.",
+        );
+
+        assert_eq!(
+            schema.get("type").and_then(Value::as_str),
+            Some("object"),
+            "schema.type must be the JSON string 'object' specifically — \
+             dropping it or changing to 'any' would let MCP clients that \
+             require an explicit type:object before walking properties \
+             classify the schema as shape-ambiguous and refuse to render \
+             the tool's invoke affordance",
+        );
+
+        let properties = schema
+            .get("properties")
+            .expect("schema.properties must be present");
+        assert_eq!(
+            properties,
+            &serde_json::json!({}),
+            "schema.properties must be present and equal to {{}} — a \
+             refactor that dropped the empty map under a 'JSON Schema \
+             treats absent properties as empty' rationale would make \
+             MCP-client tool-arg form generators that iterate \
+             schema.properties skip the entire schema and render the \
+             tool with no form, breaking the operator's tools/list \
+             affordance even though call() still works",
+        );
+
+        assert_eq!(
+            schema.get("additionalProperties").and_then(Value::as_bool),
+            Some(false),
+            "schema.additionalProperties must be the JSON boolean false — \
+             a refactor that dropped this key or flipped it to true \
+             would silently let MCP clients send arbitrary arguments to \
+             no-arg tools like clock without parse-time error; the \
+             call() validation would still drop the args, but the \
+             operator-facing schema would no longer match the runtime \
+             contract and tool-arg dashboards would mis-render the \
+             permitted-args set",
+        );
+
+        let object = schema.as_object().expect("schema must be a JSON object");
+        assert_eq!(
+            object.len(),
+            3,
+            "schema must have exactly three top-level keys \
+             (type, properties, additionalProperties); a refactor that \
+             added a fourth key (e.g., $schema or title) would change \
+             the published wire form for every no-arg tool. If a fourth \
+             key is needed, the pin must be updated in lockstep with \
+             the rename/addition so the operator-facing schema change \
+             is intentional",
+        );
+    }
+
     #[tokio::test]
     async fn registry_call_returns_not_found_for_unknown() {
         let reg = registry_with_echo();

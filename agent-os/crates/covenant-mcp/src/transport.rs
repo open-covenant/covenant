@@ -834,6 +834,73 @@ mod tests {
     }
 
     #[test]
+    fn transport_closed_constants_pin_minus_32099_code_and_transport_closed_message() {
+        // TRANSPORT_CLOSED_CODE (line 74) and TRANSPORT_CLOSED_MESSAGE
+        // (line 75) are the JSON-RPC sentinel the reader's EOF/shutdown
+        // path emits when a stdio MCP child process exits. The emit
+        // site at line 253-257 in NewStdioClient::spawn uses LITERAL
+        // values:
+        //
+        //     code: -32099,
+        //     message: "transport closed".into(),
+        //
+        // The consume site at line 95 in From<JsonRpcError> for
+        // McpClientError uses the named constants in the conjunction
+        // `e.code == TRANSPORT_CLOSED_CODE && e.message ==
+        // TRANSPORT_CLOSED_MESSAGE → McpClientError::Closed`. The
+        // constants and the literal must agree exactly: a drift would
+        // silently desync the consume side from the emit side, causing
+        // EOF events to route to McpClientError::Rpc instead of
+        // McpClientError::Closed and breaking connection-recovery
+        // logic.
+        //
+        // transport_closed_error_maps_to_closed (above) and
+        // from_jsonrpc_error_for_mcp_client_error_pins_closed_vs_rpc_boundary_arms
+        // (below) both construct JsonRpcError values with
+        // TRANSPORT_CLOSED_CODE and TRANSPORT_CLOSED_MESSAGE directly,
+        // so neither test catches a refactor that changed the
+        // constants while the literal at line 253-257 stayed at -32099
+        // / "transport closed" — the test fixtures and the matched
+        // constant remain in lockstep through the constant, masking
+        // the desync.
+        //
+        // -32099 sits at the high-magnitude end of JSON-RPC 2.0's
+        // implementation-defined "Server error" range (-32000 to
+        // -32099), distinct from the spec's reserved standard codes
+        // (-32700 parse-error, -32600 invalid-request, -32601
+        // method-not-found, -32602 invalid-params, -32603
+        // internal-error).
+        assert_eq!(
+            TRANSPORT_CLOSED_CODE, -32099,
+            "TRANSPORT_CLOSED_CODE must remain -32099 — the literal \
+             value the reader's EOF path emits at line 253-257. A \
+             refactor that consolidated the sentinel into a different \
+             value (e.g., -32098 under a 'cleaner sentinel range' \
+             rationale, or -32603 under a 'use the JSON-RPC standard \
+             internal-error code' rationale) without also updating \
+             the emit literal would silently desync the consume side: \
+             every EOF JsonRpcError would route to McpClientError::Rpc \
+             instead of McpClientError::Closed, and connection-recovery \
+             logic gating on Closed would never trigger. A move to a \
+             JSON-RPC 2.0 reserved standard code would also collide \
+             with the spec's documented meaning for external MCP \
+             clients reading the code on the wire",
+        );
+        assert_eq!(
+            TRANSPORT_CLOSED_MESSAGE, "transport closed",
+            "TRANSPORT_CLOSED_MESSAGE must remain the literal string \
+             'transport closed' the reader emits at line 255. The \
+             consume side uses AND (not OR) in the boundary \
+             conjunction at line 95, so a rename of the constant (e.g., \
+             to 'closed' or 'transport_closed' for snake_case \
+             consistency) against an emit-side literal of 'transport \
+             closed' would always fail the conjunction and route every \
+             transport-close event to Rpc. The exact-string pin \
+             anchors the constant to the literal",
+        );
+    }
+
+    #[test]
     fn from_jsonrpc_error_for_mcp_client_error_pins_closed_vs_rpc_boundary_arms() {
         // covenant_mcp::transport::From<JsonRpcError> for McpClientError
         // (line 93-103) routes a JSON-RPC error envelope into the

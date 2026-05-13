@@ -475,6 +475,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_registry_call_pins_not_found_carries_requested_name() {
+        // covenant_mcp::ToolRegistry::call (line 148-154):
+        //
+        //   pub async fn call(&self, name: &str, arguments: Value) -> Result<ToolCallResult, ToolError> {
+        //       let tool = self
+        //           .inner
+        //           .get(name)
+        //           .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        //       tool.call(arguments).await
+        //   }
+        //
+        // The NotFound payload IS the contract: operator MCP-client
+        // dashboards triaging a 'tool not found' error rely on the
+        // String to identify which name the agent requested (typo,
+        // tool rename, MCP client misconfiguration). The variant tag
+        // alone is not enough — without the name, an operator sees
+        // only that *some* call failed.
+        //
+        // registry_call_returns_not_found_for_unknown (line 471) above
+        // asserts only matches!(err, ToolError::NotFound(_)) and never
+        // reads the inner String. A refactor that swapped
+        // 'name.to_string()' for a generic placeholder (\"unknown\",
+        // String::new(), or a normalised/lowercased variant) under a
+        // 'reduce error-message verbosity' or 'normalize for audit-log
+        // consistency' rationale would silently strip the requested
+        // name from the error; the existing test would still pass.
+        //
+        // Pin TWO distinct missing names to anchor that the payload is
+        // the REQUESTED value, not a hardcoded constant — a refactor
+        // that hardcoded the payload to \"does-not-exist\" (e.g., by
+        // accidentally inlining the test fixture into the error
+        // constructor) would surface on the second call.
+
+        let reg = registry_with_echo();
+
+        let err = reg.call("does-not-exist", Value::Null).await.unwrap_err();
+        match err {
+            ToolError::NotFound(name) => assert_eq!(
+                name, "does-not-exist",
+                "ToolError::NotFound must carry the REQUESTED tool name \
+                 verbatim — a refactor that swapped name.to_string() \
+                 for a generic placeholder ('unknown', String::new()) \
+                 under a 'reduce error-message verbosity' rationale \
+                 would strip the requested name; operator MCP-client \
+                 dashboards lose the only signal that identifies the \
+                 typo'd or renamed tool. got: {name:?}"
+            ),
+            other => panic!("expected ToolError::NotFound, got {other:?}"),
+        }
+
+        let err = reg.call("another-missing", Value::Null).await.unwrap_err();
+        match err {
+            ToolError::NotFound(name) => assert_eq!(
+                name, "another-missing",
+                "a second call with a distinct missing name MUST carry \
+                 that distinct name in the NotFound payload — anchors \
+                 that the payload is the input parameter, NOT a \
+                 hardcoded constant. A refactor that accidentally \
+                 inlined the fixture from the first test ('does-not-\
+                 exist') into the error constructor would surface here \
+                 with the wrong name. got: {name:?}"
+            ),
+            other => panic!("expected ToolError::NotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn registry_dispatches_to_named_tool() {
         let reg = registry_with_echo();
         let r = reg

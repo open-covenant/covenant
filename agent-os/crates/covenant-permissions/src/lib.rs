@@ -5224,4 +5224,107 @@ mod tests {
             "an action with a near-prefix like 'memory.readx' must be rejected; otherwise strip_prefix matching silently widens to typo-ed prefixes",
         );
     }
+
+    #[test]
+    fn friendly_action_title_pins_twenty_two_entry_catalog_and_none_on_unknown() {
+        // covenant_permissions::friendly_action_title (lib.rs line
+        // 1408-1432) maps every signed capability action emitted by
+        // the daemon to a plain-English lowercase verb phrase. The
+        // catalog is the operator-facing CLI rendering used by the
+        // bootstrap and capability-list outputs (covenant/src/main.rs)
+        // and is documented as cross-bound to
+        // covenant-web/lib/labels.ts (different casing — TS uses
+        // title case for card titles, Rust uses lowercase verb
+        // phrases for inline CLI substitution; the action keys must
+        // match across both surfaces). The function has no test
+        // today, so a refactor that renamed any title would silently
+        // shift every CLI rendering and drift away from the
+        // covenant-web cross-binding.
+        //
+        // A refactor that changed the return type from
+        // Option<&'static str> to &'static str (returning a default
+        // for missing entries under a 'callers always get a
+        // renderable string' rationale) would silently hide
+        // unknown-action regressions; the None contract is the
+        // documented signal that a caller should fall back to the
+        // raw action.
+        let catalog: &[(&str, &str)] = &[
+            ("intent.subscribe", "receive your tasks"),
+            ("intent.publish", "send tasks to other agents"),
+            ("memory.read", "read memory"),
+            ("memory.write", "save to memory"),
+            ("memory.purge", "delete memories"),
+            ("memory.search", "search memory"),
+            ("identity.read", "see identity info"),
+            ("identity.rotate", "rotate identity keys"),
+            ("tool.web_search", "search the web"),
+            ("tool.summarize", "summarize text"),
+            ("tool.terminal", "run terminal commands"),
+            ("tool.file_read", "read files"),
+            ("tool.file_write", "write files"),
+            ("tool.gpu_inference", "use GPU inference"),
+            ("agent.spawn", "start other agents"),
+            ("agent.suspend", "pause other agents"),
+            ("chain.receipts", "read settlement receipts"),
+            ("chain.flush", "flush receipts on-chain"),
+            ("audit.purge", "purge audit log entries"),
+            ("capabilities.purge", "purge revoked permissions"),
+            ("peers.purge", "purge revoked peers"),
+            ("a2a.compact", "compact the agent-to-agent log"),
+        ];
+
+        assert_eq!(
+            catalog.len(),
+            22,
+            "friendly_action_title catalog has 22 documented entries — \
+             a refactor that removed one (e.g., dropping 'a2a.compact' \
+             under an 'a2a actions are admin-only and do not need \
+             friendly titles' rationale) would silently make that \
+             action fall back to the raw string in operator CLI \
+             rendering; a refactor that added a 23rd entry must update \
+             this count in lockstep so the catalog change is \
+             intentional",
+        );
+
+        for (action, expected) in catalog {
+            assert_eq!(
+                friendly_action_title(action),
+                Some(*expected),
+                "friendly_action_title({action:?}) must return \
+                 Some({expected:?}) — the catalog is the operator-\
+                 facing CLI rendering used by bootstrap and \
+                 capability-list outputs and is cross-bound to \
+                 covenant-web/lib/labels.ts via the doc-comment. A \
+                 refactor that renamed any title (e.g., 'save to \
+                 memory' to 'store memory' under a 'more descriptive \
+                 verb' rationale) would silently shift the CLI \
+                 rendering without bumping the catalog version; the \
+                 covenant-web side carries title-case variants that \
+                 must stay in lockstep with the action keys here",
+            );
+        }
+
+        assert_eq!(
+            friendly_action_title("unknown.action"),
+            None,
+            "unknown action strings must return None — the documented \
+             contract is that callers fall back to the raw action when \
+             no friendly title is registered. A refactor that changed \
+             the return type to &'static str (returning the input \
+             verbatim or a default like 'unknown action') would \
+             silently hide every future action that lands without a \
+             catalog entry; the None contract is the load-bearing \
+             signal that lets CLI callers branch on absence",
+        );
+        assert_eq!(
+            friendly_action_title(""),
+            None,
+            "empty action string must return None — pins the fallthrough \
+             arm of the match expression. A refactor that special-cased \
+             the empty string to return a default friendly title would \
+             silently mask malformed grant flows that produce empty \
+             action strings; today they surface as 'no friendly title' \
+             at the CLI rendering site",
+        );
+    }
 }

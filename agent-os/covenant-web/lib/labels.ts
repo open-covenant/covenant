@@ -34,7 +34,7 @@ const CATALOG: Record<string, PermissionMeta> = {
   },
   "intent.publish": {
     title: "Send tasks to other agents",
-    description: "Allows the agent to delegate work to other agents on this daemon.",
+    description: "Allows the agent to delegate work to other agents on this machine.",
     risk: "med",
   },
 
@@ -107,7 +107,7 @@ const CATALOG: Record<string, PermissionMeta> = {
   // agent.*
   "agent.spawn": {
     title: "Start other agents",
-    description: "Launch additional agents under this operator.",
+    description: "Launch additional agents on this machine.",
     risk: "high",
   },
   "agent.suspend": {
@@ -229,10 +229,10 @@ export function eventLabel(event: AuditEvent): EventLabel {
       return {
         headline: kind.matched_agent
           ? `Task ran on ${kind.matched_agent}`
-          : "Task had no matching agent",
+          : "No agent for this task",
         body: kind.matched_agent
           ? `“${truncate(kind.intent_text, 80)}”. ${formatHashStatus(kind.result_hash_hex, "Result")}.`
-          : `“${truncate(kind.intent_text, 80)}”. The daemon returned its fallback response.`,
+          : `“${truncate(kind.intent_text, 80)}”. No agent is set up to handle this kind of task — Covenant returned a default response.`,
         tone: kind.matched_agent ? "ok" : "warn",
         intentId: kind.intent_id,
       };
@@ -258,7 +258,10 @@ export function eventLabel(event: AuditEvent): EventLabel {
     case "capability_granted":
       return {
         headline: "Permission granted",
-        body: `${kind.granted_by_display} gave ${kind.subject_display} permission to ${permissionLabel(kind.action).title.toLowerCase()}.`,
+        body:
+          kind.granted_by_display === kind.subject_display
+            ? `Allowed: ${permissionLabel(kind.action).title.toLowerCase()}.`
+            : `${kind.granted_by_display} gave ${kind.subject_display} permission to ${permissionLabel(kind.action).title.toLowerCase()}.`,
         tone: "ok",
         intentId: null,
       };
@@ -335,7 +338,7 @@ export function eventLabel(event: AuditEvent): EventLabel {
     case "authentication_failed":
       return {
         headline: "Sign-in refused",
-        body: `Connection on ${kind.transport} was rejected: ${kind.reason}.`,
+        body: `Something tried to connect over ${kind.transport} without a valid sign-in key. Refused.`,
         tone: "danger",
         intentId: null,
       };
@@ -393,10 +396,10 @@ function formatActionList(actions: string[]): string {
 }
 
 function formatAgentRef(agentRef: string): string {
-  // `memory:write` and `memory-write:<uuid>` are synthesized agent ids the
-  // daemon uses for self-issued checks. Show them as the system itself
-  // rather than as a phantom agent name.
-  if (agentRef.startsWith("memory:") || agentRef.startsWith("memory-write:")) {
+  // Synthesized internal agent ids contain a colon and aren't user-visible
+  // identities (e.g. `memory:write`, `memory-write:<uuid>`, `chain:receipts`).
+  // Surface them as Covenant itself rather than as a phantom agent name.
+  if (agentRef.includes(":")) {
     return "Covenant";
   }
   return agentRef;

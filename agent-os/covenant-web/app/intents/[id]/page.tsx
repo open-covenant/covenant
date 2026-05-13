@@ -16,8 +16,10 @@ async function loadIntent() {
 function statusWord(status: string | undefined): string {
   switch (status) {
     case "completed":
-      return "Completed";
+    case "ok":
+      return "Done";
     case "failed":
+    case "error":
       return "Failed";
     case "running":
       return "Running";
@@ -54,13 +56,13 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
     <>
       <PageHeader
         eyebrow="task"
-        title={dispatchKind ? `"${dispatchKind.intent_text}"` : "Task"}
+        title={dispatchKind ? `“${dispatchKind.intent_text}”` : "Task"}
         subhead={
           dispatchKind
             ? dispatchKind.matched_agent
-              ? `Ran by ${dispatchKind.matched_agent}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can't be quietly changed.`
-              : "No agent was set up to handle this task. The daemon returned its fallback response."
-            : "Loading the task's steps…"
+              ? `Ran by ${dispatchKind.matched_agent}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
+              : "No agent is set up to handle this kind of task. Covenant returned a default response."
+            : "Loading the task’s steps…"
         }
         syncMs={lastSyncMs}
         error={error}

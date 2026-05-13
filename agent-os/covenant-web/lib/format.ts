@@ -106,6 +106,7 @@ export function formatScope(scope: unknown): string {
   }
   if (typeof scope === "object") {
     const obj = scope as Record<string, unknown>;
+    if (Object.keys(obj).length === 0) return "any context";
     if (obj.kind === "global") return "any context";
     if (typeof obj.agent_id === "string") return `agent ${obj.agent_id}`;
     if (typeof obj.path === "string") return `path ${obj.path}`;

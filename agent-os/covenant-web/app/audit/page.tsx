@@ -58,7 +58,7 @@ export default function ActivityLogPage() {
       <PageHeader
         eyebrow="signed activity"
         title="Activity log"
-        subhead="Everything that happens on your daemon is signed and chained together so nothing can be quietly changed. One click verifies the whole log."
+        subhead="Everything that happens on this machine is signed and chained together so nothing can be quietly changed. One click verifies the whole log."
         syncMs={lastSyncMs}
         error={error}
         right={

@@ -32,24 +32,24 @@ export default function SpendingPage() {
 
       <section className="metric-row">
         <article className="metric">
-          <span className="eyebrow">receipts</span>
+          <span className="eyebrow">charged</span>
           <span className="value">{receipts.length}</span>
           <span className="caption">{totalCredits} credits used</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">debits</span>
+          <span className="eyebrow">spent</span>
           <span className="value">{debits.length}</span>
-          <span className="caption">matched to receipts</span>
+          <span className="caption">matched to charges</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">settled on-chain</span>
+          <span className="eyebrow">on-chain</span>
           <span className="value">{onChain}</span>
           <span className="caption">{receipts.length - onChain} still local-only</span>
         </article>
         <article className="metric">
           <span className="eyebrow">window</span>
           <span className="value small">40</span>
-          <span className="caption">most recent receipts</span>
+          <span className="caption">most recent charges</span>
         </article>
       </section>
 
@@ -57,7 +57,7 @@ export default function SpendingPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">debits</p>
+              <p className="eyebrow">spent</p>
               <h2>
                 What your agents spent <span className="count">{debits.length}</span>
               </h2>
@@ -89,7 +89,7 @@ export default function SpendingPage() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">receipts</p>
+              <p className="eyebrow">charged</p>
               <h2>
                 Settled charges <span className="count">{receipts.length}</span>
               </h2>

@@ -164,8 +164,18 @@ export default function PermissionsPage() {
                     </div>
                     <p className="desc">{meta.description}</p>
                     <p className="meta-line">
-                      Granted to <strong>{cap.capability.subject.display}</strong> by{" "}
-                      <strong>{cap.capability.granted_by.display}</strong> · {formatScope(cap.capability.scope)}
+                      {cap.capability.subject.display === cap.capability.granted_by.display ? (
+                        <>
+                          Granted to <strong>{cap.capability.subject.display}</strong> ·{" "}
+                          {formatScope(cap.capability.scope)}
+                        </>
+                      ) : (
+                        <>
+                          Granted to <strong>{cap.capability.subject.display}</strong> by{" "}
+                          <strong>{cap.capability.granted_by.display}</strong> ·{" "}
+                          {formatScope(cap.capability.scope)}
+                        </>
+                      )}
                     </p>
                   </div>
                   <div className="perm-actions">

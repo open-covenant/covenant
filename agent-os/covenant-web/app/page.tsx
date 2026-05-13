@@ -77,7 +77,24 @@ export default function OverviewPage() {
 
   const events = data?.audit.events ?? [];
   const recent = events.slice().reverse();
-  const reviewRows = recent.filter(isReviewWorthy).slice(0, 4);
+  const reviewRows = (() => {
+    const seen = new Set<string>();
+    const out = [];
+    for (const event of recent) {
+      if (!isReviewWorthy(event)) continue;
+      const dedupeKey =
+        event.kind.type === "capability_check"
+          ? `capability_check:${event.kind.agent_id}:${event.kind.required_actions.join(",")}`
+          : event.kind.type === "authentication_failed"
+            ? `auth:${event.kind.transport}:${event.kind.reason}`
+            : `${event.kind.type}:${event.id}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      out.push(event);
+      if (out.length >= 4) break;
+    }
+    return out;
+  })();
   const peers = data?.peers.peers ?? [];
   const livePeers = peers.filter((p) => p.revoked_at === null);
   const caps = data?.caps.capabilities ?? [];

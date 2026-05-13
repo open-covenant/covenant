@@ -403,6 +403,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tool_call_result_serde_pins_strict_required_fields_reject_on_omission() {
+        // tool_call_result_serde_pins_camel_case_round_trip pins the
+        // canonical camelCase wire form and the snake_case rejection,
+        // but does NOT assert a closed two-key wire set and does NOT
+        // reject missing content or isError. A stray #[serde(default)]
+        // on either field would silently let a malformed payload decode
+        // (content as empty Vec or is_error as false), and the canonical
+        // MCP transport path would silently shrink while leaving the
+        // parse_tool_call_result alias path
+        // (parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap
+        // in external.rs) untouched — the two surfaces must stay
+        // distinct. Pin both required keys on the canonical struct so
+        // a future refactor that drops either field's strict-required
+        // contract forces an explicit migration decision instead of
+        // silently shrinking the wire shape on the canonical path.
+        let result = ToolCallResult::ok(vec![Content::text("hi")]);
+
+        let wire = serde_json::to_value(&result).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("ToolCallResult serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["content", "isError"].into_iter().collect();
+        assert_eq!(
+            keys, expected,
+            "ToolCallResult wire form must be exactly two keys (content, \
+             isError); an added skip_serializing_if field would silently \
+             expand the canonical wire shape and break consumers \
+             destructuring on the documented two-key shape (the \
+             parse_tool_call_result alias path is a separate surface)",
+        );
+
+        let back: ToolCallResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, result,
+            "ToolCallResult must round-trip through serde_json verbatim \
+             — the PartialEq derive is the contract every MCP tools/call \
+             consumer leans on",
+        );
+
+        for required in ["content", "isError"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<ToolCallResult>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "ToolCallResult wire form must reject a payload missing {required:?} \
+                 on the canonical path; a stray #[serde(default)] would \
+                 silently let a malformed external tools/call payload decode \
+                 with an empty content Vec or is_error=false (the alias-path \
+                 default contract stays separate)",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn registry_lists_tools_sorted_by_name() {
         let reg = ToolRegistry::from_tools(vec![Arc::new(EchoTool), Arc::new(native::ClockTool)]);

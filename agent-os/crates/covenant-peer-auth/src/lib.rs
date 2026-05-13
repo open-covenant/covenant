@@ -2894,4 +2894,22 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
     }
+
+    #[test]
+    fn peer_error_bad_token_b58_display_message_pins_prefix_encoding_qualifier_and_payload() {
+        let err = PeerError::BadTokenB58("not-a-token".into());
+        let message = format!("{err}");
+        assert_eq!(
+            message, "invalid token base58: not-a-token",
+            "PeerError::BadTokenB58 Display drifted (typo, dropped 'invalid token' prefix, dropped 'base58' encoding qualifier, or word-swap regression class)"
+        );
+        assert!(
+            message.contains("invalid token"),
+            "PeerError::BadTokenB58 must surface the 'invalid token' prefix (audit-log discriminator regression class): {message}"
+        );
+        assert!(
+            message.contains("base58"),
+            "PeerError::BadTokenB58 must surface the 'base58' encoding qualifier so a future encoding migration is forced to update the error message in lockstep: {message}"
+        );
+    }
 }

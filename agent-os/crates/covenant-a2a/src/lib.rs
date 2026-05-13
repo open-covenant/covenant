@@ -4484,6 +4484,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a2a_task_result_serde_pins_strict_required_fields_reject_on_omission() {
+        // a2a_task_result_serde_pins_content_default_and_error_message_skip_empty
+        // pins the default-bearing surface (content via #[serde(default)]
+        // and error_message via skip_serializing_if=Option::is_none) but
+        // does NOT close the canonical wire shape: it never asserts that
+        // task_id and status are strictly required and reject decoding
+        // when omitted. A future refactor that adds #[serde(default)]
+        // to either field would silently let a malformed external
+        // send_result payload decode with task_id=Uuid::nil() (then
+        // routed through the mailbox as a result for a non-existent task
+        // and only later rejected as A2AResultRejected — by which point
+        // the row has already been audited as authentic) or
+        // status=A2ATaskStatus::default() (silently demoting an Error
+        // result to Ok). Pin the strict required-fields contract on the
+        // error variant so the four-key wire shape (task_id, status,
+        // content, error_message) is exact and per-required-field
+        // omission fails at the parse boundary.
+        let task_id = Uuid::new_v4();
+        let result = A2ATaskResult::error(task_id, "boom");
+
+        let wire = serde_json::to_value(&result).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2ATaskResult serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["task_id", "status", "content", "error_message"]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            keys, expected,
+            "A2ATaskResult error wire form must be exactly four keys \
+             (task_id, status, content, error_message); a stray \
+             skip_serializing_if on error_message would shrink the error \
+             wire shape and break CLI consumers grepping on field \
+             presence to distinguish error vs ok rows",
+        );
+
+        let back: A2ATaskResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, result,
+            "A2ATaskResult error variant must round-trip through serde \
+             verbatim — the PartialEq derive is the contract every \
+             send_result consumer leans on across IPC, HTTP, and JSONL \
+             mailbox boundaries",
+        );
+
+        for required in ["task_id", "status"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<A2ATaskResult>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "A2ATaskResult wire form must reject a payload missing {required:?}; \
+                 a stray #[serde(default)] on task_id would let malformed \
+                 send_result payloads decode to Uuid::nil() and route \
+                 through the mailbox as authentic, and a stray \
+                 #[serde(default)] on status would silently demote an \
+                 Error result to A2ATaskStatus::default()",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn in_memory_mailbox_round_trips_a_task() {
         let m = InMemoryMailbox::new();

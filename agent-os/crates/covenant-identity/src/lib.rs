@@ -235,6 +235,81 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn load_or_create_rejects_symlink_at_identity_key_path() {
+        // require_identity_key_secure (line 112-132, unix path) uses
+        // std::fs::symlink_metadata to read the key file's metadata
+        // without following symlinks, then explicitly rejects any
+        // path whose file type is a symlink with IdentityError::Symlink
+        // (line 115-118). This is the security boundary that catches
+        // an attacker-planted symlink at $COVENANT_HOME/identity/local.key
+        // pointing at an attacker-controlled file before the daemon
+        // can sign settlement transactions with the contents of that
+        // file. The Symlink variant of IdentityError is defined
+        // (line 29-30) and the rejection branch is structurally
+        // present, but no existing test exercises it:
+        // load_or_create_persists_then_returns_same_pubkey and
+        // load_or_create_rejects_wrong_size_file cover the regular-
+        // file path, and the recently-added
+        // load_or_create_pins_key_file_and_parent_dir_mode_invariants
+        // covers mode-bit invariants but not symlink rejection. A
+        // refactor that switched from symlink_metadata to metadata
+        // (which follows symlinks transparently — is_symlink() on the
+        // followed target always returns false even when the original
+        // path is a symlink) or dropped the file_type().is_symlink()
+        // branch entirely would silently allow a malicious symlink to
+        // redirect the seed read with no parse-time signal.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("real-key");
+        let seed = [9u8; 32];
+        std::fs::write(&target, seed).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let identity_dir = dir.path().join("identity");
+        std::fs::create_dir_all(&identity_dir).unwrap();
+        let symlink_path = identity_dir.join("local.key");
+        std::os::unix::fs::symlink(&target, &symlink_path).unwrap();
+
+        let result = LocalIdentity::load_or_create(&symlink_path, "user@local");
+        match result {
+            Err(IdentityError::Symlink { path }) => {
+                assert_eq!(
+                    path, symlink_path,
+                    "IdentityError::Symlink must surface the symlink \
+                     path (the one passed to load_or_create), not the \
+                     target path that the symlink resolves to; \
+                     operators reading the error message need to know \
+                     which entry in $COVENANT_HOME/identity/ to \
+                     remove, and surfacing the resolved target would \
+                     leak attacker-controlled path content into log \
+                     output",
+                );
+            }
+            Err(other) => panic!(
+                "load_or_create on a symlink path must return \
+                 Err(IdentityError::Symlink); a refactor that swapped \
+                 symlink_metadata for metadata (which follows \
+                 symlinks) or dropped the file_type().is_symlink() \
+                 branch would silently widen the trust boundary to \
+                 include attacker-controlled symlink targets, and the \
+                 daemon would sign settlement transactions under the \
+                 contents of whatever file the symlink resolved to; \
+                 got Err({:?})",
+                other,
+            ),
+            Ok(_) => panic!(
+                "load_or_create on a symlink path must return \
+                 Err(IdentityError::Symlink); got Ok — the symlink \
+                 was silently followed and an attacker-planted \
+                 symlink would let the daemon sign transactions \
+                 under the contents of the resolved target",
+            ),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn load_or_create_pins_key_file_and_parent_dir_mode_invariants() {
         // The crate header (line 4-7) documents that the ed25519 seed
         // at $COVENANT_HOME/identity/local.key is persisted with 0o600

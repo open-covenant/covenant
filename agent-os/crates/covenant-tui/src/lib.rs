@@ -2305,6 +2305,130 @@ mod tests {
     }
 
     #[test]
+    fn recent_limit_caps_pin_six_documented_values_and_audit_is_strictly_highest() {
+        // covenant_tui::ipc declares six pub const RECENT_*_LIMIT_CAP at
+        // ipc.rs lines 78-103, each .min()'d in the corresponding
+        // recent_X async fn (line 350 memory, 385 audit, 428 caps,
+        // 464 a2a, 499 receipts, 544 peers). These are the operator-
+        // side hard ceiling on IPC request limit fields, so a runaway
+        // TUI request cannot ask the daemon to enumerate the entire
+        // memory/audit/etc table into one IPC frame. The doc-comments
+        // name the relative ordering: audit is set higher than memory
+        // because audit grows faster; capabilities/peers match memory
+        // because they grow slowly. No prior test in this crate
+        // references any of the six caps. A refactor that lowered any
+        // cap to 0 (callers-must-always-pass-limit) would collapse
+        // every TUI fetch to an empty page; a refactor that raised
+        // one to e.g. 10000 (we-have-headroom) would push unbounded
+        // payloads through IPC; a refactor that swapped two constants
+        // (alphabetize the block) would silently route memory traffic
+        // through the audit cap. This pin anchors each value AND the
+        // audit-strictly-highest ordering across the constants block.
+        use crate::ipc::{
+            RECENT_A2A_LIMIT_CAP, RECENT_AUDIT_LIMIT_CAP, RECENT_CAPABILITIES_LIMIT_CAP,
+            RECENT_MEMORY_LIMIT_CAP, RECENT_PEERS_LIMIT_CAP, RECENT_RECEIPTS_LIMIT_CAP,
+        };
+
+        assert_eq!(
+            RECENT_MEMORY_LIMIT_CAP, 50,
+            "RECENT_MEMORY_LIMIT_CAP must remain 50 — caps \
+             Request::RecentMemory::limit so a runaway TUI memory-tail \
+             fetch cannot ask the daemon to enumerate the entire \
+             memory table; a refactor that lowered this to 0 would \
+             collapse memory-tail to an empty view, raising it would \
+             let unbounded payloads through IPC"
+        );
+        assert_eq!(
+            RECENT_AUDIT_LIMIT_CAP, 100,
+            "RECENT_AUDIT_LIMIT_CAP must remain 100 — caps \
+             Request::RecentAudit::limit; doc-comment notes audit \
+             volume grows faster than memory, so the cap is set higher. \
+             A refactor that pulled this down to memory's 50 under an \
+             'unify caps' pass would silently halve operator audit \
+             visibility"
+        );
+        assert_eq!(
+            RECENT_CAPABILITIES_LIMIT_CAP, 50,
+            "RECENT_CAPABILITIES_LIMIT_CAP must remain 50 — caps \
+             Request::RecentCapabilities::limit; doc-comment says it \
+             matches recent_memory because capabilities grow slowly \
+             (one row per grant)"
+        );
+        assert_eq!(
+            RECENT_A2A_LIMIT_CAP, 50,
+            "RECENT_A2A_LIMIT_CAP must remain 50 — caps \
+             Request::RecentA2ATasks::limit; the mailbox is server-\
+             side filtered to tasks the operator sent or received, so \
+             it grows linearly with A2A traffic"
+        );
+        assert_eq!(
+            RECENT_RECEIPTS_LIMIT_CAP, 50,
+            "RECENT_RECEIPTS_LIMIT_CAP must remain 50 — caps \
+             Request::RecentReceipts::limit; receipts are server-side \
+             filtered to rows where the payer matches the calling \
+             peer, one row per resource consumption event"
+        );
+        assert_eq!(
+            RECENT_PEERS_LIMIT_CAP, 50,
+            "RECENT_PEERS_LIMIT_CAP must remain 50 — caps \
+             Request::ListPeers::limit; doc-comment says it matches \
+             receipts so the TUI never asks the daemon to enumerate \
+             an unbounded registry in one frame"
+        );
+
+        let non_audit = [
+            ("RECENT_MEMORY_LIMIT_CAP", RECENT_MEMORY_LIMIT_CAP),
+            (
+                "RECENT_CAPABILITIES_LIMIT_CAP",
+                RECENT_CAPABILITIES_LIMIT_CAP,
+            ),
+            ("RECENT_A2A_LIMIT_CAP", RECENT_A2A_LIMIT_CAP),
+            ("RECENT_RECEIPTS_LIMIT_CAP", RECENT_RECEIPTS_LIMIT_CAP),
+            ("RECENT_PEERS_LIMIT_CAP", RECENT_PEERS_LIMIT_CAP),
+        ];
+
+        for (name, cap) in non_audit {
+            assert!(
+                RECENT_AUDIT_LIMIT_CAP > cap,
+                "RECENT_AUDIT_LIMIT_CAP ({audit}) must be strictly \
+                 greater than {name} ({cap}) — pins the doc-comment \
+                 ordering that audit grows faster than memory and \
+                 every other request, so its cap is the unique \
+                 maximum across the six. A refactor that swapped \
+                 RECENT_AUDIT_LIMIT_CAP with one of the others under \
+                 an 'alphabetize the constants block' pass would \
+                 silently route audit requests through the lower cap \
+                 and the other request type through the audit cap",
+                audit = RECENT_AUDIT_LIMIT_CAP,
+            );
+        }
+
+        let equal_pairs = [
+            (
+                "RECENT_CAPABILITIES_LIMIT_CAP",
+                RECENT_CAPABILITIES_LIMIT_CAP,
+            ),
+            ("RECENT_A2A_LIMIT_CAP", RECENT_A2A_LIMIT_CAP),
+            ("RECENT_RECEIPTS_LIMIT_CAP", RECENT_RECEIPTS_LIMIT_CAP),
+            ("RECENT_PEERS_LIMIT_CAP", RECENT_PEERS_LIMIT_CAP),
+        ];
+        for (name, cap) in equal_pairs {
+            assert_eq!(
+                cap,
+                RECENT_MEMORY_LIMIT_CAP,
+                "{name} ({cap}) must equal RECENT_MEMORY_LIMIT_CAP \
+                 ({memory}) — the five non-audit caps share a single \
+                 documented page-size baseline (capabilities matches \
+                 memory; peers matches receipts; the doc-comments \
+                 anchor the equality). A refactor that nudged one \
+                 cap independently under a 'tune this one type' pass \
+                 would silently break the documented uniformity",
+                memory = RECENT_MEMORY_LIMIT_CAP,
+            );
+        }
+    }
+
+    #[test]
     fn ipc_error_daemon_not_running_message_includes_path_and_hint() {
         use crate::ipc::IpcError;
         use std::path::PathBuf;

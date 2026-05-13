@@ -504,6 +504,98 @@ mod tests {
     }
 
     #[test]
+    fn build_receipt_batch_pins_odd_leaf_count_duplicates_last_leaf_convention() {
+        // covenant_settlement::build_receipt_batch (line 63-98) computes
+        // the Merkle root of all unsettled receipts in a batch. Line 81
+        // is the critical convention:
+        //
+        //   let right = pair.get(1).copied().unwrap_or(pair[0]);
+        //
+        // For an odd-count level, the LAST leaf is duplicated as its
+        // own right sibling — the Bitcoin/Solana Merkle convention.
+        // The resulting H(left || left) becomes a parent node in the
+        // reduction. This root is what the on-chain Solana settlement
+        // program will verify against the receipt batch anchor; a
+        // different convention silently produces a different root for
+        // every odd-count batch and on-chain verification would fail.
+        //
+        // receipt_batch_uses_only_unsettled_receipts (line 482) and
+        // receipt_batch_root_changes_with_memory_record_id (line 496)
+        // pin 1-leaf batches. The 1-leaf path SKIPS the while-loop
+        // because level.len() > 1 is false from the start, so the
+        // odd-count branch is never executed. This pin fills the
+        // gap by exercising a 3-leaf batch where the chunks(2)
+        // iterator produces a final pair with a single element.
+
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+        let mut c = receipt(3);
+        c.id = Uuid::from_u128(0xc);
+
+        let batch3 = build_receipt_batch(&[a.clone(), b.clone(), c.clone()]).expect(
+            "the 3-leaf odd-count batch must produce a valid root — \
+             this is the case the existing 1-leaf tests do not \
+             exercise because the while-loop never iterates with one \
+             leaf",
+        );
+
+        // The 4-leaf even-count input where the last leaf is EXPLICITLY
+        // duplicated. Under the duplicate-last convention, the 3-leaf
+        // and 4-leaf reductions must produce the SAME root because
+        // the implicit duplication in chunks(2) matches the explicit
+        // duplication in the input.
+        let batch4 = build_receipt_batch(&[a.clone(), b.clone(), c.clone(), c.clone()]).expect(
+            "the 4-leaf input with explicit c-duplication must \
+             produce a valid root — used as the algebraic equivalent \
+             of the 3-leaf implicit duplication",
+        );
+
+        assert_eq!(
+            batch3.merkle_root, batch4.merkle_root,
+            "merkle_root([a,b,c]) must equal merkle_root([a,b,c,c]) \
+             — anchors the duplicate-last-leaf convention. A refactor \
+             that swapped 'unwrap_or(pair[0])' for \
+             'unwrap_or([0u8; 32])' (null-right-child convention) or \
+             that dropped the second hasher.update for odd singletons \
+             would silently produce a different 3-leaf root while \
+             the 4-leaf root stays the same, and on-chain Solana \
+             verification would reject every odd-count batch with no \
+             parse-time signal",
+        );
+
+        // Bookkeeping pins: the convention applies to root
+        // computation only, NOT to receipt_count or receipt_ids. The
+        // 3-leaf batch must report 3 receipts and 3 ids; the 4-leaf
+        // batch must report 4 receipts and 4 ids (including the
+        // duplicated c.id). A refactor that deduplicated the input
+        // before building receipt_ids would silently change the
+        // settled-row identification.
+        assert_eq!(
+            batch3.receipt_count, 3,
+            "3-leaf batch must report receipt_count=3; the duplicate-\
+             last-leaf convention applies to the Merkle tree level, \
+             not to the receipt bookkeeping fields",
+        );
+        assert_eq!(
+            batch4.receipt_count, 4,
+            "4-leaf batch must report receipt_count=4 (including the \
+             explicit duplicate); a refactor that deduplicated input \
+             by id would silently make the 3-leaf and 4-leaf inputs \
+             indistinguishable at the bookkeeping level",
+        );
+        assert_eq!(batch3.receipt_ids.len(), 3);
+        assert_eq!(batch4.receipt_ids.len(), 4);
+        assert_eq!(
+            batch4.receipt_ids[2], batch4.receipt_ids[3],
+            "the explicit c-duplication in the 4-leaf input must \
+             surface as identical receipt_ids[2] and [3] — the \
+             bookkeeping path carries the input verbatim",
+        );
+    }
+
+    #[test]
     fn receipt_migration_plan_splits_legacy_and_correlated_memory_receipts() {
         let mut legacy = receipt(1);
         legacy.id = Uuid::from_u128(1);

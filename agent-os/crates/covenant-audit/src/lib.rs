@@ -1085,6 +1085,83 @@ mod tests {
     }
 
     #[test]
+    fn sha256_hex_pins_nist_vectors_and_lowercase_output() {
+        // covenant_audit::sha256_hex (line 388-396) is the foundation
+        // of the audit chain: chain_hash hashes
+        // (previous_chain || "\n" || event_hex) through it,
+        // chain_entry_for_line hashes each event line through it, and
+        // operators rely on the deterministic 64-character lowercase
+        // hex output to verify the chain externally with any
+        // independent SHA-256 implementation.
+        //
+        // chain_hash_pins_separator_and_sha256_composition (line 1088)
+        // only asserts internal consistency between chain_hash and
+        // sha256_hex; it never pins the actual hash function identity
+        // against any external standard. A refactor that swapped
+        // Sha256 for Sha3_256, Blake2, or any other digest under a
+        // 'use a faster hash' rationale would silently invalidate
+        // every operator's on-disk audit chain because the chain
+        // hashes would no longer match independent SHA-256
+        // verifications.
+
+        // FIPS 180-4 test vector: SHA-256 of the empty string.
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "empty input must hash to the NIST FIPS 180-4 SHA-256 \
+             test vector for the empty message. A refactor that \
+             swapped Sha256 for any other digest would surface here; \
+             a refactor that emitted uppercase or different byte \
+             ordering would also surface here",
+        );
+
+        // FIPS 180-4 test vector: SHA-256 of ASCII "abc".
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "the canonical NIST FIPS 180-4 'abc' test vector — pins \
+             that sha256_hex implements SHA-256, not SHA-224, SHA-1, \
+             SHA-3-256, or any other algorithm with a 32-byte output",
+        );
+
+        // Production-shaped input: the literal "covenant" so the test
+        // pins a non-NIST vector that any external tool can verify.
+        assert_eq!(
+            sha256_hex(b"covenant"),
+            "0667bd893799ba7a888de6d210b773825f25e1576e9ad503c0061015868192e1",
+            "ASCII 'covenant' must hash to the value any external \
+             SHA-256 implementation would produce — pins compatibility \
+             with the third-party chain verifier audit operators are \
+             expected to run against the on-disk audit JSONL",
+        );
+
+        // Length and case invariants — these would still hold under
+        // most digest swaps that emit hex, but anchor the formatting
+        // contract independent of which input is hashed.
+        let out = sha256_hex(b"any input");
+        assert_eq!(
+            out.len(),
+            64,
+            "sha256_hex output must be exactly 64 hex characters (32 \
+             bytes * 2 nibbles per byte) — pins that the output is \
+             not truncated to a prefix and not zero-padded beyond \
+             32 bytes. A refactor that truncated to 16 bytes under a \
+             'shorter audit rows' rationale would silently weaken \
+             collision resistance",
+        );
+        assert!(
+            out.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "sha256_hex output must be lowercase ASCII hex — pins the \
+             :02x format specifier. A refactor that emitted :02X \
+             (uppercase) would break external chain-verification \
+             tools that case-sensitively compare hex strings, and \
+             would change the audit-row stable identifier on \
+             round-trip. got: {out}",
+        );
+    }
+
+    #[test]
     fn chain_hash_pins_separator_and_sha256_composition() {
         let prev = "a".repeat(64);
         let evt = "b".repeat(64);

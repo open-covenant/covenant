@@ -1576,4 +1576,125 @@ mod tests {
             Err(MemoryError::InvalidCompaction(_))
         ));
     }
+
+    #[tokio::test]
+    async fn plan_compaction_marked_at_ms_defaults_to_before_ms_when_policy_field_is_none() {
+        // covenant_memory::plan_compaction (line 269) binds the
+        // stale_context.marked_at_ms value via:
+        //
+        //   let marked_at_ms = request.policy.marked_at_ms.unwrap_or(before_ms);
+        //
+        // where `before_ms` is the mark_longterm_stale_before_ms cutoff
+        // bound on the outer `if let Some(before_ms) = ...`. When
+        // MemoryCompactionPolicy::marked_at_ms is None, the cutoff
+        // itself is the recorded timestamp — anchoring stale_context to
+        // the policy boundary that triggered the mark.
+        //
+        // The existing compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents
+        // (line 1492) always sets marked_at_ms = Some(99); the
+        // default-to-cutoff arm is exercised by no direct test. A
+        // refactor that swapped .unwrap_or(before_ms) for
+        // .unwrap_or(0), .unwrap_or_default(), or
+        // .unwrap_or_else(now_ms) under a 'use sensible default' pass
+        // would silently change every stale_context.marked_at_ms emitted
+        // by operators who omit the field — dashboards would see 0 or
+        // wall-clock timestamps that no longer bind to the policy
+        // cutoff, and audit reconstruction would lose its anchor.
+        //
+        // Cross-bind: the sibling
+        // compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents
+        // pin covers the Some(M) override; this pin closes the None
+        // default arm and re-asserts Some(M) inside the same test so
+        // both arms travel together.
+
+        let s = InMemoryStore::new();
+        let id_default = Uuid::new_v4();
+        let id_explicit = Uuid::new_v4();
+        s.put(record(id_default, MemoryTier::LongTerm, "defaulted", 10))
+            .await
+            .unwrap();
+        s.put(record(id_explicit, MemoryTier::LongTerm, "explicit", 10))
+            .await
+            .unwrap();
+
+        // Default arm: marked_at_ms = None, mark_longterm_stale_before_ms = Some(200).
+        // The recorded stale_context.marked_at_ms must equal the cutoff (200).
+        let outcome = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::Apply,
+                policy: MemoryCompactionPolicy {
+                    mark_longterm_stale_before_ms: Some(200),
+                    marked_at_ms: None,
+                    ..MemoryCompactionPolicy::default()
+                },
+                reason: "default-cutoff stale-mark".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.changed,
+            "apply mode with a record below the cutoff must report changed=true",
+        );
+        assert!(
+            outcome.stale_marked.contains(&id_default),
+            "the defaulted record must appear in stale_marked: got {:?}",
+            outcome.stale_marked,
+        );
+        let got_default = s.get(id_default).await.unwrap().unwrap();
+        assert_eq!(
+            got_default.metadata["stale_context"]["marked_at_ms"], 200,
+            "marked_at_ms must default to the before_ms cutoff (200) when \
+             MemoryCompactionPolicy::marked_at_ms is None — a refactor that \
+             swapped .unwrap_or(before_ms) for .unwrap_or(0) would silently \
+             surface 0 here on every operator dashboard, breaking the \
+             policy-cutoff anchor that audit reconstruction binds to; a \
+             refactor to .unwrap_or_else(now_ms) would surface a non-\
+             deterministic wall-clock timestamp instead, breaking the \
+             reproducibility property that plan_compaction is currently a \
+             pure function of (records, policy, reason); a refactor that \
+             omitted the field entirely when policy.marked_at_ms is None \
+             would make stale_context.marked_at_ms absent here, breaking \
+             JSON consumers that assume a uniform schema across records",
+        );
+        assert_eq!(
+            got_default.metadata["stale_context"]["reason"], "default-cutoff stale-mark",
+            "reason must travel verbatim into stale_context alongside the \
+             marked_at_ms default arm — pinning both fields anchors the \
+             two-field stale_context contract that plan_compaction \
+             constructs on line 270-273",
+        );
+
+        // Explicit-override arm: marked_at_ms = Some(150), mark_longterm_stale_before_ms = Some(300).
+        // The recorded stale_context.marked_at_ms must equal the explicit
+        // override (150), NOT the cutoff (300). Pinning the override arm
+        // here prevents a 'simplify by always using before_ms' regression
+        // that would silently drop the Some(M) path while leaving the
+        // default arm intact.
+        let outcome = s
+            .compact(MemoryCompactionRequest {
+                mode: MemoryRepairMode::Apply,
+                policy: MemoryCompactionPolicy {
+                    mark_longterm_stale_before_ms: Some(300),
+                    marked_at_ms: Some(150),
+                    ..MemoryCompactionPolicy::default()
+                },
+                reason: "explicit-override stale-mark".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(outcome.changed);
+        assert!(outcome.stale_marked.contains(&id_explicit));
+        let got_explicit = s.get(id_explicit).await.unwrap().unwrap();
+        assert_eq!(
+            got_explicit.metadata["stale_context"]["marked_at_ms"], 150,
+            "explicit marked_at_ms = Some(150) must win over the cutoff \
+             (300) — a refactor that always used before_ms (dropping the \
+             .unwrap_or arm) would silently surface 300 here while the \
+             default-arm assertion above would still pass; pinning the \
+             explicit override on the same record family anchors both \
+             halves of the .unwrap_or contract",
+        );
+    }
 }

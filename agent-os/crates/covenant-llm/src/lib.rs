@@ -1892,7 +1892,8 @@ model = "nomic-embed-text"
     }
 
     #[test]
-    fn provider_error_from_wrappers_display_messages_pin_prefixes_and_external_source_display_delegation() {
+    fn provider_error_from_wrappers_display_messages_pin_prefixes_and_external_source_display_delegation(
+    ) {
         // Pins the three directly-constructible #[from] wrappers (Io,
         // Serde, Toml). ProviderError::Http wraps reqwest::Error which
         // has no public constructor and can only be produced via an
@@ -1938,7 +1939,8 @@ model = "nomic-embed-text"
             "ProviderError::Serde must NOT surface the serde_json::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
         );
 
-        let toml_source = toml::from_str::<toml::Value>("= invalid =").expect_err("parse must fail");
+        let toml_source =
+            toml::from_str::<toml::Value>("= invalid =").expect_err("parse must fail");
         let toml_err = ProviderError::Toml(toml_source);
         let toml_message = format!("{toml_err}");
         assert!(

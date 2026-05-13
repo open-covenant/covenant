@@ -895,7 +895,8 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_error_transport_display_message_pins_prefix_and_inner_mcp_client_error_display_delegation() {
+    fn bootstrap_error_transport_display_message_pins_prefix_and_inner_mcp_client_error_display_delegation(
+    ) {
         let err = BootstrapError::Transport(McpClientError::Closed);
         let message = format!("{err}");
         assert_eq!(

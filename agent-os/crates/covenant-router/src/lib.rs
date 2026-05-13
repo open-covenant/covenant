@@ -658,10 +658,13 @@ required = ["tool.web_search"]
     }
 
     #[test]
-    fn router_error_manifest_display_message_pins_prefix_path_then_source_ordering_and_display_formatting_on_both_fields() {
+    fn router_error_manifest_display_message_pins_prefix_path_then_source_ordering_and_display_formatting_on_both_fields(
+    ) {
         let err = RouterError::Manifest {
             path: PathBuf::from("/tmp/missing-agent/agent.toml"),
-            source: covenant_manifest::ManifestError::Validation("agent.id must not be empty".into()),
+            source: covenant_manifest::ManifestError::Validation(
+                "agent.id must not be empty".into(),
+            ),
         };
         let message = format!("{err}");
         assert_eq!(

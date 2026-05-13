@@ -2063,7 +2063,8 @@ cpu_ms_per_task = 5000
     }
 
     #[test]
-    fn runner_error_malformed_stdout_display_message_pins_prefix_agent_result_qualifier_and_display_formatted_source() {
+    fn runner_error_malformed_stdout_display_message_pins_prefix_agent_result_qualifier_and_display_formatted_source(
+    ) {
         let source =
             serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let err = RunnerError::MalformedStdout { source };
@@ -2091,7 +2092,8 @@ cpu_ms_per_task = 5000
     }
 
     #[test]
-    fn runner_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
+    fn runner_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
         let io_err = RunnerError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "agent.toml missing",

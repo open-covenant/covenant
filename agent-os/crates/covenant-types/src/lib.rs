@@ -2366,7 +2366,8 @@ mod tests {
     }
 
     #[test]
-    fn agent_id_error_invalid_display_display_message_pins_prefix_namespace_qualifier_and_debug_formatted_payload() {
+    fn agent_id_error_invalid_display_display_message_pins_prefix_namespace_qualifier_and_debug_formatted_payload(
+    ) {
         let err = AgentIdError::InvalidDisplay("local@bad host".into());
         let message = format!("{err}");
         assert_eq!(

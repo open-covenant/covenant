@@ -760,7 +760,8 @@ mod tests {
     }
 
     #[test]
-    fn identity_error_io_and_crypto_display_messages_pin_prefix_and_external_source_display_delegation() {
+    fn identity_error_io_and_crypto_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
         let io_err = IdentityError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "identity.key missing",

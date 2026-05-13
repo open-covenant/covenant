@@ -1255,7 +1255,8 @@ mod tests {
     }
 
     #[test]
-    fn settlement_error_empty_batch_display_message_pins_exact_phrase_and_no_io_or_serde_prefix_convergence() {
+    fn settlement_error_empty_batch_display_message_pins_exact_phrase_and_no_io_or_serde_prefix_convergence(
+    ) {
         let err = SettlementError::EmptyBatch;
         let message = format!("{err}");
         assert_eq!(
@@ -1281,7 +1282,8 @@ mod tests {
     }
 
     #[test]
-    fn settlement_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
+    fn settlement_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
         let io_err = SettlementError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "working.jsonl missing",

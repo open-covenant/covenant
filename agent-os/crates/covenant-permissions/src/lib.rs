@@ -5364,7 +5364,8 @@ mod tests {
     }
 
     #[test]
-    fn permission_error_io_and_serde_and_ed25519_display_messages_pin_prefix_and_external_source_display_delegation() {
+    fn permission_error_io_and_serde_and_ed25519_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
         let io_err = PermissionError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "caps.jsonl missing",

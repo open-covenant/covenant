@@ -5327,4 +5327,39 @@ mod tests {
              at the CLI rendering site",
         );
     }
+
+    #[test]
+    fn permission_error_display_messages_pin_four_string_variant_format_strings() {
+        let expired = format!("{}", PermissionError::Expired(1700000000));
+        assert_eq!(
+            expired, "capability expired at 1700000000",
+            "PermissionError::Expired Display drifted (typo or dropped 'capability' prefix regression class)"
+        );
+
+        let bad_sig = format!("{}", PermissionError::BadSignature);
+        assert_eq!(
+            bad_sig, "signature does not verify against granted_by pubkey",
+            "PermissionError::BadSignature Display drifted (typo or dropped 'granted_by pubkey' qualifier regression class)"
+        );
+
+        let untrusted = format!("{}", PermissionError::UntrustedGrantor);
+        assert_eq!(
+            untrusted, "granted_by pubkey does not match the daemon trust root",
+            "PermissionError::UntrustedGrantor Display drifted (typo or dropped 'daemon trust root' qualifier regression class)"
+        );
+        assert_ne!(
+            untrusted, bad_sig,
+            "PermissionError::UntrustedGrantor must not converge with PermissionError::BadSignature \
+             (prefix-convergence regression class would merge cryptographic-rejection with trust-policy-rejection)"
+        );
+
+        let invalid_scope = format!(
+            "{}",
+            PermissionError::InvalidScope("memory.read: scope must include namespace".into())
+        );
+        assert_eq!(
+            invalid_scope, "invalid capability scope: memory.read: scope must include namespace",
+            "PermissionError::InvalidScope Display drifted (typo or dropped 'capability scope' prefix regression class)"
+        );
+    }
 }

@@ -597,6 +597,70 @@ mod tests {
     }
 
     #[test]
+    fn intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality() {
+        // covenant_settlement::INTENT_DISPATCH_CREDITS (line 403) is the
+        // v0 flat-cost floor: 1 credit per intent dispatch. The
+        // intent_dispatch_credits() accessor (line 408-410) mirrors the
+        // constant — the docstring documents that 'future variants that
+        // price per agent or per tool-call can replace the body without
+        // touching callers', so the accessor is the indirection point
+        // for v1 pricing migrations and the constant is the v0
+        // tripwire. memory_write_credits_minimum_one (line 590) pins
+        // the byte-floor for memory writes; intent_dispatch_credits has
+        // no analogous pin.
+        //
+        // Three load-bearing arms, each pinned independently:
+        //   (1) INTENT_DISPATCH_CREDITS == 1 — the v0 flat-cost floor.
+        //   (2) intent_dispatch_credits() == INTENT_DISPATCH_CREDITS —
+        //       the accessor-mirror equality.
+        //   (3) intent_dispatch_credits() == 1 — a redundant direct
+        //       floor pin that catches a refactor where the constant
+        //       AND the accessor body are both bumped in lockstep
+        //       (e.g., a search-replace that hits both lines).
+        //
+        // A regression that flipped the constant to 0 during a
+        // 'make it free for testing' refactor would silently disable
+        // the budget gate — BudgetLedger::try_debit would always
+        // approve every intent dispatch and the per-hour credit cap
+        // would become a no-op surface with no parse-time signal.
+        assert_eq!(
+            INTENT_DISPATCH_CREDITS, 1u64,
+            "INTENT_DISPATCH_CREDITS must remain the v0 flat-cost floor \
+             of 1 credit per intent dispatch — a refactor that flipped \
+             this to 0 during a 'make it free for testing' pass would \
+             silently disable the daemon's pre-spawn budget gate, every \
+             BudgetLedger::try_debit call would approve, and the \
+             per-hour credit cap would become a write-only metric that \
+             never throttles; a refactor that bumped it for an \
+             experimental pricing trial would silently diverge \
+             callers' refill-ETA sizing from the actual drain rate",
+        );
+        assert_eq!(
+            intent_dispatch_credits(),
+            INTENT_DISPATCH_CREDITS,
+            "intent_dispatch_credits() must mirror INTENT_DISPATCH_CREDITS \
+             — the docstring documents the accessor as the indirection \
+             point for future per-agent pricing migrations, so the \
+             accessor body must remain equal to the public constant for \
+             v0 callers; a refactor that hard-coded a different value \
+             in the accessor body during an experimental trial would \
+             let downstream code reading INTENT_DISPATCH_CREDITS \
+             observe one value while the daemon's debit path charges \
+             another, making budget-exhaustion ETAs unreliable",
+        );
+        assert_eq!(
+            intent_dispatch_credits(),
+            1u64,
+            "intent_dispatch_credits() must remain 1 — independent floor \
+             pin that catches a lockstep refactor where INTENT_DISPATCH_CREDITS \
+             AND the accessor body are bumped together (e.g., a \
+             search-replace that hits both lines); the accessor-mirror \
+             equality pin above passes for any matched pair but only \
+             this direct value pin catches the lockstep regression",
+        );
+    }
+
+    #[test]
     fn hex32_pins_lowercase_fixed_width_and_byte_order() {
         // All-zero input → 64 ASCII '0' chars. Pins the high-nibble
         // emission: a regression that skipped the high nibble of

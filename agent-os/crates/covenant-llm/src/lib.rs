@@ -922,6 +922,80 @@ model = "deepseek-chat"
     }
 
     #[test]
+    fn ollama_provider_and_embedder_local_pin_canonical_endpoint() {
+        // OllamaProvider::local (line 130) and OllamaEmbedder::local
+        // (line 547) both hardcode http://localhost:11434 — the
+        // canonical Ollama API port. pick_provider (line 476) and
+        // pick_embedder (line 641) probe ollama_reachable against the
+        // same URL string before dispatching to local(). If the
+        // constructor's hardcoded endpoint diverged from the probe URL,
+        // auto-detect would succeed against the probe but the
+        // constructed provider/embedder would point at a stale port —
+        // completions/embeddings fail with connection refused on the
+        // new port with no signal that the constructor diverged from
+        // the probe.
+        //
+        // Existing tests pin the endpoint via TOML config decoding
+        // (line 1183 reads endpoint from a parsed [llm] block) but
+        // never directly assert the local() constructor's hardcoded
+        // string. Mirrors openai_provider_constructors_pin_canonical_base_urls
+        // for the OpenAi pair.
+        let p = OllamaProvider::local("llama3.1");
+        assert_eq!(
+            p.endpoint, "http://localhost:11434",
+            "OllamaProvider::local must bind http://localhost:11434 — \
+             the same URL pick_provider/ollama_reachable probe; a port \
+             bump in the constructor without a matching bump in the \
+             probe would let auto-detect succeed against the probe and \
+             then construct a provider pointing at a stale port"
+        );
+        assert_eq!(
+            p.model, "llama3.1",
+            "OllamaProvider::local must pass model through verbatim; a \
+             refactor that defaulted the model would silently send a \
+             different identifier than the operator configured"
+        );
+        assert_eq!(
+            p.name(),
+            "ollama",
+            "OllamaProvider must surface name='ollama' — cross-binds \
+             the auto-detect ladder's identity contract"
+        );
+
+        let e = OllamaEmbedder::local("nomic-embed-text");
+        assert_eq!(
+            e.endpoint, "http://localhost:11434",
+            "OllamaEmbedder::local must bind the same canonical port — \
+             a divergence between Provider::local and Embedder::local \
+             (one bumped to 11435, the other left at 11434) would \
+             silently split auto-detect dispatch: completions succeed \
+             on one port, embeddings fail on the other, and \
+             search_similar drops everything below threshold with no \
+             signal that the embedder constructor diverged"
+        );
+        assert_eq!(
+            e.model, "nomic-embed-text",
+            "OllamaEmbedder::local must pass model through verbatim; \
+             same regression class as the Provider arm"
+        );
+        assert_eq!(
+            e.name(),
+            "ollama",
+            "OllamaEmbedder must surface name='ollama' — parallel to \
+             the Provider arm's identity contract"
+        );
+
+        assert_eq!(
+            p.endpoint, e.endpoint,
+            "the two local() constructors must bind the same canonical \
+             endpoint; pick_provider and pick_embedder both probe one \
+             URL and dispatch to one constructor each — a divergence \
+             between them is the regression class this assertion \
+             catches loud"
+        );
+    }
+
+    #[test]
     fn openai_provider_constructors_pin_canonical_base_urls() {
         // OpenAiProvider::openai (line 322) and OpenAiProvider::deepseek
         // (line 326) are convenience constructors that hardcode the

@@ -1007,6 +1007,101 @@ model = "nomic-embed-text"
     }
 
     #[test]
+    fn embedder_config_serde_pins_optional_embed_section_default() {
+        // EmbedderConfig is the top-level secrets.toml decoder for the
+        // [embed] section. The struct carries a single field — embed:
+        // Option<EmbedSection> — with field-level #[serde(default)] and
+        // a derived Default impl. EmbedderConfig::from_path returns
+        // Self::default() when the file is missing, and pick_embedder
+        // treats embed.is_none() as the fall-through to the Ollama or
+        // MockEmbedder ladder.
+        //
+        // EmbedSection itself is pinned by
+        // embed_section_serde_pins_required_provider_and_option_defaults
+        // but no test pins the wrapper's field name, the None default
+        // on an empty TOML payload, or the parse contract when [embed]
+        // is omitted but other root keys exist. A refactor that renamed
+        // EmbedderConfig::embed would silently make every operator's
+        // secrets.toml decode into EmbedderConfig::default(),
+        // pick_embedder would fall through to Ollama or MockEmbedder
+        // with no parse signal, and memory-relevance live tests would
+        // start flipping silently — exactly the failure mode the
+        // embedder-pin-in-live-tests guidance was written to catch.
+        let empty: EmbedderConfig = toml::from_str("").unwrap();
+        assert!(
+            empty.embed.is_none(),
+            "EmbedderConfig must decode an empty TOML payload as \
+             EmbedderConfig::default() with embed == None — \
+             EmbedderConfig::from_path relies on this path for missing \
+             secrets.toml, and pick_embedder relies on embed.is_none() \
+             to fall through to the Ollama/MockEmbedder ladder"
+        );
+
+        // No [embed] section but other unknown root keys present — the
+        // top-level deserializer must still produce embed == None
+        // rather than rejecting the unknown key. The wrapper does not
+        // carry #[serde(deny_unknown_fields)] and co-resident [llm]/
+        // [search] blocks live in the same secrets.toml.
+        let other_root = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(other_root).unwrap();
+        assert!(
+            cfg.embed.is_none(),
+            "EmbedderConfig must tolerate unknown root sections without \
+             refusing to parse — operators co-locate [llm]/[search] \
+             blocks in the same secrets.toml and a refactor that added \
+             #[serde(deny_unknown_fields)] would break every co-resident \
+             secrets.toml at daemon start"
+        );
+
+        // [embed] fully populated — wrapper round-trips into the
+        // EmbedSection. Pin every inner field so a refactor that broke
+        // the wrapper's deserialization path would fail this assertion
+        // rather than landing on a misleading inner-field error.
+        let full = r#"
+[embed]
+provider = "ollama"
+model = "nomic-embed-text"
+endpoint = "http://localhost:11434"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(full).unwrap();
+        let embed = cfg
+            .embed
+            .as_ref()
+            .expect("[embed] block must surface through EmbedderConfig.embed");
+        assert_eq!(embed.provider, "ollama");
+        assert_eq!(embed.model.as_deref(), Some("nomic-embed-text"));
+        assert_eq!(embed.endpoint.as_deref(), Some("http://localhost:11434"));
+
+        // [embed] with only the strictly-required provider field — the
+        // inner section's Option defaults must surface through the
+        // wrapper so partial secrets.toml stays forward-compatible.
+        let minimal = r#"
+[embed]
+provider = "ollama"
+"#;
+        let cfg: EmbedderConfig = toml::from_str(minimal).unwrap();
+        let embed = cfg.embed.as_ref().unwrap();
+        assert_eq!(embed.provider, "ollama");
+        assert!(embed.model.is_none());
+        assert!(embed.endpoint.is_none());
+
+        // EmbedderConfig::default() must match the empty-TOML decode —
+        // pin this so a refactor that diverged the derived Default impl
+        // from the empty-TOML path would fail loud.
+        let default_cfg = EmbedderConfig::default();
+        assert!(
+            default_cfg.embed.is_none(),
+            "EmbedderConfig::default() must have embed == None to match \
+             the empty-TOML decode path that EmbedderConfig::from_path \
+             relies on for missing secrets.toml"
+        );
+    }
+
+    #[test]
     fn embed_section_serde_pins_required_provider_and_option_defaults() {
         // EmbedSection is the [embed] block operators write to
         // secrets.toml to pick the embedding provider. Mirrors

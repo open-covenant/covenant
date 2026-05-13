@@ -697,6 +697,75 @@ mod tests {
     }
 
     #[test]
+    fn runtime_name_pins_each_kind_to_documented_manifest_slug() {
+        // covenant_runtime::hermes::runtime_name (line 455-462) maps
+        // every RuntimeKind variant to the static slug the operator
+        // sees in the 'got:' field of RunnerError::WrongRuntime when
+        // they accidentally route a non-Hermes runtime through
+        // HermesRunner. The slug must match the value the operator
+        // typed in agent.toml's [agent].runtime field, so the slug
+        // contract is documentation + runtime mapping.
+        //
+        // hermes_runner_rejects_non_hermes_runtime
+        // (covenant-runtime/src/lib.rs line 1553) only exercises the
+        // Python3 arm (its fixture is subprocess_manifest with
+        // runtime = python3). The Node, RustBin, and Hermes arms of
+        // runtime_name are unpinned by any test. A refactor that
+        // renamed 'rust-bin' to 'rust_bin' (underscore normalization),
+        // 'node' to 'nodejs' (official-project-name alignment), or
+        // hoisted runtime_name into a Display impl derived from the
+        // variant identifier (where 'RustBin' would silently become
+        // 'rustbin' under naive to_lowercase rather than 'rust-bin'),
+        // would make the WrongRuntime error display a slug that does
+        // not match the operator's agent.toml value — debugging the
+        // diverged slug adds a round-trip the operator should not
+        // need to make.
+
+        assert_eq!(
+            runtime_name(RuntimeKind::Python3),
+            "python3",
+            "Python3 arm must surface as 'python3' — matches the \
+             agent.toml schema validator's accepted value; cross-\
+             bound by hermes_runner_rejects_non_hermes_runtime which \
+             asserts got == \"python3\" on the WrongRuntime error",
+        );
+        assert_eq!(
+            runtime_name(RuntimeKind::Node),
+            "node",
+            "Node arm must surface as 'node' — a refactor renaming \
+             to 'nodejs' under an 'official Node.js project name' \
+             rationale would silently make the WrongRuntime error \
+             slug diverge from the agent.toml schema slug, and \
+             operators copying the error back to their config would \
+             trigger a manifest parse failure with no obvious \
+             diagnostic link",
+        );
+        assert_eq!(
+            runtime_name(RuntimeKind::RustBin),
+            "rust-bin",
+            "RustBin arm must surface as 'rust-bin' WITH the hyphen — \
+             anchors against 'rustbin' (naive to_lowercase) or \
+             'rust_bin' (underscore normalization). A refactor that \
+             hoisted runtime_name into a Display impl derived from \
+             the variant identifier would silently produce 'rustbin' \
+             because to_lowercase has no insertion-character rule; \
+             pinning the verbatim hyphenated form catches this \
+             directly",
+        );
+        assert_eq!(
+            runtime_name(RuntimeKind::Hermes),
+            "hermes",
+            "Hermes arm must surface as 'hermes' — anchors the \
+             self-referential slug so a refactor that renamed the \
+             Hermes runtime kind itself (e.g., to a vendor-namespaced \
+             form) would have to update the slug in lockstep with \
+             the agent.toml schema; without this pin, the slug could \
+             silently shift while the WrongRuntime path is never \
+             hit for hermes runtime cards in production",
+        );
+    }
+
+    #[test]
     fn hermes_capabilities_covers_runner_pins_three_required_flags_excluding_approval_response() {
         // covenant_runtime::hermes::HermesCapabilities::covers_runner
         // (line 506-508) is the boot-time gate covenantd consults at

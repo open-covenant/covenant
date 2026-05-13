@@ -1669,4 +1669,26 @@ cpu_ms_per_task = 1000
         let m = Manifest::from_path(&path).unwrap();
         assert_eq!(m.agent.id, "research");
     }
+
+    #[test]
+    fn manifest_error_validation_display_message_pins_prefix_colon_separator_and_payload() {
+        let err = ManifestError::Validation("agent.id must not be empty".into());
+        let message = format!("{err}");
+        assert_eq!(
+            message, "validation: agent.id must not be empty",
+            "ManifestError::Validation Display drifted (typo, dropped prefix, separator swap, or prefix-convergence regression class)"
+        );
+        assert!(
+            message.starts_with("validation:"),
+            "ManifestError::Validation must surface the 'validation:' prefix at the start (audit-log discriminator regression class): {message}"
+        );
+        assert!(
+            message.contains(": agent.id must not be empty"),
+            "ManifestError::Validation must surface the payload after the ': ' separator (scraper-contract regression class): {message}"
+        );
+        assert!(
+            !message.starts_with("toml parse:"),
+            "ManifestError::Validation must not converge with ManifestError::Parse prefix (prefix-convergence regression class): {message}"
+        );
+    }
 }

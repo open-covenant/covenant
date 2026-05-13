@@ -697,6 +697,77 @@ mod tests {
     }
 
     #[test]
+    fn hermes_runner_new_pins_greedy_trim_of_trailing_slashes_on_base_url() {
+        // covenant_runtime::hermes::HermesRunner::new (line 63-75)
+        // normalizes base_url on line 71 with:
+        //
+        //   base_url.into().trim_end_matches('/').to_string()
+        //
+        // trim_end_matches is GREEDY — it strips every trailing
+        // slash, not just one. This is what makes subsequent
+        // format!("{}/runs", self.base_url) produce a single-slash
+        // join regardless of whether the operator's config has
+        // 'http://x/v1', 'http://x/v1/', or 'http://x/v1///'.
+        // Hermes's aiohttp gateway is strict about double-slash
+        // paths (silent 404 on '/v1//runs' vs working '/v1/runs');
+        // without the greedy trim, an operator's trailing-slash typo
+        // would silently 404 every dispatch with no parse-time
+        // signal.
+        //
+        // hermes_runner_rejects_non_hermes_runtime (lib.rs line
+        // 1557) and composite_hermes_runtime_without_gateway_returns_hermes_unconfigured
+        // construct HermesRunner with a no-trailing-slash base_url,
+        // so the trim arm is never exercised. A refactor that swapped
+        // trim_end_matches('/') for strip_suffix('/').unwrap_or(&s)
+        // would silently leave multi-slash trailing inputs
+        // un-normalized; pinning the trim against three explicit
+        // input shapes catches the regression directly.
+
+        let no_trailing = HermesRunner::new("http://x:8642/v1", None)
+            .expect("client must build for the no-trailing-slash form");
+        assert_eq!(
+            no_trailing.base_url, "http://x:8642/v1",
+            "no-trailing-slash input must be unchanged — anchors that \
+             the trim is a no-op when nothing matches, NOT an \
+             unconditional rewrite that could accidentally strip a \
+             documented path segment",
+        );
+
+        let one_trailing = HermesRunner::new("http://x:8642/v1/", None)
+            .expect("client must build for the single-trailing-slash form");
+        assert_eq!(
+            one_trailing.base_url, "http://x:8642/v1",
+            "single trailing slash must be stripped — the canonical \
+             operator typo (config 'http://x:8642/v1/' instead of \
+             'http://x:8642/v1') must normalize to the no-slash form \
+             so format!('{{}}/runs', base_url) produces '/v1/runs' \
+             not '/v1//runs'",
+        );
+
+        let many_trailing = HermesRunner::new("http://x:8642/v1///", None)
+            .expect("client must build for the multi-trailing-slash form");
+        assert_eq!(
+            many_trailing.base_url, "http://x:8642/v1",
+            "multiple trailing slashes must ALL be stripped (greedy \
+             trim) — a refactor that swapped trim_end_matches('/') \
+             for strip_suffix('/').unwrap_or(&s) would strip only one \
+             slash and leave 'http://x:8642/v1//' un-normalized, \
+             producing '/v1///runs' on the next format!() join and \
+             silently 404ing every dispatch on aiohttp 3.x",
+        );
+
+        let bare_host = HermesRunner::new("http://x:8642", None)
+            .expect("client must build for a bare host base_url");
+        assert_eq!(
+            bare_host.base_url, "http://x:8642",
+            "bare host with no path and no trailing slash must be \
+             unchanged — anchors that the trim does not eat a \
+             non-slash terminal character (e.g., would not strip the \
+             port number)",
+        );
+    }
+
+    #[test]
     fn runtime_name_pins_each_kind_to_documented_manifest_slug() {
         // covenant_runtime::hermes::runtime_name (line 455-462) maps
         // every RuntimeKind variant to the static slug the operator

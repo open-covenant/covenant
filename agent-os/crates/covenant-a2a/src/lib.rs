@@ -1837,7 +1837,7 @@ mod tests {
             scan_limit: 100,
         };
 
-        let mut disabled_policy = baseline_policy.clone();
+        let mut disabled_policy = baseline_policy;
         disabled_policy.enabled = false;
         match evaluate_auto_retry(&baseline_entry(), &disabled_policy, 301_000) {
             A2AAutoRetryDecision::Skip {
@@ -3040,8 +3040,7 @@ mod tests {
              result as an error on replay",
         );
         assert_eq!(
-            cached_ok.content,
-            ok_original.content,
+            cached_ok.content, ok_original.content,
             "from_result must clone A2ATaskResult.content verbatim — a \
              refactor that dropped content on the cache-write path \
              would silently strip every cached result of its tool/agent \
@@ -3075,8 +3074,7 @@ mod tests {
              stores the original, to_result substitutes the replay id",
         );
         assert_eq!(
-            replayed_ok.status,
-            cached_ok.status,
+            replayed_ok.status, cached_ok.status,
             "to_result must surface cached.status verbatim",
         );
         assert_eq!(
@@ -4773,7 +4771,7 @@ mod tests {
         );
 
         // (2) TaskSent alone → not droppable (in seen but not delivered).
-        let only_sent = compute_droppable_task_ids(&[task_sent_a.clone()]);
+        let only_sent = compute_droppable_task_ids(std::slice::from_ref(&task_sent_a));
         assert!(
             only_sent.is_empty(),
             "TaskSent alone must NOT make a task_id droppable — without a TaskRecv/TaskLeased/IdempotencyResultReplayed event the task is not in delivered; a refactor that treated TaskSent as self-delivering would silently classify every queued task as droppable on next compaction",

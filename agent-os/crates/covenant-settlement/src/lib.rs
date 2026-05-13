@@ -641,4 +641,127 @@ mod tests {
             "hex32 must emit lowercase hex only; got {encoded}",
         );
     }
+
+    #[test]
+    fn annotate_receipt_pins_complete_confirmation_field_mapping_and_onchain_sig_alias() {
+        // annotate_receipt (line 195-204) stamps a SettlementReceipt
+        // with ChainConfirmation evidence after the receipt batch is
+        // confirmed on-chain. Eight assignments plus one load-bearing
+        // aliasing contract: receipt.onchain_sig =
+        // confirmation.tx_sig.clone() binds the legacy onchain_sig
+        // field to the same Option<String> as receipt.tx_sig — the
+        // SettlementReceipt struct docstring (covenant-types/src/lib.rs
+        // line 333-337) documents 'onchain_sig remains as a backwards-
+        // compatible alias for tx_sig while older clients roll forward'.
+        //
+        // in_memory_marks_batch_confirmed (line 557) covers two of the
+        // eight assignments (chain and onchain_sig) and does not assert
+        // tx_sig <-> onchain_sig equality, leaving six field mappings
+        // and the alias equality invariant unpinned. Pin each
+        // assignment AND the alias equality so a refactor that swaps
+        // annotate_receipt for a builder-pattern alternative or that
+        // drops the redundant-looking onchain_sig binding (e.g., during
+        // a 'simplify' pass that mistakes the alias for dead code) is
+        // caught at review time.
+        let mut r = receipt(7);
+        // Sanity-check the receipt() fixture: all chain metadata fields
+        // start as None so each assertion below can observe the
+        // annotate_receipt assignment as a transition from None to
+        // Some.
+        assert!(r.chain.is_none());
+        assert!(r.cluster.is_none());
+        assert!(r.batch_id.is_none());
+        assert!(r.merkle_root.is_none());
+        assert!(r.tx_sig.is_none());
+        assert!(r.slot.is_none());
+        assert!(r.confirmed_at.is_none());
+        assert!(r.onchain_sig.is_none());
+
+        let confirmation = ChainConfirmation {
+            chain: "solana".to_string(),
+            cluster: "devnet".to_string(),
+            batch_id: "batch-1".to_string(),
+            merkle_root: "root-hex".to_string(),
+            tx_sig: Some("sig-fixture".to_string()),
+            slot: Some(12),
+            confirmed_at: Some(34),
+        };
+
+        annotate_receipt(&mut r, &confirmation);
+
+        assert_eq!(
+            r.chain.as_deref(),
+            Some("solana"),
+            "annotate_receipt must bind receipt.chain to Some(confirmation.chain.clone()) — a refactor that wired ChainConfirmation.chain to a different receipt field would silently strand the chain metadata",
+        );
+        assert_eq!(
+            r.cluster.as_deref(),
+            Some("devnet"),
+            "annotate_receipt must bind receipt.cluster to Some(confirmation.cluster.clone()) — a refactor that dropped this assignment during a 'sanitize for export' pass would silently strip every confirmed receipt of its cluster attribution",
+        );
+        assert_eq!(
+            r.batch_id.as_deref(),
+            Some("batch-1"),
+            "annotate_receipt must bind receipt.batch_id to Some(confirmation.batch_id.clone()) — receipt.batch_id is the join key build_receipt_batch and the JSONL store use to identify settled rows; dropping it would silently make every confirmed receipt look unbatched and re-batchable",
+        );
+        assert_eq!(
+            r.merkle_root.as_deref(),
+            Some("root-hex"),
+            "annotate_receipt must bind receipt.merkle_root to Some(confirmation.merkle_root.clone()) — downstream audit and provenance code uses merkle_root for inclusion-proof reconstruction; a regression would break the proof chain",
+        );
+        assert_eq!(
+            r.tx_sig.as_deref(),
+            Some("sig-fixture"),
+            "annotate_receipt must bind receipt.tx_sig to confirmation.tx_sig.clone() (Option to Option) — the existing in_memory_marks_batch_confirmed pin only asserts onchain_sig; the tx_sig assignment is the load-bearing one for newer clients and the source for the onchain_sig alias",
+        );
+        assert_eq!(
+            r.slot,
+            Some(12),
+            "annotate_receipt must bind receipt.slot to confirmation.slot — the existing partial-coverage test does not check slot; a refactor that defaulted slot to None for un-confirmed-but-batched receipts would silently lose every confirmed slot number",
+        );
+        assert_eq!(
+            r.confirmed_at,
+            Some(34),
+            "annotate_receipt must bind receipt.confirmed_at to confirmation.confirmed_at — the existing partial-coverage test does not check confirmed_at; a refactor that defaulted it to None would silently lose every confirmation timestamp",
+        );
+        assert_eq!(
+            r.onchain_sig.as_deref(),
+            Some("sig-fixture"),
+            "annotate_receipt must bind receipt.onchain_sig to confirmation.tx_sig.clone() — the documented backwards-compatibility alias; older clients read onchain_sig and newer clients read tx_sig, and the daemon serves both forms from the same source value",
+        );
+        assert_eq!(
+            r.tx_sig, r.onchain_sig,
+            "annotate_receipt must keep receipt.tx_sig and receipt.onchain_sig bound to the SAME Option<String> value — the alias equality invariant. A refactor that introduced a separate 'onchain_sig' field on ChainConfirmation (e.g., for an L2-hash separation flow) and bound onchain_sig from there would split the two fields and break consumer code that grep-asserts tx_sig == onchain_sig for a confirmed receipt; pinning the equality contract anchors this against future split-binding refactors",
+        );
+
+        // Second case: tx_sig=None must propagate to BOTH tx_sig and
+        // onchain_sig — the alias is preserved across the Option
+        // variant so a confirmation that arrives without a transaction
+        // signature surfaces both fields as None on the receipt.
+        let mut none_receipt = receipt(8);
+        let none_confirmation = ChainConfirmation {
+            chain: "solana".to_string(),
+            cluster: "devnet".to_string(),
+            batch_id: "batch-2".to_string(),
+            merkle_root: "root-2".to_string(),
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+        };
+        annotate_receipt(&mut none_receipt, &none_confirmation);
+        assert_eq!(
+            none_receipt.tx_sig, None,
+            "annotate_receipt must propagate confirmation.tx_sig=None to receipt.tx_sig=None — a refactor that defaulted tx_sig to Some(String::new()) would silently surface every signature-less confirmation as an empty-string sig",
+        );
+        assert_eq!(
+            none_receipt.onchain_sig, None,
+            "annotate_receipt must propagate confirmation.tx_sig=None to receipt.onchain_sig=None — the alias must be preserved across the Option::None variant; a refactor that bound onchain_sig from a different fallback source would split the two fields on this code path",
+        );
+        assert_eq!(
+            none_receipt.tx_sig, none_receipt.onchain_sig,
+            "the alias equality invariant must hold for the None case identically to the Some case — the alias is on the BINDING, not just on the Some-variant content",
+        );
+        assert_eq!(none_receipt.slot, None);
+        assert_eq!(none_receipt.confirmed_at, None);
+    }
 }

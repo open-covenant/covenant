@@ -24,4 +24,15 @@ Covenant releases are versioned snapshots of the daemon, libraries, operator sur
 
 Releases include a concise summary, upgrade notes, test evidence, provenance envelopes for release-producing commits, and links to reproducible artifacts. Do not publish generated artifacts that are not reproducible from the tagged source tree.
 
-Alpha provenance envelopes are consistency evidence, not release signatures. Do not claim signed releases or transparency-log publication until the signing identity policy is approved.
+Tagged releases are signed with [cosign](https://github.com/sigstore/cosign) keyless OIDC (Sigstore) — the signing identity is the GitHub Actions workflow that built the release. Verify any release artifact with:
+
+```bash
+cosign verify-blob \
+  --certificate <artifact>.pem \
+  --signature   <artifact>.sig \
+  --certificate-identity-regexp "^https://github.com/open-covenant/covenant/" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  <artifact>
+```
+
+Provenance envelopes recorded under `provenance/` are consistency evidence (commit + build inputs + audit chain head), complementary to the cosign signature.

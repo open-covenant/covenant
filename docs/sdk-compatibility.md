@@ -1,6 +1,6 @@
 # SDK Compatibility
 
-Covenant currently treats the TypeScript SDK packages as workspace-alpha surfaces. They are useful for local apps and integration tests, but they are not public npm stability commitments.
+Covenant currently treats the TypeScript SDK packages as workspace-only surfaces. They are useful for local apps and integration tests, but they are not public npm stability commitments.
 
 Run the compatibility report from the repository root:
 
@@ -14,10 +14,10 @@ The report uses schema `covenant.sdk-compatibility.v1`. The report-contract vali
 
 | Package | Current status | Compatibility boundary |
 |---|---|---|
-| `@covenant/sdk` | Workspace alpha, not published to npm | Root export map, TypeScript declarations, `packages/sdk/compatibility/exports.v1.json`, and `packages/sdk/compatibility/instructions.v1.json` are validated. |
-| `@covenant/sdk-ui` | Private workspace alpha | React hooks remain private; `packages/sdk-ui/compatibility/exports.v1.json` tracks workspace export drift. |
+| `@covenant/sdk` | Workspace-only, not published to npm | Root export map, TypeScript declarations, `packages/sdk/compatibility/exports.v1.json`, and `packages/sdk/compatibility/instructions.v1.json` are validated. |
+| `@covenant/sdk-ui` | Private workspace-only | React hooks remain private; `packages/sdk-ui/compatibility/exports.v1.json` tracks workspace export drift. |
 
-## Workspace-Alpha Rules
+## Workspace-Only Rules
 
 - Root export maps must stay aligned with `main` and `types` package metadata.
 - Source exports should not be removed or renamed without updating the package export fixture, compatibility note, and distribution readiness evidence.

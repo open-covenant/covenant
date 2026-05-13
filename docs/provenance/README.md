@@ -52,7 +52,7 @@ Bind a release-target audit root to a release subject:
 ```bash
 node agent-os/scripts/provenance.mjs audit-root write \
   --report audit-report.json \
-  --release v0.1.0-alpha.1 \
+  --release v0.1.0 \
   --release-subject release-subject.json \
   --commit HEAD \
   --out docs/provenance/audit-roots/<commit>-audit-root.json \

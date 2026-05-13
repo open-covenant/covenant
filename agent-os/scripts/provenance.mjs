@@ -336,8 +336,8 @@ function attest(taskId, commit, validationValues) {
       "Validation entries are recorded evidence supplied by the operator or automation that produced this attestation.",
     ],
     limits: [
-      "This alpha envelope is not a public transparency-log entry.",
-      "This alpha envelope does not claim a public release-signing identity.",
+      "This envelope is not a public transparency-log entry.",
+      "This envelope does not claim a public release-signing identity.",
       "Commit signature verification is outside this schema.",
     ],
   };
@@ -605,18 +605,18 @@ function auditRootAttest(options) {
       "Release targets may bind an explicit release subject digest before project key custody exists.",
     ],
     limits: [
-      "This alpha audit-root attestation is not a signature.",
-      "This alpha audit-root attestation is not a transparency-log entry.",
-      "This alpha audit-root attestation does not claim immutable retention.",
+      "This audit-root attestation is not a signature.",
+      "This audit-root attestation is not a transparency-log entry.",
+      "This audit-root attestation does not claim immutable retention.",
     ],
   };
   if (options.signingKey) {
     payload = {
       ...payload,
       limits: [
-        "This alpha audit-root attestation is a detached signature, not a transparency-log entry.",
+        "This audit-root attestation is a detached signature, not a transparency-log entry.",
         "Embedded public key verification proves payload integrity for that key, not project key custody.",
-        "This alpha audit-root attestation does not claim immutable retention.",
+        "This audit-root attestation does not claim immutable retention.",
       ],
     };
     payload = signAuditRootPayload(payload, options.signingKey, options.keyId);

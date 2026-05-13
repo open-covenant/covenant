@@ -17,19 +17,19 @@ The two primary binaries are:
 
 ## Source Install
 
-Preview the local alpha install plan:
+Preview the local install plan:
 
 ```bash
-node scripts/install-source.mjs --prefix /tmp/covenant-alpha --dry-run --json
+node scripts/install-source.mjs --prefix /tmp/covenant --dry-run --json
 ```
 
 Install the daemon and CLI from source:
 
 ```bash
-node scripts/install-source.mjs --prefix /tmp/covenant-alpha --profile release
+node scripts/install-source.mjs --prefix /tmp/covenant --profile release
 ```
 
-The installer copies `covenantd` and `covenant` into `<prefix>/bin` and writes `<prefix>/share/covenant/install-manifest.json`. See [`../docs/source-install.md`](../docs/source-install.md) for the source-built alpha boundary.
+The installer copies `covenantd` and `covenant` into `<prefix>/bin` and writes `<prefix>/share/covenant/install-manifest.json`. See [`../docs/source-install.md`](../docs/source-install.md) for the source-built install boundary.
 
 ## Validate
 

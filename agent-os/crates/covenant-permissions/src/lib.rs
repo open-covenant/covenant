@@ -1435,6 +1435,133 @@ mod tests {
     }
 
     #[test]
+    fn scope_namespace_from_action_pins_each_prefix_and_unknown_fallthrough() {
+        // covenant_permissions::ScopeNamespace::from_action (line 88-111)
+        // is the prefix-to-namespace dispatch table that routes every
+        // capability scope check to the correct per-namespace
+        // validator (validate_tool_scope, validate_memory_scope,
+        // validate_a2a_scope, validate_audit_scope, validate_peer_scope,
+        // validate_chain_scope). Nine documented prefixes plus an
+        // unknown-action fallthrough that returns None so validate_scope
+        // can pass through opaque actions without per-namespace
+        // validation.
+        //
+        // The function is exercised only INDIRECTLY through
+        // validate_scope tests that pair each action with its full
+        // grant payload. A refactor that swapped two prefix arms
+        // during a code-style cleanup (e.g., consolidating the
+        // if-else ladder into a match table with arms in different
+        // order) would silently route memory.write grants into the
+        // audit-scope validator; the existing integration tests
+        // would still pass because they always pair each action with
+        // a payload that the NATIVE validator accepts, and a
+        // misrouted dispatch only surfaces when the audit-scope
+        // validator's field whitelist happens to differ from
+        // memory-scope's in a way that the test fixture doesn't
+        // touch.
+        //
+        // Pin each prefix arm and the fallthrough at the dispatch
+        // function's boundary so a prefix-swap or arm-drop regression
+        // fails loud here.
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("intent.dispatch"),
+                Some(ScopeNamespace::Intent)
+            ),
+            "intent.* prefix must route to ScopeNamespace::Intent — a swap with another arm would route intent grants to the wrong validator",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("tool.call.echo"),
+                Some(ScopeNamespace::Tool)
+            ),
+            "tool.* prefix must route to ScopeNamespace::Tool — a swap with the audit arm would land tool.call grants in validate_audit_scope, whose argument-allowlist contract differs",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("memory.write"),
+                Some(ScopeNamespace::Memory)
+            ),
+            "memory.* prefix must route to ScopeNamespace::Memory — a swap with the audit arm would silently let memory.write grants pass validate_audit_scope's looser before_ms/include_integrity whitelist while rejecting valid memory-scope shapes",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("agent.register"),
+                Some(ScopeNamespace::Agent)
+            ),
+            "agent.* prefix must route to ScopeNamespace::Agent",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("a2a.send"),
+                Some(ScopeNamespace::A2a)
+            ),
+            "a2a.* prefix must route to ScopeNamespace::A2a — a swap with the tool arm would silently let a2a grants pass tool-scope validation and route the dispatch to the wrong runtime handler",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("audit.verify"),
+                Some(ScopeNamespace::Audit)
+            ),
+            "audit.* prefix must route to ScopeNamespace::Audit",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("peers.list"),
+                Some(ScopeNamespace::Peers)
+            ),
+            "peers.* prefix must route to ScopeNamespace::Peers — the peer validator's pubkey_b58/before_ms whitelist is materially different from any other namespace",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("identity.attest"),
+                Some(ScopeNamespace::Identity)
+            ),
+            "identity.* prefix must route to ScopeNamespace::Identity — a refactor that dropped this arm during an 'identity-to-attestation' rename would silently route identity.* grants through the unknown-action fallthrough and bypass per-namespace validation",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("chain.flush"),
+                Some(ScopeNamespace::Chain)
+            ),
+            "chain.* prefix must route to ScopeNamespace::Chain — the chain validator carries the load-bearing resource/mint/cluster/payer_pubkey_b58 contract for settlement audit",
+        );
+
+        // Unknown-action fallthrough: an action without any documented
+        // prefix must return None so validate_scope can pass it
+        // through the no-op path (intent.* and agent.* validators
+        // also use the no-op path but only after the namespace check
+        // routes them there).
+        assert!(
+            ScopeNamespace::from_action("madeup.action").is_none(),
+            "unknown action prefix must return None so validate_scope passes the grant through to the no-op path; a refactor that defaulted unknown actions to a specific namespace would silently subject every opaque action to that namespace's validator",
+        );
+        assert!(
+            ScopeNamespace::from_action("").is_none(),
+            "empty action string must return None — the empty string does not start with any documented prefix; a refactor that gave None a specific-namespace default would surface a phantom routing here",
+        );
+
+        // Substring-vs-prefix contract: a documented namespace
+        // appearing as a SUBSTRING (not a prefix) must NOT route.
+        // The function uses str::starts_with, not str::contains.
+        assert!(
+            ScopeNamespace::from_action("a2a.tool.call").is_none()
+                || matches!(
+                    ScopeNamespace::from_action("a2a.tool.call"),
+                    Some(ScopeNamespace::A2a)
+                ),
+            "a2a.tool.call starts with 'a2a.', so it routes to A2a — not Tool — even though 'tool.' appears as a substring; pinning that the FIRST documented prefix wins (no later substring match overrides) anchors the strict-prefix contract against a substring-relaxation refactor",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("a2a.tool.call"),
+                Some(ScopeNamespace::A2a)
+            ),
+            "a2a.tool.call must route to A2a (the prefix-match arm that fires first) — a refactor that changed starts_with to contains would route this string to Tool and silently misvalidate a2a grants under tool-scope rules",
+        );
+    }
+
+    #[test]
     fn validate_scope_accepts_known_versioned_shapes() {
         let cases = [
             (

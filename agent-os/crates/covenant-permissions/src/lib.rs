@@ -5522,4 +5522,27 @@ mod tests {
             "PermissionError::Crypto source() must downcast_ref to ed25519_dalek::SignatureError so daemon-side capability-verification audit emitters can extract the concrete crypto-failure type for triage; a refactor that wrapped the inner in a project-local newtype (e.g., PermissionCryptoError(ed25519_dalek::SignatureError) under a 'distinguish capability-verification crypto failures from sibling crypto-error sites' rationale) would silently break downcast_ref::<ed25519_dalek::SignatureError>() at every downstream callsite (concrete-source-type downcast regression class)"
         );
     }
+
+    #[test]
+    fn permission_error_serde_source_delegation_pin_returns_inner_serde_json_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+
+        let inner = serde_json::from_str::<serde_json::Value>("not json")
+            .expect_err("parse must fail");
+        let expected_display = format!("{inner}");
+        let err = PermissionError::Serde(inner);
+        let source = err.source().expect(
+            "PermissionError::Serde must surface the inner serde_json::Error via std::error::Error::source so daemon-side capability-document diagnostics can walk the error chain and downcast source() to serde_json::Error to inspect line/column or classify() for malformed-capability-document identification (line/column points the operator at the offending capability JSON, classify() distinguishes Syntax-vs-Data-vs-EOF for incident triage on a malformed grant); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "PermissionError::Serde source() Display must match a direct format!() of the same serde_json::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "PermissionError::Serde source() must downcast_ref to serde_json::Error so daemon-side capability-document diagnostics can call serde_json::Error::line/column/classify for malformed-capability identification; a refactor that wrapped the inner in a project-local newtype (e.g., PermissionSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies capability-document parse faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

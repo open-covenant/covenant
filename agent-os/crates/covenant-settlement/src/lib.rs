@@ -720,6 +720,103 @@ mod tests {
     }
 
     #[test]
+    fn receipt_hash_pins_conditional_memory_record_id_and_per_field_determinism() {
+        // covenant_settlement::receipt_hash (line 170-183) computes
+        // the SHA-256 of a JSON payload over 5 always-present fields
+        // (id, payer base58, resource, credits_consumed, settled_at)
+        // plus an optional memory_record_id field that lands in the
+        // payload ONLY when receipt.memory_record_id is Some. Two
+        // receipts identical except for the memory_record_id being
+        // None vs Some(uuid) must therefore produce different hashes
+        // — un-correlated and correlated receipts are intentionally
+        // distinct at the Merkle leaf level.
+        //
+        // receipt_hash is used at line 76 by build_receipt_batch to
+        // compute Merkle leaves. A refactor that unconditionally
+        // inserted memory_record_id (even with null when None) under
+        // a 'be consistent about field presence' rationale would
+        // silently change every un-correlated receipt hash on-chain
+        // and break batch reconstruction. A refactor that dropped
+        // credits_consumed or settled_at from the payload under a
+        // 'these are also persisted elsewhere' rationale would let
+        // credit-amount tampering go undetected at the leaf level.
+
+        let fixed_id = Uuid::from_u128(0xabc);
+
+        let mut none_a = receipt(1);
+        none_a.id = fixed_id;
+        let h_none_a = receipt_hash(&none_a);
+
+        let mut none_b = receipt(1);
+        none_b.id = fixed_id;
+        let h_none_b = receipt_hash(&none_b);
+
+        assert_eq!(
+            h_none_a, h_none_b,
+            "two receipts with identical field values must produce \
+             identical hashes — pins determinism. A refactor that \
+             introduced any non-deterministic input (timestamp, \
+             nonce, random salt) into the payload would surface \
+             here",
+        );
+
+        assert_eq!(
+            h_none_a.len(),
+            32,
+            "hash output must be exactly 32 bytes (SHA-256 width) — \
+             pins that the hash function is SHA-256 specifically, \
+             not a different digest with a different output width",
+        );
+
+        let mut some = receipt(1);
+        some.id = fixed_id;
+        some.memory_record_id = Some(Uuid::from_u128(0xdef));
+        let h_some = receipt_hash(&some);
+        assert_ne!(
+            h_none_a, h_some,
+            "two receipts identical except memory_record_id being \
+             None vs Some must produce DIFFERENT hashes — pins the \
+             conditional 'if let Some(id) = receipt.memory_record_id' \
+             payload insert at line 178-180. A refactor that \
+             unconditionally inserted memory_record_id (even as null) \
+             would collapse the two cases to the same hash and \
+             silently change every un-correlated receipt's on-chain \
+             hash. Settlement-chain audits would surface mass hash \
+             drift with no clear cause",
+        );
+
+        let mut diff_credits = receipt(1);
+        diff_credits.id = fixed_id;
+        diff_credits.credits_consumed = 2;
+        let h_diff_credits = receipt_hash(&diff_credits);
+        assert_ne!(
+            h_none_a, h_diff_credits,
+            "two receipts identical except credits_consumed must \
+             produce DIFFERENT hashes — pins that credits_consumed \
+             is part of the payload at line 175. A refactor that \
+             dropped the field under a 'these are also persisted in \
+             the budget ledger' rationale would let credit-amount \
+             tampering go undetected at the Merkle leaf level — a \
+             malicious operator could rewrite credits_consumed in the \
+             JSONL between batches and the Merkle root would remain \
+             unchanged",
+        );
+
+        let mut diff_settled_at = receipt(1);
+        diff_settled_at.id = fixed_id;
+        diff_settled_at.settled_at = 999;
+        let h_diff_settled_at = receipt_hash(&diff_settled_at);
+        assert_ne!(
+            h_none_a, h_diff_settled_at,
+            "two receipts identical except settled_at must produce \
+             DIFFERENT hashes — pins that settled_at is part of the \
+             payload at line 176. A refactor that dropped settled_at \
+             would let temporal-replay attacks against the Merkle \
+             leaf set go undetected",
+        );
+    }
+
+    #[test]
     fn receipt_migration_plan_does_not_export_display_identity() {
         let mut legacy = receipt(1);
         legacy.payer = AgentId::new("private-display@local", [1u8; 32]);

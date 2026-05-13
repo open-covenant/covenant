@@ -720,6 +720,158 @@ mod tests {
     }
 
     #[test]
+    fn receipt_migration_plan_json_pins_additional_contract_fields() {
+        // covenant_settlement::receipt_migration_plan_json (line
+        // 100-168) emits the schema-versioned operator-facing
+        // migration-plan envelope. The sibling pin
+        // (receipt_migration_plan_splits_legacy_and_correlated_memory_receipts
+        // at line 683) covers ~60% of the documented schema. This pin
+        // closes the remaining contract surfaces:
+        //
+        //   summary.batched_receipt_count / unbatched_receipt_count
+        //   summary.malformed_row_count zero-literal default
+        //   expected_correlation_inputs (4-element documented array)
+        //   refusal.reason exact operator-facing rationale
+        //   status discriminants on per-row entries
+        //   onchain_settled boolean OR semantics across both arms
+        //
+        // A refactor that flipped onchain_settled from
+        // tx_sig.is_some() || onchain_sig.is_some() to AND under a
+        // 'tighten the on-chain check' rationale would silently flip
+        // every dashboard row that has only one of the two signature
+        // fields populated. A refactor that renamed the status
+        // discriminants would silently break operator triage filters.
+        // A refactor that omitted malformed_row_count under an 'omit
+        // zero defaults' rationale would silently change the schema
+        // for downstream parsers that pin the field as required u64.
+
+        let mut legacy = receipt(1);
+        legacy.id = Uuid::from_u128(0xa);
+        legacy.payer = AgentId::new("legacy@local", [1u8; 32]);
+
+        let mut correlated = receipt(2);
+        correlated.id = Uuid::from_u128(0xb);
+        correlated.memory_record_id = Some(Uuid::from_u128(0x20));
+        correlated.batch_id = Some("batch-correlated".to_string());
+
+        let mut compute = receipt(3);
+        compute.id = Uuid::from_u128(0xc);
+        compute.resource = ResourceKind::Compute;
+
+        let value = receipt_migration_plan_json(&[legacy, correlated, compute]);
+
+        assert_eq!(
+            value["summary"]["batched_receipt_count"], 1,
+            "batched_receipt_count must equal the number of receipts \
+             with batch_id Some — only the correlated receipt has a \
+             batch_id in this fixture; a refactor that swapped the \
+             filter to receipt.tx_sig.is_some() under a 'batched means \
+             on-chain' conflation would silently surface all \
+             tx_sig-bearing receipts as batched even when batch_id is \
+             None",
+        );
+        assert_eq!(
+            value["summary"]["unbatched_receipt_count"], 2,
+            "unbatched_receipt_count must equal receipts.len() minus \
+             batched_receipt_count via .saturating_sub — the saturating \
+             form is load-bearing because a future refactor that \
+             populated batched_receipt_count from a different source \
+             (e.g., a join against the chain index) could exceed the \
+             receipt count and a plain subtraction would underflow \
+             usize, panicking the daemon's read-only planning command",
+        );
+        assert_eq!(
+            value["summary"]["malformed_row_count"], 0,
+            "malformed_row_count must be the zero-literal default — \
+             pins the field as a present-and-zero u64 so downstream \
+             parsers that decode it as required u64 do not regress to \
+             a 'missing field' error if a refactor swapped 0 for None \
+             under an 'omit zero defaults' rationale",
+        );
+        assert_eq!(
+            value["expected_correlation_inputs"],
+            serde_json::json!([
+                "memory_record_id from the originating memory write",
+                "payer pubkey match between receipt.payer and memory.owner",
+                "before and after receipt hash evidence for any future mutation",
+                "audit event id for the future authorized mutation"
+            ]),
+            "expected_correlation_inputs must equal the 4-element \
+             documented contract verbatim — each string is a \
+             load-bearing operator-facing input contract for the \
+             future authorized correlation mutation; a refactor that \
+             dropped, reordered, or rewrote any string would silently \
+             change the documented operator workflow without bumping \
+             the schema version",
+        );
+        assert_eq!(
+            value["refusal"]["reason"],
+            "settlement receipt migration is read-only; mutation requires a separate \
+             authorized command with rollback and audit evidence",
+            "refusal.reason must remain the exact operator-facing \
+             rationale — the string is the documented justification \
+             for why apply_supported is false and operator dashboards \
+             surface it verbatim; a refactor that paraphrased it under \
+             a 'shorten the message' pass would silently change \
+             support-channel reproductions",
+        );
+        assert_eq!(
+            value["legacy_uncorrelated_receipts"][0]["status"], "needs_memory_record_match",
+            "legacy_uncorrelated_receipts[*].status must be the \
+             documented 'needs_memory_record_match' discriminant — \
+             operator triage tools filter on this exact string; a \
+             refactor that renamed it to 'uncorrelated' or \
+             'pending_correlation' under a 'shorter status names' \
+             rationale would silently break every grep that anchors \
+             on the documented value",
+        );
+        assert_eq!(
+            value["correlated_memory_receipts"][0]["status"], "already_correlated",
+            "correlated_memory_receipts[*].status must be the \
+             documented 'already_correlated' discriminant — paired with \
+             needs_memory_record_match above, the two strings are the \
+             read-side state machine for the upcoming correlation \
+             mutation; a refactor that collapsed both into a single \
+             'status' enum field with different literals would surface \
+             here",
+        );
+        assert_eq!(
+            value["legacy_uncorrelated_receipts"][0]["onchain_settled"], false,
+            "onchain_settled must be false when both tx_sig and \
+             onchain_sig are None — pins the negative arm of the OR \
+             (tx_sig.is_some() || onchain_sig.is_some())",
+        );
+
+        // Cover both arms of the OR so a refactor flipping || to &&
+        // surfaces here. tx_sig-only and onchain_sig-only must each
+        // map to onchain_settled=true.
+        let mut tx_only = receipt(4);
+        tx_only.id = Uuid::from_u128(0xd);
+        tx_only.tx_sig = Some("tx-sig-only".to_string());
+        let value_tx_only = receipt_migration_plan_json(&[tx_only]);
+        assert_eq!(
+            value_tx_only["legacy_uncorrelated_receipts"][0]["onchain_settled"], true,
+            "tx_sig=Some, onchain_sig=None must map onchain_settled to \
+             true — pins the LHS arm of the OR. A refactor that flipped \
+             || to && would surface here as false because the AND \
+             requires both signature fields to be Some",
+        );
+
+        let mut onchain_only = receipt(5);
+        onchain_only.id = Uuid::from_u128(0xe);
+        onchain_only.onchain_sig = Some("onchain-sig-only".to_string());
+        let value_onchain_only = receipt_migration_plan_json(&[onchain_only]);
+        assert_eq!(
+            value_onchain_only["legacy_uncorrelated_receipts"][0]["onchain_settled"], true,
+            "tx_sig=None, onchain_sig=Some must map onchain_settled to \
+             true — pins the RHS arm of the OR. Combined with the \
+             tx-only and both-None arms above, the three input \
+             combinations exhaustively pin the boolean truth table for \
+             the documented OR semantics",
+        );
+    }
+
+    #[test]
     fn receipt_hash_pins_conditional_memory_record_id_and_per_field_determinism() {
         // covenant_settlement::receipt_hash (line 170-183) computes
         // the SHA-256 of a JSON payload over 5 always-present fields

@@ -14300,6 +14300,58 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[test]
+    fn budget_seed_error_display_message_and_source_delegation_pin() {
+        use covenant_budget::BudgetError;
+        use std::error::Error;
+
+        let err = BudgetSeedError {
+            agent_id: "researcher@local".to_string(),
+            source: BudgetError::NoCapacity("researcher@local".to_string()),
+        };
+        let message = format!("{err}");
+
+        assert!(
+            message.starts_with("seed budget for agent "),
+            "BudgetSeedError Display must surface the literal 'seed budget for agent ' wrap-context prefix so operator dashboards can distinguish startup register_agent_budgets seed failures from in-flight intent budget rejections; a refactor that dropped the wrap context would silently merge the two operationally-distinct surfaces (dropped-wrap-prefix regression class): {message}"
+        );
+        assert!(
+            message.contains("\"researcher@local\""),
+            "BudgetSeedError Display must render the agent_id slot with Debug formatting ({{:?}}) so non-utf8 or control-byte agent names are escaped before reaching operator logs; a refactor that swapped {{agent_id:?}} for {{agent_id}} under a 'cleaner log output' rationale would silently un-escape malformed bytes (Debug-vs-Display formatting regression class on the agent_id interpolation): {message}"
+        );
+        assert!(
+            message.contains("no capacity for researcher@local"),
+            "BudgetSeedError Display must render the source slot with Display ({{0}}) so the inner BudgetError's operator-facing message (BudgetError::NoCapacity Display = 'no capacity for <agent>') surfaces verbatim; a refactor that swapped {{source}} for {{source:?}} under a 'preserve full error context' rationale would emit the BudgetError Debug rendering 'NoCapacity(\"researcher@local\")' instead (Debug-vs-Display formatting regression class on the source interpolation): {message}"
+        );
+        assert!(
+            !message.contains("NoCapacity("),
+            "BudgetSeedError Display must NOT surface the BudgetError Debug variant name 'NoCapacity('; a Debug refactor on the source interpolation would expose the bare variant identifier and leak internal struct shape into operator logs (Debug-vs-Display formatting regression class on the source interpolation): {message}"
+        );
+
+        let agent_idx = message
+            .find("\"researcher@local\"")
+            .expect("agent_id substring must appear");
+        let source_idx = message
+            .find("no capacity for researcher@local")
+            .expect("source substring must appear");
+        assert!(
+            agent_idx < source_idx,
+            "BudgetSeedError Display must render the agent_id slot BEFORE the source slot; a slot reorder (e.g., 'seed budget {{source}}: {{agent_id:?}}' under an 'alphabetize template variables' rationale) would silently swap operator dashboard columns between agent_id and the underlying budget rejection (slot-order regression class): agent_id at {agent_idx}, source at {source_idx}, message={message}"
+        );
+
+        let source = err
+            .source()
+            .expect("BudgetSeedError must surface the inner BudgetError via std::error::Error::source so anyhow chain printers and tracing's source-walking emitters can render the wrap context AND the inner cause (dropped-source-delegation regression class)");
+        assert_eq!(
+            format!("{source}"),
+            format!(
+                "{}",
+                BudgetError::NoCapacity("researcher@local".to_string())
+            ),
+            "BudgetSeedError::source() must return the wrapped BudgetError so its Display rendering matches a direct format!('{{}}') of the same variant; a refactor that returned a different reference (e.g., &self or a stale clone) or implemented source() to return None would silently break anyhow-style chain printing (dropped-source-delegation regression class)"
+        );
+    }
+
     /// Generate a `PeerEntry` whose `token.to_b58()` starts with the
     /// supplied prefix. Random-rejection sampling — converges in ~58
     /// iterations per leading char of base58. Used by the daemon-side

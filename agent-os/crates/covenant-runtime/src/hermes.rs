@@ -1009,6 +1009,97 @@ mod tests {
     }
 
     #[test]
+    fn find_subseq_pins_empty_needle_and_short_haystack_return_none() {
+        // covenant_runtime::hermes::find_subseq (line 350-357) is the
+        // search primitive find_boundary (line 340-348) uses to locate
+        // SSE frame terminators ('\r\n\r\n' or '\n\n') in the streaming
+        // event buffer. Its body opens with two guards:
+        //
+        //   if needle.is_empty() || haystack.len() < needle.len() {
+        //       return None;
+        //   }
+        //
+        // The first guard is a correctness defense: slice::windows(0)
+        // panics, so removing the guard would convert an empty-needle
+        // call into a runtime panic mid-SSE-stream rather than a clean
+        // None. The second guard is a perf optimization that documents
+        // the early-out shape for any future swap to a memmem-style
+        // search.
+        //
+        // find_boundary_prefers_crlf_crlf_over_lf_lf (line 688) only
+        // exercises non-empty four-byte and two-byte needles against
+        // larger haystacks; neither guard arm is hit. A refactor that
+        // dropped the is_empty() guard under a 'this branch can't be
+        // reached' rationale would turn an unreachable-in-practice
+        // call into a panic; a refactor that swapped windows()+position()
+        // for a memmem helper without preserving the empty-needle
+        // semantics would silently start returning Some(0) for an
+        // empty needle (every byte position matches).
+
+        assert_eq!(
+            find_subseq(b"data: x\n\n", b""),
+            None,
+            "empty needle on a non-empty haystack must return None — \
+             this is the correctness guard: slice::windows(0) panics, \
+             so removing the is_empty() check would convert the call \
+             into a runtime panic. A refactor that swapped \
+             windows()+position() for a memmem-style helper without \
+             preserving this semantics would silently return Some(0) \
+             (every byte position matches an empty needle) and break \
+             find_boundary's framing if it were ever passed an empty \
+             terminator",
+        );
+
+        assert_eq!(
+            find_subseq(b"", b""),
+            None,
+            "empty needle on an empty haystack must return None — pins \
+             that the is_empty() guard fires before the length \
+             comparison, not after. A refactor that reordered the \
+             guards (e.g., 'check length first, then emptiness') would \
+             still return None here via the length comparison, but \
+             the explicit empty-needle-first pin makes the intent \
+             visible to anyone reading the test",
+        );
+
+        assert_eq!(
+            find_subseq(b"abc", b"abcd"),
+            None,
+            "needle one byte longer than haystack must return None — \
+             pins the haystack.len() < needle.len() perf guard. \
+             slice::windows(needle.len()) on a haystack shorter than \
+             needle.len() returns an empty iterator (no panic), so \
+             this assertion would still hold without the explicit \
+             guard, but pinning it makes the early-return part of the \
+             documented surface so a future refactor that drops it \
+             surfaces here",
+        );
+
+        assert_eq!(
+            find_subseq(b"abcd", b"abcd"),
+            Some(0),
+            "needle equal to haystack must return Some(0) — pins the \
+             boundary case at the upper end of the length comparison, \
+             not just below it. A refactor that wrote the guard as \
+             haystack.len() <= needle.len() (off-by-one) would \
+             silently return None here and break framing whenever an \
+             SSE chunk arrived exactly the size of the terminator",
+        );
+
+        assert_eq!(
+            find_subseq(b"data: x\r\n\r\n", b"\r\n\r\n"),
+            Some(7),
+            "needle found at the end of the haystack must return the \
+             index of the match — pins the positive arm with the \
+             canonical SSE-CRLF terminator at the documented offset. \
+             find_boundary_prefers_crlf_crlf_over_lf_lf exercises this \
+             same input through find_boundary; pinning it directly at \
+             find_subseq anchors the contract independent of the \
+             caller",
+        );
+    }
+
+    #[test]
     fn feature_flag_pins_missing_key_and_non_bool_value_default_to_false() {
         // covenant_runtime::hermes::feature_flag (line 511-513) is the
         // only function probe_capabilities (line 147-161) consults to

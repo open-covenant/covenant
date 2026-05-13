@@ -1612,6 +1612,37 @@ mod tests {
     }
 
     #[test]
+    fn validate_chain_scope_rejects_unsupported_resource_value() {
+        // validate_chain_scope binds the resource field to
+        // optional_string_enum_or_null with the allowed list
+        // ['compute', 'memory', 'tool', 'message', 'registration'].
+        // The optional_string_enum_or_null helper test pins the
+        // enum-miss behavior in isolation, but a regression at the
+        // validate_chain_scope call site that relaxed the allowed list
+        // (e.g., dropped 'registration', added 'cpu' as an alias for
+        // 'compute', or merged categories) would not be caught by the
+        // helper test alone — it only verifies the helper rejects an
+        // unsupported value when given the documented allowed list.
+        // validate_scope_accepts_known_versioned_shapes pins the
+        // chain.flush happy path with resource='memory' but does not
+        // exercise the rejection arm. Pin the resource enum-miss
+        // rejection at the call site so a relaxation of the allowed
+        // list — silently authorizing a settlement-flow scope class
+        // the daemon's downstream chain logic does not recognize — is
+        // caught loud at grant time, not at the runtime dispatch
+        // boundary where the rejection would split operator audit
+        // trails into a 'granted but never works' state.
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "resource": "cpu" }),
+        );
+        assert_invalid_scope(
+            "chain.flush",
+            serde_json::json!({ "version": 1, "resource": "unknown" }),
+        );
+    }
+
+    #[test]
     fn validate_audit_scope_rejects_invalid_before_ms_and_include_integrity_types() {
         assert_invalid_scope(
             "audit.verify",

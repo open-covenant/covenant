@@ -599,6 +599,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn protocol_constants_pin_values_and_self_consistency() {
         // covenant_ipc declares four public constants at line 67-70
         // that define the negotiation handshake:
@@ -686,6 +687,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn max_frame_pins_eight_mibibyte_value_and_u32_type_bound() {
         // covenant_ipc::MAX_FRAME (line 66) is the per-frame size cap
         // the IPC read side enforces at lines 571 and 588 — frames

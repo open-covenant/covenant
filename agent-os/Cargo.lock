@@ -679,6 +679,7 @@ dependencies = [
  "covenant-a2a",
  "covenant-audit",
  "covenant-ipc",
+ "covenant-manifest",
  "covenant-mcp",
  "covenant-peer-auth",
  "covenant-permissions",

@@ -11,6 +11,31 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("covenantd {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                println!(
+                    "covenantd {version}\n\
+                     local control plane for Covenant agents\n\n\
+                     usage:\n  \
+                       covenantd                 start the daemon (config from $COVENANT_HOME)\n  \
+                       covenantd --version       print the version and exit\n  \
+                       covenantd --help          print this help and exit\n",
+                    version = env!("CARGO_PKG_VERSION"),
+                );
+                return Ok(());
+            }
+            other => {
+                eprintln!("covenantd: unrecognised argument '{other}'. Try --help.");
+                std::process::exit(2);
+            }
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| "covenantd=info".into()),

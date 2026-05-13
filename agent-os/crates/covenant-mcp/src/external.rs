@@ -872,4 +872,28 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
     }
+
+    #[test]
+    fn bootstrap_error_display_messages_pin_two_string_variant_format_strings() {
+        let bad_list = format!("{}", BootstrapError::BadList("missing field tools".into()));
+        assert_eq!(
+            bad_list, "malformed tools/list response: missing field tools",
+            "BootstrapError::BadList Display drifted (typo or dropped 'tools/list' protocol-stage marker regression class)"
+        );
+
+        let duplicate = format!(
+            "{}",
+            BootstrapError::DuplicateToolName("fs.read".into())
+        );
+        assert_eq!(
+            duplicate, "duplicate remote tool name after MCP prefixing: fs.read",
+            "BootstrapError::DuplicateToolName Display drifted (typo or dropped 'after MCP prefixing' post-prefix-namespace qualifier regression class)"
+        );
+
+        assert_ne!(
+            bad_list, duplicate,
+            "BootstrapError::BadList must not converge with BootstrapError::DuplicateToolName \
+             (prefix-convergence regression class would merge protocol-stage failures with namespace-collision failures)"
+        );
+    }
 }

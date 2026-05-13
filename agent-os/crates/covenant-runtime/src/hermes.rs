@@ -697,6 +697,102 @@ mod tests {
     }
 
     #[test]
+    fn hermes_capabilities_covers_runner_pins_three_required_flags_excluding_approval_response() {
+        // covenant_runtime::hermes::HermesCapabilities::covers_runner
+        // (line 506-508) is the boot-time gate covenantd consults at
+        // covenantd/src/main.rs line 48 to decide whether to emit
+        // 'hermes gateway features confirmed' or
+        // 'hermes gateway missing required features'.
+        //
+        // The contract: self.run_submission && self.run_events_sse
+        // && self.run_stop — three required AND-folded flags.
+        // run_approval_response is INTENTIONALLY EXCLUDED because
+        // hermes-agent < v0.12 deployments do not advertise approval
+        // support, and forcing it would silently disable Hermes for
+        // those operators. The daemon logs run_approval_response
+        // alongside (main.rs line 53) but does not gate on it.
+        //
+        // No test pins covers_runner; the daemon-side consumer is
+        // integration-only. A refactor that 'tightened' the AND to
+        // also require run_approval_response would silently log
+        // 'missing required features' against every < v0.12 gateway;
+        // a refactor that 'relaxed' to OR-fold or to only require
+        // run_submission would silently re-enable Hermes for
+        // gateways missing the SSE event stream or stop endpoint —
+        // dispatches would silently lose the audit trail or hang on
+        // wall-clock budget overrun.
+
+        let all_advertised = HermesCapabilities {
+            run_submission: true,
+            run_events_sse: true,
+            run_stop: true,
+            run_approval_response: true,
+        };
+        assert!(
+            all_advertised.covers_runner(),
+            "the happy path: every feature this runner needs is \
+             advertised and the daemon must emit 'features \
+             confirmed' at boot",
+        );
+
+        let missing_submission = HermesCapabilities {
+            run_submission: false,
+            ..all_advertised
+        };
+        assert!(
+            !missing_submission.covers_runner(),
+            "run_submission=false must drop covers_runner to false — \
+             a gateway that cannot accept run submissions is unusable \
+             and the daemon must surface 'missing required features' \
+             at boot",
+        );
+
+        let missing_events_sse = HermesCapabilities {
+            run_events_sse: false,
+            ..all_advertised
+        };
+        assert!(
+            !missing_events_sse.covers_runner(),
+            "run_events_sse=false must drop covers_runner to false — \
+             without the SSE event stream, every dispatch silently \
+             loses the audit-chain Hermes step events. A refactor \
+             that dropped this from the AND chain under a 'SSE is \
+             optional, events are nice-to-have' rationale would \
+             silently emit empty Hermes audit trails",
+        );
+
+        let missing_stop = HermesCapabilities {
+            run_stop: false,
+            ..all_advertised
+        };
+        assert!(
+            !missing_stop.covers_runner(),
+            "run_stop=false must drop covers_runner to false — \
+             without the stop endpoint, the daemon cannot cancel a \
+             wedged run on wall-clock budget overrun. A refactor \
+             that dropped this from the AND chain would silently let \
+             wedged Hermes runs hold connections indefinitely",
+        );
+
+        let missing_approval_only = HermesCapabilities {
+            run_approval_response: false,
+            ..all_advertised
+        };
+        assert!(
+            missing_approval_only.covers_runner(),
+            "run_approval_response=false (with the other three \
+             advertised) must NOT drop covers_runner to false — \
+             approval is an optional feature that hermes-agent \
+             < v0.12 deployments do not advertise. A refactor that \
+             added run_approval_response to the AND chain under a \
+             'be strict about full feature coverage' rationale would \
+             silently disable Hermes for every operator on the \
+             documented compatibility floor; pinning this case \
+             anchors the intentional exclusion",
+        );
+    }
+
+    #[test]
     fn truncate_pins_ellipsis_character_and_inclusive_length_boundary() {
         // covenant_runtime::hermes::truncate (line 471-477) bounds the
         // Hermes remote-error text that feeds RunnerError::Remote

@@ -348,6 +348,73 @@ mod tests {
     }
 
     #[test]
+    fn agent_id_pins_display_and_pubkey_composition_from_self() {
+        // LocalIdentity::agent_id (line 66-71) composes an AgentId
+        // by cloning self.display into display and calling
+        // self.pubkey_bytes() into pubkey. The result feeds
+        // covenant_audit::AuditEvent.issuer (every audit row's
+        // issuer field), covenant_permissions::Capability.granted_by
+        // (every capability's signer identity), and covenant_a2a
+        // peer-routing identity lookups.
+        //
+        // agent_id_round_trips_through_serde (line above) verifies
+        // serde round-trip but does NOT pin the composition: it
+        // never asserts that agent_id().display equals
+        // self.display() or that agent_id().pubkey equals
+        // self.pubkey_bytes(). A refactor that swapped
+        // self.display.clone() for a constant ('user@local',
+        // 'system') would silently relabel every audit row, every
+        // capability grant, and every a2a peer announcement to one
+        // identity. A refactor that swapped self.pubkey_bytes() for
+        // self.signing_key().to_bytes() (the seed bytes, NOT the
+        // verifying-key bytes) would silently leak the private seed
+        // into every AgentId.pubkey field, breaking ed25519
+        // signature verification and exposing the signing key in
+        // every operator-readable surface.
+        let alice = LocalIdentity::generate("alice@local");
+        let bob = LocalIdentity::generate("bob@local");
+
+        let alice_agent = alice.agent_id();
+        assert_eq!(
+            alice_agent.display,
+            alice.display(),
+            "AgentId.display must equal self.display() byte-for-byte \
+             — a refactor that swapped self.display.clone() for a \
+             constant string under a 'normalize display fields for \
+             cross-environment audit consistency' rationale would \
+             silently relabel every audit row's issuer to one \
+             identity, breaking the issuer-based incident-response \
+             workflow that audit chains exist to support",
+        );
+        assert_eq!(
+            alice_agent.pubkey,
+            alice.pubkey_bytes(),
+            "AgentId.pubkey must equal self.pubkey_bytes() byte-for-\
+             byte — a refactor that swapped self.pubkey_bytes() for \
+             self.signing_key().to_bytes() (the seed, NOT the \
+             verifying-key bytes) under a 'use the same byte source \
+             for both signing and identity' rationale would silently \
+             leak the private seed into every AgentId.pubkey field, \
+             breaking ed25519 signature verification and exposing \
+             the signing key in every persisted audit row",
+        );
+
+        let bob_agent = bob.agent_id();
+        assert_ne!(
+            alice_agent, bob_agent,
+            "two distinct identities must produce distinct AgentIds \
+             — a refactor that returned a constant or default \
+             AgentId (e.g., 'AgentId::default()' as a partial mock, \
+             or 'AgentId {{ display: \"\".into(), pubkey: [0u8; 32] }}' \
+             as a placeholder) would satisfy the field-passthrough \
+             arms when both identities happened to share state, but \
+             this distinctness arm catches the constant-AgentId \
+             regression class that would otherwise collapse every \
+             audit row to one issuer with a zero pubkey",
+        );
+    }
+
+    #[test]
     fn load_or_create_persists_then_returns_same_pubkey() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("identity").join("local.key");

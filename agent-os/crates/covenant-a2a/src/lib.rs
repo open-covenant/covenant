@@ -2978,6 +2978,165 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_cached_result_from_and_to_result_pins_task_id_asymmetric_binding() {
+        // A2AIdempotencyCachedResult::from_result (line 82-89) and
+        // ::to_result (line 91-98) are the bidirectional bridge between
+        // an A2ATaskResult and the receiver-side idempotency cache
+        // value. The load-bearing contract is asymmetric on task_id:
+        //
+        //   from_result(&result) → records result.task_id as the cache
+        //                          value's source_task_id (preserving
+        //                          the ORIGINAL task's identifier).
+        //   to_result(task_id)   → takes a NEW task_id parameter and
+        //                          binds it to the rebuilt
+        //                          A2ATaskResult.task_id, replacing the
+        //                          cached source_task_id.
+        //
+        // Every other field — status, content, error_message — must
+        // round-trip verbatim through both directions. The
+        // a2a_idempotency_cached_result_serde_pins_four_field_wire_form
+        // pin (line 2878) covers the serialized shape; the
+        // idempotency_cache_key_pins_safety_kind_fallback_and_empty_key_paths
+        // pin (line 2820) covers the lookup keying. Neither pin covers
+        // the from_result/to_result transformation directly.
+        //
+        // A regression in from_result that swapped argument order during
+        // a fan-out cleanup (e.g., consolidating cache-write with
+        // wire-write code paths) would silently write the receiver's
+        // processing task_id into source_task_id instead of the
+        // original's — audit dashboards correlate by source_task_id and
+        // every replay would surface against the wrong task. A
+        // regression in to_result that returned source_task_id directly
+        // (e.g., a 'simplify' pass that thinks the task_id parameter is
+        // redundant) would silently replay every cached result against
+        // the ORIGINAL task_id — CLI consumers grepping on task_id
+        // could never locate the replayed row.
+        let original_id = Uuid::from_u128(7);
+        let replay_id = Uuid::from_u128(99);
+        assert_ne!(
+            original_id, replay_id,
+            "test fixture: replay id must differ from original so the \
+             rebind arm is observable",
+        );
+
+        // Ok variant: from_result preserves task_id as source_task_id;
+        // status/content round-trip; error_message stays None.
+        let ok_original = A2ATaskResult::ok(original_id, vec![Content::text("cached")]);
+        let cached_ok = A2AIdempotencyCachedResult::from_result(&ok_original);
+        assert_eq!(
+            cached_ok.source_task_id, original_id,
+            "from_result must record result.task_id as source_task_id \
+             — a refactor that swapped argument order during a fan-out \
+             cleanup would silently write the receiver's processing \
+             task_id into source_task_id and break audit-dashboard \
+             correlation by source_task_id for every replayed result",
+        );
+        assert_eq!(
+            cached_ok.status,
+            A2ATaskStatus::Ok,
+            "from_result must preserve A2ATaskResult.status verbatim — \
+             a refactor that defaulted to A2ATaskStatus::Error on the \
+             cache-write path would silently mislabel every cached ok \
+             result as an error on replay",
+        );
+        assert_eq!(
+            cached_ok.content,
+            ok_original.content,
+            "from_result must clone A2ATaskResult.content verbatim — a \
+             refactor that dropped content on the cache-write path \
+             would silently strip every cached result of its tool/agent \
+             output on replay",
+        );
+        assert_eq!(
+            cached_ok.error_message, None,
+            "from_result on an ok result must preserve error_message \
+             == None — a refactor that defaulted to Some(String::new()) \
+             would silently surface every cached ok result with an \
+             empty-string error breadcrumb on replay",
+        );
+
+        let replayed_ok = cached_ok.to_result(replay_id);
+        assert_eq!(
+            replayed_ok.task_id, replay_id,
+            "to_result must bind the new task_id parameter to \
+             A2ATaskResult.task_id, NOT source_task_id — a 'simplify' \
+             pass that thought the task_id parameter was redundant and \
+             returned cached.source_task_id directly would silently \
+             replay every cached result against the ORIGINAL task_id; \
+             CLI consumers and the HTTP gateway grep on task_id and \
+             would never locate the replayed row — the idempotency \
+             cache would become a write-only mailbox from the consumer \
+             side",
+        );
+        assert_ne!(
+            replayed_ok.task_id, cached_ok.source_task_id,
+            "to_result must NOT preserve source_task_id on the rebuilt \
+             A2ATaskResult — the rebind is asymmetric: from_result \
+             stores the original, to_result substitutes the replay id",
+        );
+        assert_eq!(
+            replayed_ok.status,
+            cached_ok.status,
+            "to_result must surface cached.status verbatim",
+        );
+        assert_eq!(
+            replayed_ok.content, cached_ok.content,
+            "to_result must surface cached.content verbatim",
+        );
+        assert_eq!(
+            replayed_ok.error_message, cached_ok.error_message,
+            "to_result must surface cached.error_message verbatim",
+        );
+
+        // Error variant: error_message must round-trip on both sides;
+        // A2ATaskResult::error wipes content to Vec::new(), so the
+        // cached.content stays empty and the replayed.content stays
+        // empty even though to_result is given a different task_id.
+        let err_original = A2ATaskResult::error(original_id, "boom");
+        let cached_err = A2AIdempotencyCachedResult::from_result(&err_original);
+        assert_eq!(
+            cached_err.source_task_id, original_id,
+            "from_result on the error path must preserve source_task_id \
+             identically to the ok path — the asymmetric rebind contract \
+             is independent of A2ATaskStatus",
+        );
+        assert_eq!(cached_err.status, A2ATaskStatus::Error);
+        assert_eq!(
+            cached_err.error_message.as_deref(),
+            Some("boom"),
+            "from_result must preserve A2ATaskResult.error_message \
+             verbatim — a refactor that flattened error_message onto a \
+             single combined 'message' field would silently drop the \
+             distinction between status=Ok and status=Error on every \
+             cached row",
+        );
+
+        let replayed_err = cached_err.to_result(replay_id);
+        assert_eq!(
+            replayed_err.task_id, replay_id,
+            "to_result on the error path must rebind task_id identically \
+             to the ok path",
+        );
+        assert_eq!(replayed_err.status, A2ATaskStatus::Error);
+        assert_eq!(
+            replayed_err.error_message.as_deref(),
+            Some("boom"),
+            "to_result must surface cached.error_message verbatim on \
+             the error path — a regression that dropped error_message \
+             from the rebuild step would silently replay every cached \
+             error as an empty-message error",
+        );
+        assert!(
+            replayed_err.content.is_empty(),
+            "A2ATaskResult::error wipes content to Vec::new() at the \
+             constructor; from_result clones that empty content into \
+             cached.content; to_result clones cached.content back into \
+             the rebuilt result — the empty-content invariant must \
+             survive the full round-trip",
+        );
+    }
+
+    #[test]
     fn a2a_idempotency_cache_key_serde_pins_four_required_fields() {
         // A2AIdempotencyCacheKey is the receiver-side cache key for
         // duplicate-safe A2A sends — the keyed struct A2AIdempotencyCachedResult

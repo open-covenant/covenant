@@ -828,6 +828,29 @@ mod tests {
     }
 
     #[test]
+    fn identity_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = std::io::Error::new(std::io::ErrorKind::NotFound, "identity.ed25519 missing");
+        let expected_display = format!("{inner}");
+        let err = IdentityError::Io(inner);
+        let source = err.source().expect(
+            "covenant_identity::IdentityError::Io must surface the inner std::io::Error via std::error::Error::source so identity-bootstrap retry-policy classifiers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct decisions on identity-key IO (NotFound triggers first-run identity generation, PermissionDenied escalates as a security-sensitive incident on the on-disk private key, Interrupted retries immediately); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_identity::IdentityError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
+        assert_eq!(
+            kind,
+            Some(std::io::ErrorKind::NotFound),
+            "covenant_identity::IdentityError::Io source() must downcast_ref to std::io::Error so identity-bootstrap classifiers can distinguish NotFound (cold-start, generate fresh identity) from PermissionDenied (security incident on the on-disk private key); a refactor that wrapped the inner in a project-local newtype (e.g., IdentityIoError(std::io::Error) under a 'tag identity IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies identity-key IO faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[test]
     fn identity_error_crypto_source_delegation_pin_returns_inner_ed25519_signature_error_via_std_error_source(
     ) {
         use std::error::Error;

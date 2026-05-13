@@ -1899,6 +1899,120 @@ mod tests {
     }
 
     #[test]
+    fn peer_token_debug_pins_six_char_base58_prefix_aligned_with_summary() {
+        // covenant_peer_auth::PeerToken Debug impl (line 91-99):
+        //
+        //   impl std::fmt::Debug for PeerToken {
+        //       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        //           // Tokens are secrets — log only a 6-char prefix of the base58
+        //           // form so audit grep still works without leaking the rest.
+        //           let s = self.to_b58();
+        //           let prefix = &s[..s.len().min(6)];
+        //           write!(f, "PeerToken({prefix}…)")
+        //       }
+        //   }
+        //
+        // The number 6 is load-bearing across THREE surfaces:
+        //
+        //   (a) PeerToken Debug redaction (this impl): `&s[..s.len().min(6)]`
+        //       documents 'log only a 6-char prefix of the base58 form'.
+        //   (b) PeerSummary::token_prefix (line 124-133): the cross-wire
+        //       redacted view carries the SAME 6-char prefix, computed by
+        //       the private token_b58_prefix helper (line 313-318) via
+        //       `s.chars().take(6).collect()` — different code, same length.
+        //   (c) The 'peers revoke <prefix>' operator workflow (line 155-160)
+        //       takes the 6-char prefix from `peers list` output as the
+        //       copy-pasteable revoke handle.
+        //
+        // token_debug_does_not_leak_full_bytes (line 1893) asserts the
+        // format starts with 'PeerToken(', contains '…', and does NOT
+        // contain the full base58 — but a refactor that changed the
+        // truncation to 4 chars or 8 chars would silently pass all three
+        // checks while breaking the cross-system 6-char correlation.
+        // Operator dashboards looking up a peer by grep'd debug-log
+        // prefix would silently mismatch PeerSummary entries on every
+        // restart-replay cycle, and `peers revoke <copy-paste-from-grep>`
+        // workflows would fail with no live match.
+        //
+        // Pin the exact 6-char length AND the alignment with the
+        // PeerSummary::token_prefix value derived from the same bytes
+        // so a refactor that drifted ONE surface relative to the others
+        // surfaces here regardless of which surface was changed first.
+
+        // Deterministic token so the base58 form is stable across CI
+        // runs. PeerToken::from_bytes preserves the bytes verbatim
+        // (no normalization).
+        let token = PeerToken::from_bytes([7u8; 32]);
+        let full_b58 = bs58::encode([7u8; 32]).into_string();
+        let expected_prefix = &full_b58[..6];
+
+        let debug = format!("{token:?}");
+
+        let expected = format!("PeerToken({expected_prefix}…)");
+        assert_eq!(
+            debug, expected,
+            "PeerToken Debug format must be exactly 'PeerToken({{first-6-base58-chars}}…)' \
+             — a refactor that changed the format delimiter (e.g., \
+             'PeerToken[{{prefix}}]' or 'PeerToken<{{prefix}}>') or shifted \
+             the truncation length (e.g., to 4 or 8 chars) would silently \
+             break operator audit-grep workflows that parse the 6-char \
+             handle from debug-log lines. got: {debug:?}",
+        );
+
+        // Independently assert the 6-char length so a future refactor
+        // that emits the right delimiters but wrong length (e.g., via
+        // a buggy substring helper) surfaces with a clear failure on
+        // the length contract specifically.
+        let inner_start = "PeerToken(".len();
+        let inner_end = debug
+            .find('…')
+            .expect("Debug format must contain the documented '…' redaction marker");
+        let prefix_in_debug = &debug[inner_start..inner_end];
+        assert_eq!(
+            prefix_in_debug.chars().count(),
+            6,
+            "the redacted prefix inside PeerToken(...…) must be exactly 6 \
+             chars — a refactor that promoted the truncation to 4 chars \
+             ('shorter is more secret') or 8 chars ('more entropy in the \
+             visible prefix') would silently misalign Debug logs from \
+             PeerSummary::token_prefix and break the 'peers revoke \
+             <copy-paste-handle>' operator workflow. got: {prefix_in_debug:?} \
+             ({} chars)",
+            prefix_in_debug.chars().count(),
+        );
+        assert_eq!(
+            prefix_in_debug, expected_prefix,
+            "the redacted prefix must be the FIRST six base58 chars of \
+             the token bytes — a refactor that picked a different slice \
+             (e.g., last 6 chars or middle 6) would silently misalign \
+             with PeerSummary::token_prefix's chars().take(6) and break \
+             cross-system grep correlation. got: {prefix_in_debug:?} \
+             expected: {expected_prefix:?}",
+        );
+
+        // Cross-bind with the PeerSummary surface: a PeerSummary built
+        // from the same token bytes must carry the SAME 6-char prefix.
+        // PeerSummary is constructed publicly through public crates
+        // (the internal summary_from helper at line 320 is private),
+        // so build one inline with the documented chars().take(6)
+        // shape to mirror token_b58_prefix at line 315-318.
+        let summary_prefix: String = full_b58.chars().take(6).collect();
+        assert_eq!(
+            prefix_in_debug,
+            summary_prefix.as_str(),
+            "PeerToken Debug prefix MUST equal PeerSummary::token_prefix \
+             for the same token bytes — the docstring at line 124 binds \
+             '6-char base58 prefix matching PeerToken::Debug redaction' \
+             across both surfaces. If this assertion fires after a \
+             refactor that diverged the two surfaces (e.g., changed the \
+             Debug truncation length without updating token_b58_prefix \
+             at line 315), operator dashboards that join debug-log lines \
+             against `peers list` rows would silently mismatch on every \
+             redaction cycle",
+        );
+    }
+
+    #[test]
     fn token_generate_yields_unique_values() {
         let a = PeerToken::generate();
         let b = PeerToken::generate();

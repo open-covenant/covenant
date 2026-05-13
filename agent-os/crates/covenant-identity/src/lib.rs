@@ -438,6 +438,112 @@ mod tests {
     }
 
     #[test]
+    fn identity_error_display_messages_pin_three_field_bearing_variant_format_strings() {
+        // IdentityError (lib.rs lines 21-33) has five variants. Two wrap
+        // external errors via #[from] (Io, Crypto); the three field-
+        // bearing variants emit security-relevant operator-facing
+        // format strings that no existing test inspects via Display.
+        // load_or_create_rejects_wrong_size_file (line 430) asserts
+        // BadSize via `matches!` and ignores Display;
+        // load_or_create_rejects_symlink_at_identity_key_path asserts
+        // the path field of the Symlink variant but not the message.
+        // The literal '32 bytes', the {mode:#o} octal formatter, and
+        // the 'refusing to follow' hint are all load-bearing for
+        // operator triage of identity-file regressions.
+
+        let bad_size = IdentityError::BadSize {
+            path: PathBuf::from("/tmp/key"),
+            got: 7,
+        };
+        let bad_size_message = format!("{bad_size}");
+        assert!(
+            bad_size_message.contains("/tmp/key"),
+            "BadSize must surface the path: {bad_size_message}"
+        );
+        assert!(
+            bad_size_message.contains("wrong size"),
+            "BadSize must keep the 'wrong size' phrase — distinguishes \
+             this variant from other size-related failures (e.g., the \
+             ed25519 SignatureError wrapped in Crypto): {bad_size_message}"
+        );
+        assert!(
+            bad_size_message.contains("expected 32 bytes"),
+            "BadSize must surface the literal 'expected 32 bytes' — \
+             the ed25519 seed length is invariant; operators reading \
+             a malformed-key error need to know the EXPECTED size to \
+             either repair the file or rotate the key. A typo that \
+             dropped '32 bytes' under a 'less verbose error messages' \
+             rationale would strip the operator's only sizing hint: \
+             {bad_size_message}"
+        );
+        assert!(
+            bad_size_message.contains("got 7"),
+            "BadSize must surface the actual size — pins the {{got}} \
+             binding so a refactor that dropped the field from the \
+             format string surfaces here: {bad_size_message}"
+        );
+
+        let insecure = IdentityError::InsecureMode {
+            path: PathBuf::from("/tmp/key"),
+            mode: 0o644,
+        };
+        let insecure_message = format!("{insecure}");
+        assert!(
+            insecure_message.contains("/tmp/key"),
+            "InsecureMode must surface the path: {insecure_message}"
+        );
+        assert!(
+            insecure_message.contains("insecure permissions"),
+            "InsecureMode must keep the 'insecure permissions' phrase: \
+             {insecure_message}"
+        );
+        assert!(
+            insecure_message.contains("0o644"),
+            "InsecureMode must emit the mode in OCTAL via {{mode:#o}} \
+             — a refactor that dropped the '#' flag would emit \
+             decimal ('420' for 0o644). The '0o' prefix is what makes \
+             the mode bits visually scannable against the documented \
+             0o600 baseline; without it, operators reading the decimal \
+             form cannot match the value against /etc/permissions \
+             tables: {insecure_message}"
+        );
+        assert!(
+            insecure_message.contains("require 0o600"),
+            "InsecureMode must surface the literal 'require 0o600' — \
+             the daemon's expected baseline lives only in this error \
+             string. A refactor that templated the baseline (e.g., \
+             '{{REQUIRED:#o}}') without updating the constant would \
+             silently let the baseline drift; the literal anchors the \
+             0o600 expectation: {insecure_message}"
+        );
+
+        let symlink = IdentityError::Symlink {
+            path: PathBuf::from("/tmp/key"),
+        };
+        let symlink_message = format!("{symlink}");
+        assert!(
+            symlink_message.contains("/tmp/key"),
+            "Symlink must surface the path: {symlink_message}"
+        );
+        assert!(
+            symlink_message.contains("is a symlink"),
+            "Symlink must keep the 'is a symlink' phrase: \
+             {symlink_message}"
+        );
+        assert!(
+            symlink_message.contains("refusing to follow"),
+            "Symlink must keep the 'refusing to follow' hint — the \
+             security-relevant diagnostic that distinguishes 'we won't \
+             resolve' (intentional policy to block attacker-planted \
+             symlinks at $COVENANT_HOME/identity/local.key) from 'we \
+             couldn't resolve' (filesystem error). A rewrite to \
+             'identity file at {{path}} is a symlink' under a 'less \
+             verbose' pass would strip the entire policy signal: \
+             {symlink_message}"
+        );
+    }
+
+    #[test]
     fn agent_id_round_trips_through_serde() {
         let id = LocalIdentity::generate("research@local");
         let agent_id = id.agent_id();

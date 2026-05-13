@@ -504,6 +504,78 @@ entry = "x.js"
     }
 
     #[test]
+    fn validate_agent_id_pins_underscore_period_and_hyphen_as_allowed_special_chars() {
+        // covenant_manifest::Manifest::validate (line 171-181) gates
+        // agent.id behind:
+        //
+        //   b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'
+        //
+        // The docstring at line 167-170 and the error message at line
+        // 178 jointly document the whitelist as '[A-Za-z0-9_.-]+' —
+        // the same regex AgentId::validate_agent_id_display applies
+        // when JSONL records replay through serde.
+        //
+        // rejects_id_with_disallowed_chars (line 482) pins that
+        // characters OUTSIDE the whitelist (space, '@', ':', non-
+        // ASCII, '/') reject. The positive complement — that the
+        // three documented special characters '_', '.', and '-' are
+        // ACCEPTED — is exercised only incidentally via alphanumeric-
+        // only fixtures elsewhere ('research', 'sandboxed', etc.) and
+        // is exercised by zero direct tests.
+        //
+        // A refactor that tightened the whitelist to alphanumeric-
+        // only ('simplify by dropping the rarely-used special chars')
+        // would silently reject every operator manifest whose
+        // agent.id contains a period, hyphen, or underscore;
+        // rejects_id_with_disallowed_chars would still pass because
+        // those special chars would now fall into the same rejection
+        // branch via the same error path. Pin each special char
+        // separately AND in combination so a partial tightening (e.g.,
+        // 'drop period only') surfaces on the period assertion while
+        // a complete tightening surfaces on all three.
+        for id in [
+            "research_bot",
+            "agent.v1",
+            "research-bot",
+            "research.bot_v1-prod",
+        ] {
+            let toml = format!(
+                r#"
+[agent]
+id = "{id}"
+name = "x"
+version = "0.0.1"
+runtime = "node"
+entry = "x.js"
+"#
+            );
+            let m = Manifest::parse(&toml).unwrap_or_else(|err| {
+                panic!(
+                    "agent.id {id:?} must be accepted by validate — the \
+                     whitelist documented at line 178 is [A-Za-z0-9_.-]+ \
+                     and all three special chars (underscore, period, \
+                     hyphen) are documented as load-bearing for operator \
+                     manifests. A refactor that tightened the whitelist \
+                     to alphanumeric-only under a 'simplify' rationale \
+                     would silently reject this manifest; \
+                     rejects_id_with_disallowed_chars (line 482) would \
+                     still pass because the special chars would fall \
+                     into the rejection branch via the same error path. \
+                     got: {err:?}"
+                )
+            });
+            assert_eq!(
+                m.agent.id, id,
+                "the validated manifest must round-trip the agent.id \
+                 verbatim — a refactor that normalised the id (e.g., \
+                 lowercased it or stripped special chars during parse) \
+                 would silently mutate the operator-supplied value and \
+                 break audit correlation that joins on agent.id",
+            );
+        }
+    }
+
+    #[test]
     fn rejects_empty_id() {
         let bad = r#"
 [agent]

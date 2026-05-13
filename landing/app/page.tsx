@@ -4,7 +4,7 @@ import { HeroMesh } from "./HeroMesh";
 import { MobileMenu } from "./MobileMenu";
 import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "./_brand";
 
-const RELEASE_DATE = "ALPHA TARGET: 13.05.2026";
+const RELEASE_DATE = "ALPHA TARGET: 18.05.2026";
 
 export default function Page() {
   return (

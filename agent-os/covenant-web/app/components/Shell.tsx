@@ -241,11 +241,6 @@ export function Shell({ children }: { children: ReactNode }) {
           letter-spacing: 0.08em;
         }
 
-        .surface {
-          min-width: 0;
-          padding: 40px 36px 96px;
-        }
-
         @media (max-width: 900px) {
           .shell {
             grid-template-columns: 1fr;
@@ -272,10 +267,6 @@ export function Shell({ children }: { children: ReactNode }) {
 
           .sidebar-foot {
             display: none;
-          }
-
-          .surface {
-            padding: 24px 22px 64px;
           }
         }
       `}</style>

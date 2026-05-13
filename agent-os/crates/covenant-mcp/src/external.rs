@@ -349,6 +349,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_tool_call_result_pins_multi_block_content_and_snake_case_is_error() {
+        // parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap
+        // covers four cases (empty object, isError camelCase alias,
+        // single-text-block content, non-object error wrap), but two
+        // forward-compat surfaces of the Wire struct's deserialization
+        // are not pinned:
+        //
+        // 1. Multi-block content with mixed Content variants. Real MCP
+        //    tools routinely return both human-readable text and a
+        //    structured JSON payload in the same tools/call response;
+        //    Vec<Content> must compose through serde with both
+        //    variants in one payload preserving order. A custom
+        //    Vec<Content> deserializer that only handled single-block
+        //    payloads would silently drop the trailing blocks and
+        //    Covenant's RemoteTool wrapper would surface an
+        //    incomplete result.
+        // 2. The canonical snake_case is_error decoding path. The
+        //    Wire struct's #[serde(default, alias = "isError")] makes
+        //    both names accept on the wire — the existing test only
+        //    asserts the camelCase alias path. A refactor that
+        //    hardened the field to camelCase-only by removing the
+        //    canonical name (or by reversing the alias direction in
+        //    a way that drops the snake_case decode path) would
+        //    silently break MCP proxies and future server
+        //    implementations that emit the Rust-native shape.
+        let multi = parse_tool_call_result(serde_json::json!({
+            "content": [
+                { "type": "text", "text": "first block" },
+                { "type": "json", "value": { "k": "v" } }
+            ],
+            "isError": false
+        }))
+        .expect("a multi-block payload with mixed Text+Json content variants must decode");
+        assert_eq!(
+            multi.content,
+            vec![
+                Content::text("first block"),
+                Content::json(serde_json::json!({ "k": "v" })),
+            ],
+            "Vec<Content> must preserve order and variant identity through \
+             parse_tool_call_result; a custom deserializer that only handled \
+             single-block payloads would silently drop the trailing block \
+             and Covenant's RemoteTool wrapper would surface an incomplete \
+             result for every multi-block tools/call response",
+        );
+        assert!(
+            !multi.is_error,
+            "multi-block ok results must keep is_error=false; the second-block \
+             decode must not silently flip the error flag",
+        );
+
+        let snake = parse_tool_call_result(serde_json::json!({ "is_error": true })).expect(
+            "the canonical snake_case is_error must decode without error; the \
+             Wire struct's alias = \"isError\" attribute opens the camelCase \
+             surface but the Rust-native snake_case name is the underlying \
+             field and must remain a valid wire form for MCP proxies and \
+             future spec versions emitting the canonical shape",
+        );
+        assert!(
+            snake.is_error,
+            "snake_case is_error=true must map onto is_error=true; a refactor \
+             that hardened the field to camelCase-only (removing the canonical \
+             name in favour of #[serde(rename = \"isError\")] without an alias \
+             back to is_error) would silently treat every snake_case error \
+             result as a success",
+        );
+    }
+
     fn happy_handler(method: &str, params: &Value) -> Result<Value, McpClientError> {
         match method {
             "initialize" => Ok(serde_json::json!({

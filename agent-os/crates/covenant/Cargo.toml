@@ -15,6 +15,7 @@ path = "src/main.rs"
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }
 covenant-ipc = { path = "../covenant-ipc" }
+covenant-manifest = { path = "../covenant-manifest" }
 covenant-types = { path = "../covenant-types" }
 covenant-mcp = { path = "../covenant-mcp" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }

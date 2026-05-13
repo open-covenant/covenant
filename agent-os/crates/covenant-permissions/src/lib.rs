@@ -1400,6 +1400,39 @@ impl CapabilityStore for InMemoryCapabilityStore {
     }
 }
 
+/// Plain-English title for a signed capability action. Mirrors the catalog
+/// the operator console (covenant-web/lib/labels.ts) uses — keep them in
+/// sync. Callers that need a fallback for unknown actions can use
+/// [`friendly_action_title`], which returns `None` for actions outside the
+/// catalog instead of inventing a title.
+pub fn friendly_action_title(action: &str) -> Option<&'static str> {
+    match action {
+        "intent.subscribe" => Some("receive your tasks"),
+        "intent.publish" => Some("send tasks to other agents"),
+        "memory.read" => Some("read memory"),
+        "memory.write" => Some("save to memory"),
+        "memory.purge" => Some("delete memories"),
+        "memory.search" => Some("search memory"),
+        "identity.read" => Some("see identity info"),
+        "identity.rotate" => Some("rotate identity keys"),
+        "tool.web_search" => Some("search the web"),
+        "tool.summarize" => Some("summarize text"),
+        "tool.terminal" => Some("run terminal commands"),
+        "tool.file_read" => Some("read files"),
+        "tool.file_write" => Some("write files"),
+        "tool.gpu_inference" => Some("use GPU inference"),
+        "agent.spawn" => Some("start other agents"),
+        "agent.suspend" => Some("pause other agents"),
+        "chain.receipts" => Some("read settlement receipts"),
+        "chain.flush" => Some("flush receipts on-chain"),
+        "audit.purge" => Some("purge audit log entries"),
+        "capabilities.purge" => Some("purge revoked permissions"),
+        "peers.purge" => Some("purge revoked peers"),
+        "a2a.compact" => Some("compact the agent-to-agent log"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

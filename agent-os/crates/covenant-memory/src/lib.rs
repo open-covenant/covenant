@@ -1248,6 +1248,113 @@ mod tests {
         assert_eq!(hits[0].text, "close");
     }
 
+    #[test]
+    fn sqlite_embedding_bytes_pins_round_trip_little_endian_and_trailing_partial_chunk_drop() {
+        // SqliteStore::embedding_to_bytes (line 505-511) and
+        // ::embedding_from_bytes (line 513-517) are the SQLite BLOB
+        // serializer/deserializer pair the persistent memory store
+        // uses to round-trip f32 embedding vectors through the
+        // embedding column. The pair encodes f32 as little-endian
+        // 4-byte chunks with no length prefix, no version byte, no
+        // padding — embedding_to_bytes writes f32::to_le_bytes()
+        // back-to-back; embedding_from_bytes reads via
+        // chunks_exact(4) which silently drops any trailing partial
+        // chunk.
+        //
+        // sqlite_roundtrip and sqlite_recent_orders_by_created_at_desc
+        // round-trip records but never directly assert byte-level
+        // encoding shape, byte order, or trailing-chunk drop
+        // semantics. A refactor that swapped little-endian for big-
+        // endian would silently corrupt every persisted embedding
+        // across mixed-endian deployments. A refactor that switched
+        // chunks_exact to chunks would silently panic on the first
+        // truncated row. A refactor that added a length prefix would
+        // silently scramble cosine similarity for every existing row.
+
+        // (1) Empty round-trip: no allocation, no panic.
+        assert_eq!(
+            SqliteStore::embedding_to_bytes(&[]),
+            Vec::<u8>::new(),
+            "empty embedding must serialize to empty bytes",
+        );
+        assert_eq!(
+            SqliteStore::embedding_from_bytes(&[]),
+            Vec::<f32>::new(),
+            "empty bytes must deserialize to empty embedding",
+        );
+
+        // (2) Single-element round-trip.
+        let v = vec![1.5_f32];
+        assert_eq!(
+            SqliteStore::embedding_from_bytes(&SqliteStore::embedding_to_bytes(&v)),
+            v,
+            "single-element vector must round-trip exactly",
+        );
+
+        // (3) Byte order: cross-bind to f32::to_le_bytes so any
+        // switch to big-endian (e.g., 'match network byte order')
+        // surfaces immediately.
+        assert_eq!(
+            SqliteStore::embedding_to_bytes(&[1.0_f32]),
+            1.0_f32.to_le_bytes().to_vec(),
+            "embedding_to_bytes must emit little-endian f32 — a \
+             refactor that swapped to to_be_bytes under a 'match \
+             network byte order' rationale would silently corrupt \
+             every persisted embedding across mixed-endian \
+             deployments (and an in-process round-trip would still \
+             pass because both writer and reader would agree on the \
+             new order)",
+        );
+
+        // (4) Ordering preservation: first f32 → first 4 bytes.
+        let bytes = SqliteStore::embedding_to_bytes(&[1.0_f32, 2.0, 3.0]);
+        assert_eq!(bytes.len(), 12, "three f32 must produce 12 bytes");
+        assert_eq!(
+            f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            1.0_f32,
+            "first f32 must occupy bytes [0..4]",
+        );
+        assert_eq!(
+            f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            2.0_f32,
+            "second f32 must occupy bytes [4..8]",
+        );
+        assert_eq!(
+            f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            3.0_f32,
+            "third f32 must occupy bytes [8..12]",
+        );
+
+        // (5) Trailing partial chunk drop: chunks_exact(4) silently
+        // drops the trailing 1-3 bytes. A refactor that switched to
+        // chunks(4) and indexed c[0..4] would panic on the partial
+        // slice; the silent-drop contract is what protects the
+        // recall path against partial writes.
+        assert_eq!(
+            SqliteStore::embedding_from_bytes(&[0u8, 0, 0, 0, 1, 2, 3]),
+            vec![0.0_f32],
+            "embedding_from_bytes must yield exactly 1 f32 from 7 \
+             bytes — chunks_exact(4) drops the trailing 3 bytes \
+             silently, which is what protects the recall path from \
+             panicking on partially-written rows after a write-time \
+             crash",
+        );
+
+        // (6) Length scaling: 100 f32 → 400 bytes (no prefix, no
+        // padding, no overhead). A length prefix or version byte
+        // would shift this to 404+.
+        assert_eq!(
+            SqliteStore::embedding_to_bytes(&[0.0_f32; 100]).len(),
+            400,
+            "100 f32 must produce exactly 400 bytes (4 bytes per f32, \
+             no overhead) — a refactor that added a length prefix \
+             ('4-byte u32 length || 4N bytes') under an 'evolve the \
+             embedding format' rationale without a coordinated \
+             migration would shift this to 404 and silently scramble \
+             cosine similarity for every existing SQLite row",
+        );
+    }
+
     #[tokio::test]
     async fn sqlite_search_respects_tier_filter() {
         let s = SqliteStore::open_in_memory().unwrap();

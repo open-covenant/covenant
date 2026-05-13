@@ -822,6 +822,87 @@ mod tests {
     }
 
     #[test]
+    fn hash_hex_pins_16_char_zero_padded_lowercase_hex_and_empty_input_safety() {
+        // hash_hex (line 697-702) populates
+        // AuditKind::IntentDispatched.result_hash_hex on every
+        // dispatched-intent audit row. Its implementation uses
+        // DefaultHasher and formats the resulting u64 with {:016x} —
+        // zero-padded to exactly 16 lowercase hex characters. The
+        // existing hash_hex_is_stable_for_same_input pin covers
+        // determinism and uniqueness but not the three implicit
+        // contract properties of the {:016x} format that audit-row
+        // consumers and operator dashboards rely on: exact 16-char
+        // width regardless of input value (a refactor to {:x} would
+        // emit 1-16 chars and break fixed-width column alignment);
+        // lowercase hex charset (a refactor to {:016X} would silently
+        // break grep workflows and string-equality checks against
+        // known-good hashes); empty-input safety (a refactor to a
+        // hasher that panicked on empty input would crash the daemon
+        // on the first empty-result intent). Mirrors the
+        // chain_hash_pins_separator_and_sha256_composition test's
+        // parallel pin of the SHA-256 chain anchor's 64-char lowercase
+        // hex output contract.
+        for (label, input) in [
+            ("empty", &b""[..]),
+            ("single byte", &b"a"[..]),
+            ("multi byte", &b"hello"[..]),
+            (
+                "longer payload",
+                &b"the quick brown fox jumps over the lazy dog"[..],
+            ),
+        ] {
+            let out = hash_hex(input);
+            assert_eq!(
+                out.len(),
+                16,
+                "hash_hex must produce exactly 16 hex characters for \
+                 every input including {label} — the {{:016x}} format \
+                 zero-pads low-value u64 hash outputs to 16 chars; a \
+                 refactor that dropped the 016 width (e.g., to {{:x}}) \
+                 would emit variable-length hex (1-16 chars depending \
+                 on the high bits of the DefaultHasher output) and \
+                 break operator dashboards that fixed-width-pad the \
+                 result_hash_hex column, plus any downstream tool that \
+                 parses the hash by character position; got len {} for \
+                 output {:?}",
+                out.len(),
+                out,
+            );
+            assert!(
+                out.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "hash_hex output must be lowercase hex only for every \
+                 input including {label}; a refactor that swapped \
+                 {{:016x}} for {{:016X}} or applied .to_uppercase() \
+                 would silently break grep workflows (e.g., grep \
+                 'result_hash_hex.*deadbeef') and string-equality \
+                 checks against known-good hashes in fixtures or \
+                 integration tests; got output {:?}",
+                out,
+            );
+        }
+
+        // Empty-input safety as its own assertion — pinning that the
+        // call returns at all (no panic, no hang, no Empty error)
+        // even when the input byte slice is zero-length. A refactor
+        // to a hasher that required non-zero input would crash the
+        // daemon on the first dispatched intent whose result hashes
+        // to an empty byte slice (an Empty error result or an intent
+        // that produced no output) and turn the audit emit path into
+        // a denial-of-service surface that an attacker could trigger
+        // by inducing an empty result.
+        let empty = hash_hex(b"");
+        assert_eq!(
+            empty.len(),
+            16,
+            "hash_hex(b\"\") must succeed and produce 16 hex chars — \
+             pinning that empty-input is a normal, non-panicking input \
+             so the audit emit path stays safe when an intent's result \
+             is empty",
+        );
+    }
+
+    #[test]
     fn chain_hash_pins_separator_and_sha256_composition() {
         let prev = "a".repeat(64);
         let evt = "b".repeat(64);

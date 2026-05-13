@@ -9340,4 +9340,60 @@ mod tests {
             "IpcError::FrameTooLarge must not surface MAX_FRAME in the got-slot (slot-swap regression class): {message}"
         );
     }
+
+    #[test]
+    fn ipc_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation()
+    {
+        let io_err = IpcError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "socket missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "IpcError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish socket/stream disk faults from frame JSON-parse faults during read_frame/write_frame on every CLI<->daemon and HTTP gateway exchange (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("socket missing"),
+            "IpcError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "IpcError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = IpcError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "IpcError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish frame JSON-parse faults from socket/stream disk faults (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "IpcError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "IpcError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose 'Error(\"...\", line: N, column: M)' buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "IpcError::Io and IpcError::Serde Display must not converge; merging the two prefixes would lose the socket/stream-fault vs frame-JSON-parse-fault discriminator (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !serde_message.starts_with("io:"),
+            "IpcError::Io must not start with 'serde:' and IpcError::Serde must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("frame too large"),
+            "IpcError::Io must not converge with the FrameTooLarge surface 'frame too large' pinned by ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value; a transport disk-fault must not be mis-routed as a frame-size violation (string-surface-convergence regression class): {io_message}"
+        );
+        assert!(
+            !serde_message.starts_with("frame too large"),
+            "IpcError::Serde must not converge with the FrameTooLarge surface 'frame too large' pinned by ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value; a frame-JSON-parse fault must not be mis-routed as a frame-size violation (string-surface-convergence regression class): {serde_message}"
+        );
+    }
 }

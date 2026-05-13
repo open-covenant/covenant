@@ -686,6 +686,71 @@ mod tests {
     }
 
     #[test]
+    fn max_frame_pins_eight_mibibyte_value_and_u32_type_bound() {
+        // covenant_ipc::MAX_FRAME (line 66) is the per-frame size cap
+        // the IPC read side enforces at lines 571 and 588 — frames
+        // larger than MAX_FRAME bytes are rejected with the
+        // IpcError::FrameTooLarge variant. The constant is the DOS-
+        // resistance floor for the daemon's IPC surface: an oversized
+        // frame allocation would let any local client exhaust daemon
+        // memory through a single large request.
+        //
+        // protocol_constants_pin_values_and_self_consistency (above)
+        // pins PROTOCOL_NAME, PROTOCOL_VERSION, MIN/MAX_PROTOCOL_VERSION
+        // but does NOT pin MAX_FRAME. A refactor that increased
+        // MAX_FRAME to 16 or 64 MiB under a 'support larger payloads'
+        // rationale would silently widen the DOS surface; a refactor
+        // that decreased MAX_FRAME to 1 MiB would silently break
+        // legitimate large IPC requests with FrameTooLarge errors
+        // operators wouldn't immediately attribute to the constant.
+        assert_eq!(
+            MAX_FRAME,
+            8 * 1024 * 1024,
+            "MAX_FRAME must remain exactly 8 MiB — the documented v1 \
+             ceiling that protects daemon memory bounds without \
+             rejecting legitimate large payloads (e.g., a memory.write \
+             with a multi-page document or an audit recent batch with \
+             hundreds of rows). A refactor that increased to 16 or 64 \
+             MiB under a 'support larger payloads' rationale would \
+             silently widen the local DOS surface without an audited \
+             review",
+        );
+        assert_eq!(
+            MAX_FRAME, 8_388_608u32,
+            "MAX_FRAME must equal 8_388_608 in decimal — cross-binds \
+             to the literal byte count so a refactor that 'simplified' \
+             to '8 * 1024 * 1024' but accidentally typed '8 * 1000 * \
+             1000' would surface here. The MiB-vs-MB distinction is \
+             load-bearing for the DOS bound: 8 MB (8_000_000) is \
+             ~388 KiB smaller than 8 MiB and would silently reject a \
+             range of payloads that today succeed",
+        );
+
+        // Type bound: an explicit u32 annotation forces a compile
+        // error if MAX_FRAME's type drifts to usize or u64.
+        let _: u32 = MAX_FRAME;
+
+        assert!(
+            MAX_FRAME > 1024 * 1024,
+            "well-ordering: MAX_FRAME must stay above the 1 MiB \
+             DOS-protective floor — a refactor that decreased to \
+             1 MiB or 256 KiB under a 'tighter memory bounds' \
+             rationale would silently break legitimate large IPC \
+             requests with FrameTooLarge errors that operators \
+             wouldn't immediately attribute to the constant change",
+        );
+        assert!(
+            MAX_FRAME < 64 * 1024 * 1024,
+            "well-ordering: MAX_FRAME must stay below 64 MiB — \
+             anchors the upper DOS bound for any future audited bump. \
+             A refactor that pushed MAX_FRAME to 64 MiB or higher \
+             would force an audit review of the daemon's per-\
+             connection memory budget under concurrent load before \
+             this assertion would let it pass",
+        );
+    }
+
+    #[test]
     fn default_recent_limit_and_default_verify_window_pin_documented_values() {
         // covenant_ipc::default_recent_limit (line 364-366) and
         // default_verify_window (line 368-370) are the foundation

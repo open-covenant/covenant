@@ -7,6 +7,8 @@ import { type ReactNode } from "react";
 import { useDeveloperMode } from "@/lib/developerMode";
 import { CommandPalette } from "./CommandPalette";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+
 const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/", label: "Overview" },
   { href: "/intents", label: "Tasks" },
@@ -78,7 +80,11 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="dev-dot" aria-hidden />
             Developer mode
           </button>
-          <p className="hint">running on this machine</p>
+          <p className="hint">
+            {DEMO_MODE
+              ? "public sandbox · shared state"
+              : "running on this machine"}
+          </p>
         </div>
       </aside>
 

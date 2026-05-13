@@ -826,6 +826,102 @@ provider = "made-up"
     }
 
     #[test]
+    fn provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping() {
+        // provider_from_config matches LlmSection.provider against five
+        // exact slugs (mock, ollama, anthropic, openai, deepseek). The
+        // existing tests pin two arms (anthropic via
+        // provider_config_parses_anthropic_block; ollama via
+        // provider_config_falls_back_to_default_model) and the
+        // unknown-provider rejection arm (provider_config_with_unknown_provider_returns_none),
+        // but three exact-match arms — mock, openai, and deepseek — are
+        // not pinned. A refactor that renamed any of the three slugs
+        // would silently send configured deployments through the
+        // unknown-provider arm into the documented Ollama/mock fallback
+        // ladder; the operator's secrets.toml would still parse, but
+        // the configured provider would never be selected and the
+        // daemon would silently degrade to the auto-detect ladder on
+        // every restart with no parse-time signal.
+        //
+        // openai and deepseek both dispatch to OpenAiProvider (with
+        // distinct base URLs supplied by ::openai and ::deepseek
+        // constructors). Both .name() returns are therefore "openai" —
+        // the deepseek arm is pinned by asserting the slug returns
+        // Some(_) (i.e., does NOT fall through to the unknown arm),
+        // not by name-distinction. This keeps the test deterministic
+        // and offline-friendly without calling .complete() on any
+        // provider.
+        let mock_toml = r#"
+[llm]
+provider = "mock"
+"#;
+        let cfg: ProviderConfig = toml::from_str(mock_toml).unwrap();
+        let p = provider_from_config(&cfg).expect(
+            "the mock arm must dispatch to MockProvider; a slug rename \
+             (e.g., to 'stub') would silently fall through into the \
+             auto-detect ladder and pick a real Ollama provider in \
+             environments where Ollama is reachable, breaking \
+             deterministic test-fixture deployments",
+        );
+        assert_eq!(
+            p.name(),
+            "mock",
+            "mock provider must surface name='mock' so operator dashboards \
+             can identify deterministic test-fixture deployments at a glance",
+        );
+
+        let openai_toml = r#"
+[llm]
+provider = "openai"
+api_key = "sk-test"
+model = "gpt-4o-mini"
+"#;
+        let cfg: ProviderConfig = toml::from_str(openai_toml).unwrap();
+        let p = provider_from_config(&cfg).expect(
+            "the openai arm must dispatch to OpenAiProvider; a slug \
+             rename or merge into a generic 'openai-compat' arm would \
+             silently fall through into the auto-detect ladder",
+        );
+        assert_eq!(
+            p.name(),
+            "openai",
+            "openai-configured provider must surface name='openai'",
+        );
+
+        let deepseek_toml = r#"
+[llm]
+provider = "deepseek"
+api_key = "sk-test"
+model = "deepseek-chat"
+"#;
+        let cfg: ProviderConfig = toml::from_str(deepseek_toml).unwrap();
+        let p = provider_from_config(&cfg).expect(
+            "the deepseek arm must dispatch to OpenAiProvider via the \
+             ::deepseek constructor; a slug rename (e.g., to \
+             'deepseek-chat' for parity with the model name) or a merge \
+             into a generic 'openai-compat' arm would silently fall \
+             through into the unknown-provider arm and the daemon's \
+             auto-detect ladder would pick Ollama or mock with no \
+             parse-time signal",
+        );
+        // OpenAiProvider::name() is the type name, not the constructor
+        // name; both ::openai and ::deepseek constructors share name
+        // == "openai". The deepseek arm's pin is the Some(_) above —
+        // distinguishing the base URL would require downcasting the
+        // Box<dyn Provider> back to OpenAiProvider, which the trait
+        // object does not expose. Keep the assertion at the level the
+        // public surface supports.
+        assert_eq!(
+            p.name(),
+            "openai",
+            "deepseek-configured provider also surfaces name='openai' \
+             because both arms share OpenAiProvider; the deepseek arm's \
+             distinct identity is the base URL bound by \
+             OpenAiProvider::deepseek (https://api.deepseek.com), not \
+             the provider name",
+        );
+    }
+
+    #[test]
     fn provider_config_serde_pins_optional_llm_section_default() {
         // ProviderConfig is the top-level secrets.toml decoder for the
         // [llm] section. The struct carries a single field — llm:

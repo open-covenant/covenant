@@ -889,6 +889,79 @@ filesystem = "host"
         assert_eq!(redacted, "failed <redacted-path> using <redacted-path>");
     }
 
+    #[test]
+    fn redact_stderr_pins_multi_occurrence_no_match_passthrough_and_empty_path_skip() {
+        // GvisorRunner::redact_stderr (line 308-323) is the helper that
+        // scrubs host paths from a sandboxed agent's stderr before the
+        // daemon surfaces the error to operator dashboards or audit
+        // rows. The existing gvisor_runner_redacts_host_paths_from_stderr
+        // pin covers the happy path (two distinct paths, each appearing
+        // once, both replaced). Three deterministic branches remain
+        // unpinned and are this slice's target:
+        //
+        //   (1) Multi-occurrence replacement — str::replace replaces
+        //       all occurrences, so the same path appearing twice must
+        //       redact both copies. A refactor to .replacen(s, repl, 1)
+        //       would leak the second copy silently.
+        //   (2) No-match pass-through — a path that does not appear in
+        //       stderr must leave stderr identical. A refactor that
+        //       inserted a 'no redaction needed' breadcrumb or
+        //       truncated stderr would actively obscure the real cause
+        //       of agent failures.
+        //   (3) Empty-path skip — line 312's `if !path.is_empty()`
+        //       branch is defensive: a PathBuf::new() has empty
+        //       .display() and str::replace("", repl) would insert the
+        //       replacement between every character of stderr. A
+        //       refactor that dropped the empty check would render the
+        //       entire stderr as a sequence of '<redacted-path>'
+        //       tokens, hiding the real diagnostic.
+        //
+        // The $HOME redaction branch (line 316-321) reads global env
+        // state via std::env::var_os and is intentionally NOT covered
+        // by this slice because std::env::set_var is racy under
+        // cargo's default parallel test execution; covering it
+        // requires serial-test infrastructure that should be a
+        // separate slice.
+        let path = PathBuf::from("/tmp/covenant-agent-bundle");
+        let stderr =
+            "ENOENT /tmp/covenant-agent-bundle; also /tmp/covenant-agent-bundle failed to unmount";
+        let redacted = GvisorRunner::redact_stderr(stderr, &[&path]);
+        assert_eq!(
+            redacted, "ENOENT <redacted-path>; also <redacted-path> failed to unmount",
+            "redact_stderr must replace every occurrence of each \
+             path — a refactor to replacen(s, repl, 1) would leak \
+             the second copy of /tmp/covenant-agent-bundle through \
+             to operator dashboards and audit rows, breaking the \
+             documented 'scrub all host paths' contract",
+        );
+
+        let missing = PathBuf::from("/usr/local/some-path-not-in-stderr");
+        let plain_stderr = "agent missing required env var FOO";
+        let passthrough = GvisorRunner::redact_stderr(plain_stderr, &[&missing]);
+        assert_eq!(
+            passthrough, plain_stderr,
+            "redact_stderr must return stderr verbatim when no path \
+             occurs in it — a refactor that emitted a default \
+             'no redaction needed' breadcrumb or truncated stderr to \
+             a fixed length would obscure the actionable diagnostic \
+             that pointed at the env-var fix",
+        );
+
+        let real_path = PathBuf::from("/tmp/covenant-real");
+        let empty_path = PathBuf::new();
+        let mixed_stderr = "failed /tmp/covenant-real with kernel error";
+        let mixed = GvisorRunner::redact_stderr(mixed_stderr, &[&empty_path, &real_path]);
+        assert_eq!(
+            mixed, "failed <redacted-path> with kernel error",
+            "redact_stderr must skip empty paths (line 312) and only \
+             redact the real one; a refactor that dropped the empty-\
+             path guard would let str::replace(\"\", repl) insert \
+             '<redacted-path>' between every character of stderr, \
+             rendering the output as meaningless redacted-path noise \
+             instead of the real error message",
+        );
+    }
+
     #[tokio::test]
     async fn gvisor_runner_cleans_bundle_when_runsc_is_missing() {
         let dir = tempdir().unwrap();

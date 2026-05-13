@@ -1857,6 +1857,87 @@ mod tests {
         assert_eq!(refill_eta_ms(&b, 1, 100), u64::MAX);
     }
 
+    #[test]
+    fn refill_eta_ms_pins_div_ceil_rounding_up_for_non_exact_division() {
+        // covenant_budget::refill_eta_ms (line 236-246) computes the
+        // ETA via:
+        //
+        //   let ms = (needed * MS_PER_HOUR).div_ceil(bucket.capacity as u128);
+        //
+        // The docstring (line 233-235) documents the return as the
+        // moment 'the bucket will hold AT LEAST `credits` tokens' —
+        // 'at least' requires the remainder to round UP, otherwise
+        // an operator polling the ETA and retrying try_debit at the
+        // returned tick would get one more BudgetError::Exhausted
+        // before the bucket actually has the credits.
+        //
+        // refill_eta_grows_with_shortfall_at_capacity_rate (line
+        // 1837) tests capacity=10 with needed=1 and 2, both of which
+        // produce exact divisions:
+        //   needed=1: 3_600_000 / 10 = 360_000 (div_ceil == floor div)
+        //   needed=2: 7_200_000 / 10 = 720_000 (div_ceil == floor div)
+        // so the rounding behavior is exercised by zero tests. Pick
+        // capacities that do NOT divide MS_PER_HOUR (3_600_000)
+        // cleanly so the .71... or .72... remainder forces div_ceil
+        // to round UP one ms past floor division.
+        //
+        // A refactor that swapped .div_ceil for plain '/' under a
+        // 'clippy suggests using the natural division operator'
+        // rationale would silently emit ETAs one ms earlier than the
+        // bucket actually refills. The existing capacity=10 fixtures
+        // would still pass; operators with capacity=7, 11, 13, or any
+        // other non-divisor of 3_600_000 would see one extra
+        // BudgetError::Exhausted on every retry-at-eta workflow.
+
+        // capacity=7/hr -> 3_600_000 / 7 = 514_285 remainder 5
+        // -> div_ceil yields 514_286, floor div yields 514_285.
+        // The 1ms difference is the contract.
+        let b = Bucket {
+            display: "x@y".into(),
+            capacity: 7,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        assert_eq!(
+            refill_eta_ms(&b, 1, 100),
+            100 + 514_286,
+            "capacity=7 with needed=1 must yield ETA=now+514_286 \
+             (div_ceil of 3_600_000/7), NOT now+514_285 (floor div) — \
+             a refactor that swapped .div_ceil for '/' under a clippy \
+             'use the natural division operator' suggestion would \
+             silently shift the returned ETA one ms earlier than the \
+             bucket actually refills; operators retrying try_debit at \
+             the reported ETA would get one more BudgetError::Exhausted \
+             before the bucket has the credits; the existing capacity=10 \
+             fixture would still pass because 3_600_000/10 divides \
+             exactly. Cross-binds refill_eta_grows_with_shortfall_at_capacity_rate \
+             (line 1837) as the exact-division ancestor"
+        );
+
+        // capacity=11/hr -> 3_600_000 / 11 = 327_272 remainder 8
+        // -> div_ceil yields 327_273, floor div yields 327_272. A
+        // second non-exact rate anchors the contract on a distinct
+        // remainder so a refactor that special-cased capacity=7
+        // (say, via a lookup table) without honoring div_ceil
+        // semantics generally would surface here.
+        let b = Bucket {
+            display: "x@y".into(),
+            capacity: 11,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        assert_eq!(
+            refill_eta_ms(&b, 1, 100),
+            100 + 327_273,
+            "capacity=11 with needed=1 must yield ETA=now+327_273 \
+             (div_ceil of 3_600_000/11), NOT now+327_272 (floor div) \
+             — anchors the div_ceil contract on a second non-exact \
+             rate so a refactor that special-cased a single capacity \
+             value (without honoring the general div_ceil semantic) \
+             cannot land silently"
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_set_capacity_seeds_full_bucket() {
         let l = InMemoryLedger::new();

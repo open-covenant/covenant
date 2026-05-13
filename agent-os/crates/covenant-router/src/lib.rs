@@ -241,6 +241,85 @@ required = {caps:?}
     }
 
     #[test]
+    fn route_pins_insertion_order_tie_breaking_on_equal_scores() {
+        // covenant_router::Router::route (line 78-115) picks the
+        // highest-scoring agent against an intent. The tie-breaker is
+        // documented through the strict greater-than comparison on
+        // line 106:
+        //
+        //   best.as_ref().is_none_or(|b| score > b.score)
+        //
+        // When two agents produce the same score (e.g., both declare
+        // the same capability and the intent text overlaps the same
+        // keywords), the FIRST agent encountered in self.agents
+        // iteration wins. self.agents is a Vec, so insertion order is
+        // the deterministic tie-breaker.
+        //
+        // picks_higher_score_when_two_match (line 223) exercises the
+        // no-tie case (research scores 2 on 'find papers and
+        // summarize them' while renderer scores 1); the tie case is
+        // not covered. A refactor that changed > to >= during a
+        // 'simplify' pass would silently flip the tie-breaker to
+        // last-wins. A refactor that swapped self.agents from Vec to
+        // BTreeMap-by-id during a 'use sorted collections' pass would
+        // silently change tie-breaking to alphabetical.
+
+        // Two agents declaring the SAME capability. Any intent that
+        // matches the capability's keyword scores both at exactly the
+        // same value, so the only thing that can pick a winner is the
+        // documented insertion-order rule.
+        let r = Router::from_cards(vec![
+            build_card("primary", vec!["tool.web_search"]),
+            build_card("backup", vec!["tool.web_search"]),
+        ]);
+        let m = r
+            .route("search for papers")
+            .expect("at least one agent must match 'search'");
+        assert_eq!(
+            m.agent_id, "primary",
+            "tie-broken by insertion order: 'primary' was registered \
+             first, so 'primary' wins the tie — a refactor that \
+             changed the strict greater-than to greater-than-or-equal \
+             would silently flip the tie-breaker to last-wins and the \
+             'backup' agent would surface on every tied route; the \
+             existing picks_higher_score_when_two_match pin would \
+             still pass because it relies on a strict score \
+             difference, but operator dashboards observing routing \
+             decisions on equal-scoring agents would see \
+             non-deterministic agent selection across daemon restarts \
+             that re-order Router::from_cards",
+        );
+
+        // Reverse the registration order; the winner must flip with
+        // insertion order, NOT stay the same (which would indicate an
+        // alphabetical or attribute-based tie-breaker). This proves
+        // the contract is order-of-iteration rather than any inherent
+        // property of the AgentCard.
+        let r = Router::from_cards(vec![
+            build_card("backup", vec!["tool.web_search"]),
+            build_card("primary", vec!["tool.web_search"]),
+        ]);
+        let m = r
+            .route("search for papers")
+            .expect("at least one agent must match 'search'");
+        assert_eq!(
+            m.agent_id, "backup",
+            "with reversed registration order, the first-registered \
+             agent now wins — confirms the tie-breaker is the \
+             documented Vec iteration order and not an alphabetical \
+             or attribute-based property. A refactor that swapped \
+             self.agents from Vec to BTreeMap-by-id during a 'use \
+             sorted collections for deterministic iteration' pass \
+             would silently shift tie-breaking to alphabetical \
+             (here, 'backup' < 'primary' so the alphabetical winner \
+             would coincidentally still be 'backup', but the first \
+             pin above would surface the regression on the original \
+             order); pinning both orderings anchors insertion-order \
+             as the contract independent of any alphabetical bias",
+        );
+    }
+
+    #[test]
     fn capability_keywords_pins_each_documented_arm_and_unknown_falls_to_empty() {
         for (cap, anchor) in [
             ("tool.web_search", "search"),

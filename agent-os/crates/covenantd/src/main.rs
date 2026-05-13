@@ -413,3 +413,87 @@ fn default_ignorefile() -> &'static str {
      **/credentials.json\n\
      **/.aws/credentials\n"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {
+        // default_ignorefile (line 396-415) is the security-critical
+        // bootstrap content written to ~/.covenant/.covenantignore on
+        // first daemon start (line 132). The function encodes the
+        // documented floor of credential patterns the daemon must NOT
+        // auto-ingest under any operator config — .env, secrets.toml,
+        // secrets.json, *.pem, *.key, id_rsa*, id_ed25519*, .ssh/**,
+        // credentials, credentials.json, .aws/credentials.
+        //
+        // The function has no direct test today; its content is
+        // exercised only indirectly through the daemon's bootstrap
+        // path. A refactor that dropped '**/.env' under a 'let
+        // operators decide their own rules' rationale would silently
+        // let every new daemon auto-ingest .env files containing API
+        // keys; a refactor that renamed '**/id_rsa*' to '*id_rsa*'
+        // would silently widen the glob (root-only vs any-depth) and
+        // let id_rsa-style filenames slip through in nested locations.
+        let body = default_ignorefile();
+
+        for pattern in [
+            "**/.env",
+            "**/.env.*",
+            "**/secrets.toml",
+            "**/secrets.json",
+            "**/*.pem",
+            "**/*.key",
+            "**/id_rsa*",
+            "**/id_ed25519*",
+            "**/.ssh/**",
+            "**/credentials",
+            "**/credentials.json",
+            "**/.aws/credentials",
+        ] {
+            assert!(
+                body.contains(pattern),
+                "default_ignorefile must contain {pattern:?} as a substring \
+                 — this is the documented floor that protects every new \
+                 daemon from auto-ingesting credentials. A refactor that \
+                 dropped or renamed this pattern would silently let \
+                 matching files leak into the audit chain and memory \
+                 store on first daemon start, before the operator has a \
+                 chance to edit .covenantignore",
+            );
+        }
+
+        assert!(
+            body.starts_with('#'),
+            "default_ignorefile must begin with a '#' comment line so \
+             operators opening ~/.covenant/.covenantignore see a \
+             documented file rather than raw glob patterns — the \
+             leading comment block explains the gitignore-style \
+             semantics ('!' un-ignores; '/' anchors; last matching \
+             rule wins) that operators rely on when extending the \
+             rule set",
+        );
+
+        assert!(
+            body.contains("# .covenantignore"),
+            "default_ignorefile must carry the documented header line \
+             '# .covenantignore — ...' so the file is self-identifying \
+             when opened in isolation (e.g., from a backup tarball or \
+             a copied home directory); a refactor that dropped the \
+             header would force operators to remember which daemon \
+             owns the file",
+        );
+
+        assert!(
+            body.contains("gitignore-style"),
+            "default_ignorefile must surface the 'gitignore-style' \
+             contract in the comment block so operators know the \
+             match semantics (last rule wins, '!' un-ignore, '/' \
+             anchor) WITHOUT consulting external docs — a refactor \
+             that dropped this phrase would silently let operators \
+             assume CSV or fnmatch semantics and introduce broken \
+             un-ignore rules that mask credential leaks",
+        );
+    }
+}

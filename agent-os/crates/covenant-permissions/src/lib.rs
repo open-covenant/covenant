@@ -5362,4 +5362,110 @@ mod tests {
             "PermissionError::InvalidScope Display drifted (typo or dropped 'capability scope' prefix regression class)"
         );
     }
+
+    #[test]
+    fn permission_error_io_and_serde_and_ed25519_display_messages_pin_prefix_and_external_source_display_delegation() {
+        let io_err = PermissionError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "caps.jsonl missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "PermissionError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish capability-file disk faults from JSON-parse faults, crypto faults, and the four security-relevant string surfaces (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("caps.jsonl missing"),
+            "PermissionError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}) (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "PermissionError::Io must NOT surface the std::io::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = PermissionError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "PermissionError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish capability JSON-parse faults from disk faults and crypto faults (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "PermissionError::Serde must surface the inner serde_json::Error Display rendering after the colon (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "PermissionError::Serde must NOT surface the serde_json::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        // Produce a SignatureError via a verify_strict failure: sign one
+        // message, then verify against a different message body. This is
+        // the simplest reliable path — VerifyingKey::from_bytes accepts
+        // most malformed-looking byte patterns when they happen to decode
+        // to a valid Edwards point.
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let signature = ed25519_dalek::Signer::sign(&signing_key, b"original message");
+        let verifying_key = signing_key.verifying_key();
+        let crypto_source = verifying_key
+            .verify_strict(b"different message", &signature)
+            .expect_err("verify_strict must fail on mismatched message");
+        let crypto_err = PermissionError::Crypto(crypto_source);
+        let crypto_message = format!("{crypto_err}");
+        assert!(
+            crypto_message.starts_with("ed25519: "),
+            "PermissionError::Crypto must surface the literal 'ed25519: ' bootstrap-stage prefix so audit-log filters can distinguish capability crypto faults (malformed pubkey/signature bytes, signature verification failure) from disk faults, JSON-parse faults, and the four security-relevant string surfaces (dropped-prefix regression class): {crypto_message}"
+        );
+        assert!(
+            crypto_message.len() > "ed25519: ".len(),
+            "PermissionError::Crypto must surface the inner ed25519_dalek::SignatureError Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render the SignatureError struct fields and a 'less verbose' refactor that dropped {{0}} entirely would leave only the prefix (dropped-source-rendering regression class on the {{0}} interpolation): {crypto_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "PermissionError::Io and PermissionError::Serde Display must not converge (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert_ne!(
+            io_message, crypto_message,
+            "PermissionError::Io and PermissionError::Crypto Display must not converge (prefix-convergence regression class): io={io_message} crypto={crypto_message}"
+        );
+        assert_ne!(
+            serde_message, crypto_message,
+            "PermissionError::Serde and PermissionError::Crypto Display must not converge (prefix-convergence regression class): serde={serde_message} crypto={crypto_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !io_message.starts_with("ed25519:"),
+            "PermissionError::Io must not start with 'serde:' or 'ed25519:' (sibling-prefix-swap regression class): {io_message}"
+        );
+        assert!(
+            !serde_message.starts_with("io:") && !serde_message.starts_with("ed25519:"),
+            "PermissionError::Serde must not start with 'io:' or 'ed25519:' (sibling-prefix-swap regression class): {serde_message}"
+        );
+        assert!(
+            !crypto_message.starts_with("io:") && !crypto_message.starts_with("serde:"),
+            "PermissionError::Crypto must not start with 'io:' or 'serde:' (sibling-prefix-swap regression class): {crypto_message}"
+        );
+
+        let security_surfaces = [
+            "capability expired at",
+            "signature does not verify against granted_by pubkey",
+            "granted_by pubkey does not match the daemon trust root",
+            "invalid capability scope:",
+        ];
+        for surface in security_surfaces {
+            assert!(
+                !io_message.starts_with(surface),
+                "PermissionError::Io must not converge with the security-relevant string surface '{surface}' (security-surface-convergence regression class): {io_message}"
+            );
+            assert!(
+                !serde_message.starts_with(surface),
+                "PermissionError::Serde must not converge with the security-relevant string surface '{surface}' (security-surface-convergence regression class): {serde_message}"
+            );
+            assert!(
+                !crypto_message.starts_with(surface),
+                "PermissionError::Crypto must not converge with the security-relevant string surface '{surface}' (security-surface-convergence regression class): {crypto_message}"
+            );
+        }
+    }
 }

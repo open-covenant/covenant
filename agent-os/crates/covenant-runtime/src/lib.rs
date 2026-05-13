@@ -2089,4 +2089,60 @@ cpu_ms_per_task = 5000
             "RunnerError::MalformedStdout must NOT surface the serde_json::Error's Debug rendering; a Debug-formatted source would expose internal struct fields like 'Error(\"...\", line: N, column: M)' that can leak buffer position structs into operator logs (Debug-vs-Display formatting regression class on the source interpolation): {message}"
         );
     }
+
+    #[test]
+    fn runner_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
+        let io_err = RunnerError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "agent.toml missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "RunnerError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish runner pipe/file-read faults from JSON-parse faults (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("agent.toml missing"),
+            "RunnerError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "RunnerError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = RunnerError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "RunnerError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish runner JSON-parse faults from pipe/file-read faults (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "RunnerError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "RunnerError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose 'Error(\"...\", line: N, column: M)' buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "RunnerError::Io and RunnerError::Serde Display must not converge; merging the two prefixes would lose the pipe/file-read vs JSON-parse-fault discriminator (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !serde_message.starts_with("io:"),
+            "RunnerError::Io must not start with 'serde:' and RunnerError::Serde must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} serde={serde_message}"
+        );
+        let malformed_prefix = "agent stdout was not a valid AgentResult JSON line:";
+        assert!(
+            !io_message.starts_with(malformed_prefix),
+            "RunnerError::Io must not converge with RunnerError::MalformedStdout prefix; a pipe/file-read fault must not be mis-routed as an AgentResult-stdout-parse fault (MalformedStdout-convergence regression class): {io_message}"
+        );
+        assert!(
+            !serde_message.starts_with(malformed_prefix),
+            "RunnerError::Serde must not converge with RunnerError::MalformedStdout prefix; a generic JSON-parse fault must not be mis-routed as an AgentResult-stdout-parse fault (MalformedStdout-convergence regression class): {serde_message}"
+        );
+    }
 }

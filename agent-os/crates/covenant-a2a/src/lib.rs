@@ -1623,6 +1623,92 @@ mod tests {
     }
 
     #[test]
+    fn auto_retry_policy_serde_pins_five_key_wire_shape() {
+        // auto_retry_policy_serde_pins_empty_object_matches_default covers
+        // the decode-time defaults: {} decodes to Default and each
+        // function-backed default value is checked. That test does NOT
+        // assert the serialize-time wire shape — a regression that added
+        // #[serde(skip_serializing_if)] to any of the five fields would
+        // silently shrink the wire object while still passing the
+        // empty-object round-trip check (absence decodes back to default).
+        // A2AAutoRetryPolicy embeds in A2AAutoRetryReport (the inner
+        // payload of Response::A2AAutoRetried) and is mirrored into
+        // AuditKind::A2AAutoRetrySchedulerScan, so operator dashboards
+        // and audit-replay consumers destructure on the five-key shape.
+        // Pin the closed key set and the per-key default value so a
+        // skip_serializing_if regression fails loud at the boundary.
+        let canonical = A2AAutoRetryPolicy::default();
+
+        let wire = serde_json::to_value(canonical).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("A2AAutoRetryPolicy serialises as a JSON object");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "enabled",
+            "min_lease_age_ms",
+            "max_attempts",
+            "max_requeues",
+            "scan_limit",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "A2AAutoRetryPolicy wire form must be exactly five keys; \
+             a stray #[serde(skip_serializing_if)] on any field would \
+             silently drop the key whenever the value matched the default \
+             and operator dashboards would lose the policy field that the \
+             decode-time default-pin test cannot see",
+        );
+
+        assert_eq!(
+            obj.get("enabled"),
+            Some(&serde_json::json!(false)),
+            "Default enabled must surface as false on the wire — a \
+             skip_serializing_if = std::ops::Not::not regression would \
+             silently drop the key for the documented disabled-by-default \
+             posture",
+        );
+        assert_eq!(
+            obj.get("min_lease_age_ms")
+                .and_then(serde_json::Value::as_u64),
+            Some(300_000),
+            "Default min_lease_age_ms must surface as the function-backed \
+             default 300_000 — cross-binds the wire form to \
+             default_auto_retry_min_lease_age_ms()",
+        );
+        assert_eq!(
+            obj.get("max_attempts").and_then(serde_json::Value::as_u64),
+            Some(3),
+            "Default max_attempts must surface as the function-backed \
+             default 3 — cross-binds the wire form to \
+             default_auto_retry_max_attempts()",
+        );
+        assert_eq!(
+            obj.get("max_requeues").and_then(serde_json::Value::as_u64),
+            Some(1),
+            "Default max_requeues must surface as the function-backed \
+             default 1 — cross-binds the wire form to \
+             default_auto_retry_max_requeues()",
+        );
+        assert_eq!(
+            obj.get("scan_limit").and_then(serde_json::Value::as_u64),
+            Some(100),
+            "Default scan_limit must surface as the function-backed \
+             default 100 — cross-binds the wire form to \
+             default_auto_retry_scan_limit()",
+        );
+
+        let back: A2AAutoRetryPolicy = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, canonical,
+            "Default policy must round-trip through serde_json verbatim — \
+             the Eq derive is the contract every audit-replay consumer leans on",
+        );
+    }
+
+    #[test]
     fn auto_retry_evaluates_only_old_idempotent_in_flight_tasks() {
         let mut task = dummy_task();
         task.idempotency = Some(A2AIdempotency::new(

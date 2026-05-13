@@ -641,6 +641,155 @@ mod tests {
     }
 
     #[test]
+    fn runtime_trace_serde_pins_snake_case_tag_and_per_variant_field_set() {
+        // RuntimeTrace (line 49-84) is the mid-run signal enum the
+        // Hermes gateway emits over SSE and the daemon ingests via
+        // serde_json::from_str. The enum carries
+        //
+        //     #[serde(tag = "type", rename_all = "snake_case")]
+        //
+        // so the four variants surface on the wire with a tagged
+        // "type" field (NOT the externally-tagged default which would
+        // wrap the variant under a JSON key named after the variant)
+        // and snake_case slugs (NOT the camelCase the upstream MCP
+        // JSON-RPC convention uses).
+        //
+        // The slugs are pinned at the covenant-audit layer through
+        // AuditKind::Hermes* variants (audit_kind_hermes_tool_invoked_serde_pins_four_field_variant
+        // et al at covenant-audit/src/lib.rs line 3045+), but those
+        // pins exercise a DIFFERENT enum with its own serde attributes.
+        // A refactor that changed RuntimeTrace's rename_all to
+        // camelCase, dropped the tag attribute, renamed a field, or
+        // added a stray #[serde(default)]/skip_serializing_if to a
+        // required field would silently break SSE ingestion while
+        // every audit-layer test continued to pass. The daemon's
+        // runtime_trace_to_audit_kind_pins_each_variant_mapping_preview_redaction_and_responded_to_resolved_rename
+        // pin (covenantd/src/lib.rs line 5142) only exercises the
+        // in-process struct mapping AFTER a successful SSE decode;
+        // the wire-form decode itself is unpinned.
+
+        let invoked = RuntimeTrace::HermesToolInvoked {
+            run_id: "r1".into(),
+            tool: "terminal".into(),
+            preview: "ls".into(),
+        };
+        let invoked_wire = serde_json::to_value(&invoked).unwrap();
+        assert_eq!(
+            invoked_wire,
+            serde_json::json!({
+                "type": "hermes_tool_invoked",
+                "run_id": "r1",
+                "tool": "terminal",
+                "preview": "ls",
+            }),
+            "HermesToolInvoked must serialize with type=hermes_tool_invoked \
+             plus three flattened fields (run_id, tool, preview). A refactor \
+             that changed rename_all to camelCase would emit hermesToolInvoked \
+             and the daemon's SSE deserializer would fail with 'unknown variant'; \
+             a refactor that dropped the tag attribute would emit the \
+             externally-tagged default (variant name as a wrapping JSON key) \
+             and the SSE consumer would also fail",
+        );
+        assert_eq!(
+            serde_json::from_value::<RuntimeTrace>(invoked_wire.clone()).unwrap(),
+            invoked,
+            "round-trip must reconstruct the original variant verbatim",
+        );
+
+        // Closed-key-set anchor for HermesToolInvoked. A stray
+        // #[serde(skip_serializing_if = ...)] on any field would drop
+        // the key from the wire payload; this assertion catches that
+        // class of regression directly.
+        let invoked_obj = invoked_wire.as_object().unwrap();
+        let invoked_keys: std::collections::BTreeSet<&str> =
+            invoked_obj.keys().map(String::as_str).collect();
+        let expected_invoked_keys: std::collections::BTreeSet<&str> =
+            ["type", "run_id", "tool", "preview"].into_iter().collect();
+        assert_eq!(
+            invoked_keys, expected_invoked_keys,
+            "HermesToolInvoked wire form must have exactly four keys; \
+             a refactor that added a skip_serializing_if on any field, \
+             or that introduced a new field without updating this pin, \
+             would surface here as a key-set divergence",
+        );
+
+        let completed = RuntimeTrace::HermesToolCompleted {
+            run_id: "r1".into(),
+            tool: "terminal".into(),
+            duration_ms: 42,
+            error: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&completed).unwrap(),
+            serde_json::json!({
+                "type": "hermes_tool_completed",
+                "run_id": "r1",
+                "tool": "terminal",
+                "duration_ms": 42,
+                "error": false,
+            }),
+            "HermesToolCompleted slug, field names, and integer/bool wire types \
+             must match the daemon's SSE decoder; a rename of duration_ms or \
+             error (e.g., to durationMs camelCase) would silently drop the \
+             field at decode time",
+        );
+
+        let requested = RuntimeTrace::HermesApprovalRequested {
+            run_id: "r1".into(),
+            choices: vec!["approve".into(), "deny".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&requested).unwrap(),
+            serde_json::json!({
+                "type": "hermes_approval_requested",
+                "run_id": "r1",
+                "choices": ["approve", "deny"],
+            }),
+            "HermesApprovalRequested choices must remain a JSON array of strings; \
+             a refactor that wrapped each choice in a label-value object pair \
+             would break the SSE decoder and the audit-row representation",
+        );
+
+        let responded = RuntimeTrace::HermesApprovalResponded {
+            run_id: "r1".into(),
+            choice: "approve".into(),
+            resolved: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(&responded).unwrap(),
+            serde_json::json!({
+                "type": "hermes_approval_responded",
+                "run_id": "r1",
+                "choice": "approve",
+                "resolved": 1,
+            }),
+            "HermesApprovalResponded resolved must serialize as a JSON number \
+             (u64 in Rust). A refactor that widened to u128 or narrowed to u32 \
+             with truncation would surface here; a refactor that renamed the \
+             field to 'count' under a 'clearer name' rationale would also \
+             surface",
+        );
+
+        // Negative slug rejection: a camelCase tag must NOT decode.
+        // Pins that rename_all stays a whitelist so a future
+        // #[serde(other)] arm cannot silently absorb mis-cased
+        // upstream payloads from a future Hermes gateway version.
+        assert!(
+            serde_json::from_value::<RuntimeTrace>(serde_json::json!({
+                "type": "hermesToolInvoked",
+                "run_id": "r1",
+                "tool": "terminal",
+                "preview": "ls",
+            }))
+            .is_err(),
+            "camelCase slug 'hermesToolInvoked' must be rejected — pins that \
+             rename_all = snake_case stays a whitelist. A dropped or flipped \
+             rename_all attribute would let this decode and the daemon would \
+             ingest events with the wrong variant identity",
+        );
+    }
+
+    #[test]
     fn parse_result_pins_first_non_empty_line_fallback_and_malformed_stdout() {
         let leading_blank =
             b"\n{\"text\":\"hello\",\"sources\":[]}\nthen garbage that must be ignored\n";

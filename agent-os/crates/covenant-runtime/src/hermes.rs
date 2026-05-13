@@ -685,6 +685,81 @@ mod tests {
     }
 
     #[test]
+    fn strip_cr_pins_only_one_trailing_cr_and_preserves_middle_and_leading() {
+        // hermes::strip_cr (line 385-391) is the SSE line-end
+        // normalizer that runs on every line of an SSE frame before
+        // parse_sse_frame slices the leading 'data:' prefix. The
+        // function strips at most ONE trailing \r — the standard SSE
+        // line ending under both LF and CRLF wire conventions, where
+        // the framing layer already split on \n leaving an optional
+        // \r at the end of each line.
+        //
+        // parse_sse_frame_pins_strict_crlf_frame_parses_identically_to_lf
+        // (above) verifies the COMPOSITION of strip_cr inside
+        // parse_sse_frame's lf-vs-crlf parity but never directly pins
+        // strip_cr's arms. This pin closes:
+        //   - only one trailing \r is stripped (not multiple)
+        //   - input without trailing \r passes through untouched
+        //   - middle \r is preserved (suffix-only strip)
+        //   - empty input is safe (no panic, no underflow)
+        //
+        // A refactor that switched to .trim_end_matches(b'\r') would
+        // strip multiple trailing \r and break SSE servers that emit
+        // \r\r as a deliberate keepalive boundary. A refactor that
+        // switched to .replace would strip middle \r from data lines
+        // and silently mangle event payloads.
+        assert_eq!(
+            strip_cr(b"hello\r"),
+            b"hello",
+            "trailing \\r must be stripped — the canonical SSE line \
+             ending under CRLF",
+        );
+        assert_eq!(
+            strip_cr(b"hello"),
+            b"hello",
+            "no trailing \\r must be a no-op — the LF-only SSE line \
+             ending must pass through unchanged",
+        );
+        assert_eq!(
+            strip_cr(b"hello\r\r"),
+            b"hello\r",
+            "exactly one trailing \\r must be stripped, not multiple — \
+             a refactor that switched to trim_end_matches(b'\\r') under \
+             a 'be permissive of pathological multi-\\r servers' \
+             rationale would silently strip both, masking double-CR-LF \
+             keepalive boundaries that some SSE implementations emit \
+             as inter-event separators",
+        );
+        assert_eq!(
+            strip_cr(b"\r"),
+            b"",
+            "a bare \\r must strip to empty — pinning the underflow-\
+             safety boundary on the smallest CR-bearing input",
+        );
+        assert_eq!(
+            strip_cr(b""),
+            b"",
+            "empty input must return empty without panic — a refactor \
+             that 'simplified' to &line[..line.len()-1] under an \
+             'every SSE line has trailing \\r per spec' rationale would \
+             underflow on usize subtraction and panic on the first \
+             empty line of an SSE stream, crashing the daemon's \
+             runtime-event ingest path",
+        );
+        assert_eq!(
+            strip_cr(b"hel\rlo"),
+            b"hel\rlo",
+            "a \\r in the middle of the line must be preserved — a \
+             refactor that switched to .replace(b'\\r', b'') under a \
+             'normalize all CR everywhere' rationale would silently \
+             strip \\r from operator-supplied event payload (e.g., a \
+             tool response containing a Windows-style multi-line \
+             string) and mangle every such payload before it reached \
+             the JSON parser",
+        );
+    }
+
+    #[test]
     fn find_boundary_prefers_crlf_crlf_over_lf_lf() {
         let crlf = b"data: x\r\n\r\ndata: y\r\n";
         assert_eq!(find_boundary(crlf), Some(7));

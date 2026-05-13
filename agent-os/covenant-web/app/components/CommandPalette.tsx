@@ -44,11 +44,13 @@ export function CommandPalette() {
       const r = await api.verifyAudit();
       setFeedback(
         r.report.valid
-          ? `audit chain valid · ${r.report.events} events · root ${r.report.root_hash_hex.slice(0, 12)}…`
-          : `audit chain INVALID · ${r.report.failures.length} failures`,
+          ? `Activity log verified · ${r.report.events} signed steps`
+          : `Activity log tampered · ${r.report.failures.length} ${
+              r.report.failures.length === 1 ? "failure" : "failures"
+            }`,
       );
     } catch (e) {
-      setFeedback(`verify failed: ${e instanceof Error ? e.message : String(e)}`);
+      setFeedback(`Couldn't verify: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(null);
     }
@@ -62,12 +64,12 @@ export function CommandPalette() {
       try {
         const r = await api.submitIntent(intent);
         if (r.kind === "intent_result") {
-          setFeedback(`dispatched · ${r.text.slice(0, 90)}`);
+          setFeedback(`Sent · ${r.text.slice(0, 90)}`);
         } else {
-          setFeedback(`error · ${r.message}`);
+          setFeedback(`Error · ${r.message}`);
         }
       } catch (e) {
-        setFeedback(`error · ${e instanceof Error ? e.message : String(e)}`);
+        setFeedback(`Error · ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setBusy(null);
       }
@@ -81,9 +83,9 @@ export function CommandPalette() {
     setBusy("grant");
     try {
       await api.grantCapability(cap);
-      setFeedback(`granted · ${cap}`);
+      setFeedback(`Granted · ${cap}`);
     } catch (e) {
-      setFeedback(`error · ${e instanceof Error ? e.message : String(e)}`);
+      setFeedback(`Error · ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(null);
     }
@@ -91,15 +93,15 @@ export function CommandPalette() {
 
   const baseActions = useMemo<Action[]>(
     () => [
-      { id: "nav-overview", label: "Go to overview", hint: "/", run: () => navigate("/") },
-      { id: "nav-audit", label: "Go to audit", hint: "/audit", run: () => navigate("/audit") },
-      { id: "nav-intents", label: "Go to intents", hint: "/intents", run: () => navigate("/intents") },
-      { id: "nav-peers", label: "Go to peers", hint: "/peers", run: () => navigate("/peers") },
-      { id: "nav-capabilities", label: "Go to capabilities", hint: "/capabilities", run: () => navigate("/capabilities") },
-      { id: "nav-memory", label: "Go to memory", hint: "/memory", run: () => navigate("/memory") },
-      { id: "nav-settlement", label: "Go to settlement", hint: "/settlement", run: () => navigate("/settlement") },
-      { id: "nav-queues", label: "Go to queues", hint: "/queues", run: () => navigate("/queues") },
-      { id: "verify", label: "Verify audit chain", hint: "audit/verify", run: verifyChain },
+      { id: "nav-overview", label: "Go to Overview", hint: "home", run: () => navigate("/") },
+      { id: "nav-intents", label: "Go to Tasks", hint: "what you've sent", run: () => navigate("/intents") },
+      { id: "nav-audit", label: "Go to Activity log", hint: "signed events", run: () => navigate("/audit") },
+      { id: "nav-queues", label: "Go to Messages", hint: "agent-to-agent", run: () => navigate("/queues") },
+      { id: "nav-peers", label: "Go to Agents", hint: "who you trust", run: () => navigate("/peers") },
+      { id: "nav-capabilities", label: "Go to Permissions", hint: "what they can do", run: () => navigate("/capabilities") },
+      { id: "nav-memory", label: "Go to Memory", hint: "what they remember", run: () => navigate("/memory") },
+      { id: "nav-settlement", label: "Go to Spending", hint: "credits used", run: () => navigate("/settlement") },
+      { id: "verify", label: "Verify activity log", hint: "check nothing was altered", run: verifyChain },
     ],
     [navigate, verifyChain],
   );
@@ -112,8 +114,8 @@ export function CommandPalette() {
       return [
         {
           id: "intent-dispatch",
-          label: `Dispatch intent · "${text.slice(0, 60)}"`,
-          hint: "covenant intent",
+          label: `Send task · "${text.slice(0, 60)}"`,
+          hint: "press enter",
           run: () => dispatchIntent(text),
         },
       ];
@@ -123,8 +125,8 @@ export function CommandPalette() {
       return [
         {
           id: "cap-grant",
-          label: `Grant capability · ${action}`,
-          hint: "covenant capabilities grant",
+          label: `Grant permission · ${action}`,
+          hint: "press enter",
           run: () => grantCapability(action),
         },
       ];
@@ -196,7 +198,7 @@ export function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search or type a command"
+            placeholder="Type to search, or > to send a task"
             spellCheck={false}
           />
         </div>

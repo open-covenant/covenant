@@ -4,8 +4,8 @@ import { Shell } from "./components/Shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Covenant · Operator Console",
-  description: "The local control plane for Covenant. Dispatch intents, manage capabilities, and verify the audit chain.",
+  title: "Covenant · Control Panel",
+  description: "Your local control panel for Covenant. Send tasks, manage permissions, and check the activity log.",
 };
 
 export default function RootLayout({

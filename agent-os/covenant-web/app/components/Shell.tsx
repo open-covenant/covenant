@@ -6,15 +6,15 @@ import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
 import { CommandPalette } from "./CommandPalette";
 
-const NAV: ReadonlyArray<{ href: string; label: string; section: string }> = [
-  { href: "/", label: "overview", section: "operate" },
-  { href: "/audit", label: "audit", section: "operate" },
-  { href: "/intents", label: "intents", section: "operate" },
-  { href: "/peers", label: "peers", section: "trust" },
-  { href: "/capabilities", label: "capabilities", section: "trust" },
-  { href: "/memory", label: "memory", section: "state" },
-  { href: "/settlement", label: "settlement", section: "state" },
-  { href: "/queues", label: "queues", section: "state" },
+const NAV: ReadonlyArray<{ href: string; label: string }> = [
+  { href: "/", label: "Overview" },
+  { href: "/intents", label: "Tasks" },
+  { href: "/audit", label: "Activity" },
+  { href: "/queues", label: "Messages" },
+  { href: "/peers", label: "Agents" },
+  { href: "/capabilities", label: "Permissions" },
+  { href: "/memory", label: "Memory" },
+  { href: "/settlement", label: "Spending" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -25,7 +25,6 @@ function isActive(pathname: string, href: string): boolean {
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
 
-  const sections = ["operate", "trust", "state"] as const;
   return (
     <div className="shell">
       <aside className="sidebar" aria-label="navigation">
@@ -35,25 +34,20 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
           <span>
             <strong>COVENANT</strong>
-            <em>operator console</em>
+            <em>control panel</em>
           </span>
         </Link>
 
         <nav>
-          {sections.map((section) => (
-            <div key={section} className="nav-group">
-              <p className="eyebrow">{section}</p>
-              {NAV.filter((item) => item.section === section).map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={isActive(pathname, item.href) ? "nav-link active" : "nav-link"}
-                  prefetch={false}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </div>
+          {NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={isActive(pathname, item.href) ? "nav-link active" : "nav-link"}
+              prefetch={false}
+            >
+              {item.label}
+            </Link>
           ))}
         </nav>
 
@@ -62,18 +56,18 @@ export function Shell({ children }: { children: ReactNode }) {
           <dl>
             <div>
               <dt>⌘K</dt>
-              <dd>command palette</dd>
+              <dd>quick actions</dd>
             </div>
             <div>
-              <dt>g h</dt>
+              <dt>g o</dt>
               <dd>overview</dd>
             </div>
             <div>
-              <dt>g a</dt>
-              <dd>audit</dd>
+              <dt>g t</dt>
+              <dd>tasks</dd>
             </div>
           </dl>
-          <p className="hint">daemon · 127.0.0.1:8421</p>
+          <p className="hint">running on this machine</p>
         </div>
       </aside>
 
@@ -147,22 +141,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
         .sidebar nav {
           display: grid;
-          gap: 22px;
-        }
-
-        .nav-group {
-          display: grid;
-          gap: 4px;
-        }
-
-        .nav-group .eyebrow {
-          margin-bottom: 6px;
-          color: var(--muted);
-          font-family: var(--font-mono);
-          font-size: 10px;
-          font-weight: 500;
-          letter-spacing: 0.32em;
-          text-transform: uppercase;
+          gap: 2px;
         }
 
         .nav-link {

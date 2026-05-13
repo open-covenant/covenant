@@ -1890,4 +1890,93 @@ model = "nomic-embed-text"
              of the configured provider"
         );
     }
+
+    #[test]
+    fn provider_error_from_wrappers_display_messages_pin_prefixes_and_external_source_display_delegation() {
+        // Pins the three directly-constructible #[from] wrappers (Io,
+        // Serde, Toml). ProviderError::Http wraps reqwest::Error which
+        // has no public constructor and can only be produced via an
+        // actual transport invocation — pinning it would require either
+        // adding a reqwest-internals test dep or running a network
+        // probe, both of which exceed the scope of a Display-message
+        // pin. The Http prefix is documented; if a reqwest fixture path
+        // becomes available in a future reqwest release, this pin
+        // should be extended.
+
+        let io_err = ProviderError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "llm.toml missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "ProviderError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish provider IO faults from HTTP, JSON-decode, and TOML-parse faults (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("llm.toml missing"),
+            "ProviderError::Io must surface the inner std::io::Error Display rendering after the colon (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "ProviderError::Io must NOT surface the std::io::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = ProviderError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "ProviderError::Serde must surface the literal 'serde: ' bootstrap-stage prefix (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "ProviderError::Serde must surface the inner serde_json::Error Display rendering after the colon (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "ProviderError::Serde must NOT surface the serde_json::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        let toml_source = toml::from_str::<toml::Value>("= invalid =").expect_err("parse must fail");
+        let toml_err = ProviderError::Toml(toml_source);
+        let toml_message = format!("{toml_err}");
+        assert!(
+            toml_message.starts_with("toml: "),
+            "ProviderError::Toml must surface the literal 'toml: ' bootstrap-stage prefix so audit-log filters can distinguish llm-config-toml-parse faults from HTTP, IO, and JSON-decode faults (dropped-prefix regression class): {toml_message}"
+        );
+        assert!(
+            toml_message.len() > "toml: ".len(),
+            "ProviderError::Toml must surface the inner toml::de::Error Display rendering after the colon (dropped-source-rendering regression class on the {{0}} interpolation): {toml_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "ProviderError::Io and ProviderError::Serde Display must not converge (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert_ne!(
+            io_message, toml_message,
+            "ProviderError::Io and ProviderError::Toml Display must not converge (prefix-convergence regression class): io={io_message} toml={toml_message}"
+        );
+        assert_ne!(
+            serde_message, toml_message,
+            "ProviderError::Serde and ProviderError::Toml Display must not converge (prefix-convergence regression class): serde={serde_message} toml={toml_message}"
+        );
+        for (name, message) in [
+            ("Io", io_message.as_str()),
+            ("Serde", serde_message.as_str()),
+            ("Toml", toml_message.as_str()),
+        ] {
+            assert!(
+                !message.starts_with("http: "),
+                "ProviderError::{name} must not start with 'http: '; a sibling-prefix swap toward the Http wrapper would silently mis-route incident triage (sibling-prefix-swap regression class): {message}"
+            );
+            assert!(
+                !message.starts_with("provider returned no content")
+                    && !message.starts_with("provider error (")
+                    && !message.starts_with("missing api key for provider"),
+                "ProviderError::{name} must not converge with the three pinned string-variant surfaces (Empty, Status, MissingKey); a wrapper Display refactor must not collapse onto the operator-facing literal strings (string-surface-convergence regression class): {message}"
+            );
+        }
+    }
 }

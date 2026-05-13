@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { MobileMenu } from "../MobileMenu";
+import { SiteFooter } from "../SiteFooter";
 import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "../_brand";
 
 export const metadata: Metadata = {
   title: "Roadmap — Covenant",
   description:
-    "Development milestones for Covenant: control-plane hardening, marketplace and SDKs, native integration, distributed operation, and the 1.0 stability commitment.",
+    "Development milestones for Covenant: the next release with live agent visibility, plugin tools, and marketplace foundation; native integration; distributed operation; and the 1.0 stability commitment.",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
@@ -35,44 +36,41 @@ const MILESTONES: Milestone[] = [
     intro:
       "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [
-      "Daemon, CLI, IPC, local HTTP gateway, identity, permissions, memory, audit, A2A, MCP, budget, and local receipt ledger",
-      "Trusted-local subprocess runtime plus fail-closed handling for sandbox-required manifests",
-      "Opt-in Linux gVisor validation path where host prerequisites are met",
-      "Autonomous workflow records, live coverage matrix, identity guards, and commit-scoped provenance envelopes",
+      "Daemon, CLI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
+      "Subprocess runtime with timeout enforcement and an opt-in Linux isolation path",
+      "Signed permission lifecycle with grant, scope check, expiry, and revocation",
+      "Verifiable workflow records and commit-scoped provenance for every privileged action",
+      "Public sandbox at sandbox.opencovenant.org",
       "Apache 2.0 core",
     ],
   },
   {
     code: "M1",
-    title: "Hardening",
+    title: "Production, Tools, and Marketplace Foundation",
     status: "Next",
     intro:
-      "Production hardening across the runtime, tooling, and distribution surface.",
+      "The next release. Live agent visibility, the tools agents actually need, and the marketplace foundation — landing as a single push.",
     bullets: [
-      "Linux gVisor runner promoted into repeatable CI with pinned fixtures",
-      "Per-agent LLM routing with fallback chains and budget-aware escalation",
-      "Terminal user interface (Ratatui)",
-      "Live web search enabled by default via Brave or SerpAPI",
-      "Signed installers: Homebrew, deb and rpm packages, macOS notarization",
-      "Mid-task graceful save when an agent reaches its resource budget",
-      "Versioning for IPC and capability wire formats",
-    ],
-  },
-  {
-    code: "M2",
-    title: "Marketplace and SDKs",
-    status: "Upcoming",
-    intro:
-      "On-chain marketplace foundations and a published SDK surface.",
-    bullets: [
-      "On-chain agent registry with slashable identity stakes",
-      "Reputation primitive",
-      "SDKs published to PyPI (Python), npm (TypeScript), and crates.io (Rust)",
+      "Live progress streaming — watch an agent work in real time across the CLI, console, and HTTP gateway",
+      "Unified model provider — plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
+      "Plugin catalog — install vetted tools from a one-click catalog inside the console, starting with filesystem access",
+      "Production-grade isolated runtime for untrusted agent code on Linux",
+      "Terminal user interface",
+      "Mid-task save and resume when an agent reaches its resource budget",
+      "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
+      "Stable wire formats for SDK and integration compatibility",
+      "Browser tool — agents that navigate, click, and read pages",
+      "Isolated code execution — agents that write, run, and iterate on real code in a contained environment",
+      "Git host integration — read repositories, comment on issues, propose pull requests",
+      "Replay and state debugger — pick any moment from the activity log, see full state, re-run from there",
+      "On-chain agent registry with slashable identity stakes and a reputation primitive",
+      "SDKs published to PyPI, npm, and crates.io",
+      "Editor integration for Visual Studio Code",
       "Adapters for existing agent frameworks: LangGraph and CrewAI",
     ],
   },
   {
-    code: "M3",
+    code: "M2",
     title: "Native Integration",
     status: "Upcoming",
     intro:
@@ -86,26 +84,27 @@ const MILESTONES: Milestone[] = [
     ],
   },
   {
-    code: "M4",
+    code: "M3",
     title: "Distributed",
     status: "Upcoming",
     intro:
       "Multi-host operation, federated identity, and cross-organization workflows.",
     bullets: [
-      "Firecracker microVM isolation",
-      "Cross-host communication with name@host.tld registry resolution",
+      "Multi-host operation with name@host.tld resolution — agent teams across machines",
+      "Public agent registry with one-line install and signed manifests",
+      "Microvm-grade isolation",
       "Multi-device memory synchronization for a single identity",
       "Agent migration across hosts",
       "Trust flows for cross-organization marketplace transactions",
     ],
   },
   {
-    code: "M5",
+    code: "M4",
     title: "1.0 Release",
     status: "Upcoming",
     intro: "Long-term API stability and the formal 1.0 commitment.",
     bullets: [
-      "Stable v1 wire formats for IPC, capabilities, and agent manifests",
+      "Stable v1 wire formats for IPC, permissions, and agent manifests",
       "Long-term support release line",
       "Bug bounty program",
       "Comprehensive documentation across all primitives and public APIs",
@@ -248,9 +247,7 @@ export default function RoadmapPage() {
         </ol>
       </div>
 
-      <footer className="px-4 pb-8 text-center text-[10px] tracking-widest text-neutral-500 uppercase sm:text-[11px]">
-        open agent-native operating layer
-      </footer>
+      <SiteFooter className="pb-8" />
     </main>
   );
 }

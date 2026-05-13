@@ -535,6 +535,99 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_frame_pins_strict_crlf_frame_parses_identically_to_lf() {
+        // covenant_runtime::hermes::parse_sse_frame (line 359-383)
+        // splits each frame on b'\n' and passes each line through
+        // strip_cr (line 385-391) to remove a trailing b'\r' before
+        // the 'data:' prefix match feeds serde_json. This is what
+        // makes CRLF-formatted SSE streams (the strict SSE spec form)
+        // decode identically to LF-formatted streams (what Hermes's
+        // current aiohttp gateway emits).
+        //
+        // parse_sse_frame_handles_lf_lf_and_crlf (line 519) NAMES the
+        // CRLF case in its identifier but the body only exercises LF
+        // — no test passes a 'data: {...}\r' or '...\r\n\r\n' frame
+        // through parse_sse_frame. find_boundary_prefers_crlf_crlf_over_lf_lf
+        // (line 600+) tests find_boundary, NOT the downstream line-level
+        // CR strip. A refactor that dropped the strip_cr() call under
+        // an 'aiohttp uses LF, we don't need this' rationale would
+        // silently break parsing of any future strict-CRLF Hermes
+        // deployment; the trailing \r would land inside the JSON body
+        // and serde_json::from_str would reject it, dropping every
+        // tool.started/tool.completed/approval.* trace with no
+        // parse-time signal at the runner level.
+
+        // Single-line CRLF frame: the trailing \r belongs to the SSE
+        // line terminator and must be stripped before serde_json sees
+        // the payload. If strip_cr is dropped, the \r lands in the
+        // JSON suffix and parse fails silently.
+        let single_line_crlf = b"data: {\"event\":\"tool.started\",\"run_id\":\"r-crlf\",\"tool\":\"terminal\",\"preview\":\"ls\"}\r";
+        match parse_sse_frame(single_line_crlf).expect(
+            "single-line CRLF SSE frame must parse — strip_cr must \
+             remove the trailing \\r so the JSON payload reaches \
+             serde_json clean. If this fires, parse_sse_frame is \
+             handing \\r-terminated bytes to from_str and dropping \
+             every event on a strict-CRLF Hermes deployment",
+        ) {
+            RuntimeTrace::HermesToolInvoked {
+                run_id,
+                tool,
+                preview,
+            } => {
+                assert_eq!(
+                    run_id, "r-crlf",
+                    "run_id from CRLF frame must match the literal in \
+                     the JSON; a mismatch here would indicate the \\r \
+                     leaked into the payload and the value got coerced",
+                );
+                assert_eq!(
+                    tool, "terminal",
+                    "tool from CRLF frame must match the literal — \
+                     pins that the strip happens BEFORE serde extracts \
+                     the field, not as a post-decode cleanup",
+                );
+                assert_eq!(
+                    preview, "ls",
+                    "preview from CRLF frame must match the literal — \
+                     anchors that string-valued fields are not \
+                     trailing-\\r corrupted",
+                );
+            }
+            other => {
+                panic!("single-line CRLF frame must parse to HermesToolInvoked; got {other:?}")
+            }
+        }
+
+        // Multi-line strict-CRLF frame matching the canonical SSE
+        // termination shape ('\r\n\r\n' between frames). Anchors that
+        // every line iterated by parse_sse_frame is stripped, not
+        // just the first or last.
+        let multi_line_crlf = b"data: {\"event\":\"approval.request\",\"run_id\":\"r2\",\"choices\":[\"once\",\"always\"]}\r\n\r\n";
+        match parse_sse_frame(multi_line_crlf).expect(
+            "multi-line CRLF SSE frame ending in \\r\\n\\r\\n must \
+             parse — each line that the b'\\n' split yields carries a \
+             trailing \\r that strip_cr must remove uniformly. A \
+             refactor that stripped only the first or last line would \
+             leave a \\r in the data: payload of any intermediate line",
+        ) {
+            RuntimeTrace::HermesApprovalRequested { run_id, choices } => {
+                assert_eq!(run_id, "r2");
+                assert_eq!(
+                    choices,
+                    vec!["once".to_string(), "always".to_string()],
+                    "choices array from CRLF frame must round-trip the \
+                     two literals in order — pins that array-typed \
+                     fields decode through CRLF correctly, not just \
+                     scalar string fields",
+                );
+            }
+            other => {
+                panic!("multi-line CRLF frame must parse to HermesApprovalRequested; got {other:?}")
+            }
+        }
+    }
+
+    #[test]
     fn parse_sse_frame_ignores_comments_and_empty_lines() {
         // Hermes sends `: keepalive\n` comments every 30s. They must
         // not be parsed as data, and a frame that contains only

@@ -95,6 +95,9 @@ fn print_usage() {
     eprintln!("covenant — agent-native operating layer CLI");
     eprintln!();
     eprintln!("usage:");
+    eprintln!(
+        "  covenant bootstrap [--json]             grant the capabilities every loaded agent needs to run its first task"
+    );
     eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
     eprintln!("  covenant ping [--json]                  check the daemon is responsive");
     eprintln!(
@@ -400,6 +403,121 @@ async fn main() -> Result<()> {
     authenticate(&mut stream, &home).await?;
 
     match args[0].as_str() {
+        "bootstrap" => {
+            let mut as_json = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--json" => as_json = true,
+                    other => bail!("unknown flag '{other}'"),
+                }
+                i += 1;
+            }
+
+            // Union of every loaded agent's [capabilities] required, plus
+            // memory.write — the daemon writes a working-memory record on
+            // every successful dispatch, so without it the first intent
+            // fails before any agent code runs.
+            let agents_dir = home.join("agents");
+            let mut required: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            required.insert("memory.write".to_string());
+            if agents_dir.exists() {
+                for entry in std::fs::read_dir(&agents_dir)
+                    .with_context(|| format!("read agents dir {}", agents_dir.display()))?
+                {
+                    let entry = entry?;
+                    let manifest_path = entry.path().join("agent.toml");
+                    if !manifest_path.exists() {
+                        continue;
+                    }
+                    let raw = std::fs::read_to_string(&manifest_path)
+                        .with_context(|| format!("read {}", manifest_path.display()))?;
+                    let manifest = covenant_manifest::Manifest::parse(&raw).with_context(|| {
+                        format!("parse manifest {}", manifest_path.display())
+                    })?;
+                    for action in manifest.capabilities.required.iter() {
+                        required.insert(action.clone());
+                    }
+                }
+            }
+
+            // Skip what's already granted so re-running bootstrap is a no-op.
+            write_frame(
+                &mut stream,
+                &Request::RecentCapabilities { limit: 512 },
+            )
+            .await?;
+            let existing: std::collections::HashSet<String> =
+                match read_frame::<_, Response>(&mut stream).await? {
+                    Response::Capabilities { capabilities } => capabilities
+                        .iter()
+                        .map(|c| c.capability.action.clone())
+                        .collect(),
+                    Response::Error { message } => bail!("daemon error: {message}"),
+                    other => bail!("unexpected response: {other:?}"),
+                };
+
+            let mut granted: Vec<(String, String)> = Vec::new();
+            let mut already: Vec<String> = Vec::new();
+            for action in &required {
+                if existing.contains(action) {
+                    already.push(action.clone());
+                    continue;
+                }
+                write_frame(
+                    &mut stream,
+                    &Request::GrantCapability {
+                        action: action.clone(),
+                        scope: None,
+                        expires_at: None,
+                    },
+                )
+                .await?;
+                match read_frame::<_, Response>(&mut stream).await? {
+                    Response::CapabilityGranted { signature_b58, .. } => {
+                        granted.push((action.clone(), signature_b58));
+                    }
+                    Response::Error { message } => {
+                        bail!("daemon error granting {action}: {message}")
+                    }
+                    other => bail!("unexpected response: {other:?}"),
+                }
+            }
+
+            if as_json {
+                let payload = serde_json::json!({
+                    "kind": "bootstrap_result",
+                    "granted": granted
+                        .iter()
+                        .map(|(a, s)| serde_json::json!({ "action": a, "signature_b58": s }))
+                        .collect::<Vec<_>>(),
+                    "already_granted": already,
+                });
+                println!("{}", serde_json::to_string(&payload)?);
+            } else if granted.is_empty() {
+                println!(
+                    "nothing to do — every required capability is already granted ({} total)",
+                    already.len()
+                );
+            } else {
+                println!(
+                    "granted {} of {} capabilities to user@local:",
+                    granted.len(),
+                    granted.len() + already.len()
+                );
+                for (action, _) in &granted {
+                    let label = covenant_permissions::friendly_action_title(action)
+                        .map(|t| format!("{t} ({action})"))
+                        .unwrap_or_else(|| action.clone());
+                    println!("  + {label}");
+                }
+                if !already.is_empty() {
+                    println!("{} already granted, skipped.", already.len());
+                }
+                println!();
+                println!("ready. try: covenant intent \"say hello\"");
+            }
+        }
         "ping" => {
             let mut as_json = false;
             let mut i = 1;
@@ -934,10 +1052,14 @@ async fn main() -> Result<()> {
                                         Some(ms) => format!("expires {ms}"),
                                         None => "perpetual".into(),
                                     };
+                                    let action_label = match covenant_permissions::friendly_action_title(&c.capability.action) {
+                                        Some(title) => format!("{title} ({})", c.capability.action),
+                                        None => c.capability.action.clone(),
+                                    };
                                     println!(
                                         "{} → {} ({}) [{}]",
                                         c.capability.subject.display,
-                                        c.capability.action,
+                                        action_label,
                                         c.capability.granted_by.display,
                                         exp
                                     );
@@ -1040,7 +1162,11 @@ async fn main() -> Result<()> {
                                     ))?
                                 );
                             } else {
-                                println!("granted: {subject_display} → {action}");
+                                let action_label = match covenant_permissions::friendly_action_title(&action) {
+                                    Some(title) => format!("{title} ({action})"),
+                                    None => action.clone(),
+                                };
+                                println!("granted: {subject_display} → {action_label}");
                                 println!("signature: {signature_b58}");
                             }
                         }

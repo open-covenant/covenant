@@ -566,6 +566,137 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tool_spec_default_composition_pins_each_field_routing() {
+        // covenant_mcp::Tool::spec (lib.rs line 95-101) is the default
+        // trait method composing ToolSpec from three sibling trait
+        // methods:
+        //
+        //   spec.name         = self.name().to_string()
+        //   spec.description  = self.description().to_string()
+        //   spec.input_schema = self.input_schema()
+        //
+        // Every Tool impl inherits this default unless it overrides
+        // spec(). ToolRegistry::list_specs (line 140-142) calls
+        // .spec() on every registered tool. Existing pins cover the
+        // ToolSpec WIRE FORM (tool_spec_serde_pins_camel_case_round_trip
+        // line 200, tool_spec_serde_pins_strict_required_fields line
+        // 252) and the DEFAULT input_schema CONTENT
+        // (tool_default_input_schema_pins above) but the COMPOSITION
+        // binding is not anchored.
+        //
+        // A refactor that swapped two field bindings (name reads from
+        // description and vice versa under an 'alphabetize struct-
+        // field initializers' pass) would silently emit ToolSpecs
+        // where MCP clients render description in the name slot for
+        // every tools/list response. A refactor that made spec() a
+        // default-empty fallback ('every Tool impl should explicitly
+        // override spec()') would silently emit empty specs for every
+        // inheriting tool.
+        let tool = StaticTool {
+            name: "spec-pin-target",
+            text: "static-text",
+        };
+        let spec = tool.spec();
+
+        assert_eq!(
+            spec.name,
+            tool.name(),
+            "spec.name must equal self.name() — a refactor that swapped \
+             the binding to self.description() under an 'alphabetize \
+             struct-field initializers' rationale would silently emit \
+             'static test tool' in the name slot for every Tool impl \
+             that inherits spec(); the wire-form pins still pass \
+             because they round-trip a hand-built ToolSpec, not the \
+             trait composition",
+        );
+        assert_eq!(
+            spec.description,
+            tool.description(),
+            "spec.description must equal self.description() — paired \
+             with the name assertion, this catches both halves of a \
+             field-swap refactor",
+        );
+        assert_eq!(
+            spec.input_schema,
+            tool.input_schema(),
+            "spec.input_schema must equal self.input_schema() — a \
+             refactor that emitted Value::Null under a 'default \
+             implementations should return safe defaults' rationale \
+             would silently let every inheriting tool's tools/list \
+             schema collapse to null while the call() validation \
+             continued to reject args",
+        );
+
+        // Override input_schema and re-pin: a refactor that cached
+        // spec() under a OnceCell or const fixture would silently make
+        // the override invisible. The default body reads
+        // self.input_schema() at every call, so the override must
+        // surface in spec().input_schema.
+        struct CustomSchemaTool;
+        #[async_trait]
+        impl Tool for CustomSchemaTool {
+            fn name(&self) -> &str {
+                "custom-schema"
+            }
+            fn description(&self) -> &str {
+                "tool with overridden input_schema"
+            }
+            fn input_schema(&self) -> Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string"}
+                    }
+                })
+            }
+            async fn call(&self, _arguments: Value) -> Result<ToolCallResult, ToolError> {
+                Ok(ToolCallResult::ok(vec![]))
+            }
+        }
+        let custom = CustomSchemaTool;
+        let custom_spec = custom.spec();
+        assert_eq!(
+            custom_spec.input_schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "q": {"type": "string"}
+                }
+            }),
+            "spec().input_schema must surface the trait-method override \
+             verbatim — a refactor that cached spec() under a OnceCell \
+             with an 'spec is immutable per tool' rationale would \
+             silently keep returning the default no-args schema even \
+             when the tool overrides input_schema; downstream MCP \
+             clients would receive a schema that does not match the \
+             tool's actual argument shape and tool-arg form generators \
+             would render the wrong UI",
+        );
+        assert_eq!(custom_spec.name, "custom-schema");
+        assert_eq!(custom_spec.description, "tool with overridden input_schema");
+
+        // Idempotency: two consecutive spec() calls on the same tool
+        // must return byte-identical ToolSpec values. A refactor that
+        // introduced a per-call nonce, counter, or timestamp under a
+        // 'disambiguate concurrent spec lookups for tracing' rationale
+        // would break ToolRegistry::list_specs callers that compare
+        // catalog snapshots across consecutive tools/list responses.
+        let spec_a = tool.spec();
+        let spec_b = tool.spec();
+        assert_eq!(
+            spec_a, spec_b,
+            "spec() must be idempotent — two consecutive calls on the \
+             same tool must return equal ToolSpec values. A refactor \
+             that introduced a per-call nonce or timestamp would let \
+             ToolRegistry::list_specs surface different names for the \
+             same tool across consecutive tools/list responses, \
+             breaking MCP-client tool-arg form caches keyed on the \
+             name; the regression is invisible to the wire-form pins \
+             which exercise a single ToolSpec instance",
+        );
+    }
+
     #[tokio::test]
     async fn registry_call_returns_not_found_for_unknown() {
         let reg = registry_with_echo();

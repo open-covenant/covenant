@@ -893,6 +893,89 @@ mod tests {
     }
 
     #[test]
+    fn pubkey_base58_pins_bitcoin_alphabet_leading_zero_ones_and_distinctness() {
+        // AgentId::pubkey_base58 (line 63-65) is the canonical
+        // base58 projection of the 32-byte pubkey field. It feeds
+        // scoped_action_alternatives (line 74) which produces
+        // capability-action strings like 'a2a.recv.<pubkey_b58>'
+        // that covenant_permissions checks at grant-time and
+        // dispatch-time, surfaces directly in operator-facing audit
+        // rows, and round-trips into Solana tooling that expects the
+        // Bitcoin base58 alphabet (no 0/O/I/l).
+        //
+        // scoped_action_alternatives_b58_uses_pubkey (above) verifies
+        // the COMPOSITION of pubkey_base58 inside the format string,
+        // but not the standalone behavior. A refactor that swapped
+        // bs58::encode for bs58::encode_check (which appends a 4-byte
+        // checksum) would silently widen every audit-row pubkey_b58
+        // by ~6 chars and break every persisted capability token's
+        // string-equality compare. A refactor that switched to hex
+        // would silently double the field length. A refactor that
+        // switched the alphabet (e.g., to Ripple) would silently
+        // change the char set even when bytes match.
+
+        // (1) Leading-zero handling: base58 with the Bitcoin
+        // alphabet maps each leading zero byte to a leading '1'
+        // character. An all-zeros pubkey must produce exactly 32
+        // leading '1's.
+        let zeros = AgentId::new("z@local", [0u8; 32]);
+        assert_eq!(
+            zeros.pubkey_base58(),
+            "1".repeat(32),
+            "an all-zeros pubkey must encode to exactly 32 leading \
+             '1' characters per the Bitcoin base58 leading-zero \
+             convention — a refactor that swapped bs58::encode for \
+             bs58::encode_check (which appends a 4-byte checksum) or \
+             switched to a hex projection would silently change the \
+             length and break every persisted capability token's \
+             string-equality compare against the unchecked form",
+        );
+
+        // (2) Cross-bind to the bs58 crate behavior on a known
+        // pubkey: the function must be exactly bs58::encode of
+        // self.pubkey, no transformation, no padding, no checksum.
+        let seven = AgentId::new("s@local", [7u8; 32]);
+        let expected = bs58::encode([7u8; 32]).into_string();
+        assert_eq!(
+            seven.pubkey_base58(),
+            expected,
+            "pubkey_base58 must equal bs58::encode(self.pubkey).into_string() \
+             on a known pubkey — pinning that no extra transformation \
+             (case-fold, prefix, suffix, checksum) wraps the bs58 call",
+        );
+
+        // (3) Distinctness: two distinct pubkeys must produce
+        // distinct base58 strings — rules out a 'always returns a
+        // constant' regression that would also satisfy the
+        // round-trip arms.
+        let one = AgentId::new("a@local", [1u8; 32]);
+        let two = AgentId::new("b@local", [2u8; 32]);
+        assert_ne!(
+            one.pubkey_base58(),
+            two.pubkey_base58(),
+            "two pubkeys with different bytes must produce different \
+             base58 strings — a refactor that returned a constant or \
+             accidentally read the wrong field would silently collapse \
+             every AgentId to one identity in scoped_action_alternatives \
+             and every audit-row pubkey_b58 column",
+        );
+
+        // (4) Charset: Bitcoin alphabet excludes '0', 'O', 'I', 'l'
+        // to avoid visual confusion. Pin that the output never
+        // contains these chars on a non-trivial pubkey.
+        let charset_check = seven.pubkey_base58();
+        assert!(
+            charset_check
+                .chars()
+                .all(|c| !matches!(c, '0' | 'O' | 'I' | 'l')),
+            "pubkey_base58 must use the Bitcoin alphabet (no 0, O, I, l) \
+             — a refactor that switched to the Ripple alphabet, \
+             base64, or hex would let one of these chars surface; got \
+             {charset_check:?}",
+        );
+    }
+
+    #[test]
     fn intent_uses_default_priority_when_missing() {
         let i = Intent {
             id: Uuid::nil(),

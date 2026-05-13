@@ -2092,6 +2092,28 @@ cpu_ms_per_task = 5000
     }
 
     #[test]
+    fn runner_error_malformed_stdout_source_delegation_pin_returns_inner_serde_json_error_via_std_error_source(
+    ) {
+        use std::error::Error;
+        let source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let expected_display = format!("{source}");
+        let err = RunnerError::MalformedStdout { source };
+        let inner = err.source().expect(
+            "RunnerError::MalformedStdout must surface the inner serde_json::Error via std::error::Error::source so anyhow chain printers, tracing's source-walking emitters, and daemon audit-log emitters that downcast source() to serde_json::Error to extract line/column can render the wrapper context AND the inner cause; a thiserror refactor that dropped the #[source] attribute on the source field (e.g., field rename without re-annotation, or removing the explicit #[source] attribute under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        let inner_message = format!("{inner}");
+        assert!(
+            inner_message.contains("expected"),
+            "RunnerError::MalformedStdout source() must return an error whose Display contains 'expected' — the serde_json::Error Display rendering for a parse failure; a refactor that wrapped the source in a different type (e.g., Box<dyn Error>) and dropped the literal serde_json parse-failure prose would silently mute the structural parse-failure discriminator in chain-walked output (concrete-source-type regression class): {inner_message}"
+        );
+        assert_eq!(
+            inner_message, expected_display,
+            "RunnerError::MalformedStdout source() Display must match a direct format!() of the same serde_json::Error verbatim; a refactor that swapped the source field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side callsite downcasts to the concrete serde_json::Error type used to extract line/column for audit-log triage (concrete-source-type regression class)"
+        );
+    }
+
+    #[test]
     fn runner_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation(
     ) {
         let io_err = RunnerError::Io(std::io::Error::new(

@@ -2575,6 +2575,29 @@ mod tests {
     }
 
     #[test]
+    fn ipc_error_frame_source_delegation_pin_returns_inner_covenant_ipc_error_via_std_error_source()
+    {
+        use crate::ipc::IpcError;
+        use std::error::Error;
+
+        let inner = covenant_ipc::IpcError::FrameTooLarge { got: 9_999_999 };
+        let expected_display = format!("{inner}");
+        let err = IpcError::Frame(inner);
+        let source = err.source().expect(
+            "IpcError::Frame must surface the inner covenant_ipc::IpcError via std::error::Error::source so anyhow chain printers, tracing's source-walking emitters, and daemon-side bootstrap audit-log emitters that may downcast source() to covenant_ipc::IpcError to classify FrameTooLarge vs MagicMismatch vs Io vs Serde for distinct remediation hints can render the wrapper context AND the inner cause; a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        let source_message = format!("{source}");
+        assert!(
+            source_message.contains("frame too large"),
+            "IpcError::Frame source() must return an error whose Display contains 'frame too large' — the covenant_ipc::IpcError::FrameTooLarge Display rendering; a refactor that wrapped the source in a different type (e.g., Box<dyn Error + Send + Sync>) and dropped the literal covenant_ipc::IpcError Display would silently mute the structural frame-protocol-failure discriminator in chain-walked output (concrete-source-type regression class): {source_message}"
+        );
+        assert_eq!(
+            source_message, expected_display,
+            "IpcError::Frame source() Display must match a direct format!() of the same covenant_ipc::IpcError variant verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> would silently break TUI-side downcasts to covenant_ipc::IpcError used to dispatch remediation hints ('the frame budget is too small' vs 'the daemon is mid-rotation' vs 'the socket file is stale'); additionally, a cross-crate refactor of covenant_ipc::IpcError::FrameTooLarge Display under a 'consistency with sibling variants' rationale would also surface as a pin failure here (concrete-source-type regression class, cross-crate-Display-drift regression class)"
+        );
+    }
+
+    #[test]
     fn ipc_error_wire_and_frame_and_other_display_messages_pin_prefix_and_external_source_display_delegation(
     ) {
         use crate::ipc::IpcError;

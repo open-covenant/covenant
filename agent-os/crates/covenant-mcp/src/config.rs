@@ -140,6 +140,81 @@ args = []
     }
 
     #[test]
+    fn mcp_section_serde_pins_default_server_array() {
+        // McpSection is the [mcp] block in secrets.toml, sitting
+        // between McpConfigFile.mcp (Option<McpSection>) and the
+        // [[mcp.server]] arrays. The struct carries a single field —
+        // server: Vec<McpServer> — with field-level #[serde(default)]
+        // and a derived Default impl, so a [mcp] block that opens the
+        // section but writes no [[mcp.server]] entries decodes to an
+        // empty server Vec rather than failing parse.
+        //
+        // A refactor that renamed McpSection::server (or applied
+        // #[serde(rename)]) silently lets every operator's
+        // secrets.toml decode into a section with an empty server Vec
+        // — McpConfigFile::servers() returns an empty slice with no
+        // parse signal, and configured MCP tool servers disappear on
+        // next daemon restart. A refactor that dropped the field-level
+        // #[serde(default)] silently turns every [mcp] header with no
+        // [[mcp.server]] entries into a parse error.
+        let empty_section = r#"
+[mcp]
+"#;
+        let cfg: McpConfigFile = toml::from_str(empty_section).unwrap();
+        let section = cfg.mcp.as_ref().expect(
+            "[mcp] header must surface McpSection even when no [[mcp.server]] entries follow",
+        );
+        assert!(
+            section.server.is_empty(),
+            "McpSection::server default must be the empty Vec — a \
+             refactor that dropped the field-level #[serde(default)] \
+             would silently turn every [mcp] header with no \
+             [[mcp.server]] entries into a parse error",
+        );
+
+        // [[mcp.server]] arrays without an explicit [mcp] header — TOML
+        // treats this as the implicit-section pattern and still
+        // populates mcp.server. Pin so a refactor that required an
+        // explicit [mcp] header would surface here.
+        let two_servers = r#"
+[[mcp.server]]
+name = "fs"
+command = "node"
+
+[[mcp.server]]
+name = "git"
+command = "node"
+"#;
+        let cfg: McpConfigFile = toml::from_str(two_servers).unwrap();
+        let section = cfg.mcp.as_ref().unwrap();
+        assert_eq!(section.server.len(), 2);
+        assert_eq!(section.server[0].name, "fs");
+        assert_eq!(section.server[1].name, "git");
+
+        // McpSection::default() must produce an empty server Vec — pin
+        // this so a refactor that diverged the derived Default impl
+        // from the empty-section parse path would fail loud.
+        let default_section = McpSection::default();
+        assert!(
+            default_section.server.is_empty(),
+            "McpSection::default() must have server == empty Vec",
+        );
+
+        // Direct toml::from_str<McpSection> of an empty body — pins
+        // the field-level #[serde(default)] independently of the
+        // outer wrapper.
+        let bare: McpSection = toml::from_str("").unwrap();
+        assert!(
+            bare.server.is_empty(),
+            "McpSection deserialized from an empty TOML body must \
+             produce an empty server Vec via field-level \
+             #[serde(default)]; a refactor that dropped the default \
+             would turn this into a parse error and break every test \
+             that constructs McpSection from a {{}} body",
+        );
+    }
+
+    #[test]
     fn mcp_config_file_serde_pins_optional_mcp_section_default() {
         // McpConfigFile is the top-level secrets.toml decoder for the
         // [mcp] section. The struct carries a single field — mcp:

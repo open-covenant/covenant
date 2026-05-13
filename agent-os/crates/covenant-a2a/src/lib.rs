@@ -1789,6 +1789,211 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_auto_retry_pins_remaining_skip_reason_arms() {
+        // evaluate_auto_retry (line 314-377) is a seven-arm decision
+        // function. Three arms are pinned by neighbouring tests:
+        // Requeue (auto_retry_evaluates_only_old_idempotent_in_flight_tasks),
+        // UnsafeDuplicateSafety + MaxAttemptsReached
+        // (auto_retry_rejects_unsafe_or_exhausted_tasks). The five
+        // remaining Skip reasons — Disabled (line 319), NotInFlight
+        // (line 326), MissingLease (line 333), LeaseTooYoung (line
+        // 340), MissingIdempotency (line 347-358, both the
+        // entry.task.idempotency=None path and the empty-key path) —
+        // encode the daemon scheduler's short-circuit ladder. A
+        // refactor that reordered the checks, flipped a comparison
+        // (e.g., < to <= on the lease-age gate), or merged two
+        // reasons into one would silently shift the
+        // AuditKind::A2AAutoRetrySchedulerScan.skipped_by_reason
+        // histogram across daemon restarts with no compile-time
+        // signal and no operator-visible diagnostic beyond a subtle
+        // shift in retry rates.
+        //
+        // Each arm pins both the reason variant AND the lease_age_ms
+        // shape: Skip arms that fire before lease-age computation
+        // (Disabled, NotInFlight, MissingLease) carry
+        // lease_age_ms=None; arms that fire after (LeaseTooYoung,
+        // MissingIdempotency) carry Some(lease_age) so audit rows
+        // can attribute the skip to a specific lease.
+        fn baseline_entry() -> A2ATaskQueueEntry {
+            let mut task = dummy_task();
+            task.idempotency = Some(A2AIdempotency::new(
+                A2ADuplicateSafety::Idempotent,
+                "task:key",
+            ));
+            A2ATaskQueueEntry {
+                state: A2ATaskQueueState::InFlight,
+                task,
+                lease_id: Some(Uuid::nil()),
+                leased_to: Some(dummy_agent("research@local")),
+                leased_at_ms: Some(1_000),
+                attempt: 1,
+            }
+        }
+        let baseline_policy = A2AAutoRetryPolicy {
+            enabled: true,
+            min_lease_age_ms: 300_000,
+            max_attempts: 3,
+            max_requeues: 1,
+            scan_limit: 100,
+        };
+
+        let mut disabled_policy = baseline_policy.clone();
+        disabled_policy.enabled = false;
+        match evaluate_auto_retry(&baseline_entry(), &disabled_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::Disabled,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms, None,
+                "Disabled fires before any lease-age computation; \
+                 lease_age_ms must be None so audit rows do not \
+                 attribute the skip to a specific lease — a refactor \
+                 that moved this check below the lease-age branch \
+                 would surface Some(lease_age) here and mislead \
+                 operators investigating disabled-scheduler scans",
+            ),
+            other => panic!(
+                "policy.enabled=false must return Skip(Disabled); a \
+                 refactor that moved the disabled check below \
+                 NotInFlight/MissingLease/etc would mask the \
+                 disabled-scheduler diagnostic behind downstream-arm \
+                 histograms; got {other:?}"
+            ),
+        }
+
+        let mut not_in_flight = baseline_entry();
+        not_in_flight.state = A2ATaskQueueState::Queued;
+        match evaluate_auto_retry(&not_in_flight, &baseline_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::NotInFlight,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms, None,
+                "NotInFlight also fires before lease-age computation; \
+                 lease_age_ms must be None — a refactor that fell \
+                 through to compute lease_age before the state check \
+                 would surface Some on entries that have a leased_at \
+                 even though their state is Queued",
+            ),
+            other => panic!(
+                "entry.state != InFlight must return Skip(NotInFlight); \
+                 got {other:?}"
+            ),
+        }
+
+        let mut missing_lease_id = baseline_entry();
+        missing_lease_id.lease_id = None;
+        match evaluate_auto_retry(&missing_lease_id, &baseline_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::MissingLease,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms, None,
+                "MissingLease still fires before the lease-age \
+                 computation; even if leased_at_ms is set, a missing \
+                 lease_id should surface Skip(MissingLease, None) — \
+                 a refactor that decoupled the two None checks would \
+                 surface Some(lease_age) here and conflate \
+                 partial-lease-data tasks with stale-lease tasks",
+            ),
+            other => panic!(
+                "entry.lease_id=None must return Skip(MissingLease); \
+                 got {other:?}"
+            ),
+        }
+
+        let mut missing_leased_at = baseline_entry();
+        missing_leased_at.leased_at_ms = None;
+        match evaluate_auto_retry(&missing_leased_at, &baseline_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::MissingLease,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms, None,
+                "MissingLease must also fire when leased_at_ms is \
+                 None even if lease_id is set — both Options are \
+                 collapsed into the same Skip reason because the \
+                 audit row's lease attribution requires both",
+            ),
+            other => panic!(
+                "entry.leased_at_ms=None must return Skip(MissingLease); \
+                 got {other:?}"
+            ),
+        }
+
+        let too_young = baseline_entry();
+        let half_min = baseline_policy.min_lease_age_ms / 2;
+        let now_for_young = too_young.leased_at_ms.unwrap() + half_min;
+        match evaluate_auto_retry(&too_young, &baseline_policy, now_for_young) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::LeaseTooYoung,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms,
+                Some(half_min),
+                "LeaseTooYoung fires AFTER lease-age computation so \
+                 the audit row can attribute the skip to a specific \
+                 lease age — lease_age_ms must surface Some(actual \
+                 age) not None; a refactor that flipped the < to <= \
+                 on the comparison would silently shift exactly-at-\
+                 boundary leases between LeaseTooYoung and downstream \
+                 arms",
+            ),
+            other => panic!(
+                "lease_age_ms < min_lease_age_ms must return \
+                 Skip(LeaseTooYoung); got {other:?}"
+            ),
+        }
+
+        let mut no_idem = baseline_entry();
+        no_idem.task.idempotency = None;
+        match evaluate_auto_retry(&no_idem, &baseline_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::MissingIdempotency,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms,
+                Some(300_000),
+                "MissingIdempotency fires after lease-age \
+                 computation; lease_age_ms must surface the actual \
+                 lease age so audit rows attribute the skip to a \
+                 specific lease — a refactor that moved the \
+                 idempotency check before the lease-age computation \
+                 would surface None here and break the audit-row \
+                 attribution",
+            ),
+            other => panic!(
+                "entry.task.idempotency=None must return \
+                 Skip(MissingIdempotency); got {other:?}"
+            ),
+        }
+
+        let mut empty_idem = baseline_entry();
+        empty_idem.task.idempotency =
+            Some(A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "   "));
+        match evaluate_auto_retry(&empty_idem, &baseline_policy, 301_000) {
+            A2AAutoRetryDecision::Skip {
+                reason: A2AAutoRetrySkipReason::MissingIdempotency,
+                lease_age_ms,
+            } => assert_eq!(
+                lease_age_ms,
+                Some(300_000),
+                "A whitespace-only idempotency key must collapse to \
+                 MissingIdempotency (the key.trim().is_empty() \
+                 branch at line 353) so a sender that writes ' ' or \
+                 '\\t' does not falsely satisfy the idempotency \
+                 contract; a refactor that dropped the trim would \
+                 let whitespace keys through and the receiver-side \
+                 cache would treat them as distinct from empty",
+            ),
+            other => panic!(
+                "whitespace-only idempotency key must return \
+                 Skip(MissingIdempotency); got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn a2a_task_status_serde_pins_snake_case_wire_form() {
         // A2ATaskStatus rides inside A2ATaskResult and the receiver-side
         // A2AIdempotencyCachedResult JSON. Both are persisted across

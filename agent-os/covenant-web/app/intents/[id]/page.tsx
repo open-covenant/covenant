@@ -3,14 +3,9 @@
 import Link from "next/link";
 import { use, useState } from "react";
 import { api } from "@/lib/api";
-import {
-  AUDIT_KIND_LABELS,
-  auditSummary,
-  auditTone,
-  eventsForIntent,
-  short,
-  time,
-} from "@/lib/audit";
+import { eventsForIntent } from "@/lib/audit";
+import { formatTimestamp, shortHash } from "@/lib/format";
+import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../../components/PageHeader";
 
@@ -18,7 +13,22 @@ async function loadIntent() {
   return api.recentAudit(200);
 }
 
-export default function IntentTracePage(props: { params: Promise<{ id: string }> }) {
+function statusWord(status: string | undefined): string {
+  switch (status) {
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "running":
+      return "Running";
+    case "pending":
+      return "Pending";
+    default:
+      return status ? status[0].toUpperCase() + status.slice(1) : "—";
+  }
+}
+
+export default function TaskTracePage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
   const { data, error, lastSyncMs } = usePoll(loadIntent, 3000);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -43,51 +53,51 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
   return (
     <>
       <PageHeader
-        eyebrow={`intent · ${short(id, 18)}`}
-        title={dispatchKind ? `"${dispatchKind.intent_text}"` : "Intent trace"}
+        eyebrow="task"
+        title={dispatchKind ? `"${dispatchKind.intent_text}"` : "Task"}
         subhead={
           dispatchKind
             ? dispatchKind.matched_agent
-              ? `Routed to agent ${dispatchKind.matched_agent}. Result hash ${dispatchKind.result_hash_hex}.`
-              : `No agent matched. The daemon returned the fallback response.`
-            : "Loading trace…"
+              ? `Ran by ${dispatchKind.matched_agent}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can't be quietly changed.`
+              : "No agent was set up to handle this task. The daemon returned its fallback response."
+            : "Loading the task's steps…"
         }
         syncMs={lastSyncMs}
         error={error}
         right={
           <Link href="/intents" className="btn ghost">
-            back to intents
+            back to tasks
           </Link>
         }
       />
 
       <section className="trace-meta">
         <article className="meta-cell">
-          <p className="eyebrow">events</p>
+          <p className="eyebrow">steps</p>
           <strong>{trace.length}</strong>
         </article>
         <article className="meta-cell">
-          <p className="eyebrow">elapsed</p>
+          <p className="eyebrow">took</p>
           <strong>{totalDurationMs == null ? "—" : `${totalDurationMs} ms`}</strong>
         </article>
         <article className="meta-cell">
-          <p className="eyebrow">agent</p>
+          <p className="eyebrow">ran by</p>
           <strong>{dispatchKind?.matched_agent ?? "—"}</strong>
         </article>
         <article className="meta-cell">
           <p className="eyebrow">status</p>
-          <strong>{dispatchKind?.status ?? "—"}</strong>
+          <strong>{statusWord(dispatchKind?.status)}</strong>
         </article>
       </section>
 
       {isLoading ? (
         <div className="panel">
-          <p className="empty">Loading trace…</p>
+          <p className="empty">Loading the task's steps…</p>
         </div>
       ) : trace.length === 0 ? (
         <div className="panel">
           <p className="empty">
-            No trace found for this intent. It may be older than what is cached locally.
+            Can't find this task in the local log. It may be older than what's cached on this machine.
           </p>
         </div>
       ) : (
@@ -95,16 +105,17 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
           {trace.map((event, idx) => {
             const isLast = idx === trace.length - 1;
             const isExpanded = expanded.has(event.id);
+            const label = eventLabel(event);
             return (
-              <article key={event.id} className={`trace-step tone-${auditTone(event)}`}>
+              <article key={event.id} className={`trace-step tone-${label.tone}`}>
                 <div className="rail">
                   <span className="dot" />
                   {!isLast && <span className="line" />}
                 </div>
                 <div className="step-card">
                   <div className="step-head">
-                    <span className="ts">{time(event.timestamp_ms)}</span>
-                    <span className="kind">{AUDIT_KIND_LABELS[event.kind.type]}</span>
+                    <span className="ts">{formatTimestamp(event.timestamp_ms, { withSeconds: true })}</span>
+                    <span className="kind">{KIND_PILL_LABELS[event.kind.type]}</span>
                     <button
                       type="button"
                       className="btn link"
@@ -113,7 +124,8 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
                       {isExpanded ? "hide raw" : "raw json"}
                     </button>
                   </div>
-                  <p className="summary">{auditSummary(event)}</p>
+                  <p className="headline">{label.headline}</p>
+                  <p className="summary">{label.body}</p>
                   {isExpanded && (
                     <pre className="result compact">{JSON.stringify(event, null, 2)}</pre>
                   )}
@@ -232,16 +244,21 @@ export default function IntentTracePage(props: { params: Promise<{ id: string }>
         .step-head .kind {
           flex: 1;
           color: var(--fg);
-          font-family: var(--font-mono);
-          font-size: 12px;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
+          font-size: 11.5px;
+          letter-spacing: 0.02em;
+        }
+
+        .headline {
+          margin: 10px 0 4px;
+          color: var(--fg);
+          font-size: 13.5px;
+          font-weight: 500;
         }
 
         .summary {
-          margin: 8px 0 0;
+          margin: 0;
           color: var(--dim);
-          font-size: 13.5px;
+          font-size: 13px;
           line-height: 1.55;
         }
       `}</style>

@@ -2,15 +2,7 @@
 
 import Link from "next/link";
 import { api } from "@/lib/api";
-import {
-  auditDetail,
-  auditTone,
-  eventIntentId,
-  short,
-  time,
-  truncate,
-  AUDIT_KIND_LABELS,
-} from "@/lib/audit";
+import { formatTimestamp, shortHash, truncate } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -18,10 +10,10 @@ async function loadIntents() {
   return api.recentAudit(100);
 }
 
-export default function IntentsPage() {
+export default function TasksPage() {
   const { data, error, lastSyncMs } = usePoll(loadIntents, 3000);
   const events = data?.events ?? [];
-  const intents = events
+  const tasks = events
     .filter((e) => e.kind.type === "intent_dispatched")
     .slice()
     .reverse();
@@ -29,9 +21,9 @@ export default function IntentsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="dispatch history"
-        title="Intents"
-        subhead="Every intent the daemon has dispatched. Click one to see its full trace."
+        eyebrow="what you've asked for"
+        title="Tasks"
+        subhead="Every task you've sent. Click one to see its signed steps."
         syncMs={lastSyncMs}
         error={error}
       />
@@ -41,39 +33,43 @@ export default function IntentsPage() {
           <div>
             <p className="eyebrow">recent</p>
             <h2>
-              Last dispatches <span className="count">{intents.length}</span>
+              Recent tasks <span className="count">{tasks.length}</span>
             </h2>
           </div>
         </div>
 
-        {intents.length === 0 ? (
+        {tasks.length === 0 ? (
           <p className="empty" style={{ padding: "30px 22px" }}>
-            Nothing here yet. Dispatches will appear in this list as they happen.
+            Nothing here yet. Tasks you send will show up in this list.
           </p>
         ) : (
           <div className="intent-list">
-            {intents.map((event) => {
+            {tasks.map((event) => {
               if (event.kind.type !== "intent_dispatched") return null;
-              const intentId = eventIntentId(event);
+              const tone = event.kind.matched_agent ? "ok" : "warn";
               return (
                 <Link
                   key={event.id}
                   href={`/intents/${event.kind.intent_id}`}
-                  className={`intent-row tone-${auditTone(event)}`}
+                  className={`intent-row tone-${tone}`}
                 >
                   <div className="left">
-                    <span className="text-muted text-mono ts">{time(event.timestamp_ms)}</span>
+                    <span className="text-muted text-mono ts">
+                      {formatTimestamp(event.timestamp_ms)}
+                    </span>
                     <p className="text">{truncate(event.kind.intent_text, 180)}</p>
                   </div>
                   <div className="right">
                     <span className="agent">
                       {event.kind.matched_agent ? (
-                        <>→ <strong>{event.kind.matched_agent}</strong></>
+                        <>
+                          Ran by <strong>{event.kind.matched_agent}</strong>
+                        </>
                       ) : (
                         <em>no agent matched</em>
                       )}
                     </span>
-                    <span className="hash">{short(event.kind.result_hash_hex, 16)}</span>
+                    <span className="hash">{shortHash(event.kind.result_hash_hex, 16)}</span>
                   </div>
                 </Link>
               );
@@ -128,13 +124,12 @@ export default function IntentsPage() {
           justify-items: end;
           gap: 4px;
           flex: 0 0 auto;
-          font-family: var(--font-mono);
-          font-size: 11px;
+          font-size: 12px;
         }
 
         .intent-row .agent {
           color: var(--dim);
-          letter-spacing: 0.04em;
+          letter-spacing: 0.02em;
         }
 
         .intent-row .agent strong {
@@ -149,6 +144,8 @@ export default function IntentsPage() {
 
         .intent-row .hash {
           color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 11px;
           letter-spacing: 0.04em;
         }
       `}</style>

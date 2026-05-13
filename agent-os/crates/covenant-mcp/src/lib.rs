@@ -805,4 +805,44 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
     }
+
+    #[test]
+    fn tool_error_display_messages_pin_three_string_variant_format_strings() {
+        let not_found = format!("{}", ToolError::NotFound("fs.read".into()));
+        assert_eq!(
+            not_found, "tool not found: fs.read",
+            "ToolError::NotFound Display drifted (typo or dropped 'tool' qualifier regression class)"
+        );
+
+        let invalid_args = format!(
+            "{}",
+            ToolError::InvalidArguments("expected object, got array".into())
+        );
+        assert_eq!(
+            invalid_args, "invalid arguments: expected object, got array",
+            "ToolError::InvalidArguments Display drifted (typo or prefix-convergence regression class)"
+        );
+
+        let failed = format!(
+            "{}",
+            ToolError::Failed("subprocess exited with code 137".into())
+        );
+        assert_eq!(
+            failed, "tool failed: subprocess exited with code 137",
+            "ToolError::Failed Display drifted (typo or prefix-convergence regression class)"
+        );
+
+        assert_ne!(
+            not_found, invalid_args,
+            "ToolError::NotFound must not converge with ToolError::InvalidArguments"
+        );
+        assert_ne!(
+            invalid_args, failed,
+            "ToolError::InvalidArguments must not converge with ToolError::Failed"
+        );
+        assert_ne!(
+            failed, not_found,
+            "ToolError::Failed must not converge with ToolError::NotFound"
+        );
+    }
 }

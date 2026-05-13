@@ -2667,6 +2667,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_purge_older_than_pins_cutoff_equality_keep_arm() {
+        // covenant_audit::InMemoryAuditLog::purge_older_than (line 674-679):
+        //
+        //   async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
+        //       let mut g = self.events.lock().await;
+        //       let len_before = g.len();
+        //       g.retain(|e| e.timestamp_ms >= before_ms);
+        //       Ok((len_before - g.len()) as u64)
+        //   }
+        //
+        // The retain predicate uses `>=`, so records with timestamp
+        // EXACTLY equal to before_ms are KEPT — the function's
+        // 'older_than' name documents 'older' as STRICTLY less than the
+        // cutoff. in_memory_purge_drops_old_events_and_keeps_new (line
+        // 2657) records timestamps 100/200/300 with cutoff=250 — no
+        // event sits at the cutoff, so the equality arm is exercised
+        // by zero tests.
+        //
+        // A refactor that flipped `>=` to `>` (or rewrote the
+        // predicate to 'e.timestamp_ms > before_ms') under a 'purge
+        // older OR EQUAL TO before_ms' rereading would silently shift
+        // every cutoff-equal record from kept to purged. Operator
+        // dashboards running a daily purge with cutoff aligned to a
+        // calendar-tick boundary would lose records emitted exactly on
+        // that boundary tick on every cycle; the existing strict-less-
+        // than test would still pass, and audit chain integrity reports
+        // would still verify because the purge is an in-place vec
+        // mutation, not a chain rewrite. Pin BOTH the cutoff-equality
+        // keep arm AND the strict-less-than purge arm in one test so a
+        // coordinated rewrite that swaps both halves at once cannot
+        // land silently.
+
+        let log = InMemoryAuditLog::new();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // Phase 1: cutoff=200 puts the boundary on the middle event.
+        // - 100 is strictly less than 200 -> PURGED
+        // - 200 is equal to 200          -> KEPT (the equality arm)
+        // - 300 is strictly greater      -> KEPT
+        let purged = log.purge_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge exactly the 100-stamped event — the \
+             200-stamped event sits at the cutoff and the `>=` predicate \
+             keeps it; a refactor that flipped to `>` would purge BOTH \
+             100 and 200, returning 2 here and silently losing every \
+             cutoff-equal record on every daily purge cycle. got: {purged}",
+        );
+        let remaining = log.recent(10).await.unwrap();
+        let mut timestamps: Vec<u64> = remaining.iter().map(|e| e.timestamp_ms).collect();
+        timestamps.sort();
+        assert_eq!(
+            timestamps,
+            vec![200, 300],
+            "after cutoff=200 the survivors must be the cutoff-equal \
+             event (200) and the strictly-greater event (300); a \
+             refactor that purged cutoff-equal records would leave only \
+             [300] here, and a refactor that inverted the predicate \
+             would leave only [100]. Pinning the explicit survivor set \
+             forecloses any single-direction predicate flip",
+        );
+
+        // Phase 2: re-purge with cutoff=300 puts the boundary on the
+        // remaining higher-value event.
+        // - 200 (still present)         -> strictly less than 300 -> PURGED
+        // - 300                         -> equal to 300          -> KEPT
+        let purged = log.purge_older_than(300).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge with cutoff=300 must drop the now-strictly-less \
+             200-stamped event while keeping the cutoff-equal 300; \
+             confirms the equality arm survives a SECOND purge cycle \
+             with the boundary moved to a different timestamp, which \
+             pins that the arm is invariant to cutoff value (not \
+             coincidentally satisfied by the phase-1 fixture)",
+        );
+        let remaining = log.recent(10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].timestamp_ms, 300,
+            "the survivor must be the 300-stamped event; cross-binds \
+             the cutoff-equality contract on a different timestamp \
+             value than phase 1 so a refactor that hardcoded the \
+             equality arm to a specific value (e.g., `before_ms == 200`) \
+             during a misguided 'inline this constant' pass would \
+             surface here",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_purge_rewrites_only_when_something_drops() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

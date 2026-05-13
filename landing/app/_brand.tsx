@@ -4,8 +4,6 @@
 
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
-export const REPO_SLUG = "open-covenant/covenant";
-export const LICENSE = "Apache 2.0";
 export const TAGLINE = "Open infrastructure for agent-native computing";
 export const RELEASE_DATE = "ALPHA TARGET: 18.05.2026";
 

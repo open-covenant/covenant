@@ -1691,4 +1691,60 @@ cpu_ms_per_task = 1000
             "ManifestError::Validation must not converge with ManifestError::Parse prefix (prefix-convergence regression class): {message}"
         );
     }
+
+    #[test]
+    fn manifest_error_parse_and_io_display_messages_pin_prefix_and_external_source_display_delegation(
+    ) {
+        let parse_source = toml::from_str::<toml::Value>("not valid toml = =")
+            .expect_err("toml parse must fail");
+        let parse_err = ManifestError::Parse(parse_source);
+        let parse_message = format!("{parse_err}");
+        assert!(
+            parse_message.starts_with("toml parse: "),
+            "ManifestError::Parse must surface the literal 'toml parse: ' bootstrap-stage prefix so audit-log filters can distinguish agent.toml syntax faults from disk faults and validation faults during manifest load (dropped-prefix regression class): {parse_message}"
+        );
+        assert!(
+            parse_message.contains("TOML parse error"),
+            "ManifestError::Parse must surface the inner toml::de::Error Display rendering after the colon ({{0}}, not {{0:?}}); toml v0.8 Display renders parse failures starting with 'TOML parse error at line N, column M', a Debug refactor on {{0}} would render 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {parse_message}"
+        );
+        assert!(
+            !parse_message.contains("TomlError {"),
+            "ManifestError::Parse must NOT surface the toml::de::Error Debug rendering; a Debug refactor on {{0}} would expose 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' internal struct fields (Debug-vs-Display formatting regression class on the {{0}} interpolation): {parse_message}"
+        );
+
+        let io_err = ManifestError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "agent.toml missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "ManifestError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish agent.toml disk faults from syntax faults and validation faults during manifest load (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("agent.toml missing"),
+            "ManifestError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "ManifestError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        assert_ne!(
+            parse_message, io_message,
+            "ManifestError::Parse and ManifestError::Io Display must not converge; merging the two prefixes would lose the syntax-fault vs disk-fault discriminator (prefix-convergence regression class): parse={parse_message} io={io_message}"
+        );
+        assert!(
+            !parse_message.starts_with("io:") && !io_message.starts_with("toml parse:"),
+            "ManifestError::Parse must not start with 'io:' and ManifestError::Io must not start with 'toml parse:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): parse={parse_message} io={io_message}"
+        );
+        assert!(
+            !parse_message.starts_with("validation:"),
+            "ManifestError::Parse must not converge with the Validation surface 'validation:' pinned by manifest_error_validation_display_message_pins_prefix_colon_separator_and_payload; a TOML syntax fault must not be mis-routed as a structured validation incident (string-surface-convergence regression class): {parse_message}"
+        );
+        assert!(
+            !io_message.starts_with("validation:"),
+            "ManifestError::Io must not converge with the Validation surface 'validation:' pinned by manifest_error_validation_display_message_pins_prefix_colon_separator_and_payload; a disk fault must not be mis-routed as a structured validation incident (string-surface-convergence regression class): {io_message}"
+        );
+    }
 }

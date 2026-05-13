@@ -1241,4 +1241,26 @@ api_key = "BSA-test"
             "covenant_tools::SearchError::Serde source() must downcast_ref to serde_json::Error so search-tool response-body diagnostics can call serde_json::Error::line/column/classify for malformed-response identification; a refactor that wrapped the inner in a project-local newtype (e.g., SearchSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies search provider response parse faults (concrete-source-type downcast regression class)"
         );
     }
+
+    #[test]
+    fn search_error_toml_source_delegation_pin_returns_inner_toml_de_error_via_std_error_source() {
+        use std::error::Error;
+
+        let inner = toml::from_str::<toml::Value>("not valid toml = =")
+            .expect_err("toml parse must fail");
+        let expected_display = format!("{inner}");
+        let err = SearchError::Toml(inner);
+        let source = err.source().expect(
+            "covenant_tools::SearchError::Toml must surface the inner toml::de::Error via std::error::Error::source so search-tool config-load diagnostics can walk the error chain and downcast source() to toml::de::Error to inspect the rendered 'TOML parse error at line N, column M' span context for malformed-search-config identification during search-secrets incident triage; a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
+        );
+        assert_eq!(
+            format!("{source}"),
+            expected_display,
+            "covenant_tools::SearchError::Toml source() Display must match a direct format!() of the same toml::de::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+        );
+        assert!(
+            source.downcast_ref::<toml::de::Error>().is_some(),
+            "covenant_tools::SearchError::Toml source() must downcast_ref to toml::de::Error so search-tool config-load diagnostics can inspect rendered line/column span context for malformed-search-config identification; a refactor that wrapped the inner in a project-local newtype (e.g., SearchTomlError(toml::de::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies search-config TOML parse faults (concrete-source-type downcast regression class)"
+        );
+    }
 }

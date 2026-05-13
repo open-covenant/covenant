@@ -2154,6 +2154,86 @@ mod tests {
     }
 
     #[test]
+    fn budget_checkpoint_error_display_messages_pin_four_string_variant_format_strings() {
+        // BudgetCheckpointError (lib.rs lines 87-101) has six variants.
+        // Two wrap external errors via #[from] (Io, Serde); the four
+        // string-bearing variants emit operator-facing format strings
+        // that no existing test inspects. The three Uuid-bearing
+        // variants intentionally use distinct verbs ('active',
+        // 'resumed', 'no ... for') so operators can grep by message
+        // prefix to triage which lifecycle stage the intent is in. A
+        // verb swap or merger between AlreadyPaused and AlreadyResumed
+        // would silently confuse triage.
+
+        let invalid = BudgetCheckpointError::InvalidCheckpoint("missing intent_id".into());
+        assert_eq!(
+            format!("{invalid}"),
+            "invalid pause checkpoint: missing intent_id",
+            "BudgetCheckpointError::InvalidCheckpoint Display must \
+             remain 'invalid pause checkpoint: <reason>' — the 'pause' \
+             qualifier anchors that this variant is specifically about \
+             pause checkpoints (validate_pause_checkpoint and \
+             validate_resume_state_value fire it); dropping 'pause' \
+             would silently merge the diagnostic with hypothetical \
+             other checkpoint types"
+        );
+
+        let uuid = Uuid::from_u128(42);
+        let already_paused = BudgetCheckpointError::AlreadyPaused(uuid);
+        let already_paused_message = format!("{already_paused}");
+        assert!(
+            already_paused_message.contains("pause checkpoint already active"),
+            "AlreadyPaused must keep the 'active' verb — distinguishes \
+             a double-pause attempt ('already active') from a double-\
+             resume attempt ('already resumed'): {already_paused_message}"
+        );
+        assert!(
+            already_paused_message.contains(&uuid.to_string()),
+            "AlreadyPaused must bind the Uuid verbatim so operators can \
+             correlate the error to a specific intent: {already_paused_message}"
+        );
+        assert!(
+            already_paused_message.contains("for intent"),
+            "AlreadyPaused must keep the 'for intent' prefix so the \
+             Uuid is anchored to its semantic meaning: \
+             {already_paused_message}"
+        );
+
+        let already_resumed = BudgetCheckpointError::AlreadyResumed(uuid);
+        let already_resumed_message = format!("{already_resumed}");
+        assert!(
+            already_resumed_message.contains("pause checkpoint already resumed"),
+            "AlreadyResumed must keep the 'resumed' verb — distinguishes \
+             a double-resume attempt from a double-pause attempt: \
+             {already_resumed_message}"
+        );
+        assert!(
+            already_resumed_message.contains(&uuid.to_string()),
+            "AlreadyResumed must bind the Uuid: {already_resumed_message}"
+        );
+
+        assert_ne!(
+            already_paused_message, already_resumed_message,
+            "AlreadyPaused and AlreadyResumed Display messages must be \
+             distinct — pins that a refactor consolidating the two \
+             error states under one variant or one shared format string \
+             would surface from a second angle"
+        );
+
+        let not_found = BudgetCheckpointError::NotFound(uuid);
+        assert_eq!(
+            format!("{not_found}"),
+            format!("no pause checkpoint for intent {uuid}"),
+            "NotFound must remain 'no pause checkpoint for intent \
+             <uuid>' — the 'pause' qualifier anchors this variant; \
+             dropping it ('no checkpoint for intent ...') would \
+             silently merge with hypothetical other checkpoint types \
+             and break dashboards that grep 'no pause checkpoint' to \
+             find missing-checkpoint rows"
+        );
+    }
+
+    #[test]
     fn budget_error_display_messages_pin_no_capacity_and_exhausted_format_strings() {
         // BudgetError (lib.rs lines 63-85) has four variants. Two wrap
         // external errors via #[from]; the two string-bearing variants

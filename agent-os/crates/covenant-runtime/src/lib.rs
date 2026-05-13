@@ -1410,7 +1410,7 @@ filesystem = "read-only-package"
         let node_card = card_for(&manifest_for("node"), dir.path().to_path_buf());
 
         assert_eq!(
-            GvisorRunner::args_for(&rust_card),
+            GvisorRunner::args_for(&rust_card).unwrap(),
             vec!["/workspace/agent.sh".to_string()],
             "RustBin arm must surface the bare workspace-prefixed entry \
              — a refactor that prepended an interpreter (e.g., 'cargo \
@@ -1421,7 +1421,7 @@ filesystem = "read-only-package"
         );
 
         assert_eq!(
-            GvisorRunner::args_for(&py_card),
+            GvisorRunner::args_for(&py_card).unwrap(),
             vec!["python3".to_string(), "/workspace/agent.sh".to_string()],
             "Python3 arm must prepend the literal 'python3' before the \
              workspace-prefixed entry — a refactor that swapped this \
@@ -1435,7 +1435,7 @@ filesystem = "read-only-package"
         );
 
         assert_eq!(
-            GvisorRunner::args_for(&node_card),
+            GvisorRunner::args_for(&node_card).unwrap(),
             vec!["node".to_string(), "/workspace/agent.sh".to_string()],
             "Node arm must prepend the literal 'node' before the \
              workspace-prefixed entry — a refactor that dropped the \

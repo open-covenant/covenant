@@ -436,6 +436,98 @@ provider = "made-up"
     }
 
     #[test]
+    fn search_config_serde_pins_optional_search_section_default() {
+        // SearchConfig is the top-level secrets.toml decoder for the
+        // [search] section. The struct carries a single field — search:
+        // Option<SearchSection> — with field-level #[serde(default)] and
+        // a derived Default impl. SearchConfig::from_path returns
+        // Self::default() when the file is missing, and pick_search
+        // treats search.is_none() as the fall-through to
+        // MockSearch::stub().
+        //
+        // SearchSection itself is pinned by
+        // search_section_serde_pins_required_provider_and_api_key_default
+        // but no test pins the wrapper's field name, the None default
+        // on an empty TOML payload, or the parse contract when [search]
+        // is omitted but other root keys exist. A refactor that renamed
+        // SearchConfig::search would silently make every operator's
+        // secrets.toml decode into SearchConfig::default(), pick_search
+        // would fall through to MockSearch::stub() with no parse signal,
+        // and configured Brave/SerpApi deployments would silently lose
+        // their provider — agents would think they're searching the web
+        // but be looking at the canned stub on every call.
+        let empty: SearchConfig = toml::from_str("").unwrap();
+        assert!(
+            empty.search.is_none(),
+            "SearchConfig must decode an empty TOML payload as \
+             SearchConfig::default() with search == None — \
+             SearchConfig::from_path relies on this path for missing \
+             secrets.toml, and pick_search relies on search.is_none() \
+             to fall through to MockSearch::stub()"
+        );
+
+        // No [search] section but other unknown root keys present — the
+        // top-level deserializer must still produce search == None
+        // rather than rejecting the unknown key. Operators co-locate
+        // [llm]/[embed] blocks in the same secrets.toml and the wrapper
+        // does not carry #[serde(deny_unknown_fields)].
+        let other_root = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk"
+"#;
+        let cfg: SearchConfig = toml::from_str(other_root).unwrap();
+        assert!(
+            cfg.search.is_none(),
+            "SearchConfig must tolerate unknown root sections without \
+             refusing to parse — operators co-locate [llm]/[embed] \
+             blocks in the same secrets.toml and a refactor that added \
+             #[serde(deny_unknown_fields)] would break every co-resident \
+             secrets.toml at daemon start"
+        );
+
+        // [search] fully populated — wrapper round-trips into the
+        // SearchSection. Pin every inner field so a refactor that broke
+        // the wrapper's deserialization path would fail this assertion
+        // rather than landing on a misleading inner-field error.
+        let full = r#"
+[search]
+provider = "brave"
+api_key = "BSA-test"
+"#;
+        let cfg: SearchConfig = toml::from_str(full).unwrap();
+        let section = cfg
+            .search
+            .as_ref()
+            .expect("[search] block must surface through SearchConfig.search");
+        assert_eq!(section.provider, "brave");
+        assert_eq!(section.api_key.as_deref(), Some("BSA-test"));
+
+        // [search] with only the strictly-required provider field — the
+        // inner section's Option default must surface through the
+        // wrapper so partial secrets.toml stays forward-compatible.
+        let minimal = r#"
+[search]
+provider = "mock"
+"#;
+        let cfg: SearchConfig = toml::from_str(minimal).unwrap();
+        let section = cfg.search.as_ref().unwrap();
+        assert_eq!(section.provider, "mock");
+        assert!(section.api_key.is_none());
+
+        // SearchConfig::default() must match the empty-TOML decode —
+        // pin this so a refactor that diverged the derived Default impl
+        // from the empty-TOML path would fail loud.
+        let default_cfg = SearchConfig::default();
+        assert!(
+            default_cfg.search.is_none(),
+            "SearchConfig::default() must have search == None to match \
+             the empty-TOML decode path that SearchConfig::from_path \
+             relies on for missing secrets.toml"
+        );
+    }
+
+    #[test]
     fn search_section_serde_pins_required_provider_and_api_key_default() {
         // SearchSection is the [search] block operators write to
         // secrets.toml to pick the search-tool provider. Mirrors

@@ -2234,6 +2234,69 @@ mod tests {
     }
 
     #[test]
+    fn budget_checkpoint_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
+        let io_err = BudgetCheckpointError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "checkpoints.jsonl missing",
+        ));
+        let io_message = format!("{io_err}");
+        assert!(
+            io_message.starts_with("io: "),
+            "BudgetCheckpointError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish checkpoint-file disk faults from JSON-parse faults and from the four intent-id-bearing surfaces that drive the resume claim logic (dropped-prefix regression class): {io_message}"
+        );
+        assert!(
+            io_message.contains("checkpoints.jsonl missing"),
+            "BudgetCheckpointError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+        assert!(
+            !io_message.contains("Custom {") && !io_message.contains("Os {"),
+            "BudgetCheckpointError::Io must NOT surface the std::io::Error Debug rendering (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+        );
+
+        let serde_source =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
+        let serde_err = BudgetCheckpointError::Serde(serde_source);
+        let serde_message = format!("{serde_err}");
+        assert!(
+            serde_message.starts_with("serde: "),
+            "BudgetCheckpointError::Serde must surface the literal 'serde: ' bootstrap-stage prefix so audit-log filters can distinguish checkpoint-row JSON-parse faults from disk faults (dropped-prefix regression class): {serde_message}"
+        );
+        assert!(
+            serde_message.contains("expected"),
+            "BudgetCheckpointError::Serde must surface the inner serde_json::Error Display rendering after the colon (serde_json renders parse failures with 'expected ...' Display strings); a Debug refactor on {{0}} would render 'Error(\"...\", line: N, column: M)' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+        assert!(
+            !serde_message.contains("Error("),
+            "BudgetCheckpointError::Serde must NOT surface the serde_json::Error Debug rendering; a Debug refactor on {{0}} would expose buffer-position structs (Debug-vs-Display formatting regression class on the {{0}} interpolation): {serde_message}"
+        );
+
+        assert_ne!(
+            io_message, serde_message,
+            "BudgetCheckpointError::Io and BudgetCheckpointError::Serde Display must not converge; merging the two prefixes would lose the disk-fault vs JSON-parse-fault discriminator (prefix-convergence regression class): io={io_message} serde={serde_message}"
+        );
+        assert!(
+            !io_message.starts_with("serde:") && !serde_message.starts_with("io:"),
+            "BudgetCheckpointError::Io must not start with 'serde:' and BudgetCheckpointError::Serde must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} serde={serde_message}"
+        );
+        let intent_id_prefixes = [
+            "invalid pause checkpoint:",
+            "pause checkpoint already active for intent",
+            "pause checkpoint already resumed for intent",
+            "no pause checkpoint for intent",
+        ];
+        for prefix in intent_id_prefixes {
+            assert!(
+                !io_message.starts_with(prefix),
+                "BudgetCheckpointError::Io must not converge with the intent-id-bearing surface '{prefix}'; a disk fault must not be mis-routed as a resume-claim-logic incident (intent-id-surface-convergence regression class): {io_message}"
+            );
+            assert!(
+                !serde_message.starts_with(prefix),
+                "BudgetCheckpointError::Serde must not converge with the intent-id-bearing surface '{prefix}'; a JSON-parse fault must not be mis-routed as a resume-claim-logic incident (intent-id-surface-convergence regression class): {serde_message}"
+            );
+        }
+    }
+
+    #[test]
     fn budget_error_display_messages_pin_no_capacity_and_exhausted_format_strings() {
         // BudgetError (lib.rs lines 63-85) has four variants. Two wrap
         // external errors via #[from]; the two string-bearing variants

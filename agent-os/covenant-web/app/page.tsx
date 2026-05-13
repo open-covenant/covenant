@@ -120,9 +120,13 @@ export default function OverviewPage() {
   return (
     <>
       <PageHeader
-        eyebrow="local control plane"
+        eyebrow={DEMO_MODE ? "public sandbox" : "local control plane"}
         title="Overview"
-        subhead="Send tasks to your agents, manage their permissions, and check that the activity log is intact. Everything happens on this machine."
+        subhead={
+          DEMO_MODE
+            ? "Send tasks to your agents, manage their permissions, and check that the activity log is intact. This is a shared public sandbox — state is visible to everyone and resets periodically."
+            : "Send tasks to your agents, manage their permissions, and check that the activity log is intact. Everything happens on this machine."
+        }
         syncMs={lastSyncMs}
         error={error}
         right={

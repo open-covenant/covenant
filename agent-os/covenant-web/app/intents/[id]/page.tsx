@@ -9,6 +9,8 @@ import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../../components/PageHeader";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+
 async function loadIntent() {
   return api.recentAudit(200);
 }
@@ -99,7 +101,9 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
       ) : trace.length === 0 ? (
         <div className="panel">
           <p className="empty">
-            Can&apos;t find this task in the local log. It may be older than what&apos;s cached on this machine.
+            {DEMO_MODE
+              ? "Can't find this task in the activity log. It may be older than the sandbox retention window — shared state resets periodically."
+              : "Can't find this task in the local log. It may be older than what's cached on this machine."}
           </p>
         </div>
       ) : (

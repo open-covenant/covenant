@@ -5,6 +5,8 @@ import { formatDateTime, formatTimestamp, shortHash } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+
 async function loadSettlement() {
   const [receipts, debits] = await Promise.all([
     api.recentReceipts(40),
@@ -25,7 +27,11 @@ export default function SpendingPage() {
       <PageHeader
         eyebrow="what your agents are spending"
         title="Spending"
-        subhead="How many credits your agents have used and which resources they tapped. On-chain settlement is coming; for now everything stays on this machine."
+        subhead={
+          DEMO_MODE
+            ? "How many credits agents have used in this sandbox and which resources they tapped. On-chain settlement is coming; for now this is a shared tally that resets periodically."
+            : "How many credits your agents have used and which resources they tapped. On-chain settlement is coming; for now everything stays on this machine."
+        }
         syncMs={lastSyncMs}
         error={error}
       />

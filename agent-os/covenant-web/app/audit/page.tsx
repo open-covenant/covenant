@@ -9,6 +9,8 @@ import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+
 async function loadAudit() {
   return api.recentAudit(100);
 }
@@ -58,7 +60,11 @@ export default function ActivityLogPage() {
       <PageHeader
         eyebrow="signed activity"
         title="Activity log"
-        subhead="Everything that happens on this machine is signed and chained together so nothing can be quietly changed. One click verifies the whole log."
+        subhead={
+          DEMO_MODE
+            ? "Everything that happens here is signed and chained together so nothing can be quietly changed. One click verifies the whole log. State is shared across sandbox visitors and resets periodically."
+            : "Everything that happens on this machine is signed and chained together so nothing can be quietly changed. One click verifies the whole log."
+        }
         syncMs={lastSyncMs}
         error={error}
         right={

@@ -201,6 +201,80 @@ mod tests {
     use crate::transport::MockMcpClient;
 
     #[test]
+    fn protocol_version_pins_exact_mcp_spec_date_string() {
+        // covenant_mcp::external::PROTOCOL_VERSION (line 19) is the
+        // public const every external MCP server initialize handshake
+        // quotes via 'protocolVersion' (line 54 in initialize request,
+        // line 424 in initialize response, line 542 in initialized
+        // notification). External MCP servers parse the field as a
+        // date string and compare it against their supported versions
+        // to decide whether to accept the handshake.
+        //
+        // No direct test today; the value is exercised indirectly via
+        // stdio transport handshake tests that capture the field. A
+        // refactor that bumped this to a newer date without
+        // coordinating the request/response shape changes that newer
+        // MCP versions require would silently fail every external
+        // server's handshake; a refactor that dropped the const in
+        // favor of inline literals at the three call sites would split
+        // the source of truth and let drift creep in.
+        assert_eq!(
+            PROTOCOL_VERSION, "2024-11-05",
+            "PROTOCOL_VERSION must remain '2024-11-05' — the MCP \
+             spec revision the daemon's external transport implements. \
+             A refactor that bumped this without coordinating the wire \
+             shape changes would silently break every operator's MCP \
+             integration on the next initialize handshake",
+        );
+
+        assert_eq!(
+            PROTOCOL_VERSION.len(),
+            10,
+            "PROTOCOL_VERSION must be exactly 10 chars (YYYY-MM-DD) — \
+             a refactor that switched to semver ('1.0.0' is 5 chars; \
+             'v2024.11.05' is 11 chars) would silently break the \
+             documented MCP spec contract that external servers parse \
+             this field as a date string and reject anything that does \
+             not match the date-string shape",
+        );
+
+        let parts: Vec<&str> = PROTOCOL_VERSION.split('-').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "PROTOCOL_VERSION must contain exactly two '-' separators \
+             splitting it into [year, month, day] — a refactor that \
+             changed the separator (e.g., to '/' or '.') or dropped a \
+             component (e.g., to 'YYYY-MM') would silently break MCP \
+             servers that parse the field as date components",
+        );
+        for (label, part, expected_len) in [
+            ("year", parts[0], 4),
+            ("month", parts[1], 2),
+            ("day", parts[2], 2),
+        ] {
+            assert_eq!(
+                part.len(),
+                expected_len,
+                "PROTOCOL_VERSION {label} component must be {expected_len} \
+                 chars — pinning the YYYY-MM-DD structure (4-2-2) so a \
+                 refactor that emitted a 1-digit month or 3-digit year \
+                 surfaces here; got {part:?} ({} chars)",
+                part.len(),
+            );
+            assert!(
+                part.chars().all(|c| c.is_ascii_digit()),
+                "PROTOCOL_VERSION {label} component must be all ASCII \
+                 digits — pinning that the date string carries no \
+                 letters (e.g., 'v', 'rc1') or punctuation; a refactor \
+                 that prefixed with 'v' or suffixed with a milestone \
+                 tag would silently break the date-string contract; \
+                 got {part:?}",
+            );
+        }
+    }
+
+    #[test]
     fn matches_filter_pins_star_exact_and_prefix_glob_branches() {
         assert!(
             matches_filter("*", "anything"),

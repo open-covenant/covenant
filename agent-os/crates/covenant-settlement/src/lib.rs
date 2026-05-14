@@ -518,10 +518,10 @@ mod tests {
         // domain. The prefix appears exactly ONCE in the crate (line
         // 91) and no test references it.
         //
-        // receipt_batch_uses_only_unsettled_receipts (line 482) pins
+        // receipt_batch_uses_only_unsettled_receipts pins
         // 'batch.batch_id.len() == 64' (length, not content);
-        // receipt_batch_root_changes_with_memory_record_id (line 496)
-        // pins merkle_root inequality but not batch_id. A refactor
+        // receipt_batch_root_changes_with_memory_record_id pins
+        // merkle_root inequality but not batch_id. A refactor
         // that dropped the prefix, renamed to underscore form, or
         // swapped the ':' separator for '/' would silently shift
         // every batch_id and break on-chain anchoring against
@@ -603,9 +603,9 @@ mod tests {
         // different convention silently produces a different root for
         // every odd-count batch and on-chain verification would fail.
         //
-        // receipt_batch_uses_only_unsettled_receipts (line 482) and
-        // receipt_batch_root_changes_with_memory_record_id (line 496)
-        // pin 1-leaf batches. The 1-leaf path SKIPS the while-loop
+        // receipt_batch_uses_only_unsettled_receipts and
+        // receipt_batch_root_changes_with_memory_record_id pin 1-leaf
+        // batches. The 1-leaf path SKIPS the while-loop
         // because level.len() > 1 is false from the start, so the
         // odd-count branch is never executed. This pin fills the
         // gap by exercising a 3-leaf batch where the chunks(2)

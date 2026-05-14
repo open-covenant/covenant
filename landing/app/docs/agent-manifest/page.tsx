@@ -72,9 +72,12 @@ priority                = "normal"`}</code>
             <td>string</td>
             <td>yes</td>
             <td>
-              Stable identifier in the form <code>name@host</code>.
-              Used as the routing key, the audit-log subject, and the
-              memory-record owner.
+              Stable identifier. ASCII{" "}
+              <code>[A-Za-z0-9_.-]+</code>; <code>@</code> is rejected
+              at parse time. Used as the routing key and the audit-log{" "}
+              <code>matched_agent</code> value. The daemon synthesises
+              <code>&lt;id&gt;@agent</code> as the agent&apos;s{" "}
+              <code>AgentId.display</code> for budget keying.
             </td>
           </tr>
           <tr>

@@ -140,7 +140,7 @@ chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null, "payer_
 action_len_be        [4 bytes, u32 big-endian]
 action               [action_len bytes]
 scope_len_be         [4 bytes, u32 big-endian]
-scope_json_bytes     [scope_len bytes — UTF-8 JSON]
+scope_jcs_bytes      [scope_len bytes — JCS-canonicalised JSON, RFC 8785]
 granted_by_pubkey    [32 bytes]
 expires_tag          [1 byte: 0 = none, 1 = present]
 expires_at_be        [8 bytes, u64 big-endian; zero if expires_tag = 0]`}</code>

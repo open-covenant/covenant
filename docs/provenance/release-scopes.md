@@ -103,6 +103,10 @@ Future verifiers will need to:
 
 Verifiers without access to the task corpus can still verify the signature, the schema, and the internal consistency of the count/distribution fields. They cannot independently confirm `task_set_sha256` without the corpus — that's an intentional consequence of the privacy-preserving design.
 
+## Read-only inspection
+
+`agent-os/scripts/release-scope-manifest.mjs --path <manifest>` performs steps 3 (release shape), 4 (count vs distribution sum), and the schema/non-claims checks from the verifier contract without recomputing `task_set_sha256`. It emits a `covenant.release-scope-manifest-check.v1` report under `--json` and exits non-zero on any failure. The inspector does not sign, publish, upload, or recompute the task-set digest, and it redacts absolute paths in its report. `agent-os/scripts/validate-release-scope-manifest.mjs` exercises a well-formed fixture plus tampered cases (bad schema, non-ISO `generatedAt`, non-hex commit, non-hex digest, distribution-sum mismatch, missing required `non_claims` entry, unknown top-level field, unknown workflow state, invalid repository slug, empty `previousTag`) so regressions in the inspector are caught before a manifest ever ships.
+
 ## Non-goals
 
 - This manifest does not publish task records.

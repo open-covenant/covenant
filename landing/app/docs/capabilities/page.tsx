@@ -59,6 +59,22 @@ export default function CapabilitiesPage() {
           <code>agent.</code> — actions over agent registration and
           execution.
         </li>
+        <li>
+          <code>a2a.</code> — actions over agent-to-agent task and
+          result flows.
+        </li>
+        <li>
+          <code>audit.</code> — actions over the audit log and
+          integrity surface.
+        </li>
+        <li>
+          <code>peers.</code> — actions over peer registration and
+          revocation.
+        </li>
+        <li>
+          <code>chain.</code> — actions over chain receipt reads and
+          flushing.
+        </li>
       </ul>
 
       <p>

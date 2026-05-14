@@ -82,8 +82,8 @@ const manifestInspectorOk =
   ]);
 
 const manifestGeneratorOk =
-  exists("agent-os/scripts/build-release-scope-manifest.mjs") ||
-  exists("agent-os/scripts/release-scope-manifest-build.mjs");
+  exists("agent-os/scripts/build-release-scope-manifest.mjs") &&
+  exists("agent-os/scripts/validate-build-release-scope-manifest.mjs");
 
 const signingWorkflowOk = workflowFiles().some((path) => {
   const text = read(path);
@@ -142,6 +142,7 @@ const gates = [
     ok: manifestGeneratorOk,
     evidence: [
       "agent-os/scripts/build-release-scope-manifest.mjs",
+      "agent-os/scripts/validate-build-release-scope-manifest.mjs",
       "docs/provenance/release-scopes.md",
     ],
     blockers: manifestGeneratorOk

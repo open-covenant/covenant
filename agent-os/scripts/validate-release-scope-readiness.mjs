@@ -64,9 +64,9 @@ const okGates = new Set([
   "release-scope-schema-doc",
   "release-scope-publication-location",
   "release-scope-manifest-inspector",
+  "release-scope-manifest-generator",
 ]);
 const plannedGates = new Set([
-  "release-scope-manifest-generator",
   "release-scope-signing-workflow",
   "audit-root-release-scope-binding",
 ]);
@@ -120,7 +120,6 @@ if (!Array.isArray(report.non_goals)
 }
 
 const expectedBlockers = new Set([
-  "release-scope-manifest-generator",
   "release-scope-signing-workflow",
   "audit-root-release-scope-binding",
 ]);

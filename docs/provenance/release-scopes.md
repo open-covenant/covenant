@@ -87,9 +87,11 @@ The audit-root attestation will embed both `releaseSubjectSha256` (already suppo
 
 ## Publication
 
-Generated manifests will be committed to `docs/provenance/release-scopes/<tag>.json` before the release tag is pushed, then signed in CI on release publication. The publication location is publicly tracked so verifiers can pull the manifest and run cosign verify-blob without needing internal-loop access.
+Generated manifests are committed to `docs/provenance/release-scopes/<tag>.json` before the release tag is pushed, then signed in CI on release publication. The publication location is publicly tracked so verifiers can pull the manifest and run cosign verify-blob without needing internal-loop access.
 
-Until the generator script and workflow extension land, `docs/provenance/release-scopes/` stays empty (only its `README.md` is committed) and no release-scope claims are made.
+`agent-os/scripts/build-release-scope-manifest.mjs` is the generator. It reads every task record under `--task-dir`, validates that each has a known `id` and an allowed `state`, sorts records by `id`, canonicalizes each record (sorted keys at every level, no whitespace, no trailing newline), concatenates with a single `\n`, and emits the full `covenant.release-scope.v1` manifest with the SHA-256 over the concatenation as `task_set_sha256`. It requires `--repository`, `--release-id`, `--tag`, `--commit`, and either `--previous-tag` or `--first-release`. With `--output <path>` it writes the manifest; otherwise it writes to stdout. The generator does not sign, publish, upload, or write transparency-log entries; signing is the CI workflow's job.
+
+Until the signing-workflow extension lands, `docs/provenance/release-scopes/` stays empty (only its `README.md` is committed) and no release-scope claims are made.
 
 ## Verifier contract
 

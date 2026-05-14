@@ -40,8 +40,9 @@ export default function IpcPage() {
 
       <h2>Request shapes</h2>
       <p>
-        A request is a JSON object tagged with <code>kind</code>. The
-        full set today:
+        A request is a JSON object tagged with <code>kind</code>. Core
+        request kinds; the exhaustive enum lives in the{" "}
+        <code>covenant-ipc</code> Rust crate.
       </p>
 
       <pre>

@@ -34,9 +34,9 @@ export default function ConceptsPage() {
       <h2>Agent</h2>
       <p>
         An <strong>agent</strong> is anything Covenant can dispatch an
-        intent to. Agents are registered via an <code>agent.toml</code>{" "}
-        manifest under <code>$COVENANT_HOME/agents/</code>. The manifest
-        declares:
+        intent to. Each agent is a subdirectory of{" "}
+        <code>$COVENANT_HOME/agents/</code> containing an{" "}
+        <code>agent.toml</code> manifest; the manifest declares:
       </p>
 
       <ul>

@@ -265,8 +265,12 @@ priority                = "normal"`}</code>
             </td>
             <td>
               <code>trusted-local</code> or <code>linux-gvisor</code>.
-              The runtime crate has an initial gVisor runner; daemon
-              backend selection and live Linux coverage remain planned.
+              The runtime crate has a gVisor runner and the daemon supports
+              the <code>linux-gvisor</code> backend; live Linux CI coverage
+              runs on sandbox-runtime path PRs via{" "}
+              <code>gvisor-live.yml</code>. Promoting that workflow to a
+              required check and broadening sandbox policy enforcement remain
+              planned.
             </td>
           </tr>
           <tr>

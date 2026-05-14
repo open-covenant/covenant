@@ -41,8 +41,10 @@ export default function ConceptsPage() {
 
       <ul>
         <li>
-          a stable <code>agent.id</code> in the form{" "}
-          <code>name@host</code>,
+          a stable <code>agent.id</code> — ASCII{" "}
+          <code>[A-Za-z0-9_.-]+</code>; the daemon synthesises{" "}
+          <code>&lt;id&gt;@agent</code> as the agent&apos;s{" "}
+          <code>AgentId.display</code>,
         </li>
         <li>
           a <code>runtime</code> (currently <code>rust-bin</code>,{" "}

@@ -20,7 +20,7 @@ Not implemented:
 
 - `outbound-https-only`, `full`, `ephemeral`, and `host` sandbox policies are not enforced by the initial runner; they fail closed instead.
 - macOS execution is trusted-local only.
-- Default CI does not yet provision the Linux host, `runsc`, or rootfs needed for live sandbox validation.
+- Default CI does not run live sandbox validation on every PR — only sandbox-runtime path PRs trigger the dedicated `.github/workflows/gvisor-live.yml` workflow, which provisions `runsc` and the rootfs, and that workflow is not yet a required check.
 
 ## Trust Boundary
 

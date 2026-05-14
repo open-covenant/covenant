@@ -22,8 +22,7 @@
 ## Autonomous workflow checklist
 
 - [ ] I planned the change before editing or explained why the path was mechanical.
-- [ ] I updated docs/status when public behavior, setup, architecture, or project claims changed.
-- [ ] I updated `agent-os/autonomy/tasks` when this changed autonomous backlog state.
+- [ ] I updated public docs (`README.md`, `ROADMAP.md`, `landing/app/docs/`) when public behavior, setup, architecture, or project claims changed.
 - [ ] New public behavior includes failure-mode tests or an explicit tracked gap.
 - [ ] Human-only blockers are recorded instead of bypassed.
 

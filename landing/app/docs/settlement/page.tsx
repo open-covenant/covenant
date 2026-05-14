@@ -71,8 +71,11 @@ export default function SettlementPage() {
           credits at the configured rate.
         </li>
         <li>
-          <code>consume_credits(amount)</code> — destroy credits at
-          the point of consumption (memory write, tool call, etc.).
+          <code>consume_credits(amount, receipt_hash)</code> —
+          destroy credits at the point of consumption (memory write,
+          tool call, etc.). <code>receipt_hash</code> binds the
+          on-chain consumption to a specific local receipt batch for
+          reconciliation.
         </li>
       </ul>
 

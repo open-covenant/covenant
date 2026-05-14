@@ -131,9 +131,9 @@ export default function DocsIndexPage() {
         manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, runtime-level gVisor
         runner work, live Linux sandbox coverage, and a documented Linux runner
-        setup. Distributed settlement, installers, SDK publication, signed
-        release artifacts, and transparency publication are tracked on the
-        roadmap.
+        setup. Distributed settlement, installers, SDK publication,
+        release-scope and audit-root signing, and transparency publication are
+        tracked on the roadmap.
       </p>
 
       <h2>Position in the stack</h2>

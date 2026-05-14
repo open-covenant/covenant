@@ -220,7 +220,7 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <h3>Resume a budget-rejected intent</h3>
       <pre>
         <code>{`$ covenant intents resume latest --json
-{"kind":"intent_resume","resumed_intent_id":"...","status":"error","result":null,"message":"budget exhausted: ..."}`}</code>
+{"kind":"intents_resume","ok":false,"mode":"latest","intent_id":"...","error":{"code":"daemon_error","message":"budget exhausted; try again later"}}`}</code>
       </pre>
 
       <h3>Inspect daemon protocol metadata</h3>

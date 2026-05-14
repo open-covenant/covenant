@@ -101,6 +101,9 @@ fn print_usage() {
     eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
     eprintln!("  covenant ping [--json]                  check the daemon is responsive");
     eprintln!(
+        "  covenant version                        print daemon protocol metadata as JSON (no token required)"
+    );
+    eprintln!(
         "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
     );
     eprintln!(
@@ -400,6 +403,23 @@ async fn main() -> Result<()> {
             sock.display()
         )
     })?;
+
+    // `version` is the operator's pre-auth protocol probe — same
+    // payload as the HTTP `/version` route. Handle it before
+    // `authenticate` so a fresh `COVENANT_HOME` with no operator
+    // token still gets a usable response.
+    if args[0] == "version" {
+        write_frame(&mut stream, &Request::ProtocolInfo).await?;
+        match read_frame::<_, Response>(&mut stream).await? {
+            Response::ProtocolInfo { info } => {
+                println!("{}", serde_json::to_string(&info)?);
+                return Ok(());
+            }
+            Response::Error { message } => bail!("daemon error: {message}"),
+            other => bail!("unexpected response: {other:?}"),
+        }
+    }
+
     authenticate(&mut stream, &home).await?;
 
     match args[0].as_str() {

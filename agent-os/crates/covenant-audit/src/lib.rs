@@ -776,7 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_recent_pins_saturating_sub_zero_limit_and_full_tail_boundary_arms() {
-        // covenant_audit::InMemoryAuditLog::recent (line 668-672):
+        // covenant_audit::InMemoryAuditLog::recent contract:
         //
         //   async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError> {
         //       let g = self.events.lock().await;
@@ -792,14 +792,14 @@ mod tests {
         //   (4) limit  < g.len() -> tail-view of the last `limit` events,
         //                          NOT head-view of the first `limit`
         //
-        // in_memory_record_and_recent (line 728) only exercises arm 4
+        // in_memory_record_and_recent only exercises arm 4
         // with three events and limit=2, and never reads last_two[0]
         // — only last_two[1] is asserted ('error'), so a refactor that
         // swapped the slice for the FIRST `limit` events would let the
         // existing test fail only on the [1] index; pinning BOTH ends of
         // the tail (last_two[0]=='b' AND last_two[1]=='c' below)
         // forecloses any single-index rewrite.
-        // jsonl_recent_on_missing_file_is_empty (line 810) exercises
+        // jsonl_recent_on_missing_file_is_empty exercises
         // limit=10 against a missing JsonlAuditLog file, which never
         // enters the populated-state saturating_sub branch on InMemory.
         //
@@ -1081,9 +1081,9 @@ mod tests {
                  lines 524-528 fires on chain.len() != events.len() \
                  in both directions); a one-directional comparison \
                  (e.g., chain > events) would silently let this \
-                 truncated-chain case pass and the rebuild logic at \
-                 line 540 would silently produce a chain matching \
-                 the truncated state. Got: {other:?}"
+                 truncated-chain case pass and the chain-entry rebuild \
+                 via build_chain_entries would silently produce a chain \
+                 matching the truncated state. Got: {other:?}"
             ),
         }
     }

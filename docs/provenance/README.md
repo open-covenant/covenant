@@ -31,8 +31,8 @@ node agent-os/scripts/provenance.mjs verify-all
 
 `agent-os/scripts/validate.sh` runs `verify-all` automatically.
 
-Autonomy review artifacts are generated unsigned by default. The verifier can check signed review artifacts when an approved project public key is supplied; project key custody and publication are defined in [keys/](keys/).
-Release provenance readiness is gated on artifact subject verification, project key custody, and transparency publication; only the first two have landed contracts so far, and public release provenance remains blocked until the first key is published and the transparency target is selected.
+Autonomy review artifacts are generated unsigned by default. The verifier can check signed review artifacts when an approved project public key is supplied; the project signing model is defined in [keys/](keys/).
+Release provenance readiness is gated on artifact subject verification, signing workflows for the release-evidence triple (release-subject, release-scope, audit-root), and transparency publication. The release-subject signing workflow has shipped via cosign keyless; release-scope and audit-root signing workflows remain planned, and public release provenance remains blocked until those workflows ship and a transparency target is selected.
 
 Generate an audit-root attestation from `covenant audit verify` output:
 
@@ -124,7 +124,7 @@ For `covenant.audit-root-attestation.v1`, the verifier also checks:
 - Signed audit-root attestations prove payload integrity for the embedded public key. Public trust still requires a project-controlled key policy, release process, and transparency publication.
 - Validation entries record evidence from the producing operator or automation; the verifier checks envelope consistency, not whether every command was re-run.
 - Release artifact subject schema is defined in docs/provenance/release-subjects.md. Audit-root release targets can bind an embedded release subject digest; produced artifact file verification remains planned.
-- Review artifact signing has verifier support behind an explicit trusted public key input. The project signing key custody contract, publication location, manifest schema, rotation policy, authorized-signer role, and release-evidence floor are documented; no project key has been published yet. See [keys/](keys/) for the publication location and manifest.
-- Release provenance readiness has a read-only gate report; public release provenance remains blocked until the first key is published, release-artifact subject verification is implemented, and a transparency publication target is selected.
+- Review artifact signing has verifier support behind an explicit trusted public key input. Project signing identity is sigstore keyless via cosign; see [keys/](keys/) for the identity pins and the inventory of which artifact kinds are signed today vs planned.
+- Release provenance readiness has a read-only gate report; public release provenance remains blocked until the release-scope and audit-root signing workflows ship, release-artifact subject file verification is implemented, and a transparency publication target is selected.
 
-Audit root signing is implemented as detached `audit-root-attestation.v1` payloads with optional local ed25519 signatures. Release publication and transparency-log publication remain planned work, gated on the same project signing key publication step recorded in [keys/](keys/).
+Audit root signing is implemented as detached `audit-root-attestation.v1` payloads with optional local ed25519 signatures. Release publication of signed release-scope and audit-root artifacts, plus transparency-log publication, remain planned work; the signing identity model is sigstore keyless (see [keys/](keys/)).

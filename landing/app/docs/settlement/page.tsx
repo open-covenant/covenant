@@ -123,7 +123,7 @@ covenant receipts recent --limit 20 --json
 covenant chain flush-receipts --limit 20 --json
 covenant chain receipt-batches --limit 20 --json
 # Or via HTTP:
-curl -s 127.0.0.1:8421/receipts/recent?limit=20 | jq`}</code>
+curl -s 127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000 | jq`}</code>
       </pre>
 
       <h2>Verification</h2>

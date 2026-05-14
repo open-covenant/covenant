@@ -782,7 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_store_put_replaces_record_with_same_id() {
-        // covenant_memory::InMemoryStore::put (line 353-361) runs
+        // covenant_memory::InMemoryStore::put runs
         // g.retain(|r| r.id != record.id) before g.push(record), making
         // put behave as an upsert keyed by record.id — a second put
         // with the same id REPLACES the previous record rather than
@@ -1251,18 +1251,18 @@ mod tests {
     #[tokio::test]
     async fn in_memory_search_similar_pins_strict_positive_filter_and_inclusive_floor_equal_boundary(
     ) {
-        // InMemoryStore::search_similar (line 408-428) applies the paired
+        // InMemoryStore::search_similar applies the paired
         // predicate
         //
         //     .filter(|(s, _)| *s > 0.0 && *s >= floor)
         //
-        // on line 424. The strict-positive `s > 0.0` arm drops degenerate
+        // The strict-positive `s > 0.0` arm drops degenerate
         // zero-cosine records (zero-norm or mismatched-length embeddings;
-        // see cosine() line 321-337) and anchors the documented
+        // see cosine()) and anchors the documented
         // 'Records with empty embeddings get score 0 and are... dropped,
         // depending on the impl' contract from the MemoryStore trait
-        // doc (line 63-64). The `s >= floor` arm pins the inclusive
-        // min_relevance semantic documented at line 65-66 ('records
+        // doc. The `s >= floor` arm pins the inclusive
+        // min_relevance semantic documented on the trait method ('records
         // whose cosine score is strictly less than the threshold are
         // dropped' — i.e., equality passes).
         //
@@ -1270,7 +1270,7 @@ mod tests {
         // (above) probes min_relevance=Some(0.5) against cosine ~0.099
         // — both `>` and `>=` agree on this case, neither arm of the
         // dual predicate is uniquely exercised. The existing
-        // in_memory_search_returns_closest_first (line 1198) uses
+        // in_memory_search_returns_closest_first uses
         // limit=2 against 3 records so a zero-cosine record is silently
         // dropped by limit-truncation rather than by the strict-positive
         // filter. A refactor that changed `s > 0.0` to `s >= 0.0` under
@@ -1407,8 +1407,8 @@ mod tests {
 
     #[test]
     fn sqlite_embedding_bytes_pins_round_trip_little_endian_and_trailing_partial_chunk_drop() {
-        // SqliteStore::embedding_to_bytes (line 505-511) and
-        // ::embedding_from_bytes (line 513-517) are the SQLite BLOB
+        // SqliteStore::embedding_to_bytes and
+        // ::embedding_from_bytes are the SQLite BLOB
         // serializer/deserializer pair the persistent memory store
         // uses to round-trip f32 embedding vectors through the
         // embedding column. The pair encodes f32 as little-endian
@@ -1718,7 +1718,7 @@ mod tests {
 
     #[test]
     fn plan_repair_backfill_provenance_pins_non_object_metadata_under_previous_metadata() {
-        // covenant_memory::plan_repair (line 175-210) handles
+        // covenant_memory::plan_repair handles
         // MemoryRepairCommand::BackfillProvenance by reading the
         // record's existing metadata. Line 197-204:
         //
@@ -1737,7 +1737,7 @@ mod tests {
         // provenance on a legacy record with null/string/array
         // metadata does not silently lose the prior value. The
         // existing repair_backfills_provenance_metadata test
-        // (line 1425) only exercises the object-already arm.
+        // only exercises the object-already arm.
         //
         // A refactor that replaces the match with
         // metadata.as_object_mut().unwrap() under a 'metadata is
@@ -1764,7 +1764,7 @@ mod tests {
             after.metadata["previous_metadata"],
             serde_json::Value::Null,
             "null metadata must be preserved verbatim under \
-             previous_metadata — pins the non-object arm at line 199. \
+             previous_metadata — pins the non-object arm. \
              A refactor that dropped the wrap would surface here as a \
              missing previous_metadata key, and a refactor that swapped \
              the arm for as_object_mut().unwrap() would have panicked \
@@ -1817,7 +1817,7 @@ mod tests {
             after.metadata["source"], "import",
             "object metadata happy path: existing keys must be \
              preserved without re-keying under previous_metadata — \
-             pins the first match arm at line 198. A refactor that \
+             pins the first match arm. A refactor that \
              accidentally fell through to the 'other' arm for objects \
              would surface here as a missing 'source' key and an \
              unexpected previous_metadata wrap",
@@ -1930,7 +1930,7 @@ mod tests {
 
     #[test]
     fn plan_compaction_stale_context_pins_non_object_metadata_under_previous_metadata() {
-        // covenant_memory::plan_compaction (line 212-317) marks
+        // covenant_memory::plan_compaction marks
         // LongTerm records stale when their created_at falls below
         // mark_longterm_stale_before_ms. Lines 274-281 use the same
         // non-object preservation pattern as plan_repair:
@@ -1944,10 +1944,10 @@ mod tests {
         //       }
         //   };
         //
-        // Every existing compaction test uses record() (line 770)
+        // Every existing compaction test uses record()
         // which seeds metadata = serde_json::json!({}); so they all
-        // hit the object-already arm at line 275. The 'other' arm
-        // (line 276-280) that handles legacy LongTerm records with
+        // hit the object-already arm. The 'other' arm
+        // that handles legacy LongTerm records with
         // null/string/array metadata is dead code from the test
         // suite's perspective. A refactor that swapped the match for
         // metadata.as_object_mut().unwrap() under a 'metadata is
@@ -2006,7 +2006,7 @@ mod tests {
                 after.metadata["previous_metadata"], expected_previous,
                 "{label}: the non-object metadata must be preserved \
                  verbatim under previous_metadata — pins the 'other' \
-                 arm at line 276-280. A refactor that dropped the \
+                 'other' arm. A refactor that dropped the \
                  wrap would surface as a missing previous_metadata \
                  key; a refactor that swapped the match for \
                  as_object_mut().unwrap() would have panicked before \
@@ -2048,8 +2048,7 @@ mod tests {
 
     #[test]
     fn plan_repair_detach_parent_pins_parent_mismatch_arms_and_field_composition() {
-        // covenant_memory::plan_repair (line 175-210), DetachParent arm
-        // (lines 180-193), guards on
+        // covenant_memory::plan_repair, DetachParent arm, guards on
         //
         //   if expected_parent.is_some() && record.parent != *expected_parent
         //
@@ -2066,7 +2065,7 @@ mod tests {
         //       None }).
         //
         // Of these four arms, only arm (3) is pinned today via
-        // repair_rejects_parent_mismatch (line 1642), and only via
+        // repair_rejects_parent_mismatch, and only via
         // matches!(_, Err(MemoryError::ParentMismatch { .. })) — the
         // existing pin does NOT inspect the ParentMismatch field
         // values, so a refactor that swapped expected and actual under
@@ -2141,7 +2140,7 @@ mod tests {
         let err = plan_repair(&with_parent(Some(parent_b)), &detach(Some(parent_a))).expect_err(
             "expected=Some(X), actual=Some(Y) with X!=Y must \
                  return ParentMismatch — the existing \
-                 repair_rejects_parent_mismatch pin (line 1642) covers \
+                 repair_rejects_parent_mismatch pin covers \
                  this arm only at the matches!(_, Err(_)) level; this \
                  destructure pins the field VALUES so a refactor that \
                  swapped expected and actual cannot land silently",
@@ -2244,7 +2243,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_compaction_marked_at_ms_defaults_to_before_ms_when_policy_field_is_none() {
-        // covenant_memory::plan_compaction (line 269) binds the
+        // covenant_memory::plan_compaction binds the
         // stale_context.marked_at_ms value via:
         //
         //   let marked_at_ms = request.policy.marked_at_ms.unwrap_or(before_ms);
@@ -2256,7 +2255,7 @@ mod tests {
         // the policy boundary that triggered the mark.
         //
         // The existing compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents
-        // (line 1492) always sets marked_at_ms = Some(99); the
+        // always sets marked_at_ms = Some(99); the
         // default-to-cutoff arm is exercised by no direct test. A
         // refactor that swapped .unwrap_or(before_ms) for
         // .unwrap_or(0), .unwrap_or_default(), or
@@ -2327,7 +2326,7 @@ mod tests {
             "reason must travel verbatim into stale_context alongside the \
              marked_at_ms default arm — pinning both fields anchors the \
              two-field stale_context contract that plan_compaction \
-             constructs on line 270-273",
+             constructs",
         );
 
         // Explicit-override arm: marked_at_ms = Some(150), mark_longterm_stale_before_ms = Some(300).

@@ -224,7 +224,7 @@ EOF`}</code>
       </pre>
 
       <p>
-        The daemon routes the intent to <code>research@local</code>,
+        The daemon routes the intent to the <code>research</code> agent,
         executes the binary as a subprocess, captures the response,
         persists the memory record and settlement receipt, and emits audit
         events for both the dispatch and the capability check.

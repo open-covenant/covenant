@@ -38,7 +38,7 @@ export default function AuditPage() {
   "type":           "intent_dispatched",
   "intent_id":      "uuid",
   "intent_text":    "…",
-  "matched_agent":  "research@local" | null,
+  "matched_agent":  "research" | null,
   "result_hash_hex": "…",
   "status":         "ok"
 }`}</code>
@@ -62,7 +62,7 @@ export default function AuditPage() {
       <pre>
         <code>{`{
   "type":              "capability_check",
-  "agent_id":          "research@local" | "tool:echo",
+  "agent_id":          "research" | "tool:echo",
   "required_actions":  ["tool.web_search"],
   "missing_actions":   [],
   "passed":            true
@@ -156,7 +156,7 @@ curl -s 127.0.0.1:8421/audit/verify \\
       <h3>Find every dispatch for a specific agent</h3>
       <pre>
         <code>{`jq -c 'select(.kind.type == "intent_dispatched"
-              and .kind.matched_agent == "research@local")' \\
+              and .kind.matched_agent == "research")' \\
   ~/.covenant/audit/events.jsonl`}</code>
       </pre>
 

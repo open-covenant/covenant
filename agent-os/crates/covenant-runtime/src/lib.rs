@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn runtime_trace_serde_pins_snake_case_tag_and_per_variant_field_set() {
-        // RuntimeTrace (line 49-84) is the mid-run signal enum the
+        // RuntimeTrace is the mid-run signal enum the
         // Hermes gateway emits over SSE and the daemon ingests via
         // serde_json::from_str. The enum carries
         //
@@ -896,9 +896,9 @@ entry = "./fake"
 
     #[tokio::test]
     async fn mock_runner_run_pins_card_intent_independence_and_runtime_events_empty_default() {
-        // MockRunner::new (line 505-515) constructs an AgentResult with
+        // MockRunner::new constructs an AgentResult with
         // text=input, sources=empty Vec, runtime_events=empty Vec.
-        // MockRunner::run (line 518-522) clones this canned response on
+        // MockRunner::run clones this canned response on
         // every call and intentionally ignores its _card and _intent
         // arguments (the underscore prefix documents the intent).
         //
@@ -998,7 +998,7 @@ required = ["tool.web_search"]
             result_card_a_intent_a, result_second_call,
             "two sequential calls on the same MockRunner with the same \
              inputs must yield identical AgentResult — MockRunner \
-             clone()s self.response on every call (line 520). A \
+             clone()s self.response on every call. A \
              refactor that swapped clone for take/replace under a \
              'avoid the clone allocation' rationale would silently \
              break every test fixture that calls .run twice and \
@@ -1282,7 +1282,7 @@ filesystem = "host"
         // RunnerError::UnsupportedSandboxPolicy { .. } without
         // verifying any reason string, and arm 1 (backend mismatch) is
         // not covered at all. SandboxBackend::TrustedLocal is the
-        // documented default (line 99-101) — a manifest with no
+        // documented default in covenant-manifest — a manifest with no
         // [sandbox] section parses as a valid manifest with
         // backend=TrustedLocal; the manifest-level guard
         // rejects_required_trusted_local_sandbox (covenant-manifest)
@@ -1916,7 +1916,8 @@ cpu_ms_per_task = 5000
             other => panic!(
                 "SubprocessRunner.run with a Hermes manifest must \
                  surface RunnerError::WrongRuntime — the early branch \
-                 at line 184 is the documented loud-fail safety net; \
+                 inside SubprocessRunner.run is the documented \
+                 loud-fail safety net; \
                  a refactor that removed it under a 'composite already \
                  routes, this is dead code' rationale would surface \
                  here as an IO error or a successful spawn against a \
@@ -1948,7 +1949,8 @@ cpu_ms_per_task = 5000
             other => panic!(
                 "GvisorRunner::args_for with a Hermes manifest must \
                  surface RunnerError::WrongRuntime — the early branch \
-                 at line 298 mirrors the SubprocessRunner safety net; \
+                 inside GvisorRunner::args_for mirrors the \
+                 SubprocessRunner safety net; \
                  a refactor that removed it would let the args_for \
                  dispatch reach the end of the match without producing \
                  a value, which the compiler would catch via the \

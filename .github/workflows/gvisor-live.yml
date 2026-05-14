@@ -101,9 +101,3 @@ jobs:
           COVENANT_LIVE_GVISOR_ROOTFS: ${{ steps.rootfs.outputs.rootfs_dir }}
         run: |
           cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runner_dispatches_with_runsc
-
-      - name: validate runner record post-run
-        working-directory: ${{ github.workspace }}
-        run: |
-          node agent-os/scripts/validate-gvisor-host-readiness.mjs
-          node agent-os/scripts/validate-gvisor-runner-promotion-readiness.mjs

@@ -186,9 +186,9 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
-              <code>agents/*.toml</code>
+              <code>agents/&lt;name&gt;/agent.toml</code>
             </td>
-            <td>TOML, one manifest per file</td>
+            <td>TOML, one manifest per package directory</td>
             <td>covenant-router</td>
           </tr>
           <tr>

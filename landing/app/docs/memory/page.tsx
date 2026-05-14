@@ -181,7 +181,7 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
         <code>covenant verify</code> runs read-only consistency checks
         across memory, audit, capability, and settlement state. The
         response includes aggregate checks plus machine-readable drift
-        items that future repair commands can consume.
+        items that the memory repair commands consume.
       </p>
 
       <pre>

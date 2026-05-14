@@ -29,7 +29,7 @@ Safe handling order:
 
 1. Inspect the drift item and the underlying state file.
 2. Decide whether the record is valid, stale, missing provenance, or externally mutated.
-3. Prefer a future explicit repair command over ad hoc file edits.
+3. Prefer the explicit repair commands (Repair Contract below) over ad hoc file edits.
 4. Preserve useful long-term memory unless there is clear evidence it is stale or unsafe.
 
 ## Repair Contract

@@ -284,7 +284,8 @@ GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
 POST /a2a/results                 # body: A2ATaskResult JSON
 GET  /a2a/results/next            # drains the next queued result
 GET  /a2a/results/recent?limit=N  # non-consuming snapshot
-GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results
+GET  /a2a/queue?limit=N&min_lease_age_ms=5000&deadline_within_ms=60000&state_filter=queued|in_flight
+                                  # queued tasks, in-flight leases, pending results
 
 POST /a2a/repair
   Body: {

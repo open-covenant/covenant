@@ -1119,7 +1119,7 @@ mod tests {
         // 517-523 explains why the daemon refuses rather than rebuilds:
         // a rebuild would produce a chain matching tampered events,
         // which is the attacker's goal. jsonl_record_pins_chain_corruption_on_length_mismatch_with_field_values
-        // (line 992) pins the field VALUES via destructure-and-assert
+        // pins the field VALUES via destructure-and-assert
         // but never format!('{err}'). A typo, a slot swap (mis-
         // reporting which file was tampered in incident triage), or a
         // dropped 'refusing to rebuild' hint would silently degrade
@@ -1289,7 +1289,7 @@ mod tests {
 
     #[test]
     fn sha256_hex_pins_nist_vectors_and_lowercase_output() {
-        // covenant_audit::sha256_hex (line 388-396) is the foundation
+        // covenant_audit::sha256_hex is the foundation
         // of the audit chain: chain_hash hashes
         // (previous_chain || "\n" || event_hex) through it,
         // chain_entry_for_line hashes each event line through it, and
@@ -2984,7 +2984,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_purge_older_than_pins_cutoff_equality_keep_arm() {
-        // covenant_audit::InMemoryAuditLog::purge_older_than (line 674-679):
+        // covenant_audit::InMemoryAuditLog::purge_older_than:
         //
         //   async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
         //       let mut g = self.events.lock().await;
@@ -2996,8 +2996,8 @@ mod tests {
         // The retain predicate uses `>=`, so records with timestamp
         // EXACTLY equal to before_ms are KEPT — the function's
         // 'older_than' name documents 'older' as STRICTLY less than the
-        // cutoff. in_memory_purge_drops_old_events_and_keeps_new (line
-        // 2657) records timestamps 100/200/300 with cutoff=250 — no
+        // cutoff. in_memory_purge_drops_old_events_and_keeps_new
+        // records timestamps 100/200/300 with cutoff=250 — no
         // event sits at the cutoff, so the equality arm is exercised
         // by zero tests.
         //
@@ -3085,7 +3085,7 @@ mod tests {
         // event on every daemon restart that consumes the rewritten
         // JSONL log.
         //
-        // jsonl_purge_rewrites_only_when_something_drops (line 2762)
+        // jsonl_purge_rewrites_only_when_something_drops
         // uses cutoff=150 against events at 100/200/300 — no event
         // sits at the cutoff. jsonl_purge_no_op_when_nothing_old
         // uses cutoff=50 — also no boundary case. The
@@ -3306,18 +3306,18 @@ mod tests {
 
     #[test]
     fn zero_chain_hash_pins_64_char_all_zero_string() {
-        // ZERO_CHAIN_HASH (line 386) is the genesis seed every audit
+        // ZERO_CHAIN_HASH is the genesis seed every audit
         // hash chain uses for its first event's previous_hash_hex.
         // The value '0' * 64 matches the conventional zero/genesis
         // form that Bitcoin's coinbase parent hash, audit-log replay
         // tools, and any independent SHA-256 verifier expect when
         // seeding the chain replay from the first event.
-        // build_chain_entries (line 420), the JsonlAuditLog::verify
-        // path (line 635), and the root_hash_hex defaulting paths
-        // (line 544, 727) all reference this constant.
+        // build_chain_entries, the JsonlAuditLog::verify
+        // path, and the root_hash_hex defaulting paths
+        // all reference this constant.
         //
-        // chain_hash_pins_separator_and_sha256_composition (line 1088
-        // sibling) uses ZERO_CHAIN_HASH on BOTH sides of its
+        // chain_hash_pins_separator_and_sha256_composition (sibling)
+        // uses ZERO_CHAIN_HASH on BOTH sides of its
         // composition assertion, so the constant's value is a
         // reference, not a target — a refactor that changed
         // ZERO_CHAIN_HASH to a different 64-char string (e.g., the

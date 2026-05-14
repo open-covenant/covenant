@@ -112,7 +112,7 @@ POST /memory/compact
   Body: MemoryCompactionRequest
 
 → 200 { "kind": "memories", "records": [ ... ] }
-   or  { "kind": "memory_purged", "tier": "working", "before_ms": 1714938000000, "purged": 42 }
+   or  { "kind": "memory_purged", "purged": 42 }
    or  { "kind": "memory_repaired", ... }
    or  { "kind": "memory_compacted", ... }`}</code>
       </pre>
@@ -214,7 +214,7 @@ POST /capabilities/purge
     "action": "tool.web_search"
   }
    or  { "kind": "capability_revoked", "signature_b58": "…", "removed": true }
-   or  { "kind": "capabilities_purged", "before_ms": 1714938000000, "purged": 7 }`}</code>
+   or  { "kind": "capabilities_purged", "purged": 7 }`}</code>
       </pre>
 
       <h3>Verify</h3>
@@ -270,7 +270,7 @@ GET /audit/verify
 
 POST /audit/purge
   Body: { "before_ms": 1714938000000 }
-→ 200 { "kind": "audit_purged", "before_ms": 1714938000000, "purged": 42 }`}</code>
+→ 200 { "kind": "audit_purged", "purged": 42 }`}</code>
       </pre>
 
       <h3>Agent-to-agent</h3>
@@ -328,10 +328,7 @@ POST /a2a/compact
       <pre>
         <code>{`GET /peers/list?limit=20&prefix=A1B2&status=live
 → 200 {
-    "kind":                 "peer_list",
-    "limit":                20,
-    "filter_pubkey_prefix": "A1B2",
-    "matched_count":        1,
+    "kind": "peer_list",
     "peers": [
       {
         "agent_id":      { ... },
@@ -340,13 +337,13 @@ POST /a2a/compact
         "revoked_at":    null
       }
     ],
-    "operator_pubkey_b58":  "…",
-    "truncated":            false
+    "operator_pubkey_b58": "…",
+    "truncated":          false
   }
 
 POST /peers/purge
   Body: { "before_ms": 1714938000000 }
-→ 200 { "kind": "peers_purged", "before_ms": 1714938000000, "purged": 3 }
+→ 200 { "kind": "peers_purged", "purged": 3 }
 
 POST /peers/rotate
 → 200 { "kind": "operator_token_rotated", "token_b58": "…" }

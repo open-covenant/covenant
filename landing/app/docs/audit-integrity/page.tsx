@@ -73,6 +73,24 @@ node agent-os/scripts/provenance.mjs audit-root verify \\
   --file docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
       </pre>
 
+      <p>
+        At release time the same generator binds a release tag, the release-subject
+        manifest (<code>covenant.provenance.release.v1</code>), and the release-scope
+        manifest (<code>covenant.release-scope.v1</code>). <code>audit-root verify</code>
+        re-validates each embedded payload, so one signature over the audit-root
+        covers the audit log, the release artifact set, and the in-scope task set:
+      </p>
+
+      <pre>
+        <code>{`node agent-os/scripts/provenance.mjs audit-root write \\
+  --report audit-report.json \\
+  --release <tag> \\
+  --release-subject release-subject.json \\
+  --release-scope release-scopes/<tag>.json \\
+  --commit <commit> \\
+  --out docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
+      </pre>
+
       <h2>Related</h2>
       <ul>
         <li>

@@ -21,7 +21,6 @@
   "scripts": {
     "agent-os:validate": "bash agent-os/scripts/validate.sh",
     "agent-os:provenance": "node agent-os/scripts/provenance.mjs",
-    "readme:validate": "node agent-os/scripts/validate-readme-copy.mjs",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

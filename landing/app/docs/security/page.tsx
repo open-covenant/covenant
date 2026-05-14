@@ -81,12 +81,15 @@ export default function SecurityPage() {
           </tr>
           <tr>
             <td>Sandbox-required agent → host</td>
-            <td>Planned</td>
+            <td>Partial</td>
             <td>
-              Manifests can require <code>linux-gvisor</code>, and the
-              trusted-local runner fails closed instead of downgrading.
-              The initial runner supports only read-only packages with
-              network disabled until broader policies have real enforcement.
+              Manifests can require <code>linux-gvisor</code>, the
+              trusted-local runner fails closed instead of downgrading, the
+              daemon supports the <code>linux-gvisor</code> backend, and
+              opt-in live Linux coverage runs on sandbox-runtime path PRs
+              via <code>gvisor-live.yml</code>. Promoting that workflow to a
+              required check and broadening sandbox policy enforcement
+              remain planned.
             </td>
           </tr>
         </tbody>

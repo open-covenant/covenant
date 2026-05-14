@@ -76,6 +76,7 @@ agent-os/scripts/autonomy-summary.mjs
 agent-os/scripts/autonomy-transition.mjs
 agent-os/scripts/autonomy-verify-handoff-bundle.mjs
 agent-os/scripts/autonomy-verify-review-artifact.mjs
+agent-os/scripts/build-release-scope-manifest.mjs
 agent-os/scripts/check-no-display-form-a2a.sh
 agent-os/scripts/commit-rotation.mjs
 agent-os/scripts/configure-git-identity.mjs
@@ -92,6 +93,8 @@ agent-os/scripts/package-manager-readiness.mjs
 agent-os/scripts/provenance-self-test.mjs
 agent-os/scripts/release-artifact-subject.mjs
 agent-os/scripts/release-provenance-readiness.mjs
+agent-os/scripts/release-scope-manifest.mjs
+agent-os/scripts/release-scope-readiness.mjs
 agent-os/scripts/review-signing-readiness.mjs
 agent-os/scripts/settlement-deployment-readiness.mjs
 agent-os/scripts/settlement-oracle-policy.mjs
@@ -106,6 +109,7 @@ agent-os/scripts/validate-autonomy-next-cli.mjs
 agent-os/scripts/validate-autonomy-review-artifacts.mjs
 agent-os/scripts/validate-autonomy-summary.mjs
 agent-os/scripts/validate-autonomy.mjs
+agent-os/scripts/validate-build-release-scope-manifest.mjs
 agent-os/scripts/validate-commit-rotation.mjs
 agent-os/scripts/validate-current-git-identity.mjs
 agent-os/scripts/validate-distribution-readiness.mjs
@@ -125,6 +129,8 @@ agent-os/scripts/validate-privileged-cli-live-matrix.mjs
 agent-os/scripts/validate-project-keys.mjs
 agent-os/scripts/validate-release-artifact-subject.mjs
 agent-os/scripts/validate-release-provenance-readiness.mjs
+agent-os/scripts/validate-release-scope-manifest.mjs
+agent-os/scripts/validate-release-scope-readiness.mjs
 agent-os/scripts/validate-review-signing-readiness.mjs
 agent-os/scripts/validate-sdk-compatibility.mjs
 agent-os/scripts/validate-settlement-deployment-readiness.mjs

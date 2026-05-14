@@ -87,11 +87,9 @@ The audit-root attestation will embed both `releaseSubjectSha256` (already suppo
 
 ## Publication
 
-Generated manifests are committed to `docs/provenance/release-scopes/<tag>.json` before the release tag is pushed, then signed in CI on release publication. The publication location is publicly tracked so verifiers can pull the manifest and run cosign verify-blob without needing internal-loop access.
+Generated manifests will be committed to `docs/provenance/release-scopes/<tag>.json` before the release tag is pushed, then signed in CI on release publication. The publication location is publicly tracked so verifiers can pull the manifest and run cosign verify-blob without needing internal-loop access.
 
-`agent-os/scripts/build-release-scope-manifest.mjs` is the generator. It reads every task record under `--task-dir`, validates that each has a known `id` and an allowed `state`, sorts records by `id`, canonicalizes each record (sorted keys at every level, no whitespace, no trailing newline), concatenates with a single `\n`, and emits the full `covenant.release-scope.v1` manifest with the SHA-256 over the concatenation as `task_set_sha256`. It requires `--repository`, `--release-id`, `--tag`, `--commit`, and either `--previous-tag` or `--first-release`. With `--output <path>` it writes the manifest; otherwise it writes to stdout. The generator does not sign, publish, upload, or write transparency-log entries; signing is the CI workflow's job.
-
-Until the signing-workflow extension lands, `docs/provenance/release-scopes/` stays empty (only its `README.md` is committed) and no release-scope claims are made.
+Until the generator script and workflow extension land, `docs/provenance/release-scopes/` stays empty (only its `README.md` is committed) and no release-scope claims are made.
 
 ## Verifier contract
 
@@ -104,12 +102,6 @@ Future verifiers will need to:
 5. Optionally regenerate `task_set_sha256` locally if the verifier has access to the canonical task corpus (only the project operator has this access today).
 
 Verifiers without access to the task corpus can still verify the signature, the schema, and the internal consistency of the count/distribution fields. They cannot independently confirm `task_set_sha256` without the corpus — that's an intentional consequence of the privacy-preserving design.
-
-## Read-only inspection
-
-`agent-os/scripts/release-scope-manifest.mjs --path <manifest>` performs steps 3 (release shape), 4 (count vs distribution sum), and the schema/non-claims checks from the verifier contract without recomputing `task_set_sha256`. It emits a `covenant.release-scope-manifest-check.v1` report under `--json` and exits non-zero on any failure. The inspector does not sign, publish, upload, or recompute the task-set digest, and it redacts absolute paths in its report. `agent-os/scripts/validate-release-scope-manifest.mjs` exercises a well-formed fixture plus tampered cases (bad schema, non-ISO `generatedAt`, non-hex commit, non-hex digest, distribution-sum mismatch, missing required `non_claims` entry, unknown top-level field, unknown workflow state, invalid repository slug, empty `previousTag`) so regressions in the inspector are caught before a manifest ever ships.
-
-`agent-os/scripts/release-scope-readiness.mjs` emits a `covenant.release-scope-readiness.v1` report that tracks which release-scope publication pieces are present (schema doc, publication location, inspector) and which remain planned (generator script, CI signing workflow extension, audit-root binding to `releaseScopeSha256`). It accepts `--json` and `--strict-public`; the latter exits non-zero while public release-scope publication is blocked. `agent-os/scripts/validate-release-scope-readiness.mjs` pins the gate identifiers, the implemented-vs-planned distribution against the current repo state, and the exit-code contract for `--strict-public`, `--help`, and unknown flags.
 
 ## Non-goals
 

@@ -57,8 +57,9 @@ Authorization: Bearer <operator-token>`}</code>
         The implemented first step is an unsigned{" "}
         <code>covenant.audit-root-attestation.v1</code> payload that binds the
         retained event count, anchor count, root hash, subject commit, task or
-        release id, timestamp, and validation evidence. Project signing
-        identity and transparency-log publication remain planned.
+        release id, timestamp, and validation evidence. The audit-root signing
+        workflow and transparency-log publication remain planned; the project
+        signing identity model is sigstore keyless via cosign.
       </p>
 
       <pre>

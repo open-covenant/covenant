@@ -255,8 +255,8 @@ required = {caps:?}
         // iteration wins. self.agents is a Vec, so insertion order is
         // the deterministic tie-breaker.
         //
-        // picks_higher_score_when_two_match (line 223) exercises the
-        // no-tie case (research scores 2 on 'find papers and
+        // picks_higher_score_when_two_match exercises the no-tie
+        // case (research scores 2 on 'find papers and
         // summarize them' while renderer scores 1); the tie case is
         // not covered. A refactor that changed > to >= during a
         // 'simplify' pass would silently flip the tie-breaker to

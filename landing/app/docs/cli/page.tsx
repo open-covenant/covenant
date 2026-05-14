@@ -244,7 +244,7 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       </pre>
       <pre>
         <code>{`$ covenant memory recent -n 3 --json
-{"kind":"memory_read","mode":"recent","tier":null,"limit":3,"query":null,"records":[...]}`}</code>
+{"kind":"memory_read","mode":"recent","tier":null,"limit":3,"query":null,"min_relevance":null,"records":[...]}`}</code>
       </pre>
 
       <h3>Semantic search across all tiers</h3>
@@ -254,7 +254,7 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       </pre>
       <pre>
         <code>{`$ covenant memory search "agent memory" -n 5 --json
-{"kind":"memory_read","mode":"search","tier":null,"limit":5,"query":"agent memory","records":[...]}`}</code>
+{"kind":"memory_read","mode":"search","tier":null,"limit":5,"query":"agent memory","min_relevance":null,"records":[...]}`}</code>
       </pre>
 
       <h3>Purge old memory records</h3>

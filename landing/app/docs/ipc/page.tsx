@@ -71,7 +71,8 @@ export default function IpcPage() {
   "before_ms": 1714938000000 }
 
 { "kind": "recent_receipts",
-  "limit": 10 }
+  "limit":    10,
+  "since_ms": null | 1714938000000 }
 
 { "kind": "recent_capabilities",
   "limit": 10 }

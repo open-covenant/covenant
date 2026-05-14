@@ -536,9 +536,10 @@ pub enum Response {
         #[serde(default)]
         truncated: bool,
     },
-    /// Response to [`Request::RevokePeer`]. The four `RevokeOutcome`
-    /// cases (Revoked / AlreadyRevoked / NotFound / Ambiguous) are
-    /// distinct on the wire so the CLI can render each case clearly.
+    /// Response to [`Request::RevokePeer`]. The five `RevokeOutcome`
+    /// cases (Revoked / AlreadyRevoked / NotFound / Ambiguous /
+    /// SelfRevokeForbidden) are distinct on the wire so the CLI can
+    /// render each case clearly.
     /// Token bytes are **never** carried — `RevokeOutcome` carries
     /// `PeerSummary` (or `Vec<PeerSummary>` for ambiguous), which by
     /// the registry's redaction invariant excludes `PeerToken`.
@@ -8514,7 +8515,7 @@ mod tests {
              newtype wrapping RevokeOutcome would either inline its \
              fields next to 'kind' or nest 'outcome' one level \
              deeper — either form silently breaks every CLI consumer \
-             that reads .outcome.type to switch on the four \
+             that reads .outcome.type to switch on the five \
              RevokeOutcome cases",
         );
         assert_eq!(
@@ -8553,7 +8554,7 @@ mod tests {
             "Response::PeerRevoked wire form must reject a payload \
              missing 'outcome'; a stray #[serde(default)] would let a \
              malformed row decode with a synthetic default \
-             RevokeOutcome (none of the four cases) and the CLI would \
+             RevokeOutcome (none of the five cases) and the CLI would \
              surface a phantom 'unknown' state — a real fetch failure \
              (truncated frame, partial decode error) would be \
              silently reclassified as a clean apply where the \

@@ -156,14 +156,6 @@ COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100`}</code>
         metadata and must never bypass this classification.
       </p>
 
-      <h2>Follow-up work</h2>
-      <ul>
-        <li>Add an explicit typed task-kind field for cache scoping.</li>
-        <li>
-          Add periodic retry scheduling that reuses the existing retry gate.
-        </li>
-      </ul>
-
       <h2>Related</h2>
       <ul>
         <li>

@@ -196,7 +196,7 @@ cp agent-os/target/release/research ~/.covenant/agents/research/
 
 cat > ~/.covenant/agents/research/agent.toml <<'EOF'
 [agent]
-id      = "research@local"
+id      = "research"
 name    = "research"
 version = "0.1.0"
 runtime = "rust-bin"

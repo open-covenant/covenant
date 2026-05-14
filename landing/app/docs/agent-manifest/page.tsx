@@ -24,7 +24,7 @@ export default function AgentManifestPage() {
       <h2>Example</h2>
       <pre>
         <code>{`[agent]
-id      = "research@local"
+id      = "research"
 name    = "research"
 version = "0.1.0"
 runtime = "rust-bin"

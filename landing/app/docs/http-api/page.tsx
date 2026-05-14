@@ -297,7 +297,7 @@ POST /a2a/repair
     "reason":  "…"
   }
 → 200 {
-    "kind": "a2a_repaired",
+    "kind": "a2_a_repaired",
     "outcome": {
       "task_id": "uuid",
       "action":  "requeued" | "forced_error",
@@ -308,7 +308,7 @@ POST /a2a/repair
   }
 
 POST /a2a/compact
-→ 200 { "kind": "a2a_compacted", "dropped": 7 }`}</code>
+→ 200 { "kind": "a2_a_compacted", "dropped": 7 }`}</code>
       </pre>
       <p>
         Write paths (<code>POST</code>) require capability tokens —

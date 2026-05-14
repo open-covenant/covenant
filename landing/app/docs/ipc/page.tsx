@@ -105,7 +105,11 @@ export default function IpcPage() {
 
 { "kind": "send_a2a_task",      "task":   { ... } }
 { "kind": "try_recv_a2a_task" }
-{ "kind": "a2a_queue",          "limit":  20 }
+{ "kind": "a2a_queue",
+  "limit":              20,
+  "min_lease_age_ms":   null | 5000,
+  "deadline_within_ms": null | 60000,
+  "state_filter":       null | "queued" | "in_flight" }
 
 { "kind": "post_a2a_result",    "result": { ... } }
 { "kind": "try_recv_a2a_result" }`}</code>

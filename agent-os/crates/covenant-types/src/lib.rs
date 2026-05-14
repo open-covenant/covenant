@@ -1857,8 +1857,8 @@ mod tests {
         // credits_consumed must not default to 0 (zero-bills the agent),
         // settled_at must not default to 0 (collapses every row to epoch
         // start and breaks recent-receipts pagination ordering).
-        // settlement_receipt_memory_record_id_skip_empty_pin (line 1392)
-        // pins the asymmetric Option contract; this test pins the
+        // settlement_receipt_memory_record_id_skip_empty_pin pins the
+        // asymmetric Option contract; this test pins the
         // strict-required-fields rejection contract that the existing
         // tests do not exercise.
         let memory_id = Uuid::new_v4();

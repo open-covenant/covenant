@@ -445,9 +445,11 @@ mod tests {
 
     #[test]
     fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {
-        // default_ignorefile (line 396-415) is the security-critical
-        // bootstrap content written to ~/.covenant/.covenantignore on
-        // first daemon start (line 132). The function encodes the
+        // default_ignorefile is the security-critical bootstrap
+        // content written to ~/.covenant/.covenantignore on first
+        // daemon start (the std::fs::write call gated by
+        // `if !ignore_path.exists()` near the daemon-home bootstrap
+        // block). The function encodes the
         // documented floor of credential patterns the daemon must NOT
         // auto-ingest under any operator config — .env, secrets.toml,
         // secrets.json, *.pem, *.key, id_rsa*, id_ed25519*, .ssh/**,

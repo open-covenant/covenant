@@ -206,7 +206,6 @@ POST /capabilities/revoke
   Body: { "signature_b58": "4qXP…" }
 POST /capabilities/purge
   Body: { "before_ms": 1714938000000 }
-     or { "older_than_ms": 86400000 }
 
 → 200 {
     "kind": "capability_granted",

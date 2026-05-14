@@ -20,7 +20,7 @@ export default function AlphaReleasePage() {
         <li>Builds from source on supported developer hosts.</li>
         <li>Uses the documented validation profile for local control-plane surfaces.</li>
         <li>Records live-test prerequisites instead of hiding skipped boundaries.</li>
-        <li>Keeps distributed settlement, installers, SDK publication, signed artifacts, and transparency publication as planned work until implemented.</li>
+        <li>Keeps distributed settlement, installers, SDK publication, release-scope and audit-root signing, and transparency publication as planned work until implemented.</li>
       </ul>
 
       <h2>Evidence bundle</h2>

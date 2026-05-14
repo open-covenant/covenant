@@ -122,26 +122,26 @@ A2ATaskResult {
       <h2>Daemon-mediated flow</h2>
       <pre>
         <code>{`POST /a2a/tasks                   # body: A2ATask JSON
-  → 200 { "kind": "a2a_task_queued", "task_id": "uuid" }
+  → 200 { "kind": "a2_a_task_queued", "task_id": "uuid" }
 
 GET  /a2a/tasks/next              # leases the next queued task
-  → 200 { "kind": "a2a_task_opt", "task": { ... } | null }
+  → 200 { "kind": "a2_a_task_opt", "task": { ... } | null }
 
 GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
-  → 200 { "kind": "a2a_tasks", "tasks": [ ... ] }
+  → 200 { "kind": "a2_a_tasks", "tasks": [ ... ] }
 
 POST /a2a/results                 # body: A2ATaskResult JSON
-  → 200 { "kind": "a2a_result_posted", "task_id": "uuid" }
+  → 200 { "kind": "a2_a_result_posted", "task_id": "uuid" }
 
 GET  /a2a/results/next            # drains the next queued result
-  → 200 { "kind": "a2a_result_opt", "result": { ... } | null }
+  → 200 { "kind": "a2_a_result_opt", "result": { ... } | null }
 
 GET  /a2a/results/recent?limit=N  # non-consuming snapshot
-  → 200 { "kind": "a2a_results", "results": [ ... ] }
+  → 200 { "kind": "a2_a_results", "results": [ ... ] }
 
 GET  /a2a/queue?limit=N&min_lease_age_ms=5000&deadline_within_ms=60000&state_filter=queued|in_flight
                                   # queued tasks, in-flight leases, pending results
-  → 200 { "kind": "a2a_queue", "tasks": [ ... ], "results": [ ... ] }`}</code>
+  → 200 { "kind": "a2_a_queue", "tasks": [ ... ], "results": [ ... ] }`}</code>
       </pre>
 
       <pre>

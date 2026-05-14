@@ -632,19 +632,18 @@ entry = "x.js"
 
     #[test]
     fn validate_agent_id_pins_underscore_period_and_hyphen_as_allowed_special_chars() {
-        // covenant_manifest::Manifest::validate (line 171-181) gates
-        // agent.id behind:
+        // covenant_manifest::Manifest::validate gates agent.id behind:
         //
         //   b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'
         //
-        // The docstring at line 167-170 and the error message at line
-        // 178 jointly document the whitelist as '[A-Za-z0-9_.-]+' —
-        // the same regex AgentId::validate_agent_id_display applies
-        // when JSONL records replay through serde.
+        // The inline comment and the error message inside
+        // Manifest::validate jointly document the whitelist as
+        // '[A-Za-z0-9_.-]+' — the same regex
+        // AgentId::validate_agent_id_display applies when JSONL records
+        // replay through serde.
         //
-        // rejects_id_with_disallowed_chars (line 482) pins that
-        // characters OUTSIDE the whitelist (space, '@', ':', non-
-        // ASCII, '/') reject. The positive complement — that the
+        // rejects_id_with_disallowed_chars pins that characters OUTSIDE
+        // the whitelist (space, '@', ':', non-ASCII, '/') reject. The positive complement — that the
         // three documented special characters '_', '.', and '-' are
         // ACCEPTED — is exercised only incidentally via alphanumeric-
         // only fixtures elsewhere ('research', 'sandboxed', etc.) and
@@ -679,16 +678,16 @@ entry = "x.js"
             let m = Manifest::parse(&toml).unwrap_or_else(|err| {
                 panic!(
                     "agent.id {id:?} must be accepted by validate — the \
-                     whitelist documented at line 178 is [A-Za-z0-9_.-]+ \
-                     and all three special chars (underscore, period, \
-                     hyphen) are documented as load-bearing for operator \
-                     manifests. A refactor that tightened the whitelist \
-                     to alphanumeric-only under a 'simplify' rationale \
-                     would silently reject this manifest; \
-                     rejects_id_with_disallowed_chars (line 482) would \
-                     still pass because the special chars would fall \
-                     into the rejection branch via the same error path. \
-                     got: {err:?}"
+                     whitelist documented inside Manifest::validate is \
+                     [A-Za-z0-9_.-]+ and all three special chars \
+                     (underscore, period, hyphen) are documented as \
+                     load-bearing for operator manifests. A refactor \
+                     that tightened the whitelist to alphanumeric-only \
+                     under a 'simplify' rationale would silently reject \
+                     this manifest; rejects_id_with_disallowed_chars \
+                     would still pass because the special chars would \
+                     fall into the rejection branch via the same error \
+                     path. got: {err:?}"
                 )
             });
             assert_eq!(
@@ -895,9 +894,9 @@ entry = "main.py"
         // HermesApprovalPolicy::OperatorPrompt (via the #[default]
         // attribute on the OperatorPrompt variant at line 176).
         //
-        // hermes_section_parses_and_defaults_when_omitted (line 768)
-        // only covers the two binary cases: full block with both
-        // fields, or no [hermes] block at all. The intermediate
+        // hermes_section_parses_and_defaults_when_omitted only covers
+        // the two binary cases: full block with both fields, or no
+        // [hermes] block at all. The intermediate
         // cases — [hermes] block present with only one of
         // tools_allowed or approval_policy declared — are not tested.
         // A refactor that dropped the struct-level #[serde(default)]

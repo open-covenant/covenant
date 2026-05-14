@@ -336,7 +336,7 @@ orphans total: 0`}</code>
       <h3>Read the audit feed</h3>
       <pre>
         <code>{`$ covenant audit recent --limit 5 --json
-{"kind":"audit_recent","limit":5,"events":[...]}`}</code>
+{"kind":"audit_recent","limit":5,"since_ms":null,"events":[...]}`}</code>
       </pre>
 
       <h3>Purge old audit events</h3>

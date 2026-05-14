@@ -481,9 +481,9 @@ mod tests {
         // no-arg tool; it inherits the default.
         //
         // clock_returns_recent_epoch_ms (native.rs line 88) and
-        // registry_lists_tools_sorted_by_name (line 463) exercise the
-        // default-schema path through ClockTool but assert only on
-        // behavior and tool names — NOT on the published schema bytes.
+        // registry_lists_tools_sorted_by_name exercise the default-schema
+        // path through ClockTool but assert only on behavior and tool
+        // names — NOT on the published schema bytes.
         // tool_spec_uses_camel_case_on_the_wire (line 188) and
         // tool_spec_serde_pins_strict_required_fields_reject_on_omission
         // (line 252) pin the OUTER ToolSpec envelope keys, not the
@@ -723,8 +723,8 @@ mod tests {
         // alone is not enough — without the name, an operator sees
         // only that *some* call failed.
         //
-        // registry_call_returns_not_found_for_unknown (line 471) above
-        // asserts only matches!(err, ToolError::NotFound(_)) and never
+        // registry_call_returns_not_found_for_unknown above asserts
+        // only matches!(err, ToolError::NotFound(_)) and never
         // reads the inner String. A refactor that swapped
         // 'name.to_string()' for a generic placeholder (\"unknown\",
         // String::new(), or a normalised/lowercased variant) under a

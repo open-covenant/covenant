@@ -1208,7 +1208,7 @@ mod tests {
 
     #[test]
     fn hash_hex_pins_16_char_zero_padded_lowercase_hex_and_empty_input_safety() {
-        // hash_hex (line 697-702) populates
+        // hash_hex populates
         // AuditKind::IntentDispatched.result_hash_hex on every
         // dispatched-intent audit row. Its implementation uses
         // DefaultHasher and formats the resulting u64 with {:016x} —
@@ -1297,7 +1297,7 @@ mod tests {
         // hex output to verify the chain externally with any
         // independent SHA-256 implementation.
         //
-        // chain_hash_pins_separator_and_sha256_composition (line 1088)
+        // chain_hash_pins_separator_and_sha256_composition
         // only asserts internal consistency between chain_hash and
         // sha256_hex; it never pins the actual hash function identity
         // against any external standard. A refactor that swapped

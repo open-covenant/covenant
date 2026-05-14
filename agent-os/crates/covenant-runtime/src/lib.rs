@@ -655,18 +655,19 @@ mod tests {
         // JSON-RPC convention uses).
         //
         // The slugs are pinned at the covenant-audit layer through
-        // AuditKind::Hermes* variants (audit_kind_hermes_tool_invoked_serde_pins_four_field_variant
-        // et al at covenant-audit/src/lib.rs line 3045+), but those
-        // pins exercise a DIFFERENT enum with its own serde attributes.
+        // AuditKind::Hermes* variants
+        // (audit_kind_hermes_tool_invoked_serde_pins_four_field_variant
+        // et al in covenant-audit/src/lib.rs), but those pins exercise
+        // a DIFFERENT enum with its own serde attributes.
         // A refactor that changed RuntimeTrace's rename_all to
         // camelCase, dropped the tag attribute, renamed a field, or
         // added a stray #[serde(default)]/skip_serializing_if to a
         // required field would silently break SSE ingestion while
         // every audit-layer test continued to pass. The daemon's
         // runtime_trace_to_audit_kind_pins_each_variant_mapping_preview_redaction_and_responded_to_resolved_rename
-        // pin (covenantd/src/lib.rs line 5142) only exercises the
-        // in-process struct mapping AFTER a successful SSE decode;
-        // the wire-form decode itself is unpinned.
+        // pin in covenantd/src/lib.rs only exercises the in-process
+        // struct mapping AFTER a successful SSE decode; the wire-form
+        // decode itself is unpinned.
 
         let invoked = RuntimeTrace::HermesToolInvoked {
             run_id: "r1".into(),

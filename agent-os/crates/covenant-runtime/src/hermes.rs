@@ -931,9 +931,9 @@ mod tests {
         // contract is documentation + runtime mapping.
         //
         // hermes_runner_rejects_non_hermes_runtime
-        // (covenant-runtime/src/lib.rs line 1553) only exercises the
-        // Python3 arm (its fixture is subprocess_manifest with
-        // runtime = python3). The Node, RustBin, and Hermes arms of
+        // (in covenant-runtime/src/lib.rs) only exercises the Python3
+        // arm (its fixture is subprocess_manifest with runtime =
+        // python3). The Node, RustBin, and Hermes arms of
         // runtime_name are unpinned by any test. A refactor that
         // renamed 'rust-bin' to 'rust_bin' (underscore normalization),
         // 'node' to 'nodejs' (official-project-name alignment), or
@@ -992,8 +992,8 @@ mod tests {
     #[test]
     fn hermes_capabilities_covers_runner_pins_three_required_flags_excluding_approval_response() {
         // covenant_runtime::hermes::HermesCapabilities::covers_runner
-        // (line 506-508) is the boot-time gate covenantd consults at
-        // covenantd/src/main.rs line 48 to decide whether to emit
+        // (line 506-508) is the boot-time gate covenantd consults in
+        // covenantd/src/main.rs to decide whether to emit
         // 'hermes gateway features confirmed' or
         // 'hermes gateway missing required features'.
         //

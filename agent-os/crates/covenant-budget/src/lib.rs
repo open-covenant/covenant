@@ -2059,8 +2059,9 @@ mod tests {
         // catching the regression at the assertion site but not in a
         // place a reader auditing the unit contract can find. Mirrors
         // the covenant_settlement::INTENT_DISPATCH_CREDITS pin pattern
-        // (covenant-settlement/src/lib.rs line 873) for v0 floor
-        // constants with documented refactor risk.
+        // (intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality
+        // in covenant-settlement/src/lib.rs) for v0 floor constants
+        // with documented refactor risk.
 
         assert_eq!(
             MS_PER_HOUR, 3_600_000u128,

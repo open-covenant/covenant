@@ -42,7 +42,8 @@ export default function PrimitivesPage() {
       <p>
         Agents declare their runtime in{" "}
         <code>agent.toml</code>: <code>rust-bin</code>,{" "}
-        <code>python3</code>, or <code>node</code>. Per-task budgets
+        <code>python3</code>, <code>node</code>, or{" "}
+        <code>hermes</code>. Per-task budgets
         cover CPU time, memory, disk, and a network policy
         (<code>off</code>, <code>outbound-https-only</code>,{" "}
         <code>full</code>).

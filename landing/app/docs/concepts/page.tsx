@@ -46,7 +46,8 @@ export default function ConceptsPage() {
         </li>
         <li>
           a <code>runtime</code> (currently <code>rust-bin</code>,{" "}
-          <code>python3</code>, or <code>node</code>),
+          <code>python3</code>, <code>node</code>, or{" "}
+          <code>hermes</code>),
         </li>
         <li>
           an <code>entry</code> path to the binary or script,

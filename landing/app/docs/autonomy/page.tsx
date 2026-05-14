@@ -80,11 +80,11 @@ node agent-os/scripts/validate-autonomy.mjs`}</code>
       <ul>
         <li>
           <a
-            href="https://github.com/open-covenant/covenant/blob/main/docs/autonomous-development.md"
+            href="https://github.com/open-covenant/covenant/blob/main/agent-os/autonomy/tasks/README.md"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Autonomous development protocol
+            Autonomous task backlog primer
           </a>
         </li>
         <li>

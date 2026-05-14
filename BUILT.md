@@ -73,7 +73,7 @@ Accepted provenance signals:
 - review notes for security-sensitive changes;
 - status docs that distinguish implemented, experimental, and planned work.
 
-The foremost missing piece is public keyless attestation. A future implementation should connect local signing identities to a transparency log so third parties can verify which automation produced which artifact.
+Public keyless attestation has landed for release-subject manifests via sigstore keyless (cosign + Fulcio + Rekor); the remaining work is extending the signing workflow to audit-root attestations and release-scope manifests. Local signing identities (operator-held ed25519 keys for unsigned audit-root attestations) remain separate from this CI-driven keyless path.
 
 ## Honesty Boundaries
 

@@ -325,8 +325,8 @@ entry = "./tiny"
 
     #[test]
     fn reserved_namespaces_pins_exact_entries_count_order_and_trailing_dot_invariant() {
-        // RESERVED_NAMESPACES (line 183) is the public capability-namespace
-        // whitelist consumed by Manifest::validate at line 263. The const
+        // RESERVED_NAMESPACES is the public capability-namespace
+        // whitelist consumed by Manifest::validate. The const
         // is an &[&str] of five entries — 'intent.', 'memory.', 'identity.',
         // 'tool.', 'agent.' — each ending with a literal '.' that is
         // load-bearing for the starts_with() prefix match.
@@ -719,7 +719,7 @@ entry = "x.js"
 
     #[test]
     fn validate_pins_empty_rejection_for_name_version_and_entry_fields() {
-        // Manifest::validate (line 152) iterates over four (field-name,
+        // Manifest::validate iterates over four (field-name,
         // value) tuples and returns Err(Validation) on any empty value:
         //   ("agent.id", &self.agent.id),
         //   ("agent.name", &self.agent.name),
@@ -887,12 +887,12 @@ entry = "main.py"
 
     #[test]
     fn hermes_section_partial_block_independently_defaults_each_missing_field() {
-        // covenant_manifest::HermesAgent (line 155-171) has
+        // covenant_manifest::HermesAgent has
         // #[serde(default)] at the struct level so each missing
         // field falls back independently to Default::default():
         // tools_allowed -> Vec::new(), approval_policy ->
         // HermesApprovalPolicy::OperatorPrompt (via the #[default]
-        // attribute on the OperatorPrompt variant at line 176).
+        // attribute on the OperatorPrompt variant).
         //
         // hermes_section_parses_and_defaults_when_omitted only covers
         // the two binary cases: full block with both fields, or no
@@ -1096,7 +1096,7 @@ required = ["unknown.thing"]
         // Manifest::validate iterates capability namespaces via:
         //   self.capabilities.required.iter()
         //       .chain(self.capabilities.optional.iter())
-        // (line 195-199). rejects_bad_capability_namespace pins the
+        // rejects_bad_capability_namespace pins the
         // required-list arm. The chained optional-list arm is not
         // pinned. Use empty required + an unreserved optional entry so
         // the test isolates the optional iteration arm — a refactor that

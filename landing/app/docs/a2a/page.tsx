@@ -229,10 +229,10 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         <li>
           <strong>Authentication.</strong> Both write paths are gated by
           capability tokens (<code>a2a.send.&lt;recipient&gt;</code> and{" "}
-          <code>a2a.respond.&lt;sender&gt;</code>) checked against the
-          daemon&apos;s local identity. The capability is not yet bound
-          to the calling HTTP/IPC peer; per-call peer authentication is
-          tracked separately.
+          <code>a2a.respond.&lt;sender&gt;</code>) and peer-scoped at
+          dispatch: the daemon checks that the authenticated calling peer
+          matches the capability scope&apos;s recipient or sender field,
+          with daemon regression and live IPC denial coverage.
         </li>
         <li>
           <strong>Retry posture.</strong> A2A delivery avoids automatic

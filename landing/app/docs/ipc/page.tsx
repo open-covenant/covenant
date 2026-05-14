@@ -103,16 +103,16 @@ export default function IpcPage() {
 
 { "kind": "verify_audit_integrity" }
 
-{ "kind": "send_a2a_task",      "task":   { ... } }
-{ "kind": "try_recv_a2a_task" }
-{ "kind": "a2a_queue",
+{ "kind": "send_a2_a_task",      "task":   { ... } }
+{ "kind": "try_recv_a2_a_task" }
+{ "kind": "a2_a_queue",
   "limit":              20,
   "min_lease_age_ms":   null | 5000,
   "deadline_within_ms": null | 60000,
   "state_filter":       null | "queued" | "in_flight" }
 
-{ "kind": "post_a2a_result",    "result": { ... } }
-{ "kind": "try_recv_a2a_result" }`}</code>
+{ "kind": "post_a2_a_result",    "result": { ... } }
+{ "kind": "try_recv_a2_a_result" }`}</code>
       </pre>
 
       <h2>Response shapes</h2>
@@ -176,11 +176,11 @@ export default function IpcPage() {
     "root_hash_hex": "…",
     "failures": []
   } }
-{ "kind": "a2a_task_queued",   "task_id": "uuid" }
-{ "kind": "a2a_task_opt",      "task":    null | { ... } }
-{ "kind": "a2a_result_posted", "task_id": "uuid" }
-{ "kind": "a2a_result_opt",    "result":  null | { ... } }
-{ "kind": "a2a_queue",         "tasks":   [ ... ], "results": [ ... ] }
+{ "kind": "a2_a_task_queued",   "task_id": "uuid" }
+{ "kind": "a2_a_task_opt",      "task":    null | { ... } }
+{ "kind": "a2_a_result_posted", "task_id": "uuid" }
+{ "kind": "a2_a_result_opt",    "result":  null | { ... } }
+{ "kind": "a2_a_queue",         "tasks":   [ ... ], "results": [ ... ] }
 
 { "kind": "error", "message": "…" }`}</code>
       </pre>

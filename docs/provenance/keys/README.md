@@ -20,7 +20,7 @@ The first pin restricts to GitHub Actions OIDC. The second pin restricts to work
 | Artifact kind | Signed by | Workflow |
 |---|---|---|
 | Release tarballs and combined checksum file | Every release tag push | [.github/workflows/release.yml](../../../.github/workflows/release.yml) |
-| `covenant.provenance.release.v1` release subject manifests | Release tag push (follow-up workflow) | _planned_ |
+| `covenant.provenance.release.v1` release subject manifests | Every release tag push | [.github/workflows/sign-release-artifacts.yml](../../../.github/workflows/sign-release-artifacts.yml) |
 | `covenant.release-scope.v1` release-scope manifests | Release tag push (follow-up workflow) | _planned_ |
 | `covenant.audit-root-attestation.v1` audit-root attestations | Release tag push (follow-up workflow) | _planned_ |
 | `covenant.autonomy-review-signature.v1` review artifacts for release-scope tasks | Release tag push (follow-up workflow) | _planned_ |

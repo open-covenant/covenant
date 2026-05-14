@@ -145,7 +145,7 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
 
       <pre>
         <code>{`covenant a2a status --min-lease-age-ms 300000 --json
-  → { "kind": "a2a_status", "limit": 10, "min_lease_age_ms": 300000, "tasks": [ ... ], "results": [ ... ] }`}</code>
+  → { "kind": "a2a_status", "limit": 10, "min_lease_age_ms": 300000, "deadline_within_ms": null, "state_filter": null, "tasks": [ ... ], "results": [ ... ] }`}</code>
       </pre>
 
       <p>

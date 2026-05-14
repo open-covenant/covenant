@@ -2,7 +2,7 @@
 
 This directory is the publication location for `covenant.release-scope.v1` manifests — one file per release tag, named `<tag>.json`. The schema, generation rules, and verifier contract are defined in [docs/provenance/release-scopes.md](../release-scopes.md).
 
-The directory is intentionally empty at v0.1.0. Manifests will land when the generator script and signing workflow extension are wired up. Each published manifest will ship with sibling `<tag>.json.sig` and `<tag>.json.pem` artifacts produced by `cosign sign-blob` via the GitHub Actions release-signing workflow.
+The directory is intentionally empty at v0.1.0. Manifests will land when the signing workflow extension is wired up. Each published manifest will ship with sibling `<tag>.json.sig` and `<tag>.json.pem` artifacts produced by `cosign sign-blob` via the GitHub Actions release-signing workflow.
 
 Until then, no release-scope claims are made.
 

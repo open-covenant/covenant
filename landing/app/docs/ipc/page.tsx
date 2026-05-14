@@ -134,7 +134,7 @@ export default function IpcPage() {
   } }
 
 { "kind": "authenticated",
-  "display": "operator@local" }
+  "display": "user@local" }
 
 { "kind": "authentication_failed",
   "reason": "…" }

@@ -79,8 +79,22 @@ Body: { "text": "summarise recent work on agent memory" }
     "text": "…",
     "sources": ["…"],
     "settlement": null
-  }`}</code>
+  }
+
+POST /intents/resume
+  Body: { "intent_id": "uuid" }
+→ 200 { "kind": "intent_result", ... }`}</code>
       </pre>
+      <p>
+        <code>/intents/resume</code> re-dispatches a previously paused
+        intent by replaying its original text from the recent audit window
+        (the last 1024 events). The caller must be the same peer that
+        submitted the original intent; resuming another peer&apos;s row
+        returns an <code>error</code> response so the paused
+        <code>intent_text</code> never leaks. If the row has aged out of
+        the window or no <code>budget_exhausted</code> row matched,
+        re-submit the original text via <code>POST /intent</code>.
+      </p>
 
       <h3>Memory</h3>
       <pre>

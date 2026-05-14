@@ -32,7 +32,9 @@ export default function CliPage() {
   memory recent [--tier T] [-n N]
         [--json]                     List recent memory records.
   memory search <query>
-        [--tier T] [-n N] [--json]   Cosine-similarity search via embeddings.
+        [--tier T] [-n N]
+        [--min-relevance F] [--json] Cosine-similarity search via embeddings;
+                                     --min-relevance F drops records below cosine F.
   memory purge [--tier T]
         (--before-ms M
          | --older-than-ms D) [--json]
@@ -68,16 +70,25 @@ export default function CliPage() {
          | --older-than-ms D) [--json]
                                      Delete old revoked capability tokens.
 
-  receipts recent [-n N] [--json]    List recent settlement receipts.
+  receipts recent [-n N]
+        [--since-ms <epoch_ms>] [--json]
+                                     List recent settlement receipts;
+                                     --since-ms drops events older than epoch.
   chain status [--json]               Print configured chain settlement state.
   chain flush-receipts [-n N] [--json]
                                      Batch local receipts into a receipt root.
   chain receipt-batches [-n N] [--json]
                                      List local receipt batches.
 
-  a2a status [-n N] [--min-lease-age-ms N] [--json]
-                                     Inspect queued tasks, in-flight leases,
-                                     and pending results.
+  a2a status [-n N]
+        [--min-lease-age-ms N]
+        [--deadline-within-ms N]
+        [--state queued|in_flight]
+        [--json]                     Inspect queued tasks, in-flight leases,
+                                     and pending results;
+                                     --deadline-within-ms keeps only tasks with
+                                     deadline_ms within N ms from now;
+                                     --state narrows to one queue state.
   a2a requeue <task-id>
         --reason <text>
         --duplicate-risk <idempotent|operator-accepted>
@@ -96,9 +107,13 @@ export default function CliPage() {
 
   verify [--window N] [--json]       Cross-check audit log vs other state.
 
-  audit recent [-n N] [--json]       List recent audit events as JSONL
-                                     or one JSON envelope.
-  audit verify                       Verify the local audit hash-chain.
+  audit recent [-n N]
+        [--since-ms <epoch_ms>] [--json]
+                                     List recent audit events as JSONL
+                                     or one JSON envelope;
+                                     --since-ms drops events older than epoch
+                                     before --limit is applied.
+  audit verify [--json]              Verify the local audit hash-chain.
   audit purge
         (--before-ms M
          | --older-than-ms D) [--json]
@@ -116,10 +131,14 @@ export default function CliPage() {
          | --older-than-ms D) [--json]
                                      Delete old revoked peer tombstones.
   peers rotate [--json]              Rotate the operator peer token.
-  peers list [-n N] [--prefix B58] [--json]
-                                     List peer registry summaries.
-  peers revoke <token-prefix> [--json]
-                                     Revoke a peer token by prefix.
+  peers list [-n N] [--prefix B58]
+        [--live-only | --revoked-only] [--json]
+                                     List peer registry summaries;
+                                     filter by live or revoked status.
+  peers revoke <token-prefix>
+        [--force] [--limit-matches N] [--json]
+                                     Revoke a peer token by prefix;
+                                     --force allows ambiguous prefixes up to N.
 `}</code>
       </pre>
 

@@ -59,6 +59,21 @@ node agent-os/scripts/provenance.mjs audit-root write \
   --validation "covenant audit verify=passed"
 ```
 
+Bind a release-target audit root to both a release subject and a release scope manifest (see [release-scopes.md](./release-scopes.md)):
+
+```bash
+node agent-os/scripts/provenance.mjs audit-root write \
+  --report audit-report.json \
+  --release v0.1.0 \
+  --release-subject release-subject.json \
+  --release-scope release-scopes/v0.1.0.json \
+  --commit HEAD \
+  --out docs/provenance/audit-roots/<commit>-audit-root.json \
+  --validation "covenant audit verify=passed"
+```
+
+A single signature over the resulting audit-root payload then covers both the release artifact set (via `releaseSubjectSha256`) and the in-scope autonomy task set (via `releaseScopeSha256`).
+
 Add a detached ed25519 signature when a project signing key is available:
 
 ```bash
@@ -98,6 +113,7 @@ For `covenant.audit-root-attestation.v1`, the verifier also checks:
 - The subject commit is canonical.
 - Task targets match the task snapshot stored in the subject commit.
 - Release targets with `releaseSubject` match repository, release id, commit, artifact metadata, validation evidence, and `releaseSubjectSha256`.
+- Release targets with `releaseScope` (a [`covenant.release-scope.v1`](./release-scopes.md) manifest) match repository, release id, and commit, and the embedded `releaseScopeSha256` matches a recomputed digest of the canonicalized scope payload.
 - Unsigned signing blocks are explicitly unsigned.
 - Signed blocks use ed25519, include canonical SPKI public key material, match the public-key digest, and verify against the canonical payload with `signing.signature` cleared.
 

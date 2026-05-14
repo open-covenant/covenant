@@ -61,7 +61,7 @@ In another terminal:
 ./target/release/covenant audit verify
 ```
 
-The audit log is a signed, hash-chained record of every step. `audit verify` walks the chain and reports any tampering.
+The audit log is a locally hash-chained record of every step. `audit verify` walks the chain and reports any tampering.
 
 ## Run the test suite
 

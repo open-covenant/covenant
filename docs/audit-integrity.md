@@ -103,6 +103,20 @@ node agent-os/scripts/provenance.mjs audit-root verify \
   --file docs/provenance/audit-roots/<commit>-audit-root.json
 ```
 
+At release time the same generator binds a release tag, the release-subject manifest defined in [provenance/release-subjects.md](./provenance/release-subjects.md), and the release-scope manifest defined in [provenance/release-scopes.md](./provenance/release-scopes.md):
+
+```bash
+node agent-os/scripts/provenance.mjs audit-root write \
+  --report audit-report.json \
+  --release <tag> \
+  --release-subject release-subject.json \
+  --release-scope release-scopes/<tag>.json \
+  --commit <commit> \
+  --out docs/provenance/audit-roots/<commit>-audit-root.json
+```
+
+`audit-root verify` re-validates each embedded manifest, so a single signature over the audit-root payload covers the audit log, the release artifact set (`releaseSubjectSha256`), and the in-scope autonomy task set (`releaseScopeSha256`) together.
+
 Once the signing workflow ships, a signed audit-root attestation will be a triple — `<file>.json`, `<file>.json.sig`, `<file>.json.pem` — and a verifier will run:
 
 ```bash

@@ -25,17 +25,14 @@ export default function AlphaReleasePage() {
 
       <h2>Evidence bundle</h2>
       <p>
-        Each candidate should record the evidence helper output, validation
-        outcomes, sanitized alpha readiness blockers, skipped live prerequisites,
-        provenance links, audit-root attestations when present, and the release
-        decision.
+        Public alpha candidates surface against the validation profile below.
+        The readiness report, bundle scaffold, and bundle validator that produce
+        the recorded evidence currently live in engineering-loop tooling and are
+        not part of the public scripts directory.
       </p>
 
-      <code>{`node agent-os/scripts/alpha-release-readiness.mjs
-node agent-os/scripts/alpha-release-bundle.mjs v0.1.0-alpha.1
-node agent-os/scripts/alpha-release-validate-bundle.mjs v0.1.0-alpha.1
-node agent-os/scripts/validate-alpha-release-evidence.mjs
-bash agent-os/scripts/validate.sh --quick
+      <code>{`bash agent-os/scripts/validate.sh --quick
+node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check`}</code>
 

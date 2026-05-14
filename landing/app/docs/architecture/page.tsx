@@ -289,6 +289,15 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>covenant-peer-auth</code>
+            </td>
+            <td>
+              Peer registry, peer tokens with prefixed visibility, token
+              rotation, and revocation tombstones.
+            </td>
+          </tr>
+          <tr>
+            <td>
               <code>covenant-permissions</code>
             </td>
             <td>
@@ -310,6 +319,16 @@ export default function ArchitecturePage() {
             <td>
               Settlement primitive: receipts, credits, off-chain
               accounting that pairs with the on-chain program.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>covenant-budget</code>
+            </td>
+            <td>
+              Token-bucket budget ledger with debit records, exhaustion
+              signals, and pause/resume checkpoints used by{" "}
+              <code>covenantd</code>.
             </td>
           </tr>
           <tr>
@@ -372,6 +391,15 @@ export default function ArchitecturePage() {
             </td>
             <td>
               The CLI binary.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>covenant-tui</code>
+            </td>
+            <td>
+              Terminal UI binary with submit, recent, and grant-editor
+              views over the daemon IPC.
             </td>
           </tr>
         </tbody>

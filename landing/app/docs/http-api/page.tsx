@@ -271,7 +271,6 @@ GET /audit/verify
 
 POST /audit/purge
   Body: { "before_ms": 1714938000000 }
-     or { "older_than_ms": 86400000 }
 → 200 { "kind": "audit_purged", "purged": 42 }`}</code>
       </pre>
 

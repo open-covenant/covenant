@@ -2013,7 +2013,7 @@ mod tests {
              before the bucket has the credits; the existing capacity=10 \
              fixture would still pass because 3_600_000/10 divides \
              exactly. Cross-binds refill_eta_grows_with_shortfall_at_capacity_rate \
-             (line 1837) as the exact-division ancestor"
+             as the exact-division ancestor"
         );
 
         // capacity=11/hr -> 3_600_000 / 11 = 327_272 remainder 8

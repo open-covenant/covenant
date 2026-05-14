@@ -280,12 +280,45 @@ GET  /a2a/tasks/recent?limit=N    # non-consuming snapshot
 POST /a2a/results                 # body: A2ATaskResult JSON
 GET  /a2a/results/next            # drains the next queued result
 GET  /a2a/results/recent?limit=N  # non-consuming snapshot
-GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results`}</code>
+GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results
+
+POST /a2a/repair
+  Body: {
+    "task_id": "uuid",
+    "command": { "action": "requeue",
+                 "duplicate_risk": "idempotent" | "operator_accepted",
+                 "lease_id": "uuid" | null }
+       | { "action": "force_error",
+           "message": "…",
+           "lease_id": "uuid" | null },
+    "reason":  "…"
+  }
+→ 200 {
+    "kind": "a2a_repaired",
+    "outcome": {
+      "task_id": "uuid",
+      "action":  "requeued" | "forced_error",
+      "state":   "queued"   | "result_pending",
+      "attempt": 2,
+      "result":  null | { ... }
+    }
+  }
+
+POST /a2a/compact
+→ 200 { "kind": "a2a_compacted", "dropped": 7 }`}</code>
       </pre>
       <p>
         Write paths (<code>POST</code>) require capability tokens —
         see <Link href="/a2a">Agent-to-agent</Link> for the
-        exact actions.
+        exact actions. <code>/a2a/repair</code> is the operator-driven
+        recovery verb for stuck leases or runaway tasks; the{" "}
+        <code>requeue</code> form puts the task back on the queue
+        (callers must declare <code>duplicate_risk</code> when the
+        task is not provably idempotent) while <code>force_error</code>
+        terminates the task with an operator-supplied message.{" "}
+        <code>/a2a/compact</code> drops settled, fully resolved task
+        rows beyond the retention window and reports how many were
+        dropped.
       </p>
 
       <h3>Peers</h3>

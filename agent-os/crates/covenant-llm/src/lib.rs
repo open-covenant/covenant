@@ -814,8 +814,10 @@ mod tests {
             "ProviderError::Empty Display must remain the literal \
              'provider returned no content' — fires when the wire \
              response decoded successfully but the content array was \
-             empty (Anthropic line 288, OpenAI line 392, Ollama line \
-             175). A refactor that rewrote it to 'provider returned \
+             empty (the AnthropicProvider, OpenAiProvider, and \
+             OllamaProvider complete() arms each return \
+             Err(ProviderError::Empty) on empty content). A refactor \
+             that rewrote it to 'provider returned \
              no body' under a 'match the Status body slot wording' \
              rationale would silently shift dashboards that grep for \
              'no content' to the new phrasing"

@@ -1,0 +1,21 @@
+{
+  "schema": "covenant.project-keys.v1",
+  "_template_notice": "This file is NOT consumed by validate-project-keys.mjs. It is a paste-ready entry shape for the first key-publication PR. Copy the single object inside `keys` into the real keys.json `keys` array, replace every TODO_ placeholder with the offline-generated value, drop the matching <key_id>.spki.base64 sibling file, then run `node agent-os/scripts/validate-project-keys.mjs` to confirm the manifest is valid.",
+  "keys": [
+    {
+      "key_id": "TODO_KEY_ID_lowercase_token_e_g_project-review-key-2026-01",
+      "algorithm": "ed25519",
+      "spki_file": "TODO_KEY_ID.spki.base64",
+      "spki_sha256": "TODO_64_LOWERCASE_HEX_CHARS_FROM_openssl_dgst_sha256_OF_decoded_DER_BYTES",
+      "not_before": "TODO_ISO_TIMESTAMP_e_g_2026-01-01T00:00:00.000Z",
+      "not_after": "TODO_ISO_TIMESTAMP_e_g_2027-01-01T00:00:00.000Z",
+      "status": "active",
+      "authorized_signer": "open-covenant-release-operator",
+      "purposes": [
+        "autonomy-review-signature",
+        "audit-root-attestation",
+        "release-subject"
+      ]
+    }
+  ]
+}

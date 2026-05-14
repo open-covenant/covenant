@@ -102,12 +102,19 @@ First grant the read permission (receipt reads are gated):
 
 ```json
 {
-  "id": "8b7c45fb-7920-41ce-8c80-bf6b34a2a55c",
-  "payer": { "display": "hello@local", "pubkey": "..." },
-  "resource": "compute",
-  "credits_consumed": 1,
-  "settled_at": 1747035072000,
-  "onchain_sig": null
+  "kind": "receipt_list",
+  "limit": 5,
+  "since_ms": null,
+  "receipts": [
+    {
+      "id": "8b7c45fb-7920-41ce-8c80-bf6b34a2a55c",
+      "payer": { "display": "hello@local", "pubkey": "..." },
+      "resource": "compute",
+      "credits_consumed": 1,
+      "settled_at": 1747035072000,
+      "onchain_sig": null
+    }
+  ]
 }
 ```
 

@@ -254,7 +254,7 @@ POST /tools/call
 
       <h3>Audit</h3>
       <pre>
-        <code>{`GET /audit/recent?limit=20
+        <code>{`GET /audit/recent?limit=20&since_ms=1714938000000
 → 200 { "kind": "audit_events", "events": [ ... ] }
 
 GET /audit/verify

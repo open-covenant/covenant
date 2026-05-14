@@ -14,7 +14,11 @@ export default function HttpApiPage() {
         JSON IPC. Listening address is{" "}
         <code>127.0.0.1:8421</code> (loopback only) by default; override
         the port with the <code>COVENANT_HTTP_PORT</code> environment
-        variable.
+        variable and the bind address with{" "}
+        <code>COVENANT_HTTP_BIND_ADDR</code>. Changing the bind address
+        away from <code>127.0.0.1</code> widens the network exposure of
+        every protected route to the chosen interface — only do so when
+        the host firewall and bearer-token policy account for it.
       </p>
 
       <h2>Conventions</h2>

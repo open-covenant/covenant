@@ -123,7 +123,7 @@ COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100`}</code>
       </pre>
       <p>
         Every scheduler pass records an{" "}
-        <code>a2a_auto_retry_scheduler_scan</code> audit summary. Actual
+        <code>a2_a_auto_retry_scheduler_scan</code> audit summary. Actual
         mutations still produce per-task <code>auto_requeue</code> repair rows.
       </p>
 

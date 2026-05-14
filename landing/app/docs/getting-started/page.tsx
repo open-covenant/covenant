@@ -142,8 +142,11 @@ model    = "nomic-embed-text"
           <code>$COVENANT_HOME/memory.db</code>.
         </li>
         <li>
-          Loads any agent manifests under{" "}
-          <code>$COVENANT_HOME/agents/*.toml</code>.
+          Loads each agent package under{" "}
+          <code>$COVENANT_HOME/agents/</code> — every subdirectory
+          containing an <code>agent.toml</code>; flat{" "}
+          <code>*.toml</code> files at the top of{" "}
+          <code>agents/</code> are silently skipped.
         </li>
       </ul>
 

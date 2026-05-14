@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn build_receipt_batch_pins_batch_id_domain_separator_prefix() {
-        // covenant_settlement::build_receipt_batch (line 91) derives
+        // covenant_settlement::build_receipt_batch derives
         // batch_id with:
         //
         //   hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into())
@@ -589,9 +589,9 @@ mod tests {
 
     #[test]
     fn build_receipt_batch_pins_odd_leaf_count_duplicates_last_leaf_convention() {
-        // covenant_settlement::build_receipt_batch (line 63-98) computes
-        // the Merkle root of all unsettled receipts in a batch. Line 81
-        // is the critical convention:
+        // covenant_settlement::build_receipt_batch computes
+        // the Merkle root of all unsettled receipts in a batch.
+        // The critical convention is:
         //
         //   let right = pair.get(1).copied().unwrap_or(pair[0]);
         //
@@ -724,8 +724,8 @@ mod tests {
         // covenant_settlement::receipt_migration_plan_json (line
         // 100-168) emits the schema-versioned operator-facing
         // migration-plan envelope. The sibling pin
-        // (receipt_migration_plan_splits_legacy_and_correlated_memory_receipts
-        // at line 683) covers ~60% of the documented schema. This pin
+        // (receipt_migration_plan_splits_legacy_and_correlated_memory_receipts)
+        // covers ~60% of the documented schema. This pin
         // closes the remaining contract surfaces:
         //
         //   summary.batched_receipt_count / unbatched_receipt_count
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn receipt_hash_pins_conditional_memory_record_id_and_per_field_determinism() {
-        // covenant_settlement::receipt_hash (line 170-183) computes
+        // covenant_settlement::receipt_hash computes
         // the SHA-256 of a JSON payload over 5 always-present fields
         // (id, payer base58, resource, credits_consumed, settled_at)
         // plus an optional memory_record_id field that lands in the
@@ -883,7 +883,7 @@ mod tests {
         // — un-correlated and correlated receipts are intentionally
         // distinct at the Merkle leaf level.
         //
-        // receipt_hash is used at line 76 by build_receipt_batch to
+        // receipt_hash is used by build_receipt_batch to
         // compute Merkle leaves. A refactor that unconditionally
         // inserted memory_record_id (even with null when None) under
         // a 'be consistent about field presence' rationale would
@@ -929,7 +929,7 @@ mod tests {
             "two receipts identical except memory_record_id being \
              None vs Some must produce DIFFERENT hashes — pins the \
              conditional 'if let Some(id) = receipt.memory_record_id' \
-             payload insert at line 178-180. A refactor that \
+             payload insert. A refactor that \
              unconditionally inserted memory_record_id (even as null) \
              would collapse the two cases to the same hash and \
              silently change every un-correlated receipt's on-chain \
@@ -945,7 +945,7 @@ mod tests {
             h_none_a, h_diff_credits,
             "two receipts identical except credits_consumed must \
              produce DIFFERENT hashes — pins that credits_consumed \
-             is part of the payload at line 175. A refactor that \
+             is part of the payload. A refactor that \
              dropped the field under a 'these are also persisted in \
              the budget ledger' rationale would let credit-amount \
              tampering go undetected at the Merkle leaf level — a \
@@ -962,7 +962,7 @@ mod tests {
             h_none_a, h_diff_settled_at,
             "two receipts identical except settled_at must produce \
              DIFFERENT hashes — pins that settled_at is part of the \
-             payload at line 176. A refactor that dropped settled_at \
+             payload. A refactor that dropped settled_at \
              would let temporal-replay attacks against the Merkle \
              leaf set go undetected",
         );
@@ -1023,9 +1023,9 @@ mod tests {
 
     #[test]
     fn intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality() {
-        // covenant_settlement::INTENT_DISPATCH_CREDITS (line 403) is the
+        // covenant_settlement::INTENT_DISPATCH_CREDITS is the
         // v0 flat-cost floor: 1 credit per intent dispatch. The
-        // intent_dispatch_credits() accessor (line 408-410) mirrors the
+        // intent_dispatch_credits() accessor mirrors the
         // constant — the docstring documents that 'future variants that
         // price per agent or per tool-call can replace the body without
         // touching callers', so the accessor is the indirection point
@@ -1133,7 +1133,7 @@ mod tests {
 
     #[test]
     fn annotate_receipt_pins_complete_confirmation_field_mapping_and_onchain_sig_alias() {
-        // annotate_receipt (line 195-204) stamps a SettlementReceipt
+        // annotate_receipt stamps a SettlementReceipt
         // with ChainConfirmation evidence after the receipt batch is
         // confirmed on-chain. Eight assignments plus one load-bearing
         // aliasing contract: receipt.onchain_sig =

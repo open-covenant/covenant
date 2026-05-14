@@ -1003,7 +1003,8 @@ mod tests {
         // hermes-agent < v0.12 deployments do not advertise approval
         // support, and forcing it would silently disable Hermes for
         // those operators. The daemon logs run_approval_response
-        // alongside (main.rs line 53) but does not gate on it.
+        // alongside the 'hermes gateway features confirmed' info span
+        // in covenantd/src/main.rs but does not gate on it.
         //
         // No test pins covers_runner; the daemon-side consumer is
         // integration-only. A refactor that 'tightened' the AND to

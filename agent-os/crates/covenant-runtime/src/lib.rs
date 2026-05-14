@@ -1571,15 +1571,15 @@ filesystem = "read-only-package"
         //       inserted a 'no redaction needed' breadcrumb or
         //       truncated stderr would actively obscure the real cause
         //       of agent failures.
-        //   (3) Empty-path skip — line 312's `if !path.is_empty()`
-        //       branch is defensive: a PathBuf::new() has empty
-        //       .display() and str::replace("", repl) would insert the
-        //       replacement between every character of stderr. A
-        //       refactor that dropped the empty check would render the
-        //       entire stderr as a sequence of '<redacted-path>'
-        //       tokens, hiding the real diagnostic.
+        //   (3) Empty-path skip — the `if !path.is_empty()` branch
+        //       inside redact_stderr is defensive: a PathBuf::new() has
+        //       empty .display() and str::replace("", repl) would
+        //       insert the replacement between every character of
+        //       stderr. A refactor that dropped the empty check would
+        //       render the entire stderr as a sequence of
+        //       '<redacted-path>' tokens, hiding the real diagnostic.
         //
-        // The $HOME redaction branch (line 316-321) reads global env
+        // The $HOME redaction branch in redact_stderr reads global env
         // state via std::env::var_os and is intentionally NOT covered
         // by this slice because std::env::set_var is racy under
         // cargo's default parallel test execution; covering it

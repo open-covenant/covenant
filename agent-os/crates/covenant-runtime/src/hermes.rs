@@ -536,9 +536,9 @@ mod tests {
 
     #[test]
     fn parse_sse_frame_pins_strict_crlf_frame_parses_identically_to_lf() {
-        // covenant_runtime::hermes::parse_sse_frame (line 359-383)
+        // covenant_runtime::hermes::parse_sse_frame
         // splits each frame on b'\n' and passes each line through
-        // strip_cr (line 385-391) to remove a trailing b'\r' before
+        // strip_cr to remove a trailing b'\r' before
         // the 'data:' prefix match feeds serde_json. This is what
         // makes CRLF-formatted SSE streams (the strict SSE spec form)
         // decode identically to LF-formatted streams (what Hermes's
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn strip_cr_pins_only_one_trailing_cr_and_preserves_middle_and_leading() {
-        // hermes::strip_cr (line 385-391) is the SSE line-end
+        // hermes::strip_cr is the SSE line-end
         // normalizer that runs on every line of an SSE frame before
         // parse_sse_frame slices the leading 'data:' prefix. The
         // function strips at most ONE trailing \r — the standard SSE
@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn find_boundary_pins_crlf_priority_when_both_crlf_and_lf_lf_present_in_same_buffer() {
-        // find_boundary (line 340-348) checks CRLF-CRLF FIRST via
+        // find_boundary checks CRLF-CRLF FIRST via
         // find_subseq(buf, b"\r\n\r\n") and only falls back to LF-LF
         // when CRLF-CRLF is absent. The existing
         // find_boundary_prefers_crlf_crlf_over_lf_lf test exercises
@@ -851,8 +851,8 @@ mod tests {
 
     #[test]
     fn hermes_runner_new_pins_greedy_trim_of_trailing_slashes_on_base_url() {
-        // covenant_runtime::hermes::HermesRunner::new (line 63-75)
-        // normalizes base_url on line 71 with:
+        // covenant_runtime::hermes::HermesRunner::new
+        // normalizes base_url with:
         //
         //   base_url.into().trim_end_matches('/').to_string()
         //
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn runtime_name_pins_each_kind_to_documented_manifest_slug() {
-        // covenant_runtime::hermes::runtime_name (line 455-462) maps
+        // covenant_runtime::hermes::runtime_name maps
         // every RuntimeKind variant to the static slug the operator
         // sees in the 'got:' field of RunnerError::WrongRuntime when
         // they accidentally route a non-Hermes runtime through
@@ -992,7 +992,7 @@ mod tests {
     #[test]
     fn hermes_capabilities_covers_runner_pins_three_required_flags_excluding_approval_response() {
         // covenant_runtime::hermes::HermesCapabilities::covers_runner
-        // (line 506-508) is the boot-time gate covenantd consults in
+        // is the boot-time gate covenantd consults in
         // covenantd/src/main.rs to decide whether to emit
         // 'hermes gateway features confirmed' or
         // 'hermes gateway missing required features'.
@@ -1088,9 +1088,9 @@ mod tests {
 
     #[test]
     fn truncate_pins_ellipsis_character_and_inclusive_length_boundary() {
-        // covenant_runtime::hermes::truncate (line 471-477) bounds the
+        // covenant_runtime::hermes::truncate bounds the
         // Hermes remote-error text that feeds RunnerError::Remote
-        // messages at line 115 and line 135 (both with max=512). Two
+        // messages (both with max=512). Two
         // arms:
         //
         //   if s.len() <= max { s.to_string() }
@@ -1164,7 +1164,7 @@ mod tests {
 
     #[test]
     fn map_hermes_event_pins_missing_event_and_run_id_fields_return_none() {
-        // covenant_runtime::hermes::map_hermes_event (line 393-453) is
+        // covenant_runtime::hermes::map_hermes_event is
         // the final step of the SSE pipeline that folds a parsed JSON
         // value into a typed RuntimeTrace. It opens with two
         // question-mark guards:
@@ -1207,7 +1207,7 @@ mod tests {
         assert!(
             map_hermes_event(&event_not_str).is_none(),
             "Value where 'event' is a number must yield None — the \
-             '.as_str()?' on line 394 fires here. A refactor that \
+             '.as_str()?' on the event field fires here. A refactor that \
              loosened to to_string() would let a numeric 'event' \
              value stringify to '1' which falls through to the '_' \
              arm and returns None anyway; the more dangerous refactor \
@@ -1223,7 +1223,7 @@ mod tests {
         assert!(
             map_hermes_event(&no_run_id).is_none(),
             "Value with 'event' but no 'run_id' must yield None — the \
-             '?' on line 395 fires here. A refactor that swapped this \
+             '?' on the run_id lookup fires here. A refactor that swapped this \
              for unwrap_or(\"\") would silently fold the frame as \
              HermesToolInvoked {{ run_id: \"\", tool: \"terminal\", ... }} \
              — empty-string run_ids break audit-row correlation \
@@ -1240,7 +1240,7 @@ mod tests {
         assert!(
             map_hermes_event(&run_id_null).is_none(),
             "Value where 'run_id' is explicit JSON null must yield \
-             None — the '.as_str()?' on line 395 fires here. Distinct \
+             None — the '.as_str()?' on the run_id lookup fires here. Distinct \
              from the missing-key case at the wire level but must \
              collapse to the same answer, so a refactor that \
              special-cased null (e.g., 'treat null run_id as anonymous \
@@ -1274,8 +1274,8 @@ mod tests {
 
     #[test]
     fn find_subseq_pins_empty_needle_and_short_haystack_return_none() {
-        // covenant_runtime::hermes::find_subseq (line 350-357) is the
-        // search primitive find_boundary (line 340-348) uses to locate
+        // covenant_runtime::hermes::find_subseq is the
+        // search primitive find_boundary uses to locate
         // SSE frame terminators ('\r\n\r\n' or '\n\n') in the streaming
         // event buffer. Its body opens with two guards:
         //
@@ -1365,8 +1365,8 @@ mod tests {
 
     #[test]
     fn feature_flag_pins_missing_key_and_non_bool_value_default_to_false() {
-        // covenant_runtime::hermes::feature_flag (line 511-513) is the
-        // only function probe_capabilities (line 147-161) consults to
+        // covenant_runtime::hermes::feature_flag is the
+        // only function probe_capabilities consults to
         // fold a hermes gateway's /capabilities features map into the
         // typed HermesCapabilities struct. Its body is:
         //

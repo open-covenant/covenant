@@ -253,6 +253,61 @@ GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending resu
         exact actions.
       </p>
 
+      <h3>Peers</h3>
+      <pre>
+        <code>{`GET /peers/list?limit=20&prefix=A1B2&status=live
+→ 200 {
+    "kind": "peer_list",
+    "peers": [
+      {
+        "agent_id":      { ... },
+        "token_prefix":  "abc123",
+        "registered_at": 1714938000000,
+        "revoked_at":    null
+      }
+    ],
+    "operator_pubkey_b58": "…",
+    "truncated":          false
+  }
+
+POST /peers/purge
+  Body: { "before_ms": 1714938000000 }
+→ 200 { "kind": "peers_purged", "purged": 3 }
+
+POST /peers/rotate
+→ 200 { "kind": "operator_token_rotated", "token_b58": "…" }
+
+POST /peers/revoke
+  Body: {
+    "token_prefix": "abc123",
+    "force":        false,
+    "match_limit":  null
+  }
+→ 200 {
+    "kind": "peer_revoked",
+    "outcome": { "type": "revoked", ... }
+       | { "type": "already_revoked", ... }
+       | { "type": "not_found" }
+       | { "type": "ambiguous", "matches": [ ... ], "truncated": false }
+       | { "type": "self_revoke_forbidden", ... }
+  }`}</code>
+      </pre>
+      <p>
+        <code>/peers/list</code> filters by 6-char base58{" "}
+        <code>prefix</code> over the redacted token; <code>status</code> is
+        <code>live</code> or <code>revoked</code>; anything else (or
+        absent) means no status filter. <code>/peers/rotate</code> issues a
+        new operator token; the rotated token replaces the bootstrap file
+        and the caller&apos;s current connection keeps working — new
+        connections must authenticate with <code>token_b58</code>.{" "}
+        <code>/peers/revoke</code> takes the 6-char <code>token_prefix</code>
+        from a <code>/peers/list</code> row; the four-case{" "}
+        <code>RevokeOutcome</code> tagged enum distinguishes a fresh
+        revoke, an idempotent retry, a missing prefix, an ambiguous
+        prefix, and a refusal to revoke the operator&apos;s own bootstrap
+        token.
+      </p>
+
       <h2>Authentication</h2>
       <p>
         Every route except <code>/health</code> and{" "}

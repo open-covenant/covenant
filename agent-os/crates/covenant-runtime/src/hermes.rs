@@ -544,11 +544,11 @@ mod tests {
         // decode identically to LF-formatted streams (what Hermes's
         // current aiohttp gateway emits).
         //
-        // parse_sse_frame_handles_lf_lf_and_crlf (line 519) NAMES the
+        // parse_sse_frame_handles_lf_lf_and_crlf NAMES the
         // CRLF case in its identifier but the body only exercises LF
         // — no test passes a 'data: {...}\r' or '...\r\n\r\n' frame
         // through parse_sse_frame. find_boundary_prefers_crlf_crlf_over_lf_lf
-        // (line 600+) tests find_boundary, NOT the downstream line-level
+        // tests find_boundary, NOT the downstream line-level
         // CR strip. A refactor that dropped the strip_cr() call under
         // an 'aiohttp uses LF, we don't need this' rationale would
         // silently break parsing of any future strict-CRLF Hermes
@@ -1290,7 +1290,7 @@ mod tests {
         // the early-out shape for any future swap to a memmem-style
         // search.
         //
-        // find_boundary_prefers_crlf_crlf_over_lf_lf (line 688) only
+        // find_boundary_prefers_crlf_crlf_over_lf_lf only
         // exercises non-empty four-byte and two-byte needles against
         // larger haystacks; neither guard arm is hit. A refactor that
         // dropped the is_empty() guard under a 'this branch can't be

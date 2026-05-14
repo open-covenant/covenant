@@ -100,7 +100,7 @@ covenant tools call echo --args '{"text":"hi"}'
         <code>{`[[mcp.server]]
 name    = "filesystem"
 command = "npx"
-args    = ["-y", "@modelcontextprotocol/server-filesystem", "$HOME/notes"]
+args    = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/notes"]
 env     = { LOG_LEVEL = "info" }`}</code>
       </pre>
 

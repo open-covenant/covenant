@@ -56,13 +56,16 @@ export default function GettingStartedPage() {
 
       <pre>
         <code>{`git clone https://github.com/open-covenant/covenant.git
-cd covenant
+cd covenant/agent-os
 cargo build --workspace --exclude covenant-settlement-program`}</code>
       </pre>
 
       <p>
-        The first build downloads dependencies and may take a few minutes.
-        Two binaries land under <code>target/debug/</code>:
+        The Rust workspace lives under <code>agent-os/</code>; running{" "}
+        <code>cargo</code> from the repository root fails because no{" "}
+        <code>Cargo.toml</code> sits there. The first build downloads
+        dependencies and may take a few minutes. Two binaries land under{" "}
+        <code>agent-os/target/debug/</code>:
       </p>
 
       <ul>

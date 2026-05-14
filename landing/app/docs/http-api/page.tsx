@@ -113,7 +113,7 @@ POST /memory/compact
 
 → 200 { "kind": "memories", "records": [ ... ] }
    or  { "kind": "memory_purged", "purged": 42 }
-   or  { "kind": "memory_repair_applied", ... }
+   or  { "kind": "memory_repaired", ... }
    or  { "kind": "memory_compacted", ... }`}</code>
       </pre>
 

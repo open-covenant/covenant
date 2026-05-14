@@ -1030,8 +1030,8 @@ mod tests {
         // price per agent or per tool-call can replace the body without
         // touching callers', so the accessor is the indirection point
         // for v1 pricing migrations and the constant is the v0
-        // tripwire. memory_write_credits_minimum_one (line 590) pins
-        // the byte-floor for memory writes; intent_dispatch_credits has
+        // tripwire. memory_write_credits_minimum_one pins the
+        // byte-floor for memory writes; intent_dispatch_credits has
         // no analogous pin.
         //
         // Three load-bearing arms, each pinned independently:
@@ -1143,8 +1143,8 @@ mod tests {
         // line 333-337) documents 'onchain_sig remains as a backwards-
         // compatible alias for tx_sig while older clients roll forward'.
         //
-        // in_memory_marks_batch_confirmed (line 557) covers two of the
-        // eight assignments (chain and onchain_sig) and does not assert
+        // in_memory_marks_batch_confirmed covers two of the eight
+        // assignments (chain and onchain_sig) and does not assert
         // tx_sig <-> onchain_sig equality, leaving six field mappings
         // and the alias equality invariant unpinned. Pin each
         // assignment AND the alias equality so a refactor that swaps

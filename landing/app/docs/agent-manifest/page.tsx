@@ -414,11 +414,14 @@ runtime = "node"       →   exec node    entry`}</code>
 
       <h2>Manifest discovery</h2>
       <p>
-        The daemon scans <code>$COVENANT_HOME/agents/*.toml</code> on
-        startup. Online registration is not supported; the daemon must
-        be restarted after a new manifest is added. Existing manifests
-        may be edited in place and are re-read on the next daemon
-        start.
+        On startup the daemon walks{" "}
+        <code>$COVENANT_HOME/agents/</code> and loads each subdirectory
+        that contains an <code>agent.toml</code>; flat{" "}
+        <code>*.toml</code> files at the top of <code>agents/</code>{" "}
+        are silently skipped. Online registration is not supported;
+        the daemon must be restarted after a new manifest is added.
+        Existing manifests may be edited in place and are re-read on
+        the next daemon start.
       </p>
 
       <h2>Related</h2>

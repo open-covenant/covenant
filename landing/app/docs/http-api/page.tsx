@@ -119,7 +119,7 @@ POST /memory/compact
 
       <h3>Receipts</h3>
       <pre>
-        <code>{`GET /receipts/recent?limit=10
+        <code>{`GET /receipts/recent?limit=10&since_ms=1714938000000
 → 200 { "kind": "receipts", "receipts": [ ... ] }`}</code>
       </pre>
 

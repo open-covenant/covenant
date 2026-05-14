@@ -137,7 +137,7 @@ export default function AuditPage() {
       <pre>
         <code>{`covenant audit recent --limit 5 --json
 # Or via HTTP:
-curl -s 127.0.0.1:8421/audit/recent?limit=5&since_ms=1714938000000 | jq`}</code>
+curl -s '127.0.0.1:8421/audit/recent?limit=5&since_ms=1714938000000' | jq`}</code>
       </pre>
 
       <h3>Verify local chain</h3>

@@ -175,7 +175,7 @@ The scheduler remains:
 
 - opt-in (disabled by default);
 - limited to tasks marked safe to duplicate with an explicit idempotency key;
-- observable (`a2a_auto_retry_scheduler_scan` audit summaries plus per-requeue `auto_requeue` audit rows);
+- observable (`a2_a_auto_retry_scheduler_scan` audit summaries plus per-requeue `auto_requeue` audit rows);
 - bounded (interval, minimum lease age, max attempts, max requeues, and scan limit are operator-configurable).
 
 ## Remaining Work

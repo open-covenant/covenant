@@ -97,7 +97,7 @@ COVENANT_A2A_AUTO_RETRY_MAX_REQUEUES=1
 COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100
 ```
 
-The scheduler does not bypass the repair capability gate. If the operator identity does not hold `a2a.repair.requeue`, the scan is rejected and recorded as an `a2a_auto_retry_scheduler_scan` audit row with an error. Successful scans record the same audit summary plus per-task `auto_requeue` repair rows for actual mutations.
+The scheduler does not bypass the repair capability gate. If the operator identity does not hold `a2a.repair.requeue`, the scan is rejected and recorded as an `a2_a_auto_retry_scheduler_scan` audit row with an error. Successful scans record the same audit summary plus per-task `auto_requeue` repair rows for actual mutations.
 
 ## Receiver obligations for `idempotent` tasks
 

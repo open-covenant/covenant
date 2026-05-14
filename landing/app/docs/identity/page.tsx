@@ -64,7 +64,7 @@ export default function IdentityPage() {
         <li>
           <code>verify_with_pubkey(pubkey, message, signature)</code>{" "}
           — read-side verification; returns{" "}
-          <code>Result&lt;(), SignatureError&gt;</code>.
+          <code>Result&lt;(), IdentityError&gt;</code>.
         </li>
         <li>
           <code>verifying_key_from_bytes(pubkey)</code> — converts a

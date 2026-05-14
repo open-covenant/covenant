@@ -116,6 +116,9 @@ POST /capabilities/grant
   }
 POST /capabilities/revoke
   Body: { "signature_b58": "4qXP…" }
+POST /capabilities/purge
+  Body: { "before_ms": 1714938000000 }
+     or { "older_than_ms": 86400000 }
 
 → 200 {
     "kind": "capability_granted",
@@ -123,7 +126,8 @@ POST /capabilities/revoke
     "subject_display": "user@local",
     "action": "tool.web_search"
   }
-   or  { "kind": "capability_revoked", "signature_b58": "…", "removed": true }`}</code>
+   or  { "kind": "capability_revoked", "signature_b58": "…", "removed": true }
+   or  { "kind": "capabilities_purged", "purged": 7 }`}</code>
       </pre>
 
       <h3>Verify</h3>

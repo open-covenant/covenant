@@ -59,16 +59,11 @@ cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 
 ## Autonomy Artifacts
 
-The autonomous workflow has a machine-readable control surface:
-
-- `autonomy/workflow.json`: lifecycle states, roles, gates, transitions, and definition of done.
-- `autonomy/tasks/*.json`: task backlog records with scope, gates, expected failure modes, verification, next action, and human escalation needs.
-- `autonomy/events.jsonl`: append-only task transition log.
-- `scripts/validate-autonomy.mjs`: dependency-free validator for the workflow and task records.
-- `scripts/autonomy-next.mjs`: selects the next unblocked task by priority and state.
-- `scripts/autonomy-transition.mjs`: applies an allowed task state transition and records an event.
-
-The normal validation script runs the autonomy validator before the Rust gates.
+The autonomous workflow has a machine-readable control surface — a lifecycle
+definition, scoped task records with gates and verification, an append-only
+transition log, and a durable seed queue — implemented by engineering-loop
+tooling alongside the public scripts. The recursive engineering model in
+[BUILT.md](../BUILT.md) describes the contract that those tools implement.
 
 ## Runtime State
 

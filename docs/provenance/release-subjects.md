@@ -98,3 +98,8 @@ The release-subject verifier checks schema, repository, release id, commit, arti
 - This schema does not define key custody or signature publication.
 
 Those remain release process work that must be explicitly documented and approved.
+
+## Related release-evidence artifacts
+
+- [release-scopes.md](./release-scopes.md) defines the sibling `covenant.release-scope.v1` manifest, which binds a release to a digest of the integrated autonomy task set without exposing the task records.
+- [README.md](./README.md) documents how a single `covenant.audit-root-attestation.v1` payload can embed both the release-subject digest (`releaseSubjectSha256`) and the release-scope digest (`releaseScopeSha256`), so one signature over the audit-root covers both the artifact set described here and the in-scope task set.

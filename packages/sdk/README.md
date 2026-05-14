@@ -60,4 +60,5 @@ generated from the Solana program.
 | `solana/instructions` | instruction-prep helpers for protocol writes |
 | `auth/session` | Session token management |
 | `discovery/types` | Solana protocol event payloads |
+| `domain/task` | TaskStatus lifecycle enum (funded → proof_submitted → verified → released, plus disputed) |
 | `data/mock` | local fixtures for apps and services |

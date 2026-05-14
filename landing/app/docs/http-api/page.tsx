@@ -105,6 +105,27 @@ POST /memory/compact
 → 200 { "kind": "receipts", "receipts": [ ... ] }`}</code>
       </pre>
 
+      <h3>Budget</h3>
+      <pre>
+        <code>{`GET /budget/debits?limit=20
+→ 200 {
+    "kind": "debits",
+    "debits": [
+      {
+        "agent":          { ... },
+        "credits":        128,
+        "paired_receipt": "uuid",
+        "at_ms":          1714938000000
+      }
+    ]
+  }`}</code>
+      </pre>
+      <p>
+        Each <code>BudgetDebit</code> pairs 1:1 with a settlement receipt
+        via <code>paired_receipt</code>, so the budget log and the
+        receipt log can be joined for reconciliation.
+      </p>
+
       <h3>Chain</h3>
       <pre>
         <code>{`GET /chain/status

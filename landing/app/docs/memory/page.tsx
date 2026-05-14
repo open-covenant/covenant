@@ -231,8 +231,10 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
       </ul>
 
       <p>
-        These primitives are implemented in the store layer. Daemon, CLI,
-        and audit-log exposure remain pending.
+        These primitives are exposed through daemon dispatch, the{" "}
+        <code>covenant memory repair</code> CLI, and{" "}
+        <code>memory_repair_applied</code> audit rows, with live CLI coverage
+        for the repair round trip.
       </p>
 
       <h2>The .covenantignore allow/deny list</h2>

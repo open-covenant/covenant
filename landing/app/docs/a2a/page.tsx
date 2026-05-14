@@ -139,7 +139,8 @@ GET  /a2a/results/next            # drains the next queued result
 GET  /a2a/results/recent?limit=N  # non-consuming snapshot
   → 200 { "kind": "a2a_results", "results": [ ... ] }
 
-GET  /a2a/queue?limit=N           # queued tasks, in-flight leases, pending results
+GET  /a2a/queue?limit=N&min_lease_age_ms=5000&deadline_within_ms=60000&state_filter=queued|in_flight
+                                  # queued tasks, in-flight leases, pending results
   → 200 { "kind": "a2a_queue", "tasks": [ ... ], "results": [ ... ] }`}</code>
       </pre>
 

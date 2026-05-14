@@ -105,6 +105,55 @@ POST /memory/compact
 → 200 { "kind": "receipts", "receipts": [ ... ] }`}</code>
       </pre>
 
+      <h3>Chain</h3>
+      <pre>
+        <code>{`GET /chain/status
+→ 200 {
+    "kind": "chain_status",
+    "status": {
+      "chain":       "solana",
+      "cluster":     "devnet",
+      "rpc_url":     "…" | null,
+      "ws_url":      "…" | null,
+      "program_id":  "…" | null,
+      "covnt_mint":  "…" | null,
+      "ready":       false,
+      "missing":     ["rpc_url", "program_id"]
+    }
+  }
+
+GET /chain/receipt-batches?limit=10
+→ 200 {
+    "kind": "receipt_batches",
+    "batches": [
+      {
+        "batch_id":      "…",
+        "merkle_root":   "…",
+        "receipt_count": 20,
+        "tx_sig":        "…" | null,
+        "slot":          123 | null
+      }
+    ]
+  }
+
+POST /chain/flush-receipts
+  Body: { "limit": 10 }
+→ 200 {
+    "kind": "receipt_batch_flushed",
+    "batch": { ... },
+    "receipts_updated": 20
+  }`}</code>
+      </pre>
+      <p>
+        <code>/chain/status</code> reports the configured settlement chain
+        and the names of any missing endpoints, mint, or program fields.
+        <code>/chain/flush-receipts</code> batches unsettled local receipts
+        into one <code>ReceiptBatchSummary</code> and stamps the receipts
+        with the batch identifier; on-chain submission and{" "}
+        <code>tx_sig</code> population follow once the chain configuration
+        is complete.
+      </p>
+
       <h3>Capabilities</h3>
       <pre>
         <code>{`GET /capabilities/recent?limit=10

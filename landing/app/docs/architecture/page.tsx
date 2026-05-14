@@ -75,11 +75,16 @@ export default function ArchitecturePage() {
       </ul>
 
       <p>
-        Each registered agent runs as a child process spawned on demand
-        when an intent is dispatched. Agents have no direct access to the
-        daemon&apos;s state — every interaction goes through the daemon.
-        The runtime wall-clocks each agent against the budget declared in
-        its manifest and kills processes that overrun.
+        Subprocess-style agents (<code>rust-bin</code>,{" "}
+        <code>python3</code>, <code>node</code>) run as child processes
+        spawned on demand when an intent is dispatched; the runtime
+        wall-clocks each one against the budget declared in its manifest
+        and kills processes that overrun. <code>hermes</code>-runtime
+        agents are not subprocesses — the daemon delegates the intent to
+        a configured Hermes HTTP endpoint and treats the response as the
+        agent result. In either model, agents have no direct access to
+        the daemon&apos;s state; every interaction goes through the
+        daemon.
       </p>
 
       <h2>Request lifecycle</h2>

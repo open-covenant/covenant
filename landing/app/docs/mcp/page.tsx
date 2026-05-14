@@ -25,7 +25,7 @@ export default function McpPage() {
       <pre>
         <code>{`ToolSpec {
   name:        "echo",
-  description: "Returns the provided text argument verbatim.",
+  description: "Returns the provided \`text\` argument verbatim.",
   inputSchema: {
     "type": "object",
     "properties": { "text": { "type": "string" } },

@@ -1268,9 +1268,9 @@ filesystem = "host"
 
     #[test]
     fn gvisor_ensure_allowed_pins_backend_mismatch_arm_with_reason() {
-        // GvisorRunner::ensure_allowed (line 193-217) is the
-        // defensive-second-line check that rejects manifests the gVisor
-        // runner cannot execute safely. Three rejection arms, each with
+        // GvisorRunner::ensure_allowed is the defensive-second-line
+        // check that rejects manifests the gVisor runner cannot execute
+        // safely. Three rejection arms, each with
         // a unique reason string:
         //
         //   (1) backend != LinuxGvisor → "manifest does not select linux-gvisor"
@@ -1367,26 +1367,26 @@ cpu_ms_per_task = 5000
                 "expected RunnerError::UnsupportedSandboxPolicy for a \
                  TrustedLocal-backed manifest routed through GvisorRunner; \
                  a refactor that dropped the backend equality check inside \
-                 ensure_allowed (line 194-200) would silently let \
-                 oci_config canonicalize paths and write the OCI bundle \
-                 for a non-gVisor manifest; got: {other:?}"
+                 GvisorRunner::ensure_allowed would silently let oci_config \
+                 canonicalize paths and write the OCI bundle for a non-gVisor \
+                 manifest; got: {other:?}"
             ),
         }
     }
 
     #[test]
     fn gvisor_ensure_allowed_pins_filesystem_and_network_arm_reasons() {
-        // GvisorRunner::ensure_allowed (line 193-217) rejects manifests
-        // that select gVisor but violate the v0 filesystem or network
-        // policy. Each arm carries a unique load-bearing reason string:
+        // GvisorRunner::ensure_allowed rejects manifests that select
+        // gVisor but violate the v0 filesystem or network policy. Each
+        // arm carries a unique load-bearing reason string:
         //
         //   (1) backend != LinuxGvisor       -> "manifest does not select linux-gvisor"
         //   (2) filesystem != ReadOnlyPackage -> "initial gVisor runner only supports read-only-package filesystem policy"
         //   (3) resources.network != Off      -> "initial gVisor runner only supports network=off"
         //
         // gvisor_ensure_allowed_pins_backend_mismatch_arm_with_reason
-        // (line 884) pins arm 1's reason substring.
-        // gvisor_runner_rejects_unenforced_policies (line 828) exercises
+        // pins arm 1's reason substring.
+        // gvisor_runner_rejects_unenforced_policies exercises
         // arms 2 and 3 but only asserts the error variant via matches!()
         // — the reason strings themselves remain unpinned. This pin
         // closes both arms with a substring match identical in shape to
@@ -1467,19 +1467,17 @@ filesystem = "host"
                      that grep's this substring to classify and route \
                      filesystem-policy violations to the sandbox-policy \
                      runbook; the variant-only ancestor in \
-                     gvisor_runner_rejects_unenforced_policies (line 828) \
-                     would still pass because it never reads the reason. \
-                     got: {reason}"
+                     gvisor_runner_rejects_unenforced_policies would still \
+                     pass because it never reads the reason. got: {reason}"
                 );
             }
             other => panic!(
                 "expected RunnerError::UnsupportedSandboxPolicy with the \
                  filesystem-arm reason for filesystem=host; a refactor \
                  that dropped the filesystem equality check inside \
-                 ensure_allowed (line 201-208) would silently let \
-                 oci_config canonicalize paths and write a host-fs OCI \
-                 bundle that bypasses the v0 read-only-package \
-                 invariant; got: {other:?}"
+                 GvisorRunner::ensure_allowed would silently let oci_config \
+                 canonicalize paths and write a host-fs OCI bundle that \
+                 bypasses the v0 read-only-package invariant; got: {other:?}"
             ),
         }
 
@@ -1532,8 +1530,8 @@ filesystem = "read-only-package"
                 "expected RunnerError::UnsupportedSandboxPolicy with the \
                  network-arm reason for network=outbound-https-only; a \
                  refactor that dropped the network equality check inside \
-                 ensure_allowed (line 209-215) would silently let \
-                 oci_config write an OCI bundle whose linux.namespaces \
+                 GvisorRunner::ensure_allowed would silently let oci_config \
+                 write an OCI bundle whose linux.namespaces \
                  still includes the network namespace but whose [resources] \
                  declared outbound HTTPS — gVisor would honor the \
                  namespace isolation but the v0 contract that 'gVisor runs \
@@ -1554,8 +1552,8 @@ filesystem = "read-only-package"
 
     #[test]
     fn redact_stderr_pins_multi_occurrence_no_match_passthrough_and_empty_path_skip() {
-        // GvisorRunner::redact_stderr (line 308-323) is the helper that
-        // scrubs host paths from a sandboxed agent's stderr before the
+        // GvisorRunner::redact_stderr is the helper that scrubs host
+        // paths from a sandboxed agent's stderr before the
         // daemon surfaces the error to operator dashboards or audit
         // rows. The existing gvisor_runner_redacts_host_paths_from_stderr
         // pin covers the happy path (two distinct paths, each appearing
@@ -1616,9 +1614,10 @@ filesystem = "read-only-package"
         let mixed = GvisorRunner::redact_stderr(mixed_stderr, &[&empty_path, &real_path]);
         assert_eq!(
             mixed, "failed <redacted-path> with kernel error",
-            "redact_stderr must skip empty paths (line 312) and only \
-             redact the real one; a refactor that dropped the empty-\
-             path guard would let str::replace(\"\", repl) insert \
+            "redact_stderr must skip empty paths via its \
+             `if !path.is_empty()` branch and only redact the real one; \
+             a refactor that dropped the empty-path guard would let \
+             str::replace(\"\", repl) insert \
              '<redacted-path>' between every character of stderr, \
              rendering the output as meaningless redacted-path noise \
              instead of the real error message",

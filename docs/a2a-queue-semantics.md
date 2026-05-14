@@ -20,7 +20,7 @@ The daemon appends a durable `task_leased` event before returning a task to a re
 This chooses inspectability over accidental duplicate work:
 
 - A crash before the receiver observes the response may leave a task in `in_flight`.
-- The task will not disappear silently; it remains visible through `covenant a2a status`, IPC `a2a_queue`, and HTTP `GET /a2a/queue`.
+- The task will not disappear silently; it remains visible through `covenant a2a status`, IPC `a2_a_queue`, and HTTP `GET /a2a/queue`.
 - Covenant does not auto-retry leased tasks. Requeue and lease-expiry policy must be explicit because autonomous agents may perform non-idempotent external work.
 
 Operators can narrow status views to stale leases with `--min-lease-age-ms`:

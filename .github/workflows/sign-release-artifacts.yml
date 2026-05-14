@@ -1,0 +1,149 @@
+name: sign-release-artifacts
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sign (must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  sign-release-subject:
+    name: sign release subject manifest
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${EVENT_TAG}" ]; then
+            echo "name=${EVENT_TAG}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${INPUT_TAG}" ]; then
+            echo "name=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no release tag available (neither inputs.tag nor github.event.release.tag_name was set)"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+          persist-credentials: false
+
+      - name: Resolve release commit
+        id: commit
+        run: |
+          set -euo pipefail
+          COMMIT=$(git rev-parse HEAD)
+          echo "sha=${COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Download published release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cd out
+          gh release download "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern '*.tar.gz' \
+            --pattern 'checksums.txt'
+          ls -la
+
+      - name: Generate release subject manifest
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+
+            const tag = process.env.TAG;
+            const commit = process.env.COMMIT;
+            const repository = process.env.REPOSITORY;
+            const dir = "out";
+
+            if (!tag) throw new Error("TAG env required");
+            if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("COMMIT must be 40 hex chars");
+            if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("REPOSITORY must be owner/repo");
+
+            const files = readdirSync(dir)
+              .filter((name) => name.endsWith(".tar.gz") || name === "checksums.txt")
+              .sort();
+
+            if (files.length === 0) throw new Error("no release artifacts downloaded");
+
+            const artifacts = files.map((filename) => {
+              const path = `${dir}/${filename}`;
+              const bytes = readFileSync(path);
+              const sha256 = createHash("sha256").update(bytes).digest("hex");
+              const sizeBytes = statSync(path).size;
+              const name = filename === "checksums.txt"
+                ? "checksums"
+                : filename.replace(/\.tar\.gz$/, "");
+              return { name, filename, sha256, sizeBytes };
+            });
+
+            const subject = {
+              schema: "covenant.provenance.release.v1",
+              generatedAt: new Date().toISOString(),
+              subject: {
+                kind: "release_bundle",
+                repository,
+                releaseId: tag,
+                tag,
+                commit,
+                artifacts,
+              },
+            };
+
+            writeFileSync("out/release-subject.json", JSON.stringify(subject, null, 2) + "\n");
+            console.log(`release-subject.json: ${artifacts.length} artifacts`);
+          '
+          cat out/release-subject.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign release subject (keyless OIDC)
+        working-directory: out
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature release-subject.json.sig \
+            --output-certificate release-subject.json.pem \
+            release-subject.json
+          ls -la release-subject.json release-subject.json.sig release-subject.json.pem
+
+      - name: Upload signed release subject to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            out/release-subject.json \
+            out/release-subject.json.sig \
+            out/release-subject.json.pem

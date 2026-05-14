@@ -99,7 +99,7 @@ POST /intents/resume
       <h3>Memory</h3>
       <pre>
         <code>{`GET /memory/recent?tier=working&limit=10
-GET /memory/search?q=agent+memory&tier=longterm&limit=5
+GET /memory/search?q=agent+memory&tier=longterm&limit=5&min_relevance=0.6
 POST /memory/purge
   Body: { "tier": "working", "before_ms": 1714938000000 }
 POST /memory/repair

@@ -144,9 +144,10 @@ curl -s '127.0.0.1:8421/memory/recent?tier=longterm&limit=50'`}</code>
         <code>{`covenant memory search "agent memory"
 covenant memory search "agent memory" --tier longterm --limit 5
 covenant memory search "agent memory" --tier working --limit 5 --json
+covenant memory search "agent memory" --min-relevance 0.6 --limit 5
 
 # Or via HTTP:
-curl -s '127.0.0.1:8421/memory/search?q=agent+memory&tier=longterm&limit=5'`}</code>
+curl -s '127.0.0.1:8421/memory/search?q=agent+memory&tier=longterm&limit=5&min_relevance=0.6'`}</code>
       </pre>
 
       <h2>Garbage collection</h2>

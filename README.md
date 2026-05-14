@@ -103,7 +103,7 @@ Covenant includes:
 - Budget ledger primitives with daemon-backed pause checkpoint storage for budget exhaustion, shutdown drains, and single-use resume handoff.
 - Local settlement receipts for resource accounting.
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
-- Unsigned or locally signed audit-root attestations for local integrity reports.
+- Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
 - Source-built local installer for the daemon and CLI with a relative-path install manifest.
 - CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.

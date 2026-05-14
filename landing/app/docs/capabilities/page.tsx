@@ -117,6 +117,7 @@ memory.*    { "version": 1, "tiers": ["working"], "record_id": null, "before_ms"
 a2a.*       { "version": 1, "peer_pubkey_b58": "...", "task_id": null, "lease_id": null, "duplicate_risk": "idempotent" }
 audit.*     { "version": 1, "window": 100, "before_ms": null, "include_integrity": true }
 peers.*     { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": null, "force": null, "before_ms": null }
+identity.*  { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": null, "force": null, "before_ms": null }
 chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null, "payer_pubkey_b58": null, "resource": null, "batch_id": null }`}</code>
       </pre>
 

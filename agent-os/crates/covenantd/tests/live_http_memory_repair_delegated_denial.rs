@@ -4,9 +4,7 @@
 //! a non-operator delegate without the named grant must hit the
 //! capability gate before any retention state mutates. The IPC path
 //! is already pinned by `live_memory_repair_compact_delegated_denial`;
-//! this test extends the same pin to the HTTP gateway, closing the
-//! "broaden protected HTTP mutation coverage" gap recorded in
-//! `agent-os/autonomy/live-coverage.json` for `http-gateway`.
+//! this test extends the same pin to the HTTP gateway mutation surface.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_http_memory_repair_delegated_denial -- --ignored live_`.

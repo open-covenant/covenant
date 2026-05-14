@@ -3,9 +3,8 @@
 //! places or force-errors a leased task, compact drops resolved
 //! task event rows. The daemon-side dispatch gates each on
 //! `a2a.repair.<action>` and `a2a.compact` respectively. The IPC
-//! variants are pinned by existing live tests; this test closes the
-//! third HTTP mutation row recorded in
-//! `agent-os/autonomy/live-coverage.json` for `http-gateway`.
+//! variants are pinned by existing live tests; this test extends the
+//! same pin to the HTTP gateway mutation surface.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_http_a2a_recovery_delegated_denial -- --ignored live_`.

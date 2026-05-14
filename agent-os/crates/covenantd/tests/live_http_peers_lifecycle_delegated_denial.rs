@@ -3,9 +3,7 @@
 //! operator delegate without the named grant must hit the capability
 //! gate before any registry mutation runs. The IPC variants are
 //! already pinned by `live_peers_list_purge_delegated_denial.rs`;
-//! this test extends the same pin to the HTTP gateway, closing one
-//! of the three protected-mutation rows recorded in
-//! `agent-os/autonomy/live-coverage.json` for `http-gateway`.
+//! this test extends the same pin to the HTTP gateway mutation surface.
 //!
 //! Hermetic — no external services. `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_http_peers_lifecycle_delegated_denial -- --ignored live_`.

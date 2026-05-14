@@ -602,7 +602,7 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn protocol_constants_pin_values_and_self_consistency() {
-        // covenant_ipc declares four public constants at line 67-70
+        // covenant_ipc declares four public constants
         // that define the negotiation handshake:
         //
         //   PROTOCOL_NAME = "covenant.ipc"
@@ -690,8 +690,8 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn max_frame_pins_eight_mibibyte_value_and_u32_type_bound() {
-        // covenant_ipc::MAX_FRAME (line 66) is the per-frame size cap
-        // the IPC read side enforces at lines 571 and 588 — frames
+        // covenant_ipc::MAX_FRAME is the per-frame size cap
+        // the IPC read side enforces — frames
         // larger than MAX_FRAME bytes are rejected with the
         // IpcError::FrameTooLarge variant. The constant is the DOS-
         // resistance floor for the daemon's IPC surface: an oversized
@@ -755,8 +755,8 @@ mod tests {
 
     #[test]
     fn default_recent_limit_and_default_verify_window_pin_documented_values() {
-        // covenant_ipc::default_recent_limit (line 364-366) and
-        // default_verify_window (line 368-370) are the foundation
+        // covenant_ipc::default_recent_limit and
+        // default_verify_window are the foundation
         // constants used by #[serde(default = "...")] across 13+ IPC
         // request fields: Memory recent limits, Audit recent limits,
         // Audit verify window, etc. They establish the silent default

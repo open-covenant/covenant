@@ -2,7 +2,7 @@
 
 The Covenant project signs project-identity artifacts using **sigstore keyless** via cosign. There is no long-lived project signing key. Each signature is produced by a GitHub Actions workflow on this repository using OpenID Connect; cosign exchanges the OIDC token for a short-lived certificate issued by the public-good Fulcio CA, signs the artifact, and pushes the signature record to the Rekor public transparency log.
 
-This contract is defined in [docs/internal/decisions/0006-project-signing-key-custody.md](../../internal/decisions/0006-project-signing-key-custody.md) (engineering-internal). The verification command line below is the public part.
+The full project decision record describing this contract is kept as engineering-internal documentation outside the public repository. The verification command line below is the public part.
 
 ## Identity Pins
 
@@ -53,6 +53,6 @@ For release tarballs the verification commands are also printed in each GitHub r
 
 ## Legacy Infrastructure
 
-This directory previously contained `keys.json` and `keys.template.json` describing a long-lived ed25519 project key under operator custody. That model required dedicated air-gapped hardware the project does not have and is not in use. The files have been removed. The internal validator `validate-project-keys.mjs` remains in the repository as dormant infrastructure so a future decision could re-enable long-lived keys without re-shipping the manifest schema.
+This directory previously contained `keys.json` and `keys.template.json` describing a long-lived ed25519 project key under operator custody. That model required dedicated air-gapped hardware the project does not have and is not in use. The files have been removed. The matching long-lived-key manifest schema is preserved in engineering-internal tooling so a future decision could re-enable that model without re-shipping the schema.
 
 Any signed artifact produced before sigstore keyless was adopted (none exist) would remain verifiable under its original contract.

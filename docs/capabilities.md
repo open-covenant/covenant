@@ -170,8 +170,9 @@ Rules:
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
-6. Fail closed for malformed versioned scopes after a migration window.
-7. Keep action-only checks as the fallback only for unscoped operator grants.
+7. Interpret stable peer-registry list/revoke/purge predicates and chain receipt-read, batch-read, and flush predicates at dispatch.
+8. Fail closed for malformed versioned scopes after a migration window.
+9. Keep action-only checks as the fallback only for unscoped operator grants.
 
 Until a namespace-specific predicate lands, public docs must describe that namespace's scope as validated signed metadata and compatibility preparation, not as enforced least-privilege behavior.
 

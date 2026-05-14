@@ -121,7 +121,7 @@ priority                = "normal"`}</code>
               entry script (for <code>python3</code> /{" "}
               <code>node</code>). Resolved relative to the manifest&apos;s
               parent directory unless absolute. Ignored when{" "}
-              <code>runtime = "hermes"</code>.
+              <code>runtime = &quot;hermes&quot;</code>.
             </td>
           </tr>
         </tbody>

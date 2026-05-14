@@ -39,7 +39,7 @@ export default function IdentityPage() {
       <p>
         The display half is set on first daemon start (default{" "}
         <code>user@local</code>, kept generic so logs and commits do
-        not leak the operator's hostname). The public key is derived
+        not leak the operator&apos;s hostname). The public key is derived
         from the seed and is the cryptographically meaningful identifier;
         display strings may collide, public keys cannot.
       </p>

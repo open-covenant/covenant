@@ -28,6 +28,7 @@ export default function A2APage() {
   sender:      AgentId,
   recipient:   AgentId,
   intent_text: "do the thing",
+  task_kind:   "release.notes" | null,
   parent:      uuid | null,
   deadline_ms: u64 | null,
   idempotency: {

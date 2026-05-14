@@ -88,9 +88,15 @@ Body: { "text": "summarise recent work on agent memory" }
 GET /memory/search?q=agent+memory&tier=longterm&limit=5
 POST /memory/purge
   Body: { "tier": "working", "before_ms": 1714938000000 }
+POST /memory/repair
+  Body: MemoryRepairRequest    # see /memory for command shape
+POST /memory/compact
+  Body: MemoryCompactionRequest
 
 → 200 { "kind": "memories", "records": [ ... ] }
-   or  { "kind": "memory_purged", "purged": 42 }`}</code>
+   or  { "kind": "memory_purged", "purged": 42 }
+   or  { "kind": "memory_repair_applied", ... }
+   or  { "kind": "memory_compacted", ... }`}</code>
       </pre>
 
       <h3>Receipts</h3>

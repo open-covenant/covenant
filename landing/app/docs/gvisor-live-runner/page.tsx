@@ -131,13 +131,13 @@ cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runne
         </li>
         <li>
           <a
-            href="https://github.com/open-covenant/covenant/blob/main/docs/gvisor-live-runner.md"
+            href="https://github.com/open-covenant/covenant/blob/main/docs/runtime-sandbox-security.md"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Repository guide
+            Runtime sandbox security
           </a>{" "}
-          — source-of-truth runner details.
+          — source-of-truth runner contract and CI workflow.
         </li>
       </ul>
     </>

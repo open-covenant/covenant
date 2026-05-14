@@ -66,8 +66,9 @@ export default function SettlementPage() {
           authority, mints, and rates.
         </li>
         <li>
-          <code>mint_credits(amount_covnt)</code> — exchange burned
-          tokens for credits at the configured rate.
+          <code>buy_credits(amount_covnt)</code> — transfer{" "}
+          <code>$COVNT</code> into the treasury in exchange for
+          credits at the configured rate.
         </li>
         <li>
           <code>consume_credits(amount)</code> — destroy credits at

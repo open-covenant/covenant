@@ -84,8 +84,8 @@ node agent-os/scripts/provenance.mjs audit-root verify \\
         manifests and <code>covenant.release-scope.v1</code> release-scope
         manifests, but they remain unsigned until the project signing workflow
         ships. Key custody is sigstore keyless via cosign; signing-workflow
-        wiring for audit-root, release-subject, and release-scope payloads,
-        and transparency-log publication, remain planned.
+        wiring for audit-root and release-scope payloads, and
+        transparency-log publication, remain planned.
       </p>
 
       <p>

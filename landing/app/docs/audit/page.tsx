@@ -14,7 +14,7 @@ export default function AuditPage() {
         ground truth — operators read it directly,{" "}
         <code>covenant verify</code> cross-checks it against the other
         state files, <code>covenant audit verify</code> checks the local
-        hash-chain sidecar, and the <code>covenant audit/recent</code>{" "}
+        hash-chain sidecar, and the <code>covenant audit recent</code>{" "}
         route reads from the same file.
       </p>
 

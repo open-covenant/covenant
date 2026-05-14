@@ -47,9 +47,10 @@ git diff --check`}</code>
 
       <h2>Human-owned decisions</h2>
       <p>
-        Release id, tag creation, artifact upload, project signing keys, key
-        rotation, and public announcement language remain human-owned until the
-        project has explicit automation policy and neutral project credentials.
+        Release id, tag creation, artifact upload, signing workflow access
+        (branch protection rules), and public announcement language remain
+        human-owned until the project has explicit automation policy and
+        neutral project credentials.
       </p>
 
       <h2>Related</h2>

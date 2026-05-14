@@ -68,10 +68,19 @@ None at v1. Future versions MAY add fields under a new schema string; verifiers 
 The digest binds to a deterministic concatenation of in-scope task records. Reproducibility requires every step below.
 
 1. **Selection.** Take every task record whose transition log contains an `integrated` event with timestamp strictly greater than the `previousTag`'s tag-commit timestamp and less than or equal to the release commit timestamp. (For the first release, the lower bound is the project's first commit timestamp.) Blocked or unresolved tasks are NOT in scope; only integrated tasks contribute to the digest.
-2. **Sort.** Order the selected records by `id` lexicographically (Unicode codepoint order, NFC-normalized).
-3. **Canonical JSON.** For each record, produce a canonical JSON serialization: keys sorted lexicographically at every level, no whitespace, no trailing newline, UTF-8 encoding. The canonical form of `null`, `true`, `false`, numbers, and strings follows JSON.stringify with stable key ordering.
-4. **Concatenate.** Concatenate the canonical JSON strings with a single `\n` (0x0A) separator. No trailing separator.
-5. **Hash.** SHA-256 over the UTF-8 bytes. Lowercase 64-hex.
+2. **Sort.** Apply Unicode NFC normalization to each record's `id`, then order the records by NFC-normalized `id` using Unicode codepoint comparison (not locale-dependent collation). The same comparator applies wherever this document says "sort" or "lexicographic".
+3. **Canonical JSON.** For each record, produce a canonical JSON serialization with the following rules:
+    - **Encoding.** UTF-8 with no byte-order mark, no whitespace between tokens, no trailing newline. The byte sequence MUST be exactly the bytes that contribute to the digest.
+    - **Object keys.** Sorted with the same Unicode codepoint comparator as step 2 (NFC-normalized keys, then codepoint comparison) at every nesting level.
+    - **`null`, `true`, `false`.** The literal tokens `null`, `true`, `false`.
+    - **Integers.** Decimal digits with no decimal point, no leading zeros (except the single digit `0`), and a leading `-` for negatives (never `+`).
+    - **Non-integer numbers.** Use the shortest decimal representation that round-trips through IEEE 754 double precision. No trailing zeros after the decimal point. Use exponential form `1e21` (lowercase `e`, no `+`) only when the magnitude is >= 1e21 or < 1e-6, matching ECMA-262 `Number.prototype.toString`. `NaN` and `Infinity` are not valid JSON values and MUST cause the canonicalizer to error.
+    - **Strings.** Standard JSON escaping: `\"`, `\\`, `\/` only when necessary, `\b`, `\f`, `\n`, `\r`, `\t` for the named controls, and `\uXXXX` (lowercase hex) for any other U+0000–U+001F codepoint. All other characters MUST appear as their literal UTF-8 bytes (no `\uXXXX` escaping for non-ASCII codepoints). High surrogates (U+D800–U+DBFF) MUST be paired with their following low surrogate; unpaired surrogates MUST cause the canonicalizer to error.
+    - **Empty containers.** Encode an empty object as `{}` and an empty array as `[]` with no internal whitespace.
+    - **Arrays.** Preserve the input element order. Separator between elements is a single comma `,` with no whitespace.
+    - **Objects.** After key sorting, each key-value pair appears as `<canonical-string>:<canonical-value>` with no whitespace; pairs are separated by a single comma `,` with no whitespace.
+4. **Concatenate.** Concatenate the canonical JSON strings with a single `\n` (0x0A) separator. No trailing separator after the last record.
+5. **Hash.** SHA-256 over the UTF-8 bytes of the concatenation. Express the digest as 64 lowercase hexadecimal characters.
 
 Two operators given the same task corpus and the same `previousTag` MUST produce the same `task_set_sha256`. Any deviation indicates a missing task, a corrupted record, or a canonicalization drift.
 

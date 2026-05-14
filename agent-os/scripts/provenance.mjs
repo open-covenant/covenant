@@ -43,7 +43,7 @@ const forbiddenPatterns = [
 function usage() {
   console.error(`usage:
   node agent-os/scripts/provenance.mjs write --task <id> --out <path> [--commit <sha>] [--validation "command=passed"]
-  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--release-subject <path>] [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"] [--signing-key <pem> --key-id <id>]
+  node agent-os/scripts/provenance.mjs audit-root write --report <path> --out <path> (--task <id> | --release <id>) [--release-subject <path>] [--release-scope <path>] [--commit <sha>] [--previous-root <hex>] [--validation "command=passed"] [--signing-key <pem> --key-id <id>]
   node agent-os/scripts/provenance.mjs audit-root verify --file <path>
   node agent-os/scripts/provenance.mjs verify --file <path>
   node agent-os/scripts/provenance.mjs verify-all [--dir <path>]`);
@@ -404,12 +404,80 @@ function readReleaseSubject(path) {
   );
 }
 
-function auditRootTarget(commit, taskId, releaseId, releaseSubjectPath, repository) {
+function validateReleaseScope(value, context) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context}: release scope must be an object`);
+  }
+  if (value.schema !== "covenant.release-scope.v1") {
+    throw new Error(`${context}: unsupported release scope schema`);
+  }
+  assertIsoTimestamp(value.generatedAt, `${context}: generatedAt`);
+  const release = value.release;
+  if (!release || typeof release !== "object" || Array.isArray(release)) {
+    throw new Error(`${context}: release must be an object`);
+  }
+  assertRepository(release.repository);
+  assertReleaseId(release.releaseId);
+  if (typeof release.tag !== "string" || release.tag.trim() === "") {
+    throw new Error(`${context}: release.tag must be a non-empty string`);
+  }
+  const commit = fullCommit(release.commit);
+  if (commit !== release.commit) {
+    throw new Error(`${context}: release.commit is not canonical`);
+  }
+  if (release.previousTag !== null
+    && (typeof release.previousTag !== "string" || release.previousTag.trim() === "")) {
+    throw new Error(`${context}: release.previousTag must be null or a non-empty string`);
+  }
+  const scope = value.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    throw new Error(`${context}: scope must be an object`);
+  }
+  if (!Number.isSafeInteger(scope.task_count) || scope.task_count < 0) {
+    throw new Error(`${context}: scope.task_count must be a non-negative integer`);
+  }
+  assertHex64(scope.task_set_sha256, `${context}: scope.task_set_sha256`);
+  const distribution = scope.task_state_distribution;
+  if (!distribution || typeof distribution !== "object" || Array.isArray(distribution)) {
+    throw new Error(`${context}: scope.task_state_distribution must be an object`);
+  }
+  let sum = 0;
+  for (const [, count] of Object.entries(distribution)) {
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`${context}: scope.task_state_distribution counts must be non-negative integers`);
+    }
+    sum += count;
+  }
+  if (sum !== scope.task_count) {
+    throw new Error(`${context}: scope.task_count does not equal task_state_distribution sum`);
+  }
+  if (!Array.isArray(value.non_claims) || value.non_claims.length === 0) {
+    throw new Error(`${context}: non_claims must be a non-empty array`);
+  }
+  for (const entry of value.non_claims) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new Error(`${context}: non_claims entries must be non-empty strings`);
+    }
+  }
+  return value;
+}
+
+function readReleaseScope(path) {
+  return validateReleaseScope(
+    JSON.parse(readFileSync(resolve(repoRoot, path), "utf8")),
+    "--release-scope",
+  );
+}
+
+function auditRootTarget(commit, taskId, releaseId, releaseSubjectPath, releaseScopePath, repository) {
   if ((taskId && releaseId) || (!taskId && !releaseId)) {
     throw new Error("audit-root attestation requires exactly one of --task or --release");
   }
   if (releaseSubjectPath && !releaseId) {
     throw new Error("--release-subject requires --release");
+  }
+  if (releaseScopePath && !releaseId) {
+    throw new Error("--release-scope requires --release");
   }
   if (taskId) {
     const task = taskSnapshot(commit, taskId);
@@ -423,30 +491,47 @@ function auditRootTarget(commit, taskId, releaseId, releaseSubjectPath, reposito
       snapshotSha256: sha256(stableJson(task)),
     };
   }
-  return releaseRootTarget(commit, releaseId, releaseSubjectPath, repository);
+  return releaseRootTarget(commit, releaseId, releaseSubjectPath, releaseScopePath, repository);
 }
 
-function releaseRootTarget(commit, releaseId, releaseSubjectPath, repository) {
+function releaseRootTarget(commit, releaseId, releaseSubjectPath, releaseScopePath, repository) {
   assertReleaseId(releaseId);
-  const target = {
+  let target = {
     kind: "release",
     id: releaseId,
   };
-  if (!releaseSubjectPath) return target;
-  const releaseSubject = readReleaseSubject(releaseSubjectPath);
-  const subject = releaseSubject.subject;
-  if (
-    subject.releaseId !== releaseId ||
-    subject.repository !== repository ||
-    subject.commit !== commit
-  ) {
-    throw new Error("--release-subject metadata does not match --release, --repository, and --commit");
+  if (releaseSubjectPath) {
+    const releaseSubject = readReleaseSubject(releaseSubjectPath);
+    const subject = releaseSubject.subject;
+    if (
+      subject.releaseId !== releaseId ||
+      subject.repository !== repository ||
+      subject.commit !== commit
+    ) {
+      throw new Error("--release-subject metadata does not match --release, --repository, and --commit");
+    }
+    target = {
+      ...target,
+      releaseSubject,
+      releaseSubjectSha256: sha256(stableJson(releaseSubject)),
+    };
   }
-  return {
-    ...target,
-    releaseSubject,
-    releaseSubjectSha256: sha256(stableJson(releaseSubject)),
-  };
+  if (releaseScopePath) {
+    const releaseScope = readReleaseScope(releaseScopePath);
+    if (
+      releaseScope.release.releaseId !== releaseId ||
+      releaseScope.release.repository !== repository ||
+      releaseScope.release.commit !== commit
+    ) {
+      throw new Error("--release-scope metadata does not match --release, --repository, and --commit");
+    }
+    target = {
+      ...target,
+      releaseScope,
+      releaseScopeSha256: sha256(stableJson(releaseScope)),
+    };
+  }
+  return target;
 }
 
 function auditReportFromPayload(auditRoot) {
@@ -478,6 +563,26 @@ function assertReleaseSubjectBinding(target, commit, repository, attestationPath
   }
   if (target.releaseSubjectSha256 !== sha256(stableJson(subjectEnvelope))) {
     throw new Error(`${attestationPath}: release subject digest mismatch`);
+  }
+}
+
+function assertReleaseScopeBinding(target, commit, repository, attestationPath) {
+  if (target.releaseScope === undefined) {
+    return;
+  }
+  const scope = validateReleaseScope(
+    target.releaseScope,
+    `${attestationPath}: target.releaseScope`,
+  );
+  if (
+    scope.release.releaseId !== target.id ||
+    scope.release.repository !== repository ||
+    scope.release.commit !== commit
+  ) {
+    throw new Error(`${attestationPath}: release scope metadata mismatch`);
+  }
+  if (target.releaseScopeSha256 !== sha256(stableJson(scope))) {
+    throw new Error(`${attestationPath}: release scope digest mismatch`);
   }
 }
 
@@ -578,6 +683,7 @@ function auditRootAttest(options) {
       options.taskId,
       options.releaseId,
       options.releaseSubject,
+      options.releaseScope,
       repository,
     ),
     auditRoot: {
@@ -603,6 +709,7 @@ function auditRootAttest(options) {
       "The subject commit is resolved from the local Git object database.",
       "Task targets are bound to the task snapshot stored in the subject commit.",
       "Release targets may bind an explicit release subject digest before project key custody exists.",
+      "Release targets may bind an explicit release scope digest covering the in-scope autonomy task set.",
     ],
     limits: [
       "This audit-root attestation is not a signature.",
@@ -724,6 +831,7 @@ function verifyAuditRoot(attestationPath) {
     }
   } else if (attestation.target?.kind === "release") {
     assertReleaseSubjectBinding(attestation.target, commit, attestation.repository, attestationPath);
+    assertReleaseScopeBinding(attestation.target, commit, attestation.repository, attestationPath);
   } else {
     throw new Error(`${attestationPath}: unsupported target kind`);
   }
@@ -797,6 +905,7 @@ try {
         taskId: one(flags, "task"),
         releaseId: one(flags, "release"),
         releaseSubject: one(flags, "release-subject"),
+        releaseScope: one(flags, "release-scope"),
         repository: one(flags, "repository", defaultRepository),
         previousRoot: one(flags, "previous-root"),
         validationValues: many(flags, "validation"),

@@ -23,51 +23,34 @@ export default function AutonomyPage() {
       </p>
 
       <h2>Control surface</h2>
-      <ul>
-        <li>
-          <code>agent-os/autonomy/workflow.json</code> — states, roles, gates,
-          transitions, and definition of done.
-        </li>
-        <li>
-          <code>agent-os/autonomy/tasks/*.json</code> — scoped work records.
-        </li>
-        <li>
-          <code>agent-os/autonomy/events.jsonl</code> — append-only transition
-          history.
-        </li>
-        <li>
-          <code>agent-os/autonomy/backlog.json</code> — durable seed queue used
-          when no active task is ready.
-        </li>
-      </ul>
-
-      <h2>Commands</h2>
-      <code>{`node agent-os/scripts/autonomy-next.mjs
-node agent-os/scripts/autonomy-continue.mjs
-node agent-os/scripts/autonomy-seed-next.mjs --dry-run
-node agent-os/scripts/autonomy-transition.mjs <task-id> <state> --actor <role> --note "<why>"
-node agent-os/scripts/autonomy-summary.mjs --since 2026-05-09
-node agent-os/scripts/autonomy-summary.mjs --format json
-node agent-os/scripts/validate-autonomy.mjs`}</code>
+      <p>
+        The workflow is driven by a machine-readable lifecycle definition,
+        scoped task records with explicit gates and verification, an
+        append-only transition log, and a durable seed queue that refills
+        when no active task is ready. The concrete files and runner
+        scripts live in engineering-loop tooling rather than the public
+        scripts directory; the recursive engineering model in{" "}
+        <a
+          href="https://github.com/open-covenant/covenant/blob/main/BUILT.md"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          BUILT.md
+        </a>{" "}
+        describes the contract that those tools implement.
+      </p>
 
       <h2>Summary contract</h2>
       <p>
-        <code>autonomy-summary.mjs</code> emits Markdown for human handoffs and
-        JSON for monitors. It reports scoped task counts, state counts, active
-        work, blocked work, recently integrated tasks, and recent transition
-        events directly from tracked repository state.
+        Sprint and handoff summaries are derived from tracked task state and
+        the transition log. They report scoped task counts, state counts,
+        active work, blocked work, recently integrated tasks, and recent
+        transition events — deterministic outputs that a fresh session can
+        consume without private context.
       </p>
 
       <h2>Validation</h2>
       <ul>
-        <li>
-          Task records and transition logs are checked by{" "}
-          <code>validate-autonomy.mjs</code>.
-        </li>
-        <li>
-          Git authors and committers are checked by{" "}
-          <code>validate-git-identity.mjs</code>.
-        </li>
         <li>
           Commit evidence is checked by <code>provenance.mjs verify-all</code>.
         </li>

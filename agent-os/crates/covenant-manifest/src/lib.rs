@@ -370,7 +370,7 @@ entry = "./tiny"
                 entry.ends_with('.'),
                 "RESERVED_NAMESPACES entry {entry:?} must end with '.' — \
                  the trailing dot is load-bearing for the starts_with() \
-                 prefix match at line 263; a refactor that emitted \
+                 prefix match; a refactor that emitted \
                  'tool' (no dot) would silently let 'toolkit.scope_creep' \
                  or 'agentic.bypass' slip through validation, widening \
                  the operator-facing capability surface beyond the \
@@ -928,7 +928,7 @@ tools_allowed = ["terminal"]
             HermesApprovalPolicy::OperatorPrompt,
             "missing approval_policy must default to OperatorPrompt \
              — pins the #[default] attribute on the OperatorPrompt \
-             variant at line 176. A refactor that removed #[default] \
+             variant. A refactor that removed #[default] \
              or moved it to AutoDeny would silently flip the \
              operator-prompt default and break the documented \
              contract that an unset approval_policy blocks until an \

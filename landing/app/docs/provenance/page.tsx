@@ -42,7 +42,11 @@ node agent-os/scripts/provenance.mjs verify --file docs/provenance/attestations/
         from <code>covenant audit verify</code> output. The verifier checks
         that the report is valid, event and anchor counts match, the root hash
         is canonical hex, the subject commit is canonical, and task targets
-        match the task snapshot stored in the subject commit.
+        match the task snapshot stored in the subject commit. Release targets
+        additionally bind an embedded release-subject manifest
+        (<code>releaseSubjectSha256</code>) and an embedded release-scope
+        manifest (<code>releaseScopeSha256</code>); the verifier re-validates
+        each embedded payload and rejects metadata or digest drift.
       </p>
 
       <code>{`covenant audit verify > audit-report.json
@@ -57,12 +61,31 @@ node agent-os/scripts/provenance.mjs audit-root write \\
 node agent-os/scripts/provenance.mjs audit-root verify \\
   --file docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
 
+      <p>
+        At release time the same generator binds a release tag, the release-subject
+        manifest, and the release-scope manifest so one signature over the audit-root
+        covers the audit log, the release artifact set, and the in-scope task set:
+      </p>
+
+      <code>{`node agent-os/scripts/provenance.mjs audit-root write \\
+  --report audit-report.json \\
+  --release <tag> \\
+  --release-subject release-subject.json \\
+  --release-scope release-scopes/<tag>.json \\
+  --commit <commit> \\
+  --out docs/provenance/audit-roots/<commit>-audit-root.json`}</code>
+
       <h2>Status</h2>
       <p>
         Provenance envelopes are experimental. They are consistency evidence,
         not release signatures and not transparency-log entries. Audit-root
-        attestations are generated and verified, but they remain unsigned until
-        a project signing identity is selected. Key custody and transparency-log publication remain planned work. Release artifact subject schema is defined, but not implemented or published yet.
+        attestations are generated and verified, including the release-target
+        bindings to <code>covenant.provenance.release.v1</code> release-subject
+        manifests and <code>covenant.release-scope.v1</code> release-scope
+        manifests, but they remain unsigned until the project signing workflow
+        ships. Key custody is sigstore keyless via cosign; signing-workflow
+        wiring for audit-root, release-subject, and release-scope payloads,
+        and transparency-log publication, remain planned.
       </p>
 
       <p>

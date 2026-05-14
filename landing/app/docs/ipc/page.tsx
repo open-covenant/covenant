@@ -61,9 +61,10 @@ export default function IpcPage() {
   "limit": 10 }
 
 { "kind": "search_memory",
-  "query": "…",
-  "tier":  "working" | "episodic" | "longterm" | null,
-  "limit": 10 }
+  "query":         "…",
+  "tier":          "working" | "episodic" | "longterm" | null,
+  "limit":         10,
+  "min_relevance": null | 0.6 }
 
 { "kind": "purge_memory",
   "tier": "working" | "episodic" | "longterm" | null,

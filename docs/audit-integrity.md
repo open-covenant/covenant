@@ -83,13 +83,13 @@ This is local tamper evidence, not public non-repudiation.
 
 The chain detects edits to retained audit rows, missing sidecar entries, and sidecar mismatch after events have been anchored locally. It does not stop a host-level attacker from deleting both the audit log and the sidecar, replacing both files together, or rolling the machine back to an older filesystem snapshot.
 
-The current implementation can generate and verify `audit-root-attestation.v1` payloads from `covenant audit verify` output. It supports unsigned payloads and detached ed25519 signatures with embedded public-key material. It does not publish roots to a transparency log, define release key custody, anchor roots on-chain, or define immutable retention storage. Those are future hardening steps and should not be claimed as shipped behavior.
+The current implementation can generate and verify `audit-root-attestation.v1` payloads from `covenant audit verify` output as unsigned envelopes. Public release-grade signing has not shipped yet; the path is sigstore keyless via cosign, defined alongside the other project-identity signing in [docs/provenance/keys/](./provenance/keys/). Until the signing workflow lands, audit-root attestations stay unsigned and are treated as local integrity evidence only.
 
 ## Public Root Signing Direction
 
-The accepted planning direction is to publish detached `audit-root-attestation.v1` payloads for release candidates, sign them with a project-controlled identity, and later submit the same payloads to a transparency log. Project signing key custody, publication, rotation, authorized signer, and release-evidence policy are defined in [docs/provenance/keys/](./provenance/keys/).
+Release-candidate `audit-root-attestation.v1` payloads will be signed by a GitHub Actions workflow using cosign with sigstore keyless (Fulcio short-lived certs + Rekor transparency log), the same identity model the release tarballs already use. The OIDC issuer pin is `https://token.actions.githubusercontent.com` and the certificate identity must match `^https://github.com/open-covenant/covenant/`.
 
-The generator and verifier now exist in `agent-os/scripts/provenance.mjs`:
+The generator and unsigned-verifier exist today in `agent-os/scripts/provenance.mjs`:
 
 ```bash
 covenant audit verify > audit-report.json
@@ -103,6 +103,17 @@ node agent-os/scripts/provenance.mjs audit-root verify \
   --file docs/provenance/audit-roots/<commit>-audit-root.json
 ```
 
-Signed payloads are local cryptographic integrity evidence for the embedded key. Public non-repudiation still depends on a reviewed project key custody and publication process.
+Once the signing workflow ships, a signed audit-root attestation will be a triple — `<file>.json`, `<file>.json.sig`, `<file>.json.pem` — and a verifier will run:
+
+```bash
+cosign verify-blob \
+  --certificate <file>.json.pem \
+  --signature   <file>.json.sig \
+  --certificate-identity-regexp '^https://github.com/open-covenant/covenant/' \
+  --certificate-oidc-issuer     'https://token.actions.githubusercontent.com' \
+  <file>.json
+```
+
+Public non-repudiation depends on the Rekor log entry; verifiers can re-check the entry exists for additional confidence.
 
 Release-target audit roots can also bind an embedded `covenant.provenance.release.v1` release subject digest. The verifier checks repository, release id, commit, artifact metadata, validation evidence, and the embedded `releaseSubjectSha256`; the human custody steps for accepting a release-target root are kept in the project's release operator handbook.

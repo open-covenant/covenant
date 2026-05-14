@@ -1,85 +1,57 @@
-# Project Signing Keys
+# Project Signing
 
-This directory is the canonical publication location for project-controlled signing keys. Custody, rotation, and authorized-signer policy are tracked internally.
+The Covenant project signs project-identity artifacts using **sigstore keyless** via cosign. There is no long-lived project signing key. Each signature is produced by a GitHub Actions workflow on this repository using OpenID Connect; cosign exchanges the OIDC token for a short-lived certificate issued by the public-good Fulcio CA, signs the artifact, and pushes the signature record to the Rekor public transparency log.
 
-The repository is the source of truth: any verifier with the repository can read the trusted public key from here and verify signatures against the same envelope schemas the project produces.
+This contract is defined in [docs/internal/decisions/0006-project-signing-key-custody.md](../../internal/decisions/0006-project-signing-key-custody.md) (engineering-internal). The verification command line below is the public part.
 
-## Layout
+## Identity Pins
 
-- `keys.json` — manifest of every key the project has published. Schema `covenant.project-keys.v1`. Tracked in git.
-- `<key_id>.spki.base64` — DER SubjectPublicKeyInfo of one published key, base64-encoded, one per file. Tracked in git.
+Verifiers must accept signatures only when both pins match:
 
-`keys.json` is the index. Each entry binds a `key_id` to the SPKI file, fingerprint, validity window, status, and authorized signer.
+| Pin | Required value |
+|---|---|
+| OIDC issuer | `https://token.actions.githubusercontent.com` |
+| Certificate identity (subject regex) | `^https://github.com/open-covenant/covenant/` |
 
-## Manifest Schema
+The first pin restricts to GitHub Actions OIDC. The second pin restricts to workflows running on this project's repository. A signature that fails either pin is not a project signature.
 
-```json
-{
-  "schema": "covenant.project-keys.v1",
-  "keys": [
-    {
-      "key_id": "project-review-key-2026-01",
-      "algorithm": "ed25519",
-      "spki_file": "project-review-key-2026-01.spki.base64",
-      "spki_sha256": "<hex sha256 of the DER SPKI bytes>",
-      "not_before": "2026-01-01T00:00:00.000Z",
-      "not_after": "2027-01-01T00:00:00.000Z",
-      "status": "active",
-      "authorized_signer": "open-covenant-release-operator",
-      "purposes": ["autonomy-review-signature", "audit-root-attestation", "release-subject"]
-    }
-  ]
-}
-```
+## What Gets Signed
 
-Fields:
+| Artifact kind | Signed by | Workflow |
+|---|---|---|
+| Release tarballs and combined checksum file | Every release tag push | [.github/workflows/release.yml](../../../.github/workflows/release.yml) |
+| `covenant.provenance.release.v1` release subject manifests | Release tag push (follow-up workflow) | _planned_ |
+| `covenant.audit-root-attestation.v1` audit-root attestations | Release tag push (follow-up workflow) | _planned_ |
+| `covenant.autonomy-review-signature.v1` review artifacts for release-scope tasks | Release tag push (follow-up workflow) | _planned_ |
 
-- `key_id`: stable identifier for the key. Never re-use after rotation or revocation.
-- `algorithm`: must be `ed25519` for now.
-- `spki_file`: filename of the DER SPKI base64 file in this directory.
-- `spki_sha256`: hex SHA-256 of the DER SPKI bytes, used to bind signatures to keys.
-- `not_before`: ISO timestamp when the key becomes valid for signing.
-- `not_after`: ISO timestamp after which the key must not produce new signatures.
-- `status`: one of `active`, `retired`, `revoked`.
-- `revoked_at`: ISO timestamp when the key was revoked. Required when `status` is `revoked`. Must be absent otherwise.
-- `revoked_reason`: short rationale string. Required when `status` is `revoked`. Must be absent otherwise.
-- `authorized_signer`: role string. Currently always `open-covenant-release-operator`.
-- `purposes`: list of envelope kinds the key may sign. Subset of `autonomy-review-signature`, `audit-root-attestation`, `release-subject`.
+Routine autonomy review artifacts produced outside a named release scope stay unsigned. Their durable evidence is the `covenant.autonomy-review-artifact.v1` envelope plus the transition event chain — no signature.
 
-## Computing `spki_sha256`
+## Verification
 
-`spki_sha256` is the lowercase hex SHA-256 of the **decoded DER bytes** of the SPKI file, not of the base64 text. To reproduce it from a published file:
+Each signed artifact ships as a triple: the payload, a detached signature, and the Fulcio certificate that signed it.
 
 ```bash
-openssl enc -d -base64 -A -in <key_id>.spki.base64 | openssl dgst -sha256
+cosign verify-blob \
+  --certificate <artifact>.pem \
+  --signature   <artifact>.sig \
+  --certificate-identity-regexp '^https://github.com/open-covenant/covenant/' \
+  --certificate-oidc-issuer     'https://token.actions.githubusercontent.com' \
+  <artifact>
 ```
 
-On systems without OpenSSL, the same result comes from a portable decode-then-hash pipeline:
+This validates the signature against the public key embedded in the certificate, confirms the certificate was issued by Fulcio during a validity window that includes the Rekor log entry's `integratedTime`, and binds the signature to the OIDC identity that produced it.
 
-```bash
-base64 -d <key_id>.spki.base64 | sha256sum   # GNU coreutils
-base64 -d <key_id>.spki.base64 | shasum -a 256   # BSD / macOS
-```
+For release tarballs the verification commands are also printed in each GitHub release body.
 
-The 64-character lowercase hex output is the value recorded in `spki_sha256` for that entry. An empty `keys` array is the valid pre-publication state, in which case no fingerprint exists yet.
+## Why Sigstore Keyless
 
-## Operational Steps
+- No private key for the project to custody. Operator compromise of a workstation does not compromise the signing identity.
+- Identities are short-lived (Fulcio certificates expire within minutes of issue), so there is no long-lived-key compromise window.
+- The Rekor transparency log provides public, append-only evidence that a signature was created during a specific time window. Verifiers can re-check the log entry exists.
+- Authorization to sign is "who can push tags / dispatch workflows", enforced by GitHub branch protection. Rotation is changing the branch protection rule.
 
-The release-operator role generates and publishes keys. Automation does not generate, sign with, or rotate the project key. The operator:
+## Legacy Infrastructure
 
-1. Generates ed25519 key material on a trusted offline machine.
-2. Computes the DER SPKI bytes and base64-encodes them into `<key_id>.spki.base64`.
-3. Computes the SHA-256 of the DER SPKI bytes.
-4. Adds an `active` entry to `keys.json` with the parameters above.
-5. Commits the SPKI file and the manifest update with a single tracked commit.
-6. Announces rotation 30 days before the prior key's `not_after`. The new key is published as a second `active` entry; the prior key's status is changed to `retired` after the prior key's `not_after`.
+This directory previously contained `keys.json` and `keys.template.json` describing a long-lived ed25519 project key under operator custody. That model required dedicated air-gapped hardware the project does not have and is not in use. The files have been removed. The internal validator `validate-project-keys.mjs` remains in the repository as dormant infrastructure so a future decision could re-enable long-lived keys without re-shipping the manifest schema.
 
-Compromise response:
-
-1. Mark the affected entry `revoked` with `revoked_at` and `revoked_reason`.
-2. Publish the change in a tracked commit on the same day as the determination.
-3. Generate and publish a replacement key with a new `key_id`.
-
-## Validation
-
-The `keys.json` manifest is validated by internal tooling that confirms schema correctness, that each `active` entry has a matching SPKI file whose SHA-256 equals `spki_sha256`, that retired/revoked entries have well-formed status fields, that no `key_id` is re-used, and that no entry mixes status fields it should not have. The validator does not generate keys, fetch external resources, or modify the manifest.
+Any signed artifact produced before sigstore keyless was adopted (none exist) would remain verifiable under its original contract.

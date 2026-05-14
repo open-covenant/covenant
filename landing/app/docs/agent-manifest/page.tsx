@@ -28,7 +28,7 @@ id      = "research@local"
 name    = "research"
 version = "0.1.0"
 runtime = "rust-bin"
-entry   = "target/release/research"
+entry   = "research"
 
 [capabilities]
 required = ["tool.web_search"]

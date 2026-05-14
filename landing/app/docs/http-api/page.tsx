@@ -328,7 +328,10 @@ POST /a2a/compact
       <pre>
         <code>{`GET /peers/list?limit=20&prefix=A1B2&status=live
 → 200 {
-    "kind": "peer_list",
+    "kind":                 "peer_list",
+    "limit":                20,
+    "filter_pubkey_prefix": "A1B2",
+    "matched_count":        1,
     "peers": [
       {
         "agent_id":      { ... },
@@ -337,8 +340,8 @@ POST /a2a/compact
         "revoked_at":    null
       }
     ],
-    "operator_pubkey_b58": "…",
-    "truncated":          false
+    "operator_pubkey_b58":  "…",
+    "truncated":            false
   }
 
 POST /peers/purge

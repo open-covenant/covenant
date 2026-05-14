@@ -1346,8 +1346,8 @@ mod tests {
     #[tokio::test]
     async fn sqlite_search_similar_pins_strict_positive_filter_and_inclusive_floor_equal_boundary()
     {
-        // SqliteStore::search_similar (line 695-736) applies the same
-        // paired predicate as InMemoryStore on line 727:
+        // SqliteStore::search_similar applies the same paired
+        // predicate as InMemoryStore::search_similar:
         //
         //     if s > 0.0 && s >= floor {
         //

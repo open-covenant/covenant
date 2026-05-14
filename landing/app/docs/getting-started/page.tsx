@@ -172,23 +172,32 @@ model    = "nomic-embed-text"
       <h2>Register an agent</h2>
 
       <p>
-        Place an agent manifest under{" "}
-        <code>$COVENANT_HOME/agents/</code>. The repository includes a{" "}
-        <code>research</code> agent at <code>agents/research</code>. Build
-        the agent and create a manifest pointing at the resulting binary:
+        Each agent is a package directory under{" "}
+        <code>$COVENANT_HOME/agents/</code> containing an{" "}
+        <code>agent.toml</code> manifest. The router walks the{" "}
+        <code>agents/</code> directory, picks up each subdirectory&apos;s{" "}
+        <code>agent.toml</code>, and resolves <code>entry</code>{" "}
+        against the package directory. Flat manifest files at the top
+        of <code>agents/</code> are silently skipped. The repository
+        ships a <code>research</code> agent at{" "}
+        <code>agent-os/agents/research</code>; build it and stage the
+        binary alongside an <code>agent.toml</code> so the relative
+        entry path resolves:
       </p>
 
       <pre>
         <code>{`cargo build -p research-agent --release
 
-mkdir -p ~/.covenant/agents
-cat > ~/.covenant/agents/research.toml <<'EOF'
+mkdir -p ~/.covenant/agents/research
+cp agent-os/target/release/research ~/.covenant/agents/research/
+
+cat > ~/.covenant/agents/research/agent.toml <<'EOF'
 [agent]
 id      = "research@local"
 name    = "research"
 version = "0.1.0"
 runtime = "rust-bin"
-entry   = "target/release/research"
+entry   = "research"
 
 [capabilities]
 required = ["tool.web_search"]

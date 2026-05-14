@@ -32,6 +32,23 @@ export default function CliPage() {
         (--before-ms M
          | --older-than-ms D) [--json]
                                      Delete records older than the threshold.
+  memory compact --reason TEXT [--apply]
+        [--detach-stale-parents]
+        [tier deletion flags] [--json] Apply bounded multi-tier compaction.
+  memory plan-compaction --reason TEXT
+        [--detach-stale-parents]
+        [tier deletion flags] [--json] Preview the compaction plan without mutating.
+  memory plan-receipt-backfill
+        [-n N] [--json]                Read-only plan for legacy uncorrelated receipts.
+  memory repair detach-parent <id>
+        --reason TEXT
+        [--expected-parent UUID] [--apply]
+                                     Clear a stale parent reference.
+  memory repair delete <id>
+        --reason TEXT [--apply]      Delete a confirmed invalid record.
+  memory repair backfill-provenance <id>
+        --reason TEXT --provenance JSON [--apply]
+                                     Write provenance evidence under metadata.
 
   capabilities recent [-n N] [--json]
                                      List recent capability tokens.

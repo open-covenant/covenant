@@ -33,8 +33,7 @@ export default function LiveCoveragePage() {
       </p>
 
       <h2>Commands</h2>
-      <code>{`node agent-os/scripts/validate-live-coverage.mjs
-node agent-os/scripts/model-availability.mjs
+      <code>{`node agent-os/scripts/model-availability.mjs
 bash agent-os/scripts/test-stats.sh
 cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_

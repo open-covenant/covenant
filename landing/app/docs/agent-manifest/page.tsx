@@ -8,12 +8,17 @@ export default function AgentManifestPage() {
     <>
       <h1>Agent manifest</h1>
       <p>
-        Each Covenant agent is registered through an{" "}
-        <code>agent.toml</code> file placed under{" "}
-        <code>$COVENANT_HOME/agents/</code>. The manifest declares the
-        agent&apos;s identity, runtime, executable path, required
-        capabilities, resource budget, sandbox requirement, and optional
-        settlement configuration.
+        Each Covenant agent is a subdirectory of{" "}
+        <code>$COVENANT_HOME/agents/</code> containing an{" "}
+        <code>agent.toml</code> manifest. The router walks{" "}
+        <code>agents/</code>, picks up each subdirectory&apos;s{" "}
+        <code>agent.toml</code>, and resolves{" "}
+        <code>agent.entry</code> against that package directory.
+        Flat <code>*.toml</code> files at the top of{" "}
+        <code>agents/</code> are silently skipped. The manifest
+        declares the agent&apos;s identity, runtime, package-relative
+        executable path, required capabilities, resource budget,
+        sandbox requirement, and optional settlement configuration.
       </p>
 
       <h2>Example</h2>

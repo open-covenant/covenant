@@ -372,7 +372,7 @@ POST /peers/revoke
         and the caller&apos;s current connection keeps working — new
         connections must authenticate with <code>token_b58</code>.{" "}
         <code>/peers/revoke</code> takes the 6-char <code>token_prefix</code>
-        from a <code>/peers/list</code> row; the four-case{" "}
+        from a <code>/peers/list</code> row; the five-case{" "}
         <code>RevokeOutcome</code> tagged enum distinguishes a fresh
         revoke, an idempotent retry, a missing prefix, an ambiguous
         prefix, and a refusal to revoke the operator&apos;s own bootstrap

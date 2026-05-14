@@ -131,7 +131,7 @@ export default function CliPage() {
          | --older-than-ms D) [--json]
                                      Delete old revoked peer tombstones.
   peers rotate [--json]              Rotate the operator peer token.
-  peers list [-n N] [--prefix B58]
+  peers list [--limit N] [--prefix B58]
         [--live-only | --revoked-only] [--json]
                                      List peer registry summaries;
                                      filter by live or revoked status.

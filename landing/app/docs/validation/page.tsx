@@ -43,11 +43,7 @@ export default function ValidationProfilePage() {
         a release bundle.
       </p>
 
-      <code>{`node agent-os/scripts/alpha-release-evidence.mjs
-bash agent-os/scripts/validate.sh --quick
-node agent-os/scripts/validate-autonomy.mjs
-node agent-os/scripts/validate-live-coverage.mjs
-node agent-os/scripts/validate-git-identity.mjs
+      <code>{`bash agent-os/scripts/validate.sh --quick
 node agent-os/scripts/provenance.mjs verify-all
 pnpm --dir landing build
 git diff --check`}</code>

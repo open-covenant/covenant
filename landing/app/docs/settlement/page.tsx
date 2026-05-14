@@ -23,6 +23,13 @@ export default function SettlementPage() {
   credits_consumed: u64,
   settled_at:       u64,                // unix milliseconds
   memory_record_id: uuid | null,        // set when resource == "memory"
+  chain:            string | null,      // populated when anchored on-chain
+  cluster:          string | null,      // e.g. "devnet", "mainnet-beta"
+  batch_id:         string | null,      // identifier of the receipt batch
+  merkle_root:      string | null,      // batch merkle root committed on-chain
+  tx_sig:           string | null,      // signature of anchor_receipt_batch tx
+  slot:             u64 | null,         // chain slot where the batch confirmed
+  confirmed_at:     u64 | null,         // unix milliseconds at confirmation
   onchain_sig:      string | null       // populated when flushed on-chain
 }`}</code>
       </pre>

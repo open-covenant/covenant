@@ -1626,9 +1626,9 @@ filesystem = "read-only-package"
 
     #[test]
     fn gvisor_args_for_pins_each_runtime_kind_interpreter_prefix() {
-        // GvisorRunner::args_for (line 219-226) is the documented bridge
-        // from manifest RuntimeKind to the OCI process.args vector that
-        // gVisor's runsc hands to the sandboxed init process. Three arms:
+        // GvisorRunner::args_for is the documented bridge from manifest
+        // RuntimeKind to the OCI process.args vector that gVisor's runsc
+        // hands to the sandboxed init process. Three arms:
         //
         //   RustBin → [/workspace/<entry>]
         //   Python3 → ["python3", /workspace/<entry>]
@@ -1640,8 +1640,9 @@ filesystem = "read-only-package"
         // prepend the interpreter so the OCI exec resolves the script
         // through the language runtime rather than treating it as a
         // native binary — are not pinned. SubprocessRunner carries the
-        // same three-arm dispatch (line 105-117) and only the RustBin
-        // arm is exercised end-to-end via subprocess_runner_executes_real_script.
+        // same three-arm dispatch in its `match card.manifest.agent.runtime`
+        // and only the RustBin arm is exercised end-to-end via
+        // subprocess_runner_executes_real_script.
         //
         // A refactor that swapped the Python3 and Node interpreter
         // strings (e.g., during a code-style cleanup that touches both
@@ -1862,10 +1863,10 @@ cpu_ms_per_task = 5000
         //
         // Existing coverage pins the OPPOSITE direction
         // (HermesRunner rejecting non-Hermes via WrongRuntime; see
-        // hermes_runner_rejects_non_hermes_runtime line 1822) and the
+        // hermes_runner_rejects_non_hermes_runtime) and the
         // happy-path arms of args_for (RustBin/Python3/Node at
-        // gvisor_args_for_pins_each_runtime_kind_interpreter_prefix
-        // line 1628 — the Hermes arm is explicitly skipped). The two
+        // gvisor_args_for_pins_each_runtime_kind_interpreter_prefix —
+        // the Hermes arm is explicitly skipped). The two
         // non-Hermes-rejects-Hermes paths have no direct test, so a
         // refactor that removed the early WrongRuntime branch under a
         // 'composite already routes correctly, this is dead code'

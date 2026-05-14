@@ -66,9 +66,9 @@ The audit log is a signed, hash-chained record of every step. `audit verify` wal
 ## Run the test suite
 
 ```bash
-bash scripts/validate.sh --scripts
-bash scripts/validate.sh --quick
-bash scripts/validate.sh
+bash agent-os/scripts/validate.sh --scripts
+bash agent-os/scripts/validate.sh --quick
+bash agent-os/scripts/validate.sh
 ```
 
 Tests prefixed `live_` exercise real backends (real network, real subprocesses, real model). They are `#[ignore]`'d to keep the default run fast. Opt in with:

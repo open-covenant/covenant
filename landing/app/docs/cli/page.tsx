@@ -18,11 +18,16 @@ export default function CliPage() {
       <pre>
         <code>{`covenant <subcommand> [args]
 
+  bootstrap [--json]                 Grant the union of every loaded
+                                     agent's required capabilities (plus
+                                     memory.write); idempotent — already
+                                     granted actions are skipped.
   intent [--json] <text>             Submit an intent and print the result.
   intents resume (<intent-id>|latest)
         [--json]                     Re-dispatch a budget-rejected intent.
   ping [--json]                      Check the daemon is responsive.
-  version                            Print daemon protocol metadata as JSON.
+  version                            Print daemon protocol metadata as JSON
+                                     (pre-auth; no operator token required).
 
   memory recent [--tier T] [-n N]
         [--json]                     List recent memory records.

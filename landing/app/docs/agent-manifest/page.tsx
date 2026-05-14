@@ -100,9 +100,11 @@ priority                = "normal"`}</code>
             <td>enum</td>
             <td>yes</td>
             <td>
-              <code>rust-bin</code>, <code>python3</code>, or{" "}
-              <code>node</code>. The runtime determines how the daemon
-              executes <code>entry</code>.
+              <code>rust-bin</code>, <code>python3</code>,{" "}
+              <code>node</code>, or <code>hermes</code>. The first three
+              exec <code>entry</code> as a subprocess; <code>hermes</code>{" "}
+              delegates to a configured Hermes HTTP endpoint and ignores{" "}
+              <code>entry</code>.
             </td>
           </tr>
           <tr>
@@ -115,7 +117,8 @@ priority                = "normal"`}</code>
               Path to the binary (for <code>rust-bin</code>) or the
               entry script (for <code>python3</code> /{" "}
               <code>node</code>). Resolved relative to the manifest&apos;s
-              parent directory unless absolute.
+              parent directory unless absolute. Ignored when{" "}
+              <code>runtime = "hermes"</code>.
             </td>
           </tr>
         </tbody>
@@ -345,10 +348,14 @@ priority                = "normal"`}</code>
       <pre>
         <code>{`runtime = "rust-bin"   →   exec entry directly
 runtime = "python3"    →   exec python3 entry
-runtime = "node"       →   exec node    entry`}</code>
+runtime = "node"       →   exec node    entry
+runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
       </pre>
 
-      <p>The agent reads exactly one JSON line from stdin:</p>
+      <p>
+        The first three runtimes communicate over stdin/stdout. The
+        agent reads exactly one JSON line from stdin:
+      </p>
 
       <pre>
         <code>{`{

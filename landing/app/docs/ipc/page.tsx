@@ -98,7 +98,8 @@ export default function IpcPage() {
   "arguments": { ... } }
 
 { "kind": "recent_audit",
-  "limit": 20 }
+  "limit":    20,
+  "since_ms": null | 1714938000000 }
 
 { "kind": "verify_audit_integrity" }
 

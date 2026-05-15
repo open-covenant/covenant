@@ -439,12 +439,12 @@ mod tests {
 
     #[test]
     fn identity_error_display_messages_pin_three_field_bearing_variant_format_strings() {
-        // IdentityError (lib.rs lines 21-33) has five variants. Two wrap
-        // external errors via #[from] (Io, Crypto); the three field-
-        // bearing variants emit security-relevant operator-facing
-        // format strings that no existing test inspects via Display.
-        // load_or_create_rejects_wrong_size_file (line 430) asserts
-        // BadSize via `matches!` and ignores Display;
+        // IdentityError has five variants. Two wrap external errors via
+        // #[from] (Io, Crypto); the three field-bearing variants emit
+        // security-relevant operator-facing format strings that no
+        // existing test inspects via Display.
+        // load_or_create_rejects_wrong_size_file asserts BadSize via
+        // `matches!` and ignores Display;
         // load_or_create_rejects_symlink_at_identity_key_path asserts
         // the path field of the Symlink variant but not the message.
         // The literal '32 bytes', the {mode:#o} octal formatter, and
@@ -630,13 +630,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn load_or_create_pins_key_file_and_parent_dir_mode_invariants() {
-        // The crate header (line 4-7) documents that the ed25519 seed
-        // at $COVENANT_HOME/identity/local.key is persisted with 0o600
+        // The crate header documents that the ed25519 seed at
+        // $COVENANT_HOME/identity/local.key is persisted with 0o600
         // permissions and that the same key signs on-chain settlement
         // transactions. The unix path also chmods the parent directory
-        // to 0o700 (line 83 set_dir_mode_0700) and auto-repairs an
-        // existing key file from any non-0o600 mode back to 0o600
-        // before reading (line 121-129 require_identity_key_secure).
+        // to 0o700 via set_dir_mode_0700 and auto-repairs an existing
+        // key file from any non-0o600 mode back to 0o600 before reading
+        // via require_identity_key_secure.
         //
         // None of these three filesystem-mode invariants are observed
         // by existing tests: load_or_create_persists_then_returns_same_pubkey
@@ -645,13 +645,12 @@ mod tests {
         // short file; but no test reads st_mode on the produced key
         // file or its parent directory, and no test exercises the
         // auto-repair branch from 0o644 → 0o600. A refactor that
-        // dropped .mode(0o600) on the OpenOptionsExt builder (line 159),
-        // dropped set_dir_mode_0700 (line 142), or flipped the
-        // auto-repair branch to reject-on-bad-mode would silently
-        // degrade the security boundary on the operator's identity
-        // key with no parse-time or compile-time signal — the doc
-        // comment in the crate header would still claim the boundary
-        // exists.
+        // dropped .mode(0o600) on the OpenOptionsExt builder, dropped
+        // set_dir_mode_0700, or flipped the auto-repair branch to
+        // reject-on-bad-mode would silently degrade the security
+        // boundary on the operator's identity key with no parse-time
+        // or compile-time signal — the doc comment in the crate header
+        // would still claim the boundary exists.
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempdir().unwrap();
@@ -665,12 +664,11 @@ mod tests {
             "load_or_create must write the identity key file at mode \
              0o600 — the ed25519 seed signs every settlement \
              transaction and a refactor that dropped the .mode(0o600) \
-             call on the OpenOptionsExt builder (line 159) would let \
-             the operator's umask determine the file mode (commonly \
-             0o022 yielding 0o644) and the seed would sit world-\
-             readable on disk with the only signal being the crate's \
-             doc-comment claim, not a runtime check on first write; \
-             got mode {:#o}",
+             call on the OpenOptionsExt builder would let the \
+             operator's umask determine the file mode (commonly 0o022 \
+             yielding 0o644) and the seed would sit world-readable on \
+             disk with the only signal being the crate's doc-comment \
+             claim, not a runtime check on first write; got mode {:#o}",
             file_mode,
         );
 

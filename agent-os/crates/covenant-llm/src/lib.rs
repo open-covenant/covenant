@@ -793,12 +793,11 @@ mod tests {
 
     #[test]
     fn provider_error_display_messages_pin_three_string_variant_format_strings() {
-        // ProviderError (lib.rs lines 58-74) has seven variants. Five
-        // wrap external errors via #[from]; the three string-literal
-        // variants (Empty, Status, MissingKey) emit operator-facing
-        // format strings that no existing test inspects.
-        // anthropic_without_key_returns_missing_key (line 781) and
-        // openai_without_key_returns_missing_key (line 788) assert
+        // ProviderError has seven variants. Five wrap external errors
+        // via #[from]; the three string-literal variants (Empty, Status,
+        // MissingKey) emit operator-facing format strings that no
+        // existing test inspects. anthropic_without_key_returns_missing_key
+        // and openai_without_key_returns_missing_key assert
         // MissingKey via `matches!` which ignores the Display rendering;
         // Empty and Status have no test at all. A thiserror format-
         // string typo or a swapped {status}/{body} binding would
@@ -1027,21 +1026,20 @@ model = "deepseek-chat"
 
     #[test]
     fn ollama_provider_and_embedder_local_pin_canonical_endpoint() {
-        // OllamaProvider::local (line 130) and OllamaEmbedder::local
-        // (line 547) both hardcode http://localhost:11434 — the
-        // canonical Ollama API port. pick_provider (line 476) and
-        // pick_embedder (line 641) probe ollama_reachable against the
-        // same URL string before dispatching to local(). If the
-        // constructor's hardcoded endpoint diverged from the probe URL,
-        // auto-detect would succeed against the probe but the
-        // constructed provider/embedder would point at a stale port —
-        // completions/embeddings fail with connection refused on the
-        // new port with no signal that the constructor diverged from
-        // the probe.
+        // OllamaProvider::local and OllamaEmbedder::local both
+        // hardcode http://localhost:11434 — the canonical Ollama API
+        // port. pick_provider and pick_embedder probe ollama_reachable
+        // against the same URL string before dispatching to local().
+        // If the constructor's hardcoded endpoint diverged from the
+        // probe URL, auto-detect would succeed against the probe but
+        // the constructed provider/embedder would point at a stale
+        // port — completions/embeddings fail with connection refused
+        // on the new port with no signal that the constructor diverged
+        // from the probe.
         //
         // Existing tests pin the endpoint via TOML config decoding
-        // (line 1183 reads endpoint from a parsed [llm] block) but
-        // never directly assert the local() constructor's hardcoded
+        // (provider_from_config reads endpoint from a parsed [llm]
+        // block) but never directly assert the local() constructor's hardcoded
         // string. Mirrors openai_provider_constructors_pin_canonical_base_urls
         // for the OpenAi pair.
         let p = OllamaProvider::local("llama3.1");
@@ -1101,9 +1099,9 @@ model = "deepseek-chat"
 
     #[test]
     fn openai_provider_constructors_pin_canonical_base_urls() {
-        // OpenAiProvider::openai (line 322) and OpenAiProvider::deepseek
-        // (line 326) are convenience constructors that hardcode the
-        // canonical API base URL for each provider. The existing
+        // OpenAiProvider::openai and OpenAiProvider::deepseek are
+        // convenience constructors that hardcode the canonical API
+        // base URL for each provider. The existing
         // provider_from_config pin observes that distinguishing the
         // base URL via the Box<dyn Provider> trait object is not
         // possible — but the struct's base_url is pub String, so direct
@@ -1588,8 +1586,8 @@ provider = "made-up"
 
     #[tokio::test]
     async fn from_config_mock_arms_pin_canonical_default_canned_string_and_dim() {
-        // provider_from_config (line 434) and embedder_from_config
-        // (line 620) both carry parallel hardcoded mock-arm defaults
+        // provider_from_config and embedder_from_config both carry
+        // parallel hardcoded mock-arm defaults
         // that the existing discriminator pins
         // (provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping
         // and embedder_from_config_pins_mock_arm_and_unknown_provider_rejection)
@@ -1603,14 +1601,14 @@ provider = "made-up"
         // signal.
         //
         // Both values are observable through the trait object without
-        // downcasting: MockProvider::complete (line 100-108) returns
-        // self.canned.clone() regardless of messages, so the canned
-        // string surfaces verbatim through Provider::complete();
-        // MockEmbedder::embed (line 507-524) returns a Vec<f32> whose
-        // .len() equals self.dim regardless of input text, so the dim
-        // surfaces verbatim through Embedder::embed().len(). The same
-        // hardcoded values appear in pick_provider (line 479-481) and
-        // pick_embedder (line 644) auto-detect fallbacks — a divergence
+        // downcasting: MockProvider::complete returns self.canned.clone()
+        // regardless of messages, so the canned string surfaces
+        // verbatim through Provider::complete(); MockEmbedder::embed
+        // returns a Vec<f32> whose .len() equals self.dim regardless
+        // of input text, so the dim surfaces verbatim through
+        // Embedder::embed().len(). The same hardcoded values appear
+        // in pick_provider and pick_embedder auto-detect fallbacks
+        // — a divergence
         // between config-driven mock and auto-detect-fallback mock
         // would silently split operator dashboards (different
         // breadcrumbs depending on secrets.toml presence) and split

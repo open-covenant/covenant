@@ -570,12 +570,12 @@ mod tests {
 
     #[test]
     fn search_error_display_messages_pin_three_string_variant_format_strings() {
-        // SearchError (lib.rs lines 26-41) has seven variants parallel
-        // to covenant_llm::ProviderError. Four wrap external errors via
+        // SearchError has seven variants parallel to
+        // covenant_llm::ProviderError. Four wrap external errors via
         // #[from]. The three string-literal variants emit operator-
         // facing format strings that no existing test inspects.
-        // brave_without_key_returns_missing_key (line 553) and
-        // serpapi_without_key_returns_missing_key (line 562) assert
+        // brave_without_key_returns_missing_key and
+        // serpapi_without_key_returns_missing_key assert
         // MissingKey via `matches!` which ignores the Display rendering;
         // Empty and Status have no test at all. The two error catalogs
         // (covenant-tools SearchError and covenant-llm ProviderError)
@@ -903,10 +903,10 @@ api_key = "BSA-test"
 
     #[test]
     fn mock_search_stub_pins_canonical_canned_title_url_and_snippet() {
-        // MockSearch::stub (line 60-70) hardcodes a one-element
-        // Vec<SearchHit> that surfaces in two places: pick_search's
-        // no-config fallback (line 298) and search_from_config's mock
-        // arm (line 276). The snippet is an operator-facing breadcrumb
+        // MockSearch::stub hardcodes a one-element Vec<SearchHit> that
+        // surfaces in two places: pick_search's no-config fallback and
+        // search_from_config's mock arm. The snippet is an
+        // operator-facing breadcrumb
         // — it lands in the LLM agent's reasoning context whenever the
         // web_search tool runs against the mock fallback, and in any
         // dashboard that renders search results. The breadcrumb tells
@@ -1021,8 +1021,8 @@ api_key = "BSA-test"
         //      provider slug                 returns None on the catch-all match arm
         //                                    -> outer fallback fires
         //
-        // pick_search_falls_back_to_mock_when_no_file (line 748) pins
-        // path A. Path B is NOT pinned by any test
+        // pick_search_falls_back_to_mock_when_no_file pins path A.
+        // Path B is NOT pinned by any test
         // (search_config_unknown_provider_returns_none and
         // search_from_config_pins_mock_and_serpapi_discriminator_mapping
         // pin the helper search_from_config, never the boundary error-

@@ -1900,7 +1900,7 @@ mod tests {
 
     #[test]
     fn peer_token_debug_pins_six_char_base58_prefix_aligned_with_summary() {
-        // covenant_peer_auth::PeerToken Debug impl (line 91-99):
+        // covenant_peer_auth::PeerToken Debug impl:
         //
         //   impl std::fmt::Debug for PeerToken {
         //       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1916,15 +1916,15 @@ mod tests {
         //
         //   (a) PeerToken Debug redaction (this impl): `&s[..s.len().min(6)]`
         //       documents 'log only a 6-char prefix of the base58 form'.
-        //   (b) PeerSummary::token_prefix (line 124-133): the cross-wire
-        //       redacted view carries the SAME 6-char prefix, computed by
-        //       the private token_b58_prefix helper (line 313-318) via
-        //       `s.chars().take(6).collect()` — different code, same length.
-        //   (c) The 'peers revoke <prefix>' operator workflow (line 155-160)
-        //       takes the 6-char prefix from `peers list` output as the
-        //       copy-pasteable revoke handle.
+        //   (b) PeerSummary::token_prefix: the cross-wire redacted view
+        //       carries the SAME 6-char prefix, computed by the private
+        //       token_b58_prefix helper via `s.chars().take(6).collect()`
+        //       — different code, same length.
+        //   (c) The 'peers revoke <prefix>' operator workflow (see the
+        //       RevokeOutcome doc-comment) takes the 6-char prefix from
+        //       `peers list` output as the copy-pasteable revoke handle.
         //
-        // token_debug_does_not_leak_full_bytes (line 1893) asserts the
+        // token_debug_does_not_leak_full_bytes asserts the
         // format starts with 'PeerToken(', contains '…', and does NOT
         // contain the full base58 — but a refactor that changed the
         // truncation to 4 chars or 8 chars would silently pass all three

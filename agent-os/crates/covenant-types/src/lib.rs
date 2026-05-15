@@ -894,10 +894,10 @@ mod tests {
 
     #[test]
     fn pubkey_base58_pins_bitcoin_alphabet_leading_zero_ones_and_distinctness() {
-        // AgentId::pubkey_base58 (line 63-65) is the canonical
-        // base58 projection of the 32-byte pubkey field. It feeds
-        // scoped_action_alternatives (line 74) which produces
-        // capability-action strings like 'a2a.recv.<pubkey_b58>'
+        // AgentId::pubkey_base58 is the canonical base58 projection
+        // of the 32-byte pubkey field. It feeds
+        // scoped_action_alternatives which produces capability-action
+        // strings like 'a2a.recv.<pubkey_b58>'
         // that covenant_permissions checks at grant-time and
         // dispatch-time, surfaces directly in operator-facing audit
         // rows, and round-trips into Solana tooling that expects the

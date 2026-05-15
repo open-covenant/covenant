@@ -2042,15 +2042,14 @@ mod tests {
 
     #[test]
     fn ms_per_hour_pins_three_six_million_milliseconds_and_unit_math() {
-        // covenant_budget::MS_PER_HOUR (line 61) is the load-bearing
-        // arithmetic constant the entire credit-refill mechanism
-        // depends on. The module doc-comment at line 14 documents
-        // 'Refill rate is capacity / 3_600_000 tokens', and three
-        // private functions consume it:
+        // covenant_budget::MS_PER_HOUR is the load-bearing arithmetic
+        // constant the entire credit-refill mechanism depends on. The
+        // module doc-comment documents 'Refill rate is capacity /
+        // 3_600_000 tokens', and three private functions consume it:
         //
-        //   refill (line 213): elapsed * capacity / MS_PER_HOUR
-        //   refill (line 224): add * MS_PER_HOUR / capacity
-        //   refill_eta_ms (line 244): (needed * MS_PER_HOUR).div_ceil(capacity)
+        //   refill:         elapsed * capacity / MS_PER_HOUR
+        //   refill:         add * MS_PER_HOUR / capacity
+        //   refill_eta_ms:  (needed * MS_PER_HOUR).div_ceil(capacity)
         //
         // The constant has no direct test pinning its value. The
         // sibling refill_eta_ms_pins_div_ceil pin (above) uses derived
@@ -2066,9 +2065,9 @@ mod tests {
         assert_eq!(
             MS_PER_HOUR, 3_600_000u128,
             "MS_PER_HOUR must equal the literal 3_600_000 ms — the \
-             documented per-hour unit the module doc-comment at line \
-             14 commits to ('Refill rate is capacity / 3_600_000 \
-             tokens'). A refactor to 1000 under a 'simplify unit math \
+             documented per-hour unit the module doc-comment commits \
+             to ('Refill rate is capacity / 3_600_000 tokens'). A \
+             refactor to 1000 under a 'simplify unit math \
              to per-second' rationale would drain every operator's \
              budget ~3600x faster; a refactor to 86_400_000 under a \
              'budget windows align to daily quotas' rationale would \
@@ -2300,17 +2299,16 @@ mod tests {
 
     #[test]
     fn budget_error_display_messages_pin_no_capacity_and_exhausted_format_strings() {
-        // BudgetError (lib.rs lines 63-85) has four variants. Two wrap
-        // external errors via #[from]; the two string-bearing variants
-        // emit operator-facing format strings that no existing test
-        // inspects. in_memory_try_debit_returns_no_capacity_for_unset_agent
-        // (line 2149) asserts NoCapacity via `matches!` which ignores
-        // the Display rendering. Exhausted has no test at all. The
-        // doc-comment at lines 73-77 documents that both Exhausted
-        // fields feed the pause-and-queue resume logic — a refactor
-        // that typo'd the message or swapped the field bindings would
-        // silently degrade both operator diagnostics and the resume-
-        // verb's wait floor.
+        // BudgetError has four variants. Two wrap external errors via
+        // #[from]; the two string-bearing variants emit operator-facing
+        // format strings that no existing test inspects.
+        // in_memory_try_debit_returns_no_capacity_for_unset_agent
+        // asserts NoCapacity via `matches!` which ignores the Display
+        // rendering. Exhausted has no test at all. The BudgetError
+        // doc-comment documents that both Exhausted fields feed the
+        // pause-and-queue resume logic — a refactor that typo'd the
+        // message or swapped the field bindings would silently degrade
+        // both operator diagnostics and the resume-verb's wait floor.
 
         let no_capacity = BudgetError::NoCapacity("stranger@local".into());
         assert_eq!(
@@ -2992,17 +2990,17 @@ mod tests {
         // until this pin:
         //
         // (1) AlreadyPaused at JsonlPauseCheckpointStore::save_pause
-        //     (line 482) when an intent_id already has a live (not
-        //     yet resumed) checkpoint. Prevents a daemon from
-        //     re-pausing an in-flight intent (e.g., because the
-        //     runtime mis-handled a state transition and emitted a
-        //     second pause) and silently overwriting the prior
-        //     tokens_remaining/requested_credits — budget accounting
-        //     would drift silently on the eventual resume.
+        //     when an intent_id already has a live (not yet resumed)
+        //     checkpoint. Prevents a daemon from re-pausing an
+        //     in-flight intent (e.g., because the runtime mis-handled
+        //     a state transition and emitted a second pause) and
+        //     silently overwriting the prior tokens_remaining/
+        //     requested_credits — budget accounting would drift
+        //     silently on the eventual resume.
         //
         // (2) NotFound at JsonlPauseCheckpointStore::claim_resume
-        //     (line 524) when claim_resume is called on an intent_id
-        //     that was never saved. Prevents an operator-typed
+        //     when claim_resume is called on an intent_id that was
+        //     never saved. Prevents an operator-typed
         //     'covenant intents resume <wrong-uuid>' from surfacing a
         //     misleading no-op success and prevents a daemon-bug
         //     resume-for-unpaused-intent from silently succeeding

@@ -1790,14 +1790,13 @@ mod tests {
 
     #[test]
     fn evaluate_auto_retry_pins_remaining_skip_reason_arms() {
-        // evaluate_auto_retry (line 314-377) is a seven-arm decision
-        // function. Three arms are pinned by neighbouring tests:
-        // Requeue (auto_retry_evaluates_only_old_idempotent_in_flight_tasks),
+        // evaluate_auto_retry is a seven-arm decision function. Three
+        // arms are pinned by neighbouring tests: Requeue
+        // (auto_retry_evaluates_only_old_idempotent_in_flight_tasks),
         // UnsafeDuplicateSafety + MaxAttemptsReached
         // (auto_retry_rejects_unsafe_or_exhausted_tasks). The five
-        // remaining Skip reasons — Disabled (line 319), NotInFlight
-        // (line 326), MissingLease (line 333), LeaseTooYoung (line
-        // 340), MissingIdempotency (line 347-358, both the
+        // remaining Skip reasons — Disabled, NotInFlight, MissingLease,
+        // LeaseTooYoung, MissingIdempotency (both the
         // entry.task.idempotency=None path and the empty-key path) —
         // encode the daemon scheduler's short-circuit ladder. A
         // refactor that reordered the checks, flipped a comparison
@@ -2064,8 +2063,9 @@ mod tests {
     fn a2a_auto_retry_skip_reason_serde_pins_each_snake_case_slug() {
         // A2AAutoRetrySkipReason carries rename_all = snake_case and rides
         // inside every A2AAutoRetrySkipped report serialized over IPC,
-        // HTTP, and CLI. The slugs are also pinned via as_str (line 1692)
-        // for the BTreeMap key into A2AAutoRetrySchedulerScan audit rows.
+        // HTTP, and CLI. The slugs are also pinned via
+        // A2AAutoRetrySkipReason::as_str for the BTreeMap key into
+        // A2AAutoRetrySchedulerScan audit rows.
         // The two surfaces share the same exhaustive table but route
         // through independent code paths: a refactor that drops the
         // rename_all attribute on the enum would silently switch the
@@ -2979,8 +2979,8 @@ mod tests {
 
     #[test]
     fn idempotency_cached_result_from_and_to_result_pins_task_id_asymmetric_binding() {
-        // A2AIdempotencyCachedResult::from_result (line 82-89) and
-        // ::to_result (line 91-98) are the bidirectional bridge between
+        // A2AIdempotencyCachedResult::from_result and ::to_result are
+        // the bidirectional bridge between
         // an A2ATaskResult and the receiver-side idempotency cache
         // value. The load-bearing contract is asymmetric on task_id:
         //
@@ -2995,9 +2995,9 @@ mod tests {
         // Every other field — status, content, error_message — must
         // round-trip verbatim through both directions. The
         // a2a_idempotency_cached_result_serde_pins_four_field_wire_form
-        // pin (line 2878) covers the serialized shape; the
+        // covers the serialized shape; the
         // idempotency_cache_key_pins_safety_kind_fallback_and_empty_key_paths
-        // pin (line 2820) covers the lookup keying. Neither pin covers
+        // pin covers the lookup keying. Neither pin covers
         // the from_result/to_result transformation directly.
         //
         // A regression in from_result that swapped argument order during
@@ -4718,8 +4718,8 @@ mod tests {
 
     #[test]
     fn compute_droppable_task_ids_pins_event_accumulator_arms() {
-        // covenant_a2a::compute_droppable_task_ids (line 1416-1460) is
-        // the pure-function classifier the JsonlMailbox::compact path
+        // covenant_a2a::compute_droppable_task_ids is the pure-function
+        // classifier the JsonlMailbox::compact path
         // consumes to decide which task_ids are safe to drop from the
         // on-disk JSONL log. It walks a slice of MailboxEvents and
         // updates four collections (seen / delivered / posted / drained)
@@ -4728,9 +4728,9 @@ mod tests {
         // posted == drained.
         //
         // The function is currently tested only INDIRECTLY through
-        // JsonlMailbox::compact integration tests (line 5672 onwards).
+        // JsonlMailbox::compact integration tests.
         // event_belongs_to_droppable_pins_each_variant_lookup_and_idempotency_cache_invariant
-        // (line 4624) covers the per-variant droppable lookup but NOT
+        // covers the per-variant droppable lookup but NOT
         // the per-event accumulator updates inside compute_droppable_task_ids
         // — specifically the no-op arms (TaskRequeued,
         // IdempotencyResultCached) and the triple-counting arm
@@ -5349,8 +5349,8 @@ mod tests {
 
     #[test]
     fn a2a_task_result_constructors_pin_status_binding_content_shape_and_error_message_asymmetry() {
-        // A2ATaskResult::ok (line 390-397) and ::error (line 399-406)
-        // are the constructor pair the daemon uses to convert tool
+        // A2ATaskResult::ok and ::error are the constructor pair the
+        // daemon uses to convert tool
         // execution outcomes into A2A wire responses. Both bind
         // task_id verbatim and set status — ok() sets
         // A2ATaskStatus::Ok with operator-supplied content and

@@ -202,11 +202,11 @@ mod tests {
 
     #[test]
     fn protocol_version_pins_exact_mcp_spec_date_string() {
-        // covenant_mcp::external::PROTOCOL_VERSION (line 19) is the
-        // public const every external MCP server initialize handshake
-        // quotes via 'protocolVersion' (line 54 in initialize request,
-        // line 424 in initialize response, line 542 in initialized
-        // notification). External MCP servers parse the field as a
+        // covenant_mcp::external::PROTOCOL_VERSION is the public const
+        // every external MCP server initialize handshake quotes via
+        // 'protocolVersion' in the initialize request, the initialize
+        // response, and the initialized notification. External MCP
+        // servers parse the field as a
         // date string and compare it against their supported versions
         // to decide whether to accept the handshake.
         //
@@ -375,9 +375,9 @@ mod tests {
 
     #[test]
     fn remote_tool_options_allows_pins_include_then_exclude_precedence_and_default_arms() {
-        // RemoteToolOptions::allows (line 91-104) is the per-tool
-        // admission gate that bootstrap_remote_tools_with_options
-        // (line 70) consults to decide whether each upstream MCP
+        // RemoteToolOptions::allows is the per-tool admission gate
+        // that bootstrap_remote_tools_with_options consults to decide
+        // whether each upstream MCP
         // tools/list spec enters the operator's covenantd registry.
         // The function encodes a documented include-then-exclude
         // precedence: if include is non-empty the name must match at
@@ -488,8 +488,8 @@ mod tests {
 
     #[test]
     fn remote_tool_options_advertised_name_pins_none_empty_trimmed_and_format_arms() {
-        // RemoteToolOptions::advertised_name (line 106-116) decides
-        // the registry-facing name for each remote MCP tool. The
+        // RemoteToolOptions::advertised_name decides the
+        // registry-facing name for each remote MCP tool. The
         // function maps tool_prefix Option through three documented
         // arms: None -> verbatim upstream_name; Some(s) where
         // s.trim().is_empty() -> verbatim upstream_name; Some(non-

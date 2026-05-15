@@ -835,17 +835,16 @@ mod tests {
 
     #[test]
     fn transport_closed_constants_pin_minus_32099_code_and_transport_closed_message() {
-        // TRANSPORT_CLOSED_CODE (line 74) and TRANSPORT_CLOSED_MESSAGE
-        // (line 75) are the JSON-RPC sentinel the reader's EOF/shutdown
-        // path emits when a stdio MCP child process exits. The emit
-        // site at line 253-257 in NewStdioClient::spawn uses LITERAL
-        // values:
+        // TRANSPORT_CLOSED_CODE and TRANSPORT_CLOSED_MESSAGE are the
+        // JSON-RPC sentinel the reader's EOF/shutdown path emits when
+        // a stdio MCP child process exits. The emit site in
+        // NewStdioClient::spawn uses LITERAL values:
         //
         //     code: -32099,
         //     message: "transport closed".into(),
         //
-        // The consume site at line 95 in From<JsonRpcError> for
-        // McpClientError uses the named constants in the conjunction
+        // The consume site in From<JsonRpcError> for McpClientError
+        // uses the named constants in the conjunction
         // `e.code == TRANSPORT_CLOSED_CODE && e.message ==
         // TRANSPORT_CLOSED_MESSAGE → McpClientError::Closed`. The
         // constants and the literal must agree exactly: a drift would
@@ -903,9 +902,8 @@ mod tests {
     #[test]
     fn from_jsonrpc_error_for_mcp_client_error_pins_closed_vs_rpc_boundary_arms() {
         // covenant_mcp::transport::From<JsonRpcError> for McpClientError
-        // (line 93-103) routes a JSON-RPC error envelope into the
-        // McpClient error enum. Two arms with one load-bearing
-        // conjunction:
+        // routes a JSON-RPC error envelope into the McpClient error
+        // enum. Two arms with one load-bearing conjunction:
         //
         //   (1) e.code == TRANSPORT_CLOSED_CODE (-32099) AND
         //       e.message == TRANSPORT_CLOSED_MESSAGE ("transport closed")
@@ -916,8 +914,8 @@ mod tests {
         // Closed routes to reconnection while Rpc surfaces as a
         // client-visible error.
         //
-        // transport_closed_error_maps_to_closed (line 825) pins arm 1
-        // exactly but leaves the conjunction boundary (code matches but
+        // transport_closed_error_maps_to_closed pins arm 1 exactly but
+        // leaves the conjunction boundary (code matches but
         // message doesn't, or vice versa), the generic Rpc arm, and
         // the field-preservation contract on the Rpc arm all unpinned.
         // A refactor that loosened the conjunction from AND to OR
@@ -1048,12 +1046,12 @@ mod tests {
 
     #[test]
     fn mcp_client_error_display_messages_pin_four_string_variant_format_strings() {
-        // McpClientError (transport.rs lines 77-91) has six variants.
-        // Two wrap external errors via #[from] (Io, Serde); the four
-        // string-bearing variants emit operator-facing format strings
-        // that no existing test inspects via Display. The
-        // transport_closed_constants_pin (line 837) pins the
-        // TRANSPORT_CLOSED_MESSAGE const but the McpClientError::Closed
+        // McpClientError has six variants. Two wrap external errors
+        // via #[from] (Io, Serde); the four string-bearing variants
+        // emit operator-facing format strings that no existing test
+        // inspects via Display. The transport_closed_constants_pin
+        // pins the TRANSPORT_CLOSED_MESSAGE const but the
+        // McpClientError::Closed
         // #[error] attribute is a SEPARATE thiserror compilation — a
         // drift between the const and the Display attribute would
         // silently desync. The other three string variants (Rpc,

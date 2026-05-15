@@ -469,24 +469,24 @@ mod tests {
 
     #[test]
     fn tool_default_input_schema_pins_type_object_properties_empty_additional_properties_false() {
-        // covenant_mcp::Tool::input_schema (line 90-92) is the default
-        // implementation inherited by every Tool that does not override
-        // input_schema. The default emits:
+        // covenant_mcp::Tool::input_schema is the default implementation
+        // inherited by every Tool that does not override input_schema.
+        // The default emits:
         //
         //   { "type": "object", "properties": {}, "additionalProperties": false }
         //
         // — the no-args MCP schema operator-facing clients read out of
-        // tools/list when a tool takes zero arguments. covenant_mcp::
-        // native::ClockTool (native.rs line 44-63) is the canonical
-        // no-arg tool; it inherits the default.
+        // tools/list when a tool takes zero arguments.
+        // covenant_mcp::native::ClockTool is the canonical no-arg tool;
+        // it inherits the default.
         //
-        // clock_returns_recent_epoch_ms (native.rs line 88) and
+        // clock_returns_recent_epoch_ms (in native.rs) and
         // registry_lists_tools_sorted_by_name exercise the default-schema
         // path through ClockTool but assert only on behavior and tool
         // names — NOT on the published schema bytes.
-        // tool_spec_uses_camel_case_on_the_wire (line 188) and
+        // tool_spec_uses_camel_case_on_the_wire and
         // tool_spec_serde_pins_strict_required_fields_reject_on_omission
-        // (line 252) pin the OUTER ToolSpec envelope keys, not the
+        // pin the OUTER ToolSpec envelope keys, not the
         // INNER default schema content. A refactor that loosened the
         // default to {"type": "object"} or {} under a
         // "be permissive by default" rationale would silently weaken
@@ -577,11 +577,11 @@ mod tests {
         //   spec.input_schema = self.input_schema()
         //
         // Every Tool impl inherits this default unless it overrides
-        // spec(). ToolRegistry::list_specs (line 140-142) calls
-        // .spec() on every registered tool. Existing pins cover the
-        // ToolSpec WIRE FORM (tool_spec_serde_pins_camel_case_round_trip
-        // line 200, tool_spec_serde_pins_strict_required_fields line
-        // 252) and the DEFAULT input_schema CONTENT
+        // spec(). ToolRegistry::list_specs calls .spec() on every
+        // registered tool. Existing pins cover the ToolSpec WIRE FORM
+        // (tool_spec_serde_pins_camel_case_round_trip,
+        // tool_spec_serde_pins_strict_required_fields) and the DEFAULT
+        // input_schema CONTENT
         // (tool_default_input_schema_pins above) but the COMPOSITION
         // binding is not anchored.
         //
@@ -706,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_registry_call_pins_not_found_carries_requested_name() {
-        // covenant_mcp::ToolRegistry::call (line 148-154):
+        // covenant_mcp::ToolRegistry::call:
         //
         //   pub async fn call(&self, name: &str, arguments: Value) -> Result<ToolCallResult, ToolError> {
         //       let tool = self

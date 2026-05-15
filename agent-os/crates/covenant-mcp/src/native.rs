@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn echo_input_schema_pins_required_text_string_property_and_additional_properties_false() {
-        // EchoTool::input_schema (line 22-31) overrides Tool::input_schema's
+        // EchoTool::input_schema overrides Tool::input_schema's
         // empty-object default with the documented MCP-tools/list schema:
         //
         //   {
@@ -219,17 +219,17 @@ mod tests {
 
     #[test]
     fn echo_and_clock_tool_name_and_description_pin_operator_facing_strings() {
-        // EchoTool::name (line 16-18) and description (line 19-21), plus
-        // ClockTool::name (line 48-50) and description (line 51-53), are
-        // the four operator-facing strings every MCP client (Claude
+        // EchoTool::name and description, plus ClockTool::name and
+        // description, are the four operator-facing strings every MCP
+        // client (Claude
         // Desktop, downstream SDK wrappers, the Covenant TUI) reads
         // out of tools/list to render the tool catalog. The names
         // double as selectors operators type into commands; the
         // descriptions are the tooltip operators consult to decide
         // when to invoke the tool.
         //
-        // registry_lists_tools_sorted_by_name (lib.rs line 463-468)
-        // pins the names indirectly via the sorted-output assertion
+        // registry_lists_tools_sorted_by_name (in lib.rs) pins the
+        // names indirectly via the sorted-output assertion
         // ['clock', 'echo'], so a rename of either would surface there.
         // But no test reads .description() and compares the literal
         // string. A refactor that rewrote either description —
@@ -237,9 +237,9 @@ mod tests {
         // input back.' for terseness, or 'Returns the current Unix
         // time in milliseconds.' → 'Get current time.' for
         // accessibility — would silently shift the operator-facing
-        // copy. echo_returns_text_argument (line 70) and
-        // clock_returns_recent_epoch_ms (line 88) probe call()
-        // behavior, not the description string.
+        // copy. echo_returns_text_argument and
+        // clock_returns_recent_epoch_ms probe call() behavior, not the
+        // description string.
 
         assert_eq!(
             EchoTool.name(),

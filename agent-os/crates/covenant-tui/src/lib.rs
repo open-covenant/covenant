@@ -2307,10 +2307,12 @@ mod tests {
 
     #[test]
     fn recent_limit_caps_pin_six_documented_values_and_audit_is_strictly_highest() {
-        // covenant_tui::ipc declares six pub const RECENT_*_LIMIT_CAP at
-        // ipc.rs lines 78-103, each .min()'d in the corresponding
-        // recent_X async fn (line 350 memory, 385 audit, 428 caps,
-        // 464 a2a, 499 receipts, 544 peers). These are the operator-
+        // covenant_tui::ipc declares six pub const RECENT_*_LIMIT_CAP
+        // (RECENT_MEMORY_LIMIT_CAP, RECENT_AUDIT_LIMIT_CAP,
+        // RECENT_CAPABILITIES_LIMIT_CAP, RECENT_A2A_LIMIT_CAP,
+        // RECENT_RECEIPTS_LIMIT_CAP, RECENT_PEERS_LIMIT_CAP), each
+        // .min()'d in the corresponding recent_X async fn. These are
+        // the operator-
         // side hard ceiling on IPC request limit fields, so a runaway
         // TUI request cannot ask the daemon to enumerate the entire
         // memory/audit/etc table into one IPC frame. The doc-comments
@@ -2449,12 +2451,12 @@ mod tests {
 
     #[test]
     fn ipc_error_display_messages_pin_three_remaining_variant_hints_and_paths() {
-        // IpcError (ipc.rs lines 32-51) has six variants. The existing
+        // IpcError (in ipc.rs) has six variants. The existing
         // ipc_error_daemon_not_running_message_includes_path_and_hint
         // pins DaemonNotRunning; this pin covers the three remaining
         // string-bearing variants whose #[error] format strings carry
-        // operator-facing recovery hints that the doc-comment at
-        // ipc.rs lines 22-30 explains but no test anchors. A thiserror
+        // operator-facing recovery hints that the IpcError doc-comment
+        // explains but no test anchors. A thiserror
         // format-string typo, a dropped hint, or a swapped field
         // binding would all degrade operator diagnostics silently —
         // each surfaces as the same generic Display string until an

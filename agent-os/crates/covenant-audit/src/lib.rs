@@ -990,9 +990,8 @@ mod tests {
 
     #[tokio::test]
     async fn jsonl_record_pins_chain_corruption_on_length_mismatch_with_field_values() {
-        // covenant_audit::JsonlAuditLog::record (lib.rs around line
-        // 510-538) guards on chain-file length parity before
-        // appending a new event. The check at lines 524-528 reads:
+        // covenant_audit::JsonlAuditLog::record guards on chain-file
+        // length parity before appending a new event. The check reads:
         //
         //   if existing_chain.len() != existing_events.len() {
         //       return Err(AuditError::ChainCorruption {
@@ -1001,7 +1000,7 @@ mod tests {
         //       });
         //   }
         //
-        // The doc-comment at lines 517-523 documents the threat: the
+        // The doc-comment above the check documents the threat: the
         // previous behaviour silently rebuilt over whatever the
         // events file held, which is precisely what an attacker who
         // tampered with both files wants — rebuild produces a chain
@@ -1043,11 +1042,11 @@ mod tests {
         let err = log.record(dummy(intent_kind("ok"))).await.expect_err(
             "record must refuse to append when the chain file has \
                  been externally truncated — the previous behaviour \
-                 silently rebuilt over whatever events held; the check \
-                 at lines 524-528 closes that threat (see doc-comment \
-                 at lines 517-523). A refactor that removed the check \
-                 under a 'silently rebuild is fine' rationale would \
-                 surface here as record returning Ok",
+                 silently rebuilt over whatever events held; the \
+                 chain.len() != events.len() check in record closes \
+                 that threat (see its doc-comment). A refactor that \
+                 removed the check under a 'silently rebuild is fine' \
+                 rationale would surface here as record returning Ok",
         );
 
         match err {
@@ -1070,19 +1069,19 @@ mod tests {
                      with a single line above). Paired with the \
                      events assertion above, a field-swap regression \
                      fails BOTH assertions and the operator-facing \
-                     error message diagnostic in lines 30-31 ('events \
-                     file has {{events}} rows, chain file has \
+                     error message diagnostic on AuditError::ChainCorruption \
+                     ('events file has {{events}} rows, chain file has \
                      {{chain}}') survives intact",
                 );
             }
             other => panic!(
                 "record with truncated chain.jsonl must return \
-                 AuditError::ChainCorruption (the equality check at \
-                 lines 524-528 fires on chain.len() != events.len() \
-                 in both directions); a one-directional comparison \
-                 (e.g., chain > events) would silently let this \
-                 truncated-chain case pass and the chain-entry rebuild \
-                 via build_chain_entries would silently produce a chain \
+                 AuditError::ChainCorruption (the equality check in \
+                 record fires on chain.len() != events.len() in both \
+                 directions); a one-directional comparison (e.g., \
+                 chain > events) would silently let this truncated-\
+                 chain case pass and the chain-entry rebuild via \
+                 build_chain_entries would silently produce a chain \
                  matching the truncated state. Got: {other:?}"
             ),
         }
@@ -1105,9 +1104,9 @@ mod tests {
 
     #[test]
     fn audit_error_chain_corruption_display_message_pins_prefix_count_slots_and_refusing_hint() {
-        // covenant_audit::AuditError::ChainCorruption (lib.rs lines
-        // 30-31) is the operator-facing security boundary diagnostic
-        // for a chain-file/events-file length mismatch. The format
+        // covenant_audit::AuditError::ChainCorruption is the
+        // operator-facing security boundary diagnostic for a
+        // chain-file/events-file length mismatch. The format
         // string is:
         //
         //   chain corruption: events file has {events} rows, chain
@@ -1115,8 +1114,8 @@ mod tests {
         //
         // Three load-bearing pieces: the 'chain corruption' prefix,
         // the {events}/{chain} count slot bindings, and the 'refusing
-        // to rebuild' security-policy hint. The doc-comment at lines
-        // 517-523 explains why the daemon refuses rather than rebuilds:
+        // to rebuild' security-policy hint. The JsonlAuditLog::record
+        // doc-comment explains why the daemon refuses rather than rebuilds:
         // a rebuild would produce a chain matching tampered events,
         // which is the attacker's goal. jsonl_record_pins_chain_corruption_on_length_mismatch_with_field_values
         // pins the field VALUES via destructure-and-assert
@@ -1145,8 +1144,9 @@ mod tests {
              has' slot — pinning the slot ordering directly so a swap \
              that bound {{chain}} here would surface as 'events file \
              has 3 rows'; mis-reporting which file was tampered is \
-             precisely the attacker-favored regression the doc-comment \
-             at lines 517-523 warns against (an operator triaging a \
+             precisely the attacker-favored regression the \
+             JsonlAuditLog::record doc-comment warns against (an \
+             operator triaging a \
              truncated chain would investigate the wrong file): \
              {message}"
         );
@@ -1155,10 +1155,10 @@ mod tests {
             "ChainCorruption must bind {{chain}} to the 'chain file \
              has' slot — paired assertion with 'events file has 5 \
              rows' above so a slot swap fails BOTH and the operator-\
-             facing diagnostic at lines 30-31 stays anchored. Note the \
-             format string omits 'rows' after the {{chain}} value \
-             (anchored separately below by the semicolon check): \
-             {message}"
+             facing AuditError::ChainCorruption diagnostic stays \
+             anchored. Note the format string omits 'rows' after the \
+             {{chain}} value (anchored separately below by the \
+             semicolon check): {message}"
         );
         assert!(
             message.contains("chain file has 3;"),
@@ -1175,8 +1175,9 @@ mod tests {
             "ChainCorruption must keep the 'refusing to rebuild' hint \
              — the security-policy signal that distinguishes 'we \
              won't rebuild' (intentional) from 'we couldn't rebuild' \
-             (bug). The doc-comment at lines 517-523 documents that \
-             rebuild would produce a chain matching tampered events; \
+             (bug). The JsonlAuditLog::record doc-comment documents \
+             that rebuild would produce a chain matching tampered \
+             events; \
              dropping the hint under a 'less verbose' pass would \
              silently let operators try a different rebuild path: \
              {message}"
@@ -1199,10 +1200,10 @@ mod tests {
             "ChainCorruption must NOT emit 'chain file has 5' — \
              paired with the inverse assertion above so a slot swap \
              fails both inverse checks and the operator-facing \
-             diagnostic at lines 30-31 stays anchored from four \
-             independent positions. The 5 here would be the events \
-             count surfaced in the chain slot — exactly the swap \
-             this assertion catches: {message}"
+             AuditError::ChainCorruption diagnostic stays anchored \
+             from four independent positions. The 5 here would be \
+             the events count surfaced in the chain slot — exactly \
+             the swap this assertion catches: {message}"
         );
     }
 

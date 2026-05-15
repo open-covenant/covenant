@@ -242,10 +242,9 @@ required = {caps:?}
 
     #[test]
     fn route_pins_insertion_order_tie_breaking_on_equal_scores() {
-        // covenant_router::Router::route (line 78-115) picks the
-        // highest-scoring agent against an intent. The tie-breaker is
-        // documented through the strict greater-than comparison on
-        // line 106:
+        // covenant_router::Router::route picks the highest-scoring
+        // agent against an intent. The tie-breaker is documented
+        // through the strict greater-than comparison:
         //
         //   best.as_ref().is_none_or(|b| score > b.score)
         //
@@ -321,20 +320,20 @@ required = {caps:?}
 
     #[test]
     fn route_pins_lowercased_input_so_case_does_not_change_match() {
-        // covenant_router::Router::route (line 78-115) computes
+        // covenant_router::Router::route computes
         //
         //   let lowered = text.to_lowercase();
         //
-        // on line 79 and feeds `lowered` into `lowered.contains(kw)`
-        // on line 99. Every keyword in capability_keywords (line
-        // 121-134) is lowercase, so the to_lowercase() call IS the
-        // case-insensitive routing contract: operator inputs like
-        // "Find Papers" or "SUMMARIZE this" must score the same
-        // keywords as their fully lowercase forms.
+        // and feeds `lowered` into `lowered.contains(kw)`. Every
+        // keyword in capability_keywords is lowercase, so the
+        // to_lowercase() call IS the case-insensitive routing
+        // contract: operator inputs like "Find Papers" or
+        // "SUMMARIZE this" must score the same keywords as their
+        // fully lowercase forms.
         //
-        // matches_research_for_paper_intent (line 216) only passes a
-        // lowercase query, so the to_lowercase() call is not
-        // operator-pinned. A refactor that dropped it under a
+        // matches_research_for_paper_intent only passes a lowercase
+        // query, so the to_lowercase() call is not operator-pinned.
+        // A refactor that dropped it under a
         // "kws are already lowercase, contains() handles it" pass
         // (wrong — String::contains is case-sensitive on the
         // haystack) or that wrapped it in an
@@ -353,24 +352,25 @@ required = {caps:?}
         let r = Router::from_cards(vec![research_card()]);
         let m = r.route("FIND PAPERS ON AGENT MEMORY").expect(
             "uppercase form of 'find papers on agent memory' must route — \
-                 if this fires, text.to_lowercase() on line 79 has been \
+                 if this fires, text.to_lowercase() in Router::route has been \
                  removed or guarded with an inverted condition and routing \
                  is now case-sensitive",
         );
         assert_eq!(
             m.agent_id, "research",
             "uppercase query must select the same agent as the lowercase \
-             ancestor matches_research_for_paper_intent (line 216); a \
-             different agent here means the keyword scoring is no longer \
+             ancestor matches_research_for_paper_intent; a different \
+             agent here means the keyword scoring is no longer \
              case-insensitive",
         );
         assert!(
             m.score >= 2.0,
             "uppercase query must score the same matched keywords \
-             ('find' + 'papers') as the lowercase ancestor (line 216 \
-             asserts score >= 2.0); a lower score here means at least \
-             one keyword fell out because the haystack was no longer \
-             lowercased before contains()",
+             ('find' + 'papers') as the lowercase ancestor \
+             matches_research_for_paper_intent (which asserts score \
+             >= 2.0); a lower score here means at least one keyword \
+             fell out because the haystack was no longer lowercased \
+             before contains()",
         );
 
         // Mixed-case input against a DIFFERENT capability arm
@@ -464,20 +464,19 @@ optional = ["tool.summarize"]
     #[test]
     fn from_manifest_and_dir_pins_required_before_optional_order_name_id_distinction_and_manifest_preservation(
     ) {
-        // AgentCard::from_manifest_and_dir (line 27-41) builds the
-        // routing-relevant projection: it chains
-        // m.capabilities.required.iter() THEN
+        // AgentCard::from_manifest_and_dir builds the routing-relevant
+        // projection: it chains m.capabilities.required.iter() THEN
         // m.capabilities.optional.iter() and clones m.agent.id and
         // m.agent.name independently (different manifest paths).
         //
-        // from_manifest_collects_required_and_optional (line 443-462)
-        // checks card.id and uses .contains() for capabilities — it
-        // does NOT pin the required-before-optional ORDER, the
-        // card.name field separately from id, dedup-free behavior, or
-        // the manifest preservation. A refactor that swapped the chain
-        // order would silently change Router::route iteration order;
-        // a refactor that deduped capabilities would change scoring
-        // when an operator's agent.toml accidentally listed the same
+        // from_manifest_collects_required_and_optional checks card.id
+        // and uses .contains() for capabilities — it does NOT pin the
+        // required-before-optional ORDER, the card.name field
+        // separately from id, dedup-free behavior, or the manifest
+        // preservation. A refactor that swapped the chain order would
+        // silently change Router::route iteration order; a refactor
+        // that deduped capabilities would change scoring when an
+        // operator's agent.toml accidentally listed the same
         // capability in both required and optional.
         let toml = r#"
 [agent]

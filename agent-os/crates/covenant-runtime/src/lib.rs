@@ -1846,9 +1846,9 @@ cpu_ms_per_task = 5000
 
     #[tokio::test]
     async fn non_hermes_runners_reject_hermes_runtime_with_wrong_runtime_field_pins() {
-        // covenant_runtime documents two loud-fail safety nets at lib.rs
-        // lines 180-189 (SubprocessRunner::run) and lines 298-304
-        // (GvisorRunner::args_for). Both surfaces emit the SAME
+        // covenant_runtime documents two loud-fail safety nets:
+        // SubprocessRunner::run and GvisorRunner::args_for. Both
+        // surfaces emit the SAME
         // RunnerError::WrongRuntime shape for RuntimeKind::Hermes:
         //
         //   expected = "python3|node|rust-bin"

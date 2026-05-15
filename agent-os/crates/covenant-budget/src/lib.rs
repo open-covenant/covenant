@@ -2155,7 +2155,7 @@ mod tests {
 
     #[test]
     fn budget_checkpoint_error_display_messages_pin_four_string_variant_format_strings() {
-        // BudgetCheckpointError (lib.rs lines 87-101) has six variants.
+        // BudgetCheckpointError has six variants.
         // Two wrap external errors via #[from] (Io, Serde); the four
         // string-bearing variants emit operator-facing format strings
         // that no existing test inspects. The three Uuid-bearing

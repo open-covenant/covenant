@@ -927,7 +927,7 @@ version = "0.1.0"
 dependencies = [
  "covenant-types",
  "ed25519-dalek",
- "rand 0.8.6",
+ "rand 0.9.4",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
@@ -1015,7 +1015,7 @@ dependencies = [
  "async-trait",
  "bs58",
  "covenant-types",
- "rand 0.8.6",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "subtle",

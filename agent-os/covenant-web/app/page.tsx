@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { formatRelative, formatTimestamp, stripDaemonEcho } from "@/lib/format";
+import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
@@ -29,6 +30,7 @@ export default function OverviewPage() {
   const [intent, setIntent] = useState("");
   const [dispatching, setDispatching] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastIntentId, setLastIntentId] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
@@ -40,10 +42,15 @@ export default function OverviewPage() {
       if (!trimmed) return;
       setDispatching(true);
       setLastError(null);
+      setLastResult(null);
+      setLastIntentId(null);
       try {
         const r = await api.submitIntent(trimmed);
         if (r.kind === "intent_result") {
-          setLastResult(stripDaemonEcho(r.text));
+          const body = stripDaemonEcho(r.text);
+          setLastResult(body);
+          setLastIntentId(r.intent_id);
+          saveReply(r.intent_id, body);
         } else {
           setLastError(r.message);
         }
@@ -57,6 +64,12 @@ export default function OverviewPage() {
     },
     [refresh],
   );
+
+  const clearReply = useCallback(() => {
+    setLastResult(null);
+    setLastIntentId(null);
+    setLastError(null);
+  }, []);
 
   const onDispatch = useCallback(
     (e: FormEvent) => {
@@ -173,10 +186,35 @@ export default function OverviewPage() {
                 Try a sample task
               </button>
             )}
-            {lastResult && <span className="result-line">{lastResult}</span>}
-            {lastError && <span className="result-line error">{lastError}</span>}
           </div>
         </form>
+
+        {(lastResult || lastError || dispatching) && (
+          <div className={`reply ${lastError ? "error" : ""}`} aria-live="polite">
+            <div className="reply-head">
+              <p className="eyebrow">{lastError ? "error" : "reply"}</p>
+              <div className="reply-head-actions">
+                {lastIntentId && !lastError && (
+                  <Link className="btn ghost small" href={`/intents/${lastIntentId}`}>
+                    open task
+                  </Link>
+                )}
+                {(lastResult || lastError) && !dispatching && (
+                  <button type="button" className="btn ghost small" onClick={clearReply}>
+                    clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="reply-body">
+              {dispatching && !lastResult && !lastError ? (
+                <span className="reply-pending">waiting for the agent…</span>
+              ) : (
+                <pre>{lastError ?? lastResult}</pre>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="metric-row">
@@ -340,19 +378,65 @@ export default function OverviewPage() {
           letter-spacing: 0.08em;
         }
 
-        .result-line {
-          color: var(--dim);
-          font-family: var(--font-mono);
-          font-size: 12.5px;
-          flex: 1;
-          min-width: 0;
+        .reply {
+          margin-top: 16px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #060606;
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         }
 
-        .result-line.error {
-          color: #fafafa;
+        .reply.error {
+          border-color: #5a1f1f;
+        }
+
+        .reply-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--border);
+          background: #0a0a0a;
+        }
+
+        .reply-head-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .reply-body {
+          padding: 14px 16px;
+          max-height: 360px;
+          overflow: auto;
+        }
+
+        .reply-body pre {
+          margin: 0;
+          color: var(--fg);
+          font-family: var(--font-body);
+          font-size: 14px;
+          line-height: 1.55;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+
+        .reply.error .reply-body pre {
+          color: #f6c2c2;
+          font-family: var(--font-mono);
+          font-size: 12.5px;
+        }
+
+        .reply-pending {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 12.5px;
+        }
+
+        .btn.small {
+          padding: 4px 10px;
+          font-size: 11px;
         }
 
         .metric-row {

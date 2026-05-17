@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { eventsForIntent } from "@/lib/audit";
 import { formatTimestamp, shortHash } from "@/lib/format";
+import { loadReply } from "@/lib/intentReplies";
 import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../../components/PageHeader";
@@ -36,6 +37,12 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
   const { id } = use(props.params);
   const { data, error, lastSyncMs } = usePoll(loadIntent, 3000);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [reply, setReply] = useState<string | null>(null);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReply(loadReply(id));
+  }, [id]);
 
   const events = data?.events ?? [];
   const trace = eventsForIntent(events, id);
@@ -92,6 +99,29 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           <p className="eyebrow">status</p>
           <strong>{statusWord(dispatchKind?.status)}</strong>
         </article>
+      </section>
+
+      <section className="reply-panel">
+        <div className="reply-head">
+          <p className="eyebrow">reply</p>
+          {dispatchKind && (
+            <span className="hash">
+              signed hash {shortHash(dispatchKind.result_hash_hex, 10)}
+            </span>
+          )}
+        </div>
+        <div className="reply-body">
+          {reply ? (
+            <pre>{reply}</pre>
+          ) : (
+            <p className="empty">
+              The reply body isn&apos;t available in this tab. The activity log stores
+              a signed hash of the reply, not the body itself, so a tab that
+              didn&apos;t submit this task can&apos;t re-render it. Send the task
+              again from the Overview to see the reply.
+            </p>
+          )}
+        </div>
       </section>
 
       {isLoading ? (
@@ -174,6 +204,59 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           .trace-meta {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+        }
+
+        .reply-panel {
+          margin-bottom: 28px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--panel);
+          overflow: hidden;
+        }
+
+        .reply-panel .reply-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 16px;
+          border-bottom: 1px solid var(--border);
+          background: #0a0a0a;
+        }
+
+        .reply-panel .reply-head .eyebrow {
+          margin: 0;
+        }
+
+        .reply-panel .reply-head .hash {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.04em;
+        }
+
+        .reply-panel .reply-body {
+          padding: 14px 18px;
+          max-height: 420px;
+          overflow: auto;
+        }
+
+        .reply-panel .reply-body pre {
+          margin: 0;
+          color: var(--fg);
+          font-family: var(--font-body);
+          font-size: 14px;
+          line-height: 1.55;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+
+        .reply-panel .empty {
+          margin: 0;
+          color: var(--dim);
+          font-size: 13px;
+          line-height: 1.55;
+          max-width: 70ch;
         }
 
         .trace {

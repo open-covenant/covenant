@@ -88,9 +88,9 @@ Poseidon is denser per absorb but runs fewer rounds. Final numbers land in
 
 The exported `verification_key.json` is flagged via `verification_key.meta.json` with
 `"status": "dev-only"`. It exists solely so the rest of the stack can run
-end-to-end on devnet.
+end-to-end against a development cluster.
 
-**Do not point production settlement at this VK.** The real ceremony must use published transcripts, external randomness, and pinned artifact provenance before mainnet rollout.
+**Do not point production settlement at this VK.** The real ceremony must use published transcripts, external randomness, and pinned artifact provenance before any production rollout.
 
 ## Known limitations (M1)
 
@@ -117,7 +117,7 @@ Gitignored: `build/*.r1cs`, `build/*.wasm`, `build/*.sym`, `build/*.zkey`,
 `build/*.ptau`, `build/task_completion_js/`, `build/proof.json`, `build/public.json`,
 `build/constraints.txt`.
 
-For the real mainnet ceremony, use `circuits/ceremony/`. The current
+For the real production ceremony, use `circuits/ceremony/`. The current
 `task_completion/build/verification_key.json` remains dev-only and is not a
 drop-in replacement for the production VK.
 

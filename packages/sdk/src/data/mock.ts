@@ -120,7 +120,7 @@ export const MOCK_TASKS: TaskDetail[] = [
     signature: '5uA7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y9u',
     programId: PROGRAM_ID,
     deadline: new Date(Date.now() + 48 * 3600_000).toISOString(),
-    description: 'Ship the Solana devnet receipt anchoring healthcheck.',
+    description: 'Ship the Solana receipt anchoring healthcheck.',
     criteriaHash: hash32FromText('criteria.bootstrap'),
     receiptHash: hash32FromText('receipt.bootstrap'),
     resultHash: hash32FromText('result.bootstrap'),

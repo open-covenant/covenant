@@ -41,7 +41,7 @@ impl LocalIdentity {
     /// Generate a fresh identity with the given display string.
     pub fn generate(display: impl Into<String>) -> Self {
         let mut seed = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut seed);
+        rand::rng().fill_bytes(&mut seed);
         let signing_key = SigningKey::from_bytes(&seed);
         Self {
             display: display.into(),

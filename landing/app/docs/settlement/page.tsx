@@ -24,7 +24,7 @@ export default function SettlementPage() {
   settled_at:       u64,                // unix milliseconds
   memory_record_id: uuid | null,        // set when resource == "memory"
   chain:            string | null,      // populated when anchored on-chain
-  cluster:          string | null,      // e.g. "devnet", "mainnet-beta"
+  cluster:          string | null,      // Solana cluster identifier when anchored on-chain
   batch_id:         string | null,      // identifier of the receipt batch
   merkle_root:      string | null,      // batch merkle root committed on-chain
   tx_sig:           string | null,      // signature of anchor_receipt_batch tx

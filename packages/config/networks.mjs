@@ -83,8 +83,8 @@ export const COVENANT_CLUSTER_HEADER = 'x-covenant-cluster';
 // Server-side helper: pull the cluster override from a request's headers
 // (accepts a Fetch `Headers` instance or a plain object) and resolve the
 // matching network. Lets an API route flip clusters per-request without
-// a Render redeploy — the operator just sets `X-Covenant-Cluster: devnet`
-// (or mainnet, localnet) on the inbound call.
+// a Render redeploy — the operator sets the `X-Covenant-Cluster` header
+// to an operator-supplied cluster identifier on the inbound call.
 export function resolveNetworkFromRequestHeaders(headers, env = process.env) {
   let cluster;
   if (headers && typeof headers.get === 'function') {

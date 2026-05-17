@@ -151,7 +151,7 @@ POST /memory/compact
     "kind": "chain_status",
     "status": {
       "chain":       "solana",
-      "cluster":     "devnet",
+      "cluster":     "…",
       "rpc_url":     "…" | null,
       "ws_url":      "…" | null,
       "program_id":  "…" | null,

@@ -2201,8 +2201,8 @@ cpu_ms_per_task = 5000
     ) {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = RunnerError::Serde(inner);
         let source = err.source().expect(

@@ -1368,8 +1368,8 @@ mod tests {
     ) {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = SettlementError::Serde(inner);
         let source = err.source().expect(

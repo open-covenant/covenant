@@ -9343,8 +9343,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation()
-    {
+    fn ipc_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
         let io_err = IpcError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "socket missing",

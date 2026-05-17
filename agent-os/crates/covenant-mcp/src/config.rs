@@ -505,8 +505,8 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
             "ConfigError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
         );
 
-        let toml_source = toml::from_str::<toml::Value>("not valid toml = =")
-            .expect_err("toml parse must fail");
+        let toml_source =
+            toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let toml_err = ConfigError::Toml(toml_source);
         let toml_message = format!("{toml_err}");
         assert!(
@@ -563,8 +563,8 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
     fn config_error_toml_source_delegation_pin_returns_inner_toml_de_error_via_std_error_source() {
         use std::error::Error;
 
-        let inner = toml::from_str::<toml::Value>("not valid toml = =")
-            .expect_err("toml parse must fail");
+        let inner =
+            toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let expected_display = format!("{inner}");
         let err = ConfigError::Toml(inner);
         let source = err.source().expect(

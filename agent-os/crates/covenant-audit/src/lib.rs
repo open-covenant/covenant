@@ -3423,8 +3423,7 @@ mod tests {
     fn audit_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
         use std::error::Error;
 
-        let inner =
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "events.jsonl perms");
+        let inner = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "events.jsonl perms");
         let expected_display = format!("{inner}");
         let err = AuditError::Io(inner);
         let source = err.source().expect(
@@ -3448,8 +3447,8 @@ mod tests {
     {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = AuditError::Serde(inner);
         let source = err.source().expect(

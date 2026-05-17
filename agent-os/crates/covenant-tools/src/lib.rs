@@ -1224,8 +1224,8 @@ api_key = "BSA-test"
     ) {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = SearchError::Serde(inner);
         let source = err.source().expect(
@@ -1246,8 +1246,8 @@ api_key = "BSA-test"
     fn search_error_toml_source_delegation_pin_returns_inner_toml_de_error_via_std_error_source() {
         use std::error::Error;
 
-        let inner = toml::from_str::<toml::Value>("not valid toml = =")
-            .expect_err("toml parse must fail");
+        let inner =
+            toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let expected_display = format!("{inner}");
         let err = SearchError::Toml(inner);
         let source = err.source().expect(

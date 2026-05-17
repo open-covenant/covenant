@@ -1694,8 +1694,8 @@ cpu_ms_per_task = 1000
     #[test]
     fn manifest_error_parse_and_io_display_messages_pin_prefix_and_external_source_display_delegation(
     ) {
-        let parse_source = toml::from_str::<toml::Value>("not valid toml = =")
-            .expect_err("toml parse must fail");
+        let parse_source =
+            toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let parse_err = ManifestError::Parse(parse_source);
         let parse_message = format!("{parse_err}");
         assert!(
@@ -1775,8 +1775,8 @@ cpu_ms_per_task = 1000
     {
         use std::error::Error;
 
-        let inner = toml::from_str::<toml::Value>("not valid toml = =")
-            .expect_err("toml parse must fail");
+        let inner =
+            toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let expected_display = format!("{inner}");
         let err = ManifestError::Parse(inner);
         let source = err.source().expect(

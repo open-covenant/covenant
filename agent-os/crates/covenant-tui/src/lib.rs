@@ -2647,8 +2647,7 @@ mod tests {
             "IpcError::Wire must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {wire_message}"
         );
 
-        let frame_err =
-            IpcError::Frame(covenant_ipc::IpcError::FrameTooLarge { got: 9_999_999 });
+        let frame_err = IpcError::Frame(covenant_ipc::IpcError::FrameTooLarge { got: 9_999_999 });
         let frame_message = format!("{frame_err}");
         assert!(
             frame_message.starts_with("IPC framing error: "),

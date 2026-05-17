@@ -2013,8 +2013,8 @@ model = "nomic-embed-text"
     ) {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = ProviderError::Serde(inner);
         let source = err.source().expect(
@@ -2036,8 +2036,7 @@ model = "nomic-embed-text"
     {
         use std::error::Error;
 
-        let inner =
-            toml::from_str::<toml::Value>("= invalid =").expect_err("toml parse must fail");
+        let inner = toml::from_str::<toml::Value>("= invalid =").expect_err("toml parse must fail");
         let expected_display = format!("{inner}");
         let err = ProviderError::Toml(inner);
         let source = err.source().expect(

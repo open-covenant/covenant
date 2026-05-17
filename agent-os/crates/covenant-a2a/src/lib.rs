@@ -5089,8 +5089,7 @@ mod tests {
     }
 
     #[test]
-    fn a2a_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation()
-    {
+    fn a2a_error_io_and_serde_display_messages_pin_prefix_and_external_source_display_delegation() {
         let io_err = A2AError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "mailbox.jsonl missing",
@@ -5184,8 +5183,8 @@ mod tests {
     fn a2a_error_serde_source_delegation_pin_returns_inner_serde_json_error_via_std_error_source() {
         use std::error::Error;
 
-        let inner = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("parse must fail");
+        let inner =
+            serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{inner}");
         let err = A2AError::Serde(inner);
         let source = err.source().expect(

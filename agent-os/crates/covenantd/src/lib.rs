@@ -5190,7 +5190,7 @@ required = {caps:?}
                 assert_eq!(
                     preview_hash_hex,
                     hash_hex(preview.as_bytes()),
-                    "HermesToolInvoked must hash preview into preview_hash_hex via covenant_audit::hash_hex — the redaction invariant documented at covenant-runtime line 53-55. A refactor that 'simplified' by passing the raw preview through (e.g., under a 'preview already operator-facing' rationale) would silently leak every Hermes tool-input preview verbatim into the persisted audit chain",
+                    "HermesToolInvoked must hash preview into preview_hash_hex via covenant_audit::hash_hex — the redaction invariant documented on covenant_runtime::RuntimeTrace::HermesToolInvoked::preview. A refactor that 'simplified' by passing the raw preview through (e.g., under a 'preview already operator-facing' rationale) would silently leak every Hermes tool-input preview verbatim into the persisted audit chain",
                 );
                 assert_ne!(
                     preview_hash_hex, preview,
@@ -5282,7 +5282,7 @@ required = {caps:?}
                 assert_eq!(choice, "allow");
                 assert_eq!(
                     resolved, 2,
-                    "HermesApprovalResolved must pass resolved through verbatim — covenant-runtime line 76-78 documents 'kept as u64 so an upstream change to the counter width never silently truncates an audit row'; a refactor that coerced to a different width here would defeat the upstream pin",
+                    "HermesApprovalResolved must pass resolved through verbatim — covenant_runtime::RuntimeTrace::HermesApprovalResponded::resolved documents 'kept as u64 so an upstream change to the counter width never silently truncates an audit row'; a refactor that coerced to a different width here would defeat the upstream pin",
                 );
             }
             other => panic!(

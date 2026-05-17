@@ -1135,17 +1135,17 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn handle_terminal_view_pins_q_quits_with_browsing_return_while_esc_and_other_keys_dismiss_without_quit_across_four_modes(
     ) {
-        // App::handle_terminal_view (lib.rs line 765-773) is the shared
-        // dismissal handler for the four terminal-view modes: Result and
-        // Error (routed at line 294) and GrantResult and GrantError
-        // (routed at line 374). The body has exactly two arms:
+        // App::handle_terminal_view is the shared
+        // dismissal handler for the four terminal-view modes: Result,
+        // Error, GrantResult, and GrantError (all routed from App::on_key's
+        // mode dispatch). The body has exactly two arms:
         //
         //   KeyCode::Char('q') => { self.exit = Some(UserQuit); Mode::Browsing }
         //   _ => Mode::Browsing
         //
         // The doc-comment above the fn says "any key returns to
         // Browsing" but does not document the asymmetry with
-        // handle_browsing (line 659-735), where `KeyCode::Char('q') |
+        // handle_browsing, where `KeyCode::Char('q') |
         // KeyCode::Esc` share the quit arm. Tests in this module pin
         // each half separately — result_view_any_key_returns_to_browsing
         // uses Enter and asserts mode (not exit_reason),
@@ -2777,14 +2777,14 @@ mod tests {
     #[test]
     fn mode_name_pins_exact_discriminant_string_for_each_of_sixteen_variants() {
         use covenant_types::AgentId;
-        // Mode::name (lib.rs line 148-167) maps every Mode variant to a
+        // Mode::name maps every Mode variant to a
         // stable kebab-case discriminant string the binary's status bar
         // reads. The kebab-case test above pins SHAPE (charset,
         // non-empty, uniqueness across its variants vec) and silently
         // omits Mode::PeersTail from that vec, so PeersTail never
         // participates in the shape gate. The only direct
         // exact-string anchors elsewhere are two indirect assertions
-        // for "peers-tail" (lines 1828, 1871); the other fifteen
+        // for "peers-tail" in this module; the other fifteen
         // variants have no per-variant exact-string pin.
         //
         // A rename like "audit-tail" -> "audittail" passes the

@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn tool_spec_default_composition_pins_each_field_routing() {
-        // covenant_mcp::Tool::spec (lib.rs line 95-101) is the default
+        // covenant_mcp::Tool::spec is the default
         // trait method composing ToolSpec from three sibling trait
         // methods:
         //

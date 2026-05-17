@@ -15,5 +15,5 @@
     "sample_hash",
     "task_id"
   ],
-  "summary": "Research-only task-completion circuit. Useful for staging proof-gen flows, but not the canonical mainnet protocol proof."
+  "summary": "Research-only task-completion circuit. Useful for staging proof-gen flows, but not the canonical production protocol proof."
 }

@@ -1,6 +1,6 @@
 # @covenant/proof-gen
 
-Off-chain Groth16 prover for Covenant research and staging circuits. Agents POST a witness and receive a `(proof, public_signals)` blob that can be used for circuit development, artifact validation, and non-mainnet testing.
+Off-chain Groth16 prover for Covenant research and staging circuits. Agents POST a witness and receive a `(proof, public_signals)` blob that can be used for circuit development, artifact validation, and research-stage testing.
 
 ## Run
 
@@ -45,12 +45,12 @@ The worker process exposes its own HTTP listener on `PROOFGEN_WORKER_HEALTH_PORT
 - `GET /jobs/:id` — `queued | active | completed | failed`. Completed jobs include the raw Groth16 proof JSON plus `proof_hex` and `public_input_words` for debugging and staging integrations.
 - `GET /healthz` — liveness + artifact presence.
 
-## Known pre-mainnet limitations
+## Known pre-production limitations
 
 - Circuit artifacts must be generated before `POST /prove` can accept jobs.
 - The API and worker share Redis-backed queue state; deploy them with the same `REDIS_URL` and `PROOFGEN_WITNESS_WRAP_KEY`.
-- The current `task_completion` circuit is not the canonical mainnet settlement proof. Its public-signal shape is research-only and should not be wired directly to protocol settlement.
-- Mainnet zk readiness depends on a settlement-specific circuit, a real ceremony, pinned artifact provenance, and an explicit verifier cutover.
+- The current `task_completion` circuit is not the canonical production settlement proof. Its public-signal shape is research-only and should not be wired directly to protocol settlement.
+- Production zk readiness depends on a settlement-specific circuit, a real ceremony, pinned artifact provenance, and an explicit verifier cutover.
 - The Redis rate limit and witness envelope are both v0 single-tier: rotation of `PROOFGEN_WITNESS_WRAP_KEY` invalidates in-flight jobs encrypted under the old key. A future iteration should support a key-id field in the wrapped blob for graceful rotation.
 
 ## Artifacts

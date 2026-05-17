@@ -36,7 +36,7 @@ cargo run
 
 ## Path to live indexing
 
-When the settlement program reaches deployed-and-frozen on devnet:
+When the settlement program reaches deployed-and-frozen on a configured cluster:
 
 1. Add `solana-client` + `solana-pubsub-client` to `Cargo.toml`.
 2. Spawn a tokio task that subscribes to `logsSubscribe` filtered by

@@ -34,4 +34,4 @@ are live. Production provider partnerships and on-chain compute-bond enforcement
 The `/bonds/cancel` nonce cache is in-process. Horizontal scaling across multiple
 broker instances needs a shared store (Redis is the natural fit; the same
 constraint applies to the proof-gen in-memory rate limit). For v0 single-instance
-deploys this is sufficient — pre-mainnet posture.
+deploys this is sufficient — pre-production posture.

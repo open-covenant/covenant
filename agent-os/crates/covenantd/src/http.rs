@@ -21,12 +21,13 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
-use crate::Server;
+use crate::{sse, Server};
 use axum::{
+    body::Body,
     extract::{Extension, Query, Request as AxumRequest, State},
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE},
-        HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode,
     },
     middleware::{self, Next},
     response::{IntoResponse, Response as AxumResponse},
@@ -261,23 +262,70 @@ struct RecentParams {
     limit: Option<usize>,
 }
 
+/// Dual-mode `GET /memory` handler per ADR 0010 slice 6.h.
+///
+/// - `Accept: text/event-stream` (case-insensitive, q-values stripped)
+///   selects the SSE response path: the daemon allocates a fresh
+///   per-request connection_id, calls
+///   [`crate::Server::recent_memory_envelopes`] to materialize the
+///   `StreamBegin` / `StreamChunk*` / `StreamEnd` sequence, renders
+///   each envelope as one SSE event block, and returns a response
+///   with the pinned SSE headers (`Content-Type: text/event-stream`,
+///   `Cache-Control: no-cache`, `X-Accel-Buffering: no`).
+/// - Any other Accept header (or absent Accept) selects the buffered
+///   JSON response path: the daemon answers via `Server::respond`
+///   exactly as the v1 contract specifies — `Json<Response>` with
+///   `Content-Type: application/json`. Wire-byte-identical with the
+///   pre-ADR-0010 behavior.
+///
+/// The collector's `Err(Response)` arm is the daemon's "streaming
+/// refused, render as buffered" signal: a capability failure or
+/// non-`Memories` response renders as JSON regardless of the client's
+/// Accept header. The client asked for SSE but the daemon decided
+/// not to stream; the buffered shape is the fallback and uses the
+/// same payload v1 clients already handle.
 async fn memory_recent(
     State(s): State<HttpState>,
     Extension(peer): Extension<AgentId>,
     Query(q): Query<RecentParams>,
-) -> Result<Json<Response>, ApiError> {
-    Ok(Json(
-        s.server
+    headers: HeaderMap,
+) -> Result<AxumResponse, ApiError> {
+    let limit = q.limit.unwrap_or(10);
+    let accept = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok());
+    if sse::wants_event_stream(accept) {
+        let connection_id = uuid::Uuid::new_v4();
+        match s
+            .server
+            .recent_memory_envelopes(q.tier, limit, &peer, connection_id)
+            .await
+        {
+            Ok(envelopes) => {
+                let body = sse::render_envelopes_as_sse_body(&envelopes)
+                    .map_err(|e| ApiError(anyhow::anyhow!("sse encode: {e}")))?;
+                let mut response = AxumResponse::new(Body::from(body));
+                for (name, value) in sse::sse_response_headers() {
+                    response.headers_mut().insert(name, value);
+                }
+                Ok(response)
+            }
+            Err(response) => Ok(Json(response).into_response()),
+        }
+    } else {
+        let response = s
+            .server
             .respond(
                 Request::RecentMemory {
                     tier: q.tier,
-                    limit: q.limit.unwrap_or(10),
+                    limit,
                     prefer_stream: None,
                 },
                 &peer,
             )
-            .await,
-    ))
+            .await;
+        Ok(Json(response).into_response())
+    }
 }
 
 #[derive(Deserialize)]

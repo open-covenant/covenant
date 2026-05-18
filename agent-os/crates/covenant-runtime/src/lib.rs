@@ -533,6 +533,7 @@ pub struct GvisorRunner {
     runsc_path: PathBuf,
     rootfs: PathBuf,
     scratch_root: PathBuf,
+    tracker: Option<Arc<SubprocessTracker>>,
 }
 
 impl GvisorRunner {
@@ -541,6 +542,7 @@ impl GvisorRunner {
             runsc_path: PathBuf::from("runsc"),
             rootfs: rootfs.into(),
             scratch_root: std::env::temp_dir().join("covenant-gvisor"),
+            tracker: None,
         }
     }
 
@@ -553,8 +555,44 @@ impl GvisorRunner {
             runsc_path: runsc_path.into(),
             rootfs: rootfs.into(),
             scratch_root: scratch_root.into(),
+            tracker: None,
         }
     }
+
+    /// Builds a gVisor runner that registers the spawned `runsc` pid in
+    /// the provided [`SubprocessTracker`] keyed by `intent.id`. The
+    /// runsc process is the kernel-visible child; the agent process
+    /// inside the sandbox is in a different pid namespace and is not
+    /// directly signalable from the host. Signaling runsc's process
+    /// group (after `configure_process_group(0)` runs) propagates
+    /// termination into the sandbox.
+    pub fn with_paths_and_tracker(
+        runsc_path: impl Into<PathBuf>,
+        rootfs: impl Into<PathBuf>,
+        scratch_root: impl Into<PathBuf>,
+        tracker: Arc<SubprocessTracker>,
+    ) -> Self {
+        Self {
+            runsc_path: runsc_path.into(),
+            rootfs: rootfs.into(),
+            scratch_root: scratch_root.into(),
+            tracker: Some(tracker),
+        }
+    }
+
+    /// Mirrors `SubprocessRunner::configure_process_group`. Without
+    /// this, `runsc` inherits the daemon's process group and a future
+    /// `libc::kill(-runsc_pid, SIGTERM)` either misses runsc or hits
+    /// the daemon itself. POSIX-only; non-Unix platforms have no
+    /// process groups.
+    #[cfg(unix)]
+    fn configure_process_group(cmd: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        cmd.as_std_mut().process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    fn configure_process_group(_cmd: &mut Command) {}
 
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
         if card.manifest.sandbox.backend != SandboxBackend::LinuxGvisor {
@@ -708,22 +746,44 @@ impl Runner for GvisorRunner {
         let bundle_dir = self.write_bundle(card, &bundle_id)?;
 
         debug!(agent = %card.id, sandbox = "linux-gvisor", "spawning sandboxed agent");
-        let mut child = match Command::new(&self.runsc_path)
-            .arg("run")
+        let mut cmd = Command::new(&self.runsc_path);
+        cmd.arg("run")
             .arg("--bundle")
             .arg(&bundle_dir)
             .arg(&bundle_id)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-        {
+            .kill_on_drop(true);
+        Self::configure_process_group(&mut cmd);
+
+        let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
                 Self::cleanup_bundle(&bundle_dir);
                 return Err(RunnerError::Io(e));
             }
+        };
+
+        let _tracker_guard = match (self.tracker.as_ref(), child.id()) {
+            (Some(tracker), Some(pid)) => {
+                tracker.register(
+                    intent.id,
+                    TrackedSubprocess {
+                        agent_id: card.id.clone(),
+                        pid,
+                        started_at_ms: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
+                    },
+                );
+                Some(TrackerGuard {
+                    tracker,
+                    intent_id: intent.id,
+                })
+            }
+            _ => None,
         };
 
         let mut stdin = child.stdin.take().expect("stdin piped");
@@ -2141,6 +2201,46 @@ filesystem = "read-only-package"
              the file as a native binary and gVisor would surface \
              ENOEXEC with no parse-time signal at the runner layer",
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gvisor_runner_configure_process_group_places_runsc_in_new_group() {
+        // GvisorRunner spawns runsc on the host; runsc is the
+        // kernel-visible child. For the budget-preempt path to
+        // SIGTERM/SIGKILL the sandbox via libc::kill(-runsc_pid, SIG),
+        // runsc must be the leader of its own process group — exactly
+        // the same invariant SubprocessRunner pins for trusted-local
+        // dispatch. The test uses Command directly so it doesn't
+        // depend on a real runsc binary; it exercises the same
+        // configure_process_group function the gVisor spawn path calls,
+        // so a refactor that dropped the call from the spawn path
+        // (but kept the function) would surface in the spawn-path
+        // smoke tests that already exist, while this test pins the
+        // function's behavior.
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("30");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        GvisorRunner::configure_process_group(&mut cmd);
+
+        let mut child = cmd.spawn().expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+        assert_ne!(
+            pgid, -1,
+            "getpgid(child_pid) must succeed; errno path indicates the child exited before the syscall or the kernel rejected the request"
+        );
+        assert_eq!(
+            pgid as u32, pid,
+            "GvisorRunner::configure_process_group(0) must make the spawned runsc the leader of a new process group (pgid == pid); without this a future libc::kill(-runsc_pid, SIGTERM) issued by the preempt dispatcher would target the daemon's own group, hitting either too narrowly (only the immediate runsc process) or too broadly (the daemon itself), and the sandbox-required budget-preempt guarantee silently degrades to backend-dependent"
+        );
+
+        child.kill().await.expect("kill spawned sleep");
+        let _ = child.wait().await;
     }
 
     #[tokio::test]

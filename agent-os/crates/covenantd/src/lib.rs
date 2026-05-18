@@ -141,14 +141,13 @@ pub fn runtime_runner_config_from_values(
     }
 }
 
-/// Builds the per-backend runner. `tracker` is wired into the
-/// trusted-local SubprocessRunner so the daemon's future budget-preempt
-/// projection tick can walk in-flight subprocesses by intent_id. The
-/// gVisor branch does NOT register with the tracker in this slice — its
-/// pid lifecycle is owned by runsc's OCI bundle path and warrants its
-/// own wiring slice. Until that lands, COVENANT_RUNTIME_BACKEND=linux-gvisor
-/// operators get an empty tracker and no hard-preempt guarantee for
-/// sandbox-required agents.
+/// Builds the per-backend runner. `tracker` is wired into both the
+/// trusted-local SubprocessRunner and the linux-gvisor GvisorRunner so
+/// the daemon's future budget-preempt projection tick can walk
+/// in-flight subprocesses by intent_id regardless of which backend ran
+/// them. For gVisor, the tracker holds the host-visible runsc pid; a
+/// SIGTERM to runsc's process group propagates termination into the
+/// sandbox.
 pub fn runtime_runner_from_config(
     config: &RuntimeRunnerConfig,
     tracker: Arc<covenant_runtime::SubprocessTracker>,
@@ -161,10 +160,11 @@ pub fn runtime_runner_from_config(
             runsc_path,
             rootfs,
             scratch_root,
-        } => Arc::new(covenant_runtime::GvisorRunner::with_paths(
+        } => Arc::new(covenant_runtime::GvisorRunner::with_paths_and_tracker(
             runsc_path,
             rootfs,
             scratch_root,
+            tracker,
         )),
     }
 }

@@ -127,20 +127,20 @@ The current wall-clock guard kills a subprocess only after the agent-declared `c
 
 Shipped primitives:
 
-- `covenant-runtime::SubprocessRunner` spawns every agent in a new POSIX process group via `process_group(0)` on Unix. A subsequent `kill(-pid, SIG)` targets every grandchild the agent forked, not just the immediate child. The configuration is a no-op on non-Unix; the documented gap remains.
-- `covenant-runtime::SubprocessTracker` and `TrackedSubprocess` are the in-memory primitives the daemon will use to look up a running subprocess's pid by intent id. The tracker is not yet populated by the runner spawn path.
+- `covenant-runtime::SubprocessRunner` and `GvisorRunner` both spawn the agent (or the runsc host process, for gVisor) in a new POSIX process group via `process_group(0)` on Unix. A subsequent `kill(-pid, SIG)` targets every grandchild the agent forked, not just the immediate child. The configuration is a no-op on non-Unix; the documented gap remains.
+- `covenant-runtime::SubprocessTracker` and `TrackedSubprocess` are the in-memory primitives the daemon uses to look up a running subprocess's pid by intent id. The daemon constructs the tracker once at startup and passes it into both runners; on every successful spawn the runner registers an entry keyed by `intent.id` and the entry is unregistered when the dispatch returns (success, error, or timeout-driven kill).
+- `covenant-runtime::preempt_subprocess_pg(pid, grace)` is the pure async dispatcher function that sends `SIGTERM` to a process group, polls every 50ms up to `grace` for the group to drain via `kill(-pid, 0)==ESRCH`, then sends `SIGKILL` if any member is still alive. It returns a `PreemptOutcome` enum the daemon-side audit emitter will map to `BudgetPreempted` or `BudgetPreemptFailed` rows.
 - `covenant-budget::project_overshoot(...)` is the pure projection function the daemon-side tick will call to decide whether an in-flight subprocess is on track to exceed its remaining budget. `BudgetProjectionPolicy::NoExtrapolation` preserves the existing post-completion-only behavior; `LinearExtrapolation` short-circuits below either an observation-window or sample-count threshold to avoid spurious early triggers.
 - `covenant-audit::AuditKind::BudgetPreempted` and `BudgetPreemptFailed` are the audit rows the preempt path will emit on successful termination and on signal failure respectively. Both are wired into `audit_kind_requires_persistence` so the daemon refuses to drop them on audit-write failure.
 
 Not yet wired:
 
-- Spawn-time tracker registration in the runner. Until this lands, the tracker is empty and the projection tick has no work to do.
 - Daemon-side projection tick that walks the tracker, calls `project_overshoot`, and pushes flagged intents onto a bounded preempt queue.
-- The signal dispatcher that consumes the queue, calls `libc::kill(-pid, SIGTERM)`, waits a grace window, then `libc::kill(-pid, SIGKILL)` if the process has not exited, and emits the matching audit row.
-- The grace window environment variable `COVENANT_BUDGET_PREEMPT_GRACE_MS` (planned default: `2000`). Operators should not depend on it until the dispatcher ships.
+- Daemon-side consumer that drains the preempt queue, calls `preempt_subprocess_pg` per intent_id, and emits the matching audit row from the returned `PreemptOutcome`.
+- The grace window environment variable `COVENANT_BUDGET_PREEMPT_GRACE_MS` (planned default: `2000`). Operators should not depend on it until the consumer ships.
 - Daemon-restart recovery. The tracker is in-memory only; a crash between the projection decision and the signal dispatch leaves orphan subprocesses outliving the preempt window. Recovery via a pidfile or `/proc` scan is a separate followup.
 
-Until the dispatcher is wired, an over-budget subprocess still runs to natural completion under the existing post-completion accounting; the daemon then rejects further dispatch via `BudgetExhausted`. The hard-guarantee framing applies only after every item in *Not yet wired* lands.
+Until the consumer is wired, an over-budget subprocess still runs to natural completion under the existing post-completion accounting; the daemon then rejects further dispatch via `BudgetExhausted`. The hard-guarantee framing applies only after every item in *Not yet wired* lands.
 
 ## Security Review Checklist
 

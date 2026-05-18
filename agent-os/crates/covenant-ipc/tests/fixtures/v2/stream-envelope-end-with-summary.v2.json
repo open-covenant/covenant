@@ -1,0 +1,9 @@
+{
+  "kind": "stream_end",
+  "stream_id": "00000000-0000-0000-0000-000000000000",
+  "summary": {
+    "intent_id": "00000000-0000-0000-0000-000000000000",
+    "status": "completed",
+    "settlement": null
+  }
+}

@@ -23,8 +23,8 @@ pub mod config;
 pub mod discovery;
 pub mod identity;
 
-pub use config::{Config, Cluster};
 pub use client::SapBridge;
+pub use config::{Cluster, Config, DEFAULT_SYNAPSE_PROGRAM_ID};
 
 /// Errors surfaced by the SAP bridge.
 ///

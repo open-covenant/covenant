@@ -5,6 +5,8 @@
 //! consumer crates — so a SAP redeploy never requires rebuilding the
 //! daemon.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Solana cluster the bridge is pointed at. Mirrors the Covenant
@@ -25,6 +27,48 @@ impl Cluster {
             Cluster::Localnet => "localnet",
             Cluster::Mainnet => "mainnet",
         }
+    }
+
+    fn upper(self) -> &'static str {
+        match self {
+            Cluster::Devnet => "DEVNET",
+            Cluster::Localnet => "LOCALNET",
+            Cluster::Mainnet => "MAINNET",
+        }
+    }
+}
+
+impl std::str::FromStr for Cluster {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "devnet" => Ok(Cluster::Devnet),
+            "localnet" => Ok(Cluster::Localnet),
+            "mainnet" | "mainnet-beta" => Ok(Cluster::Mainnet),
+            other => Err(format!("unknown cluster: {other}")),
+        }
+    }
+}
+
+/// Mainnet+devnet SAP deployment as of 2026-05. Override via env when
+/// the program redeploys — never edit consumer crates to chase a new
+/// address.
+pub const DEFAULT_SYNAPSE_PROGRAM_ID: &str = "SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ";
+
+const DEFAULT_EXPLORER_URL: &str = "https://explorer.oobeprotocol.ai";
+
+fn default_rpc_url(cluster: Cluster) -> &'static str {
+    match cluster {
+        Cluster::Mainnet => "https://api.mainnet-beta.solana.com",
+        Cluster::Devnet => "https://api.devnet.solana.com",
+        Cluster::Localnet => "http://127.0.0.1:8899",
+    }
+}
+
+fn parse_bool(value: Option<&str>) -> bool {
+    match value.map(str::trim).map(str::to_ascii_lowercase) {
+        Some(s) => matches!(s.as_str(), "1" | "true" | "yes"),
+        None => false,
     }
 }
 
@@ -49,6 +93,127 @@ impl Config {
             program_id: String::new(),
             rpc_url: String::new(),
             explorer_url: String::new(),
+        }
+    }
+
+    /// Resolve from a map of env-style values. Mirrors the layering
+    /// in `resolveSynapseConfig` on the TS side: cluster-specific env
+    /// override beats the global one, and the bridge is disabled by
+    /// default so the daemon stays offline when no operator has
+    /// opted in.
+    pub fn from_env<I, K, V>(env: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let map: HashMap<String, String> = env
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .collect();
+        let get = |key: &str| map.get(key).map(String::as_str);
+
+        let cluster = get("COVENANT_SOLANA_CLUSTER")
+            .and_then(|s| s.parse::<Cluster>().ok())
+            .unwrap_or(Cluster::Devnet);
+        let upper = cluster.upper();
+
+        let enabled = parse_bool(
+            get(&format!("COVENANT_SAP_{upper}_ENABLED"))
+                .or_else(|| get("COVENANT_SAP_ENABLED")),
+        );
+
+        let program_id = get(&format!("COVENANT_SAP_{upper}_PROGRAM_ID"))
+            .or_else(|| get("COVENANT_SAP_PROGRAM_ID"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| DEFAULT_SYNAPSE_PROGRAM_ID.to_owned());
+
+        let rpc_url = get(&format!("COVENANT_SAP_{upper}_RPC_URL"))
+            .or_else(|| get("COVENANT_SAP_RPC_URL"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_rpc_url(cluster).to_owned());
+
+        let explorer_url = get("COVENANT_SAP_EXPLORER_URL")
+            .map(str::to_owned)
+            .unwrap_or_else(|| DEFAULT_EXPLORER_URL.to_owned());
+
+        Self {
+            enabled,
+            cluster,
+            program_id,
+            rpc_url,
+            explorer_url,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn disabled_by_default_with_no_env() {
+        let cfg = Config::from_env(env(&[]));
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.cluster, Cluster::Devnet);
+        assert_eq!(cfg.program_id, DEFAULT_SYNAPSE_PROGRAM_ID);
+    }
+
+    #[test]
+    fn parses_mainnet_beta_alias() {
+        let cfg = Config::from_env(env(&[("COVENANT_SOLANA_CLUSTER", "mainnet-beta")]));
+        assert_eq!(cfg.cluster, Cluster::Mainnet);
+    }
+
+    #[test]
+    fn cluster_specific_program_id_beats_global() {
+        let cfg = Config::from_env(env(&[
+            ("COVENANT_SOLANA_CLUSTER", "devnet"),
+            ("COVENANT_SAP_ENABLED", "true"),
+            ("COVENANT_SAP_PROGRAM_ID", "global-program"),
+            ("COVENANT_SAP_DEVNET_PROGRAM_ID", "devnet-program"),
+        ]));
+        assert!(cfg.enabled);
+        assert_eq!(cfg.program_id, "devnet-program");
+    }
+
+    #[test]
+    fn falls_back_to_cluster_default_rpc() {
+        let cfg = Config::from_env(env(&[
+            ("COVENANT_SOLANA_CLUSTER", "mainnet"),
+            ("COVENANT_SAP_ENABLED", "1"),
+        ]));
+        assert_eq!(cfg.rpc_url, "https://api.mainnet-beta.solana.com");
+    }
+
+    #[test]
+    fn explorer_url_overridable() {
+        let cfg = Config::from_env(env(&[
+            ("COVENANT_SAP_EXPLORER_URL", "https://staging.synapse.test"),
+        ]));
+        assert_eq!(cfg.explorer_url, "https://staging.synapse.test");
+    }
+
+    #[test]
+    fn parses_truthy_enabled() {
+        for value in ["1", "true", "TRUE", "yes"] {
+            let cfg = Config::from_env(env(&[("COVENANT_SAP_ENABLED", value)]));
+            assert!(cfg.enabled, "value={value}");
+        }
+    }
+
+    #[test]
+    fn parses_falsy_enabled() {
+        for value in ["0", "false", "no", ""] {
+            let cfg = Config::from_env(env(&[("COVENANT_SAP_ENABLED", value)]));
+            assert!(!cfg.enabled, "value={value}");
         }
     }
 }

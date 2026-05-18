@@ -14837,6 +14837,188 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_emits_signal_sent_sigterm_for_cooperative_exit() {
+        // Bash subprocess installs a SIGTERM trap that exits cleanly,
+        // then sleeps long enough that the preempt_subprocess_pg SIGTERM
+        // is the one to terminate it. Asserts the daemon-layer mapping
+        // PreemptOutcome::ExitedDuringGrace → BudgetPreempted{signal_sent="SIGTERM"}.
+        // A refactor that lost the explicit ExitedDuringGrace arm
+        // would either swallow the audit row or emit signal_sent="SIGKILL".
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let server = server_with_audit_and_budget(
+            audit.clone(),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+
+        // The trap is installed after a 50ms head-start so the
+        // dispatcher's SIGTERM cannot race the trap installation. The
+        // trap-armed exit must close stdin/stdout/stderr explicitly so
+        // bash doesn't hold them past the trap fire. `exec 0<&-` etc.
+        // keep the descriptors closed so .wait() returns promptly.
+        let script = "sleep 0.05; trap 'exit 0' TERM; sleep 60";
+        let mut std_cmd = std::process::Command::new("bash");
+        std_cmd
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash trap subprocess");
+        let pid = child.id().expect("child pid available before reap");
+
+        // Wait long enough for the trap to install before preempt fires.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "cooperative@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (result, _exit) = tokio::join!(
+            server.preempt_intent(
+                intent_id,
+                "test:cooperative_exit".into(),
+                std::time::Duration::from_millis(1_500)
+            ),
+            child.wait(),
+        );
+
+        assert!(
+            matches!(
+                result,
+                PreemptResult::Preempted {
+                    outcome: covenant_runtime::PreemptOutcome::ExitedDuringGrace,
+                }
+            ),
+            "trap-cooperative subprocess must surface PreemptOutcome::ExitedDuringGrace; got {result:?}",
+        );
+
+        let events = audit.recent(32).await.expect("audit recent must succeed");
+        let row = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::BudgetPreempted {
+                    intent_id: id,
+                    signal_sent,
+                    ..
+                } if *id == intent_id => Some(signal_sent.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected exactly one BudgetPreempted row for intent_id {intent_id}; events seen: {events:?}"
+                )
+            });
+        assert_eq!(
+            row, "SIGTERM",
+            "ExitedDuringGrace must map to signal_sent=\"SIGTERM\" so post-mortem can tell trap-cooperative exits from SIGKILL escalations",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_emits_signal_sent_none_for_already_dead_pid() {
+        // Spawn a sleep subprocess, fully reap it, then register a
+        // tracker entry pointing at the now-stale pid. preempt_intent
+        // should map preempt_subprocess_pg's AlreadyDead (kill(-pid)
+        // returns ESRCH on initial fire) to
+        // BudgetPreempted{signal_sent="none"} — NOT BudgetPreemptFailed.
+        // A refactor that treated ESRCH as a syscall error would
+        // surface here as a missing BudgetPreempted row or a
+        // BudgetPreemptFailed row.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let server = server_with_audit_and_budget(
+            audit.clone(),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("0.01")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        let _ = child.wait().await;
+
+        // Sleep a beat to let the kernel finalize the process-table
+        // cleanup, so kill(-pid, 0) actually returns ESRCH instead of
+        // hitting a half-reaped zombie entry.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "stale@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let result = server
+            .preempt_intent(
+                intent_id,
+                "test:already_dead".into(),
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                PreemptResult::Preempted {
+                    outcome: covenant_runtime::PreemptOutcome::AlreadyDead,
+                }
+            ),
+            "already-reaped pid must surface PreemptOutcome::AlreadyDead, not SigKilled or PermissionDenied; got {result:?}",
+        );
+
+        let events = audit.recent(32).await.expect("audit recent must succeed");
+        let row = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::BudgetPreempted {
+                    intent_id: id,
+                    signal_sent,
+                    ..
+                } if *id == intent_id => Some(signal_sent.clone()),
+                AuditKind::BudgetPreemptFailed { intent_id: id, .. } if *id == intent_id => {
+                    panic!(
+                        "AlreadyDead must NOT map to BudgetPreemptFailed (ESRCH is benign — subprocess exited first); events seen: {events:?}"
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected exactly one BudgetPreempted row for intent_id {intent_id}; events seen: {events:?}"
+                )
+            });
+        assert_eq!(
+            row, "none",
+            "AlreadyDead must map to signal_sent=\"none\" so post-mortem distinguishes pre-dispatch exit from actively-signalled termination",
+        );
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

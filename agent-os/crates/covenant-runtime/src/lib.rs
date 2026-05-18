@@ -226,6 +226,20 @@ impl SubprocessTracker {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Returns a copy of every `(intent_id, entry)` pair. The read
+    /// guard is dropped before the Vec is returned so a long-running
+    /// snapshot caller — for instance, the daemon-side budget
+    /// projection tick that walks each entry and awaits a budget
+    /// ledger lookup — cannot stall register/unregister. Order is
+    /// unspecified; callers must not depend on insertion order.
+    pub fn snapshot(&self) -> Vec<(Uuid, TrackedSubprocess)> {
+        let guard = self
+            .entries
+            .read()
+            .expect("subprocess tracker rwlock poisoned");
+        guard.iter().map(|(k, v)| (*k, v.clone())).collect()
+    }
 }
 
 /// Outcome of one [`preempt_subprocess_pg`] call. The daemon-side
@@ -2739,6 +2753,55 @@ cpu_ms_per_task = 5000
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_runtime::RunnerError::Serde source() must downcast_ref to serde_json::Error so daemon-side runtime diagnostics can call serde_json::Error::line/column/classify for generic JSON-parse-fault triage; a refactor that wrapped the inner in a project-local newtype (e.g., RunnerSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant or merge with MalformedStdout' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies generic runtime JSON-parse faults AND would blur the AgentResult-stdout vs generic-JSON-parse discriminator pinned in runner_error_malformed_stdout_source_delegation_pin (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    fn subprocess_tracker_snapshot_returns_all_entries_with_dropped_read_guard() {
+        // Mirrors StreamTracker::snapshot's deadlock-freedom pin. The
+        // projection tick (next slice) will iterate snapshot()
+        // entries and call async budget-ledger lookups per entry; if
+        // snapshot held its read guard across that await, the daemon
+        // would deadlock as soon as the runner spawned a new
+        // subprocess and the runner's register() blocked on the
+        // tracker's write lock. Asserting that a synchronous
+        // register from the same thread after snapshot returns
+        // doesn't deadlock is the load-bearing pin.
+        let tracker = SubprocessTracker::new();
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        let id_c = Uuid::new_v4();
+        let entry_for = |agent: &str, pid: u32| TrackedSubprocess {
+            agent_id: agent.into(),
+            pid,
+            started_at_ms: 1_700_000_000_000,
+        };
+        tracker.register(id_a, entry_for("a@local", 100));
+        tracker.register(id_b, entry_for("b@local", 200));
+        tracker.register(id_c, entry_for("c@local", 300));
+
+        let mut snap = tracker.snapshot();
+        snap.sort_by_key(|(id, _)| *id);
+        assert_eq!(
+            snap.len(),
+            3,
+            "snapshot must include every registered entry; len mismatch means iter dropped a row or the read guard returned early"
+        );
+        let mut keys: Vec<Uuid> = snap.iter().map(|(id, _)| *id).collect();
+        keys.sort();
+        let mut expected = vec![id_a, id_b, id_c];
+        expected.sort();
+        assert_eq!(
+            keys, expected,
+            "snapshot must include exactly the registered intent_ids"
+        );
+
+        // Sentinel for the deadlock-freedom pin: if snapshot held the
+        // read guard across return, this register would deadlock. The
+        // test framework's wall-clock supervision would catch a hang,
+        // but the absence of a hang here is the pin.
+        let id_d = Uuid::new_v4();
+        tracker.register(id_d, entry_for("d@local", 400));
+        assert_eq!(tracker.len(), 4);
     }
 
     #[test]

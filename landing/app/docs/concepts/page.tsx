@@ -201,8 +201,8 @@ export default function ConceptsPage() {
       <ul>
         <li>
           <strong>Unix socket</strong> at <code>$COVENANT_HOME/sock</code> —
-          the canonical, length-prefixed JSON IPC. The CLI uses this
-          transport.
+          the canonical, length-prefixed JSON IPC. The CLI and TUI use
+          this transport.
         </li>
         <li>
           <strong>HTTP gateway</strong> at <code>127.0.0.1:8421</code> —

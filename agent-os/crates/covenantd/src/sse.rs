@@ -28,6 +28,7 @@
 //! integration, and buffered-fallback path for non-SSE clients are
 //! explicit follow-up sub-slices of ADR 0010 slice 6.
 
+use axum::http::header::{HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use covenant_ipc::StreamEnvelope;
 
 /// Encode one [`StreamEnvelope`] as a single SSE event block.
@@ -86,6 +87,45 @@ pub fn wants_event_stream(accept: Option<&str>) -> bool {
         .map(str::trim)
         .map(|part| part.split(';').next().unwrap_or("").trim())
         .any(|media_type| media_type.eq_ignore_ascii_case("text/event-stream"))
+}
+
+/// The pinned `(name, value)` header set an SSE response must carry.
+///
+/// ADR 0010 names `Content-Type: text/event-stream` as the framing
+/// contract; the other two headers are universally load-bearing for
+/// SSE deployments and are pinned here so a future contributor doesn't
+/// drop them as "redundant":
+///
+/// - `Content-Type: text/event-stream` — bare media type, no
+///   `charset=utf-8` suffix. Strict `EventSource` implementations
+///   reject the suffix; intermediate proxies sometimes normalize it
+///   away anyway, so the bare form is the safer wire shape.
+/// - `Cache-Control: no-cache` — intermediate caches treat this as
+///   "revalidate before reuse", which on an open streaming connection
+///   means "forward every byte". `no-store` would let proxies decide
+///   whether to keep partial streams; `private` would skip shared
+///   caches but not handle the streaming case; neither matches the
+///   contract that every chunk must reach the client now.
+/// - `X-Accel-Buffering: no` — nginx-specific. Default nginx buffers
+///   chunked responses and holds every chunk until the connection
+///   closes, which defeats the streaming purpose. The header is a
+///   no-op on non-nginx proxies and load-bearing on nginx-fronted
+///   deployments.
+///
+/// Returned as a fixed-size array so the call site is allocation-free
+/// and the count of headers is part of the type signature. The
+/// buffered-fallback path (Accept header doesn't request
+/// `text/event-stream`) uses axum's default JSON response shape; this
+/// helper applies only to the SSE branch.
+pub fn sse_response_headers() -> [(HeaderName, HeaderValue); 3] {
+    [
+        (CONTENT_TYPE, HeaderValue::from_static("text/event-stream")),
+        (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        (
+            HeaderName::from_static("x-accel-buffering"),
+            HeaderValue::from_static("no"),
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -285,5 +325,41 @@ mod tests {
     #[test]
     fn wants_event_stream_returns_false_for_plain_json() {
         assert!(!wants_event_stream(Some("application/json")));
+    }
+
+    #[test]
+    fn sse_response_headers_returns_three_entries() {
+        assert_eq!(sse_response_headers().len(), 3);
+    }
+
+    #[test]
+    fn sse_response_headers_pins_content_type_text_event_stream() {
+        let headers = sse_response_headers();
+        assert_eq!(headers[0].0, CONTENT_TYPE);
+        assert_eq!(headers[0].1, HeaderValue::from_static("text/event-stream"));
+    }
+
+    #[test]
+    fn sse_response_headers_pins_cache_control_no_cache() {
+        let headers = sse_response_headers();
+        assert_eq!(headers[1].0, CACHE_CONTROL);
+        assert_eq!(headers[1].1, HeaderValue::from_static("no-cache"));
+    }
+
+    #[test]
+    fn sse_response_headers_pins_x_accel_buffering_no() {
+        let headers = sse_response_headers();
+        assert_eq!(headers[2].0.as_str(), "x-accel-buffering");
+        assert_eq!(headers[2].1, HeaderValue::from_static("no"));
+    }
+
+    #[test]
+    fn sse_response_headers_content_type_has_no_charset_suffix() {
+        let headers = sse_response_headers();
+        let content_type = headers[0].1.to_str().expect("ASCII header value");
+        assert_eq!(
+            content_type, "text/event-stream",
+            "content-type must be the bare media type; strict EventSource implementations reject 'charset=utf-8' suffixes"
+        );
     }
 }

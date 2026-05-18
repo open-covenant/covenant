@@ -64,7 +64,7 @@ cargo build --workspace --exclude covenant-settlement-program`}</code>
         The Rust workspace lives under <code>agent-os/</code>; running{" "}
         <code>cargo</code> from the repository root fails because no{" "}
         <code>Cargo.toml</code> sits there. The first build downloads
-        dependencies and may take a few minutes. Two binaries land under{" "}
+        dependencies and may take a few minutes. Three binaries land under{" "}
         <code>agent-os/target/debug/</code>:
       </p>
 
@@ -76,6 +76,11 @@ cargo build --workspace --exclude covenant-settlement-program`}</code>
         <li>
           <code>covenant</code> — the command-line client. Speaks to the
           daemon over the Unix socket.
+        </li>
+        <li>
+          <code>covenant-tui</code> — the terminal UI client. Renders
+          intent, memory, audit, capabilities, A2A, chain-receipts, and
+          peer-registry views over the same Unix socket.
         </li>
       </ul>
 

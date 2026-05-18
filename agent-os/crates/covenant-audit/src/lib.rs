@@ -1,11 +1,16 @@
-//! Append-only audit log.
+//! Append-only audit log with hash-chain integrity verification.
 //!
 //! Every intent dispatch, capability check, capability grant, and
-//! capability revocation produces one [`AuditEvent`]. Wire format is
+//! capability revoke rejection produces one [`AuditEvent`] (successful
+//! revocations write tombstones to the capability and peer registries
+//! instead; only rejected revocations land here). Wire format is
 //! JSONL — one event per line, easy to tail or grep — and the
 //! [`AuditLog`] trait abstracts over a JSONL-backed implementation
 //! suitable for production and an in-memory implementation suitable
-//! for tests.
+//! for tests. [`AuditLog::verify_integrity`] returns an
+//! [`AuditIntegrityReport`] computed from the per-event hash chain;
+//! this is the verdict that `covenant audit verify` and the HTTP
+//! `/audit/integrity-report` surface consume.
 
 #![deny(unsafe_code)]
 

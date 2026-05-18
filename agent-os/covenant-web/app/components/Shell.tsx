@@ -18,6 +18,7 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/capabilities", label: "Permissions" },
   { href: "/memory", label: "Memory" },
   { href: "/settlement", label: "Spending" },
+  { href: "/sap", label: "Synapse" },
 ];
 
 function isActive(pathname: string, href: string): boolean {

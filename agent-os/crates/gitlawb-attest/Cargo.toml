@@ -1,0 +1,27 @@
+[package]
+name = "gitlawb-attest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "External Attestation v1 — a pluggable provenance extension for gitlawb ref-update certificates."
+keywords = ["gitlawb", "attestation", "provenance", "did", "ed25519"]
+categories = ["cryptography", "authentication"]
+
+# Standalone crate. Intentionally has no `gitlawb-*` dependency so it can be
+# lifted into `Gitlawb/node/crates/gitlawb-attest` verbatim once accepted
+# upstream.
+[workspace]
+
+[dependencies]
+base64 = "0.22"
+bs58 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+sha2 = "0.10"
+thiserror = "1"
+
+[dev-dependencies]
+rand = "0.9"

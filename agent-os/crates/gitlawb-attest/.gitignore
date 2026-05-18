@@ -1,0 +1,3 @@
+# Standalone crate while the attestation primitive is not in the workspace.
+Cargo.lock
+target/

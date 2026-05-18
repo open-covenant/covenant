@@ -275,6 +275,37 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>OperatorTokenRotationRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "operator_token_rotation_rejected",
+  "peer_display":    "guest@local",
+  "peer_pubkey_b58": "9hYz…Lk6w"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>RotateOperatorToken</code> is rejected
+        because the authenticated peer&apos;s pubkey does not match
+        the operator identity. The gate is silent in v0 single-peer
+        — only the operator can authenticate, so the rejection branch
+        is dead code — and becomes load-bearing at Phase-1 multi-peer
+        where a guest peer reaching this path is a probe worth
+        surfacing on the operator&apos;s <code>/audit</code> feed.
+        The issuer is the daemon identity (not the rejected peer) so
+        the row passes the cross-peer audit-feed isolation filter,
+        mirroring <code>AuthenticationFailed</code>&apos;s audience
+        model. <code>peer_pubkey_b58</code> is the unforgeable
+        identity — <code>display</code> is wire-supplied and a future
+        attacker could register <code>user@local</code> against any
+        pubkey, so the base58 form (matching{" "}
+        <code>bs58::encode(peer.pubkey)</code>) is the durable probe
+        attribution. Distinct from <code>AuthenticationFailed</code>{" "}
+        (the peer authenticated successfully — they failed an
+        authorization check, not authentication).
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

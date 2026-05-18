@@ -35,7 +35,14 @@ export default function IpcPage() {
         followed by exactly one response frame, and a long-lived
         connection can carry many request/response pairs in sequence.
         Connections are not pooled by the daemon; clients may reuse a
-        single connection or open one per request.
+        single connection or open one per request. The IPC v2
+        streaming opt-in (see{" "}
+        <a href="#streaming-responses-ipc-v2">
+          Streaming responses (IPC v2)
+        </a>{" "}
+        below) replaces the single response frame with a sequence of{" "}
+        <code>StreamEnvelope</code> frames; the per-frame framing
+        rules are unchanged.
       </p>
 
       <h2>Request shapes</h2>
@@ -54,11 +61,13 @@ export default function IpcPage() {
   "token_b58": "…" }
 
 { "kind": "submit_intent",
-  "text": "…" }
+  "text":          "…",
+  "prefer_stream": null | true | false }
 
 { "kind": "recent_memory",
-  "tier": "working" | "episodic" | "longterm" | null,
-  "limit": 10 }
+  "tier":          "working" | "episodic" | "longterm" | null,
+  "limit":         10,
+  "prefer_stream": null | true | false }
 
 { "kind": "search_memory",
   "query":         "…",
@@ -98,8 +107,9 @@ export default function IpcPage() {
   "arguments": { ... } }
 
 { "kind": "recent_audit",
-  "limit":    20,
-  "since_ms": null | 1714938000000 }
+  "limit":         20,
+  "since_ms":      null | 1714938000000,
+  "prefer_stream": null | true | false }
 
 { "kind": "verify_audit_integrity" }
 
@@ -184,6 +194,90 @@ export default function IpcPage() {
 
 { "kind": "error", "message": "…" }`}</code>
       </pre>
+
+      <h2 id="streaming-responses-ipc-v2">Streaming responses (IPC v2)</h2>
+      <p>
+        Three request kinds — <code>recent_memory</code>,{" "}
+        <code>recent_audit</code>, and <code>submit_intent</code> —
+        accept an optional <code>prefer_stream</code> boolean. When
+        the client sets <code>prefer_stream: true</code>, the daemon
+        replaces the single canonical response frame with a sequence
+        of <code>StreamEnvelope</code> frames terminated by{" "}
+        <code>stream_end</code> (or <code>stream_error</code> on a
+        mid-flight failure). Omitted, <code>null</code>, or{" "}
+        <code>false</code> keeps the v1 single-Response shape
+        byte-identically; v1 clients are not affected.
+      </p>
+      <p>
+        Each <code>StreamEnvelope</code> is one length-prefixed JSON
+        frame using the same framing rules as v1 (4-byte big-endian
+        length prefix, 8 MiB cap, UTF-8 JSON payload). The envelope
+        is tagged with a <code>kind</code> discriminator:
+      </p>
+      <pre>
+        <code>{`{ "kind":          "stream_begin",
+  "stream_id":     "uuid",
+  "response_kind": "memories" | "audit_events" | "intent_result" }
+
+{ "kind":      "stream_chunk",
+  "stream_id": "uuid",
+  "sequence":  0,
+  "chunk":     { … per-verb chunk payload … } }
+
+{ "kind":      "stream_end",
+  "stream_id": "uuid",
+  "summary":   null | { … per-verb summary … } }
+
+{ "kind":      "stream_error",
+  "stream_id": "uuid",
+  "message":   "…" }`}</code>
+      </pre>
+      <p>
+        <code>stream_begin</code> opens the stream with a fresh{" "}
+        <code>stream_id</code> and announces the buffered Response
+        variant the stream materializes via <code>response_kind</code>:{" "}
+        <code>memories</code> for <code>recent_memory</code>,{" "}
+        <code>audit_events</code> for <code>recent_audit</code>, and{" "}
+        <code>intent_result</code> for <code>submit_intent</code>.
+      </p>
+      <p>
+        <code>stream_chunk</code> frames carry a <code>sequence</code>{" "}
+        starting at 0 and incrementing by 1, plus a per-verb{" "}
+        <code>chunk</code>: a memory record for <code>recent_memory</code>,
+        an audit event for <code>recent_audit</code>, and an{" "}
+        AgentResult-shaped object{" "}
+        (<code>{"{ text, sources, runtime_events }"}</code>) for{" "}
+        <code>submit_intent</code>. An empty result set still emits a{" "}
+        <code>stream_begin</code> / <code>stream_end</code> pair so a
+        dead daemon is never confused with an empty stream.
+      </p>
+      <p>
+        <code>stream_end</code> closes the stream. For{" "}
+        <code>submit_intent</code> the <code>summary</code> field
+        carries <code>intent_id</code>, <code>status</code>, and{" "}
+        <code>settlement</code> — IntentResult bookkeeping that does
+        not fit in an AgentResult chunk. <code>recent_memory</code>{" "}
+        and <code>recent_audit</code> omit <code>summary</code>.
+      </p>
+      <p>
+        <code>stream_error</code> is reserved for streams that opened
+        successfully and then failed mid-flight. <em>Streaming
+        refused</em> — capability gate failure, ignore-rule match,
+        budget exhaustion — is signaled by the daemon returning the
+        v1 single-Response frame (typically{" "}
+        <code>{"{ \"kind\": \"error\", \"message\": \"…\" }"}</code>)
+        instead of opening a stream; the consumer disambiguates the
+        two cases by reading the first frame&apos;s <code>kind</code>{" "}
+        discriminator.
+      </p>
+      <p>
+        The HTTP gateway exposes this same v2 surface as Server-Sent
+        Events: see{" "}
+        <Link href="/docs/http-api#streaming-responses">
+          Streaming responses
+        </Link>{" "}
+        on the HTTP API page for the per-frame SSE encoding.
+      </p>
 
       <h2>Implementation notes</h2>
       <ul>

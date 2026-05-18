@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!   covenant ping [--json]
-//!   covenant intent [--json] <text>
+//!   covenant intent [--json] [--stream] <text>
 //!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json] [--stream]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--min-relevance F] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
@@ -98,7 +98,7 @@ fn print_usage() {
     eprintln!(
         "  covenant bootstrap [--json]             grant the capabilities every loaded agent needs to run its first task"
     );
-    eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
+    eprintln!("  covenant intent [--json] [--stream] <text>  submit an intent and print the result (--stream opts into v2 streaming response framing)");
     eprintln!("  covenant ping [--json]                  check the daemon is responsive");
     eprintln!(
         "  covenant version                        print daemon protocol metadata as JSON (no token required)"
@@ -310,6 +310,65 @@ fn decode_audit_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<AuditEvent>
                 .with_context(|| format!("decode audit stream chunk {i}"))
         })
         .collect()
+}
+
+fn decode_intent_stream(
+    chunks: Vec<serde_json::Value>,
+    summary: Option<serde_json::Value>,
+) -> Result<Response> {
+    // ADR 0010 / Server::stream_submit_intent emits exactly one
+    // StreamChunk carrying an AgentResult plus a StreamEnd.summary that
+    // names {intent_id, status, settlement}. The CLI extracts the two
+    // load-bearing AgentResult fields (text + sources) by hand instead
+    // of pulling in covenant-runtime as a CLI dep — the streamed
+    // runtime_events vec is always empty per ADR.
+    if chunks.len() != 1 {
+        bail!(
+            "intent stream expected exactly one AgentResult chunk, got {}",
+            chunks.len()
+        );
+    }
+    let chunk = chunks.into_iter().next().expect("len == 1 just checked");
+    let chunk_obj = chunk
+        .as_object()
+        .context("intent stream chunk is not a JSON object")?;
+    let text = chunk_obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .context("intent stream chunk missing 'text'")?
+        .to_string();
+    let sources: Vec<String> = match chunk_obj.get("sources") {
+        Some(v) => serde_json::from_value(v.clone())
+            .context("decode 'sources' from intent stream chunk")?,
+        None => Vec::new(),
+    };
+    let summary = summary.context("intent stream missing summary on StreamEnd")?;
+    let intent_id: uuid::Uuid = serde_json::from_value(
+        summary
+            .get("intent_id")
+            .cloned()
+            .context("intent stream summary missing intent_id")?,
+    )
+    .context("decode intent_id from summary")?;
+    let status: String = serde_json::from_value(
+        summary
+            .get("status")
+            .cloned()
+            .context("intent stream summary missing status")?,
+    )
+    .context("decode status from summary")?;
+    let settlement: Option<SettlementReceipt> = match summary.get("settlement").cloned() {
+        Some(v) if v.is_null() => None,
+        Some(v) => Some(serde_json::from_value(v).context("decode settlement from summary")?),
+        None => None,
+    };
+    Ok(Response::IntentResult {
+        intent_id,
+        status,
+        text,
+        sources,
+        settlement,
+    })
 }
 
 fn memory_tier_slug(tier: MemoryTier) -> &'static str {
@@ -598,17 +657,20 @@ async fn main() -> Result<()> {
                 eprintln!("covenant intent: missing intent text");
                 std::process::exit(2);
             }
-            // Strip `--json` only from leading positions. Stop scanning
-            // for flags after the first non-flag token so `covenant
-            // intent search --json command help` keeps the literal text
-            // `search --json command help` instead of silently dropping
-            // the `--json` in the middle.
+            // Strip `--json` and `--stream` only from leading positions.
+            // Stop scanning for flags after the first non-flag token so
+            // `covenant intent search --json command help` keeps the
+            // literal text `search --json command help` instead of
+            // silently dropping the `--json` in the middle.
             let mut as_json = false;
+            let mut prefer_stream = false;
             let mut text_parts: Vec<String> = Vec::new();
             let mut consuming_flags = true;
             for arg in args.iter().skip(1) {
                 if consuming_flags && arg == "--json" {
                     as_json = true;
+                } else if consuming_flags && arg == "--stream" {
+                    prefer_stream = true;
                 } else {
                     consuming_flags = false;
                     text_parts.push(arg.clone());
@@ -623,11 +685,23 @@ async fn main() -> Result<()> {
                 &mut stream,
                 &Request::SubmitIntent {
                     text: request_text,
-                    prefer_stream: None,
+                    prefer_stream: prefer_stream.then_some(true),
                 },
             )
             .await?;
-            match read_frame::<_, Response>(&mut stream).await? {
+            let response = match read_response_or_stream(&mut stream).await? {
+                ResponseOrStream::Terminal(r) => r,
+                ResponseOrStream::Stream(collected) => {
+                    if collected.response_kind != "intent_result" {
+                        bail!(
+                            "unexpected stream response_kind '{}' (expected 'intent_result')",
+                            collected.response_kind
+                        );
+                    }
+                    decode_intent_stream(collected.chunks, collected.summary)?
+                }
+            };
+            match response {
                 Response::IntentResult {
                     intent_id,
                     status,
@@ -6482,6 +6556,80 @@ mod tests {
         assert!(peer_revoke_is_failure(&RevokeOutcome::SelfRevokeForbidden(
             p
         )));
+    }
+
+    #[test]
+    fn decode_intent_stream_reassembles_response_from_chunk_and_summary() {
+        // Daemon's stream_submit_intent emits one StreamChunk carrying
+        // AgentResult { text, sources, runtime_events:[] } and a
+        // StreamEnd.summary holding intent_id/status/settlement. The
+        // CLI must reassemble those into Response::IntentResult so the
+        // print branch is unchanged from v1.
+        let intent_id = uuid::Uuid::from_u128(0xABCD_1234);
+        let chunk = serde_json::json!({
+            "text": "answer body",
+            "sources": ["doc://a", "doc://b"],
+            "runtime_events": []
+        });
+        let summary = serde_json::json!({
+            "intent_id": intent_id,
+            "status": "ok",
+            "settlement": null,
+        });
+        let response =
+            decode_intent_stream(vec![chunk], Some(summary)).expect("happy intent stream decodes");
+        match response {
+            Response::IntentResult {
+                intent_id: id,
+                status,
+                text,
+                sources,
+                settlement,
+            } => {
+                assert_eq!(id, intent_id);
+                assert_eq!(status, "ok");
+                assert_eq!(text, "answer body");
+                assert_eq!(sources, vec!["doc://a", "doc://b"]);
+                assert!(settlement.is_none());
+            }
+            other => panic!("expected IntentResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_intent_stream_rejects_wrong_chunk_count() {
+        // The streamed intent path emits exactly one chunk per ADR.
+        // Two chunks means the daemon changed its emit pattern; fail
+        // loudly so the CLI doesn't silently drop or duplicate output.
+        let summary = serde_json::json!({
+            "intent_id": uuid::Uuid::nil(),
+            "status": "ok",
+            "settlement": null,
+        });
+        let err = decode_intent_stream(
+            vec![
+                serde_json::json!({"text": "a"}),
+                serde_json::json!({"text": "b"}),
+            ],
+            Some(summary),
+        )
+        .expect_err("two-chunk intent stream must error");
+        assert!(
+            err.to_string().contains("exactly one"),
+            "error must name the contract: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_intent_stream_requires_summary() {
+        // StreamEnd without a summary is a daemon protocol bug; without
+        // it the CLI cannot reconstruct intent_id/status/settlement.
+        let chunk = serde_json::json!({"text": "answer", "sources": []});
+        let err = decode_intent_stream(vec![chunk], None).expect_err("missing summary must error");
+        assert!(
+            err.to_string().contains("missing summary"),
+            "error names the missing field: {err}"
+        );
     }
 
     #[test]

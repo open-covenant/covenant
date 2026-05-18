@@ -9,8 +9,9 @@ export default function IpcPage() {
       <h1>Local IPC</h1>
       <p>
         The daemon&apos;s canonical wire protocol. Clients on the same
-        host — the CLI, operator UIs, third-party tooling — communicate
-        with the daemon over length-prefixed JSON on a Unix socket at{" "}
+        host — the CLI, the TUI, operator UIs, third-party tooling —
+        communicate with the daemon over length-prefixed JSON on a Unix
+        socket at{" "}
         <code>$COVENANT_HOME/sock</code>. The HTTP gateway is a thin
         adapter over the same surface.
       </p>

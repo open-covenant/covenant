@@ -77,9 +77,11 @@ export default function ConceptsPage() {
       <p>
         At dispatch the runtime spawns the agent binary, sends one JSON
         line containing the <code>Intent</code> on stdin, reads one JSON
-        line containing the <code>AgentResult</code> on stdout, and kills
-        the process if it exceeds <code>resources.cpu_ms_per_task</code>.
-        Stderr is streamed to the daemon&apos;s tracing log.
+        line containing the <code>AgentResult</code> on stdout, and
+        enforces the budget via projection-tick preempt on projected
+        overshoot, with a wall-clock kill at{" "}
+        <code>resources.cpu_ms_per_task</code> as the backstop. Stderr is
+        streamed to the daemon&apos;s tracing log.
       </p>
 
       <h2>Capability</h2>

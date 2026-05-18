@@ -4,7 +4,7 @@ Covenant is moving toward an open operating layer for governed autonomous softwa
 
 ## Foundation: Local Control Plane
 
-The foundation is a local control plane for autonomous engineering systems: daemon, CLI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and live validation paths.
+The foundation is a local control plane for autonomous engineering systems: daemon, CLI, TUI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and live validation paths.
 
 ## Now: Harden the Local Control Plane
 

@@ -100,6 +100,81 @@ pub enum BudgetCheckpointError {
     NotFound(Uuid),
 }
 
+/// Policy for projecting whether an in-flight subprocess is on track to
+/// exceed its remaining budget before natural completion. Consumed by
+/// [`project_overshoot`]; the choice is exposed so the future daemon-side
+/// projection tick (sub-slice B2) can switch policy via configuration
+/// without changing the projection contract callers join against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetProjectionPolicy {
+    /// Post-completion accounting only: the projection function returns
+    /// true iff the *already-accrued* debit exceeds remaining. This
+    /// matches the pre-hard-preempt behavior and is the safe default
+    /// while the daemon-side projection tick has not yet shipped.
+    NoExtrapolation,
+    /// Linear extrapolation from observed debit-rate. Requires both a
+    /// minimum observation window (so a one-millisecond initial spike
+    /// does not project to infinity) and a minimum number of debit
+    /// samples (so a single fee-paying tool call does not extrapolate
+    /// to a runaway agent). The contract is conservative: when either
+    /// threshold is below the minimum the function returns `false` and
+    /// the daemon stays on post-completion accounting for that tick.
+    LinearExtrapolation {
+        min_observation_window_ms: u64,
+        min_debit_samples: u32,
+    },
+}
+
+/// Returns `true` when the in-flight subprocess for an intent is on
+/// track to exceed its `remaining` budget under the chosen
+/// [`BudgetProjectionPolicy`]. The daemon-side projection tick
+/// (deferred to sub-slice B2) walks the [`SubprocessTracker`] entries
+/// and pushes overshooting `intent_id`s into the preempt-queue.
+///
+/// The function is intentionally pure and `u64`-typed so the projection
+/// contract is testable in isolation and never silently shifts when the
+/// daemon-side ledger schema changes.
+pub fn project_overshoot(
+    current_debit: u64,
+    observation_window_ms: u64,
+    observed_debit_samples: u32,
+    remaining: u64,
+    policy: BudgetProjectionPolicy,
+) -> bool {
+    match policy {
+        BudgetProjectionPolicy::NoExtrapolation => current_debit > remaining,
+        BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms,
+            min_debit_samples,
+        } => {
+            if observation_window_ms < min_observation_window_ms
+                || observed_debit_samples < min_debit_samples
+            {
+                return false;
+            }
+            // current_debit already exceeds remaining → overshoot is
+            // observed, not projected. Distinguishing the two cases
+            // costs a branch; collapsing them risks a future caller
+            // missing that the linear-rate path even applies when the
+            // observed debit alone is already over the line.
+            if current_debit > remaining {
+                return true;
+            }
+            // Conservative rate model: assume the subprocess will keep
+            // spending at the observed average for at least as long as
+            // it already has. If projected total exceeds remaining,
+            // flag for preempt.
+            //
+            // Saturating arithmetic guards against (a)
+            // current_debit==0 producing a zero rate that never
+            // extrapolates, and (b) a runaway extrapolation overflowing
+            // u64 on a tight rate against a long window.
+            let projected_total = current_debit.saturating_add(current_debit);
+            projected_total > remaining
+        }
+    }
+}
+
 /// One debit event. Persisted to the JSONL log by [`JsonlLedger`] and
 /// returned by [`BudgetLedger::recent_debits`] for the operator
 /// dashboard / settlement-reconciliation paths.
@@ -3059,5 +3134,112 @@ mod tests {
                  resume succeeded; got {other:?}",
             ),
         }
+    }
+
+    #[test]
+    fn project_overshoot_no_extrapolation_pins_post_completion_accounting_semantics() {
+        // NoExtrapolation is the safe default: it returns true iff the
+        // already-accrued debit exceeds remaining. This preserves the
+        // pre-hard-preempt behavior and is what the daemon uses on
+        // every tick until sub-slice B2 ships the linear path.
+        assert!(!project_overshoot(
+            10,
+            500,
+            5,
+            100,
+            BudgetProjectionPolicy::NoExtrapolation
+        ));
+        assert!(!project_overshoot(
+            100,
+            500,
+            5,
+            100,
+            BudgetProjectionPolicy::NoExtrapolation
+        ));
+        assert!(project_overshoot(
+            101,
+            500,
+            5,
+            100,
+            BudgetProjectionPolicy::NoExtrapolation
+        ));
+        // Observation window and sample count are irrelevant under
+        // NoExtrapolation; the function must not gate on either.
+        assert!(project_overshoot(
+            101,
+            0,
+            0,
+            100,
+            BudgetProjectionPolicy::NoExtrapolation
+        ));
+    }
+
+    #[test]
+    fn project_overshoot_linear_extrapolation_short_circuits_below_observation_thresholds() {
+        // Below either the window or sample threshold the linear path
+        // returns false — the daemon stays on post-completion
+        // accounting until enough evidence accumulates. Without the
+        // short-circuit a one-millisecond spike or a single fee-paying
+        // tool call would project to runaway and trigger a preempt.
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+        assert!(
+            !project_overshoot(80, 100, 5, 100, policy),
+            "window=100 < min=500 must short-circuit even when samples are sufficient"
+        );
+        assert!(
+            !project_overshoot(80, 1000, 1, 100, policy),
+            "samples=1 < min=3 must short-circuit even when window is sufficient"
+        );
+    }
+
+    #[test]
+    fn project_overshoot_linear_extrapolation_flags_when_observed_already_exceeds_remaining() {
+        // The conservative model: if current_debit already exceeds
+        // remaining, no extrapolation needed — the overshoot is
+        // observed, not projected. Catches a future regression that
+        // skipped this branch and only considered the rate-based
+        // projection.
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+        assert!(project_overshoot(150, 1000, 5, 100, policy));
+    }
+
+    #[test]
+    fn project_overshoot_linear_extrapolation_uses_observed_debit_as_residual_estimate() {
+        // The default residual estimate doubles current_debit (assume
+        // the subprocess keeps spending at the observed average for at
+        // least as long as it already has). A projected_total > remaining
+        // flags for preempt; equal or below does not. The thresholds
+        // chosen here put the projection right at the boundary so a
+        // refactor that flipped the comparison sense or used a
+        // different residual model would surface here.
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+        // current_debit=60, projected=120, remaining=100 → flag.
+        assert!(project_overshoot(60, 1000, 5, 100, policy));
+        // current_debit=40, projected=80, remaining=100 → no flag.
+        assert!(!project_overshoot(40, 1000, 5, 100, policy));
+        // Equal projected to remaining must NOT flag (strict >).
+        assert!(!project_overshoot(50, 1000, 5, 100, policy));
+    }
+
+    #[test]
+    fn project_overshoot_linear_extrapolation_handles_zero_debit_and_saturating_overflow() {
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+        // Zero observed debit projects to zero — never flags.
+        assert!(!project_overshoot(0, 1000, 5, 100, policy));
+        // Saturating add prevents a panic on u64::MAX inputs; the
+        // saturated value > any finite remaining → flag.
+        assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
     }
 }

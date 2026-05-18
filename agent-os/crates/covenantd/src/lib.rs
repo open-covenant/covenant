@@ -42,7 +42,7 @@ use covenant_permissions::{
     MemoryCompactionScopeRequest, PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
-use covenant_runtime::Runner;
+use covenant_runtime::{AgentResult, Runner};
 use covenant_settlement::{
     build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
     Settlement,
@@ -4046,6 +4046,87 @@ impl Server {
         let result = stream_dispatch::emit_audit_stream(writer, stream_id, &events).await;
         self.stream_tracker.unregister(connection_id, stream_id);
         result
+    }
+
+    /// ADR 0010 streaming orchestrator for `Request::SubmitIntent`
+    /// with `prefer_stream: Some(true)`. Symmetric with
+    /// [`Self::stream_recent_memory`] and [`Self::stream_recent_audit`]
+    /// in structure: dispatches the intent via
+    /// [`Self::dispatch_intent`] (which owns capability checks,
+    /// ignore-rule enforcement, runner invocation, audit recording,
+    /// memory writes, and budget metering), then forks on the
+    /// response variant.
+    ///
+    /// On `Response::IntentResult { intent_id, status, text, sources,
+    /// settlement }`, builds an [`AgentResult`] chunk carrying
+    /// `text` and `sources` (and an empty `runtime_events` vec
+    /// because `dispatch_intent` already folded runtime events into
+    /// the audit chain — emitting them again here would double-publish
+    /// on the wire). Packs `intent_id`, `status`, and `settlement`
+    /// into a `serde_json::Value` summary because those fields are
+    /// IntentResult-only bookkeeping that doesn't fit in an
+    /// `AgentResult` chunk. Allocates a fresh `stream_id`, registers
+    /// a [`stream_tracker::StreamEntry`] with `verb = "SubmitIntent"`
+    /// and `schema = stream_dispatch::INTENT_RESULT_CHUNK_SCHEMA`,
+    /// drives [`stream_dispatch::emit_intent_stream`] through the
+    /// caller's writer, then unregisters the tracker entry regardless
+    /// of the emit result. Any other `Response` variant (capability
+    /// failure, ignore-rule match, budget exhaustion) is written as a
+    /// v1-shape terminal frame and skips tracker bookkeeping —
+    /// ADR 0010 explicitly allows daemon-decides-not-to-stream by
+    /// falling back to v1 shape.
+    ///
+    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
+    /// fork lives in slice 5.d.
+    #[allow(dead_code)]
+    pub async fn stream_submit_intent<W>(
+        &self,
+        writer: &mut W,
+        connection_id: Uuid,
+        text: String,
+        peer: &AgentId,
+    ) -> Result<(), IpcError>
+    where
+        W: tokio::io::AsyncWriteExt + Unpin,
+    {
+        let response = self.dispatch_intent(text, peer).await;
+        let (result, summary) = match response {
+            Response::IntentResult {
+                intent_id,
+                status,
+                text,
+                sources,
+                settlement,
+            } => {
+                let result = AgentResult {
+                    text,
+                    sources,
+                    runtime_events: Vec::new(),
+                };
+                let summary = serde_json::json!({
+                    "intent_id": intent_id,
+                    "status": status,
+                    "settlement": settlement,
+                });
+                (result, summary)
+            }
+            other => return write_frame(writer, &other).await,
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "SubmitIntent".into(),
+                schema: stream_dispatch::INTENT_RESULT_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+        let emit_result =
+            stream_dispatch::emit_intent_stream(writer, stream_id, &[result], Some(summary)).await;
+        self.stream_tracker.unregister(connection_id, stream_id);
+        emit_result
     }
 
     /// Returns settlement receipts where `peer` is the payer.
@@ -10397,6 +10478,170 @@ required = {caps:?}
         assert_ne!(
             id_a, id_b,
             "consecutive audit streams must allocate fresh stream_ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_submit_intent_happy_path_emits_begin_chunk_end_with_summary_and_purges_tracker(
+    ) {
+        // Agent card matches "find" + "papers", required caps granted.
+        // dispatch_intent returns Response::IntentResult with a non-nil
+        // intent_id, status="ok", and a paired settlement receipt. The
+        // orchestrator must emit StreamBegin + 1 chunk (the AgentResult
+        // text/sources, runtime_events emptied) + StreamEnd carrying a
+        // summary Value that round-trips intent_id and status. Tracker
+        // is empty after the method returns Ok.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+
+        let mut buf = Vec::new();
+        s.stream_submit_intent(
+            &mut buf,
+            connection_id,
+            "find recent papers on agent memory".into(),
+            &me,
+        )
+        .await
+        .expect("stream_submit_intent must succeed on the happy path");
+
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let mut envelopes = Vec::new();
+        while let Ok(env) =
+            covenant_ipc::read_frame::<_, covenant_ipc::StreamEnvelope>(&mut cursor).await
+        {
+            envelopes.push(env);
+        }
+        assert_eq!(envelopes.len(), 3, "begin + 1 chunk + end = 3 frames");
+        match &envelopes[0] {
+            covenant_ipc::StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, "intent_result");
+            }
+            other => panic!("frame 0 must be StreamBegin, got {other:?}"),
+        }
+        match &envelopes[1] {
+            covenant_ipc::StreamEnvelope::StreamChunk {
+                sequence, chunk, ..
+            } => {
+                assert_eq!(*sequence, 0);
+                assert_eq!(chunk["text"], "mocked summary");
+                assert!(
+                    chunk["runtime_events"].as_array().unwrap().is_empty(),
+                    "runtime_events must be empty on the chunk — dispatch_intent already folded them into the audit chain, double-publishing would surface here"
+                );
+            }
+            other => panic!("frame 1 must be StreamChunk, got {other:?}"),
+        }
+        let summary = match &envelopes[2] {
+            covenant_ipc::StreamEnvelope::StreamEnd { summary, .. } => summary
+                .as_ref()
+                .expect("StreamEnd.summary must carry IntentResult bookkeeping"),
+            other => panic!("frame 2 must be StreamEnd, got {other:?}"),
+        };
+        assert_eq!(summary["status"], "ok");
+        let intent_id_str = summary["intent_id"]
+            .as_str()
+            .expect("intent_id must serialize as a string");
+        Uuid::parse_str(intent_id_str).expect("intent_id must round-trip through Uuid::parse_str — a string-formatting drift would surface here");
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful stream_submit_intent"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_submit_intent_capability_failure_writes_v1_error_and_skips_tracker() {
+        // No grants present. dispatch_intent's capability gate returns
+        // Response::Error (not Response::IntentResult), so the
+        // orchestrator's fallthrough writes a v1-shape terminal frame
+        // and skips StreamTracker bookkeeping. ADR 0010 allows
+        // daemon-decides-not-to-stream by falling back to v1 shape on
+        // any non-IntentResult variant. A regression that wrapped the
+        // capability failure in StreamBegin+StreamError would surface
+        // here as a StreamEnvelope decode succeeding instead of
+        // Response::Error.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        // Deliberately skip grant_action — no capability means
+        // dispatch_intent returns Response::Error.
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+
+        let mut buf = Vec::new();
+        s.stream_submit_intent(
+            &mut buf,
+            connection_id,
+            "find recent papers on agent memory".into(),
+            &me,
+        )
+        .await
+        .expect("capability-failure path must still return Ok — error went out on the wire");
+
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let resp: covenant_ipc::Response = covenant_ipc::read_frame(&mut cursor)
+            .await
+            .expect("first frame must decode as v1 Response");
+        match resp {
+            covenant_ipc::Response::Error { .. } => {}
+            other => panic!("expected v1 Response::Error on capability failure, got {other:?}"),
+        }
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty on the capability-failure path — the orchestrator skips register+unregister entirely"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_submit_intent_two_calls_use_distinct_stream_ids() {
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+
+        let mut buf_a = Vec::new();
+        s.stream_submit_intent(
+            &mut buf_a,
+            connection_id,
+            "find recent papers on agent memory".into(),
+            &me,
+        )
+        .await
+        .unwrap();
+        let mut buf_b = Vec::new();
+        s.stream_submit_intent(
+            &mut buf_b,
+            connection_id,
+            "find recent papers on agent memory".into(),
+            &me,
+        )
+        .await
+        .unwrap();
+
+        async fn read_first_begin(buf: &[u8]) -> Uuid {
+            let mut cursor = std::io::Cursor::new(buf);
+            let env: covenant_ipc::StreamEnvelope =
+                covenant_ipc::read_frame(&mut cursor).await.unwrap();
+            match env {
+                covenant_ipc::StreamEnvelope::StreamBegin { stream_id, .. } => stream_id,
+                other => panic!("expected StreamBegin, got {other:?}"),
+            }
+        }
+        let id_a = read_first_begin(&buf_a).await;
+        let id_b = read_first_begin(&buf_b).await;
+        assert_ne!(
+            id_a, id_b,
+            "consecutive intent streams must allocate fresh stream_ids"
         );
     }
 

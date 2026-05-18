@@ -250,6 +250,38 @@ pub enum AuditKind {
         tokens_remaining: u64,
         refill_eta_ms: u64,
     },
+    /// Logged when the budget-hard-preempt path successfully terminated
+    /// an over-budget subprocess. Distinct from [`BudgetExhausted`] (a
+    /// post-completion rejection) because preempt actively kills a
+    /// still-running process. `signal_sent` is the name of the signal
+    /// the daemon dispatched (`"SIGTERM"`, `"SIGKILL"`, or `"none"`
+    /// when the subprocess exited naturally inside the grace window
+    /// before any signal was needed). `exit_code` is None when the
+    /// process did not return a code (signal-terminated) and the
+    /// daemon observed termination via `child.wait()` only. The five
+    /// fields are load-bearing for the operator's post-mortem and for
+    /// any future tooling that classifies cooperative vs. forced
+    /// terminations.
+    BudgetPreempted {
+        agent_display: String,
+        intent_id: Uuid,
+        reason: String,
+        signal_sent: String,
+        exit_code: Option<i32>,
+    },
+    /// Logged when the budget-hard-preempt path attempted to signal
+    /// the subprocess but the syscall returned an error. `errno`
+    /// distinguishes ESRCH (benign — subprocess exited first; the
+    /// daemon may instead emit `BudgetPreempted` with `signal_sent =
+    /// "none"`) from EPERM (security incident — daemon lacks
+    /// signal-send permission for that pid). The four fields are
+    /// load-bearing for incident triage.
+    BudgetPreemptFailed {
+        agent_display: String,
+        intent_id: Uuid,
+        reason: String,
+        errno: i32,
+    },
     /// Logged when `dispatch_intent` falls into the NoCapacity fail-open
     /// arm: the manifest opted in to budget enforcement
     /// (`budget_credits_per_hour > 0`) but no bucket was seeded for the
@@ -2000,6 +2032,137 @@ mod tests {
             assert!(
                 serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
                 "AuditKind::BudgetExhausted wire form must reject a payload missing {required:?}; a stray #[serde(default)] on intent_text or intent_id would silently let the resume queue re-dispatch a meaningless intent",
+            );
+        }
+    }
+
+    #[test]
+    fn audit_kind_budget_preempted_serde_pins_five_field_variant_and_optional_exit_code() {
+        // BudgetPreempted is the audit row covenantd's preempt_dispatcher
+        // (future C2 slice) emits after a successful subprocess
+        // termination. Operator post-mortem joins on (intent_id,
+        // signal_sent, exit_code) to classify cooperative SIGTERM exits
+        // vs. SIGKILL fallbacks vs. natural-exit races. The five fields
+        // plus the 'type' discriminator are load-bearing; a refactor
+        // that dropped signal_sent (e.g. unified into reason) would
+        // silently strand that classification.
+        let kind = AuditKind::BudgetPreempted {
+            agent_display: "research@local".into(),
+            intent_id: Uuid::nil(),
+            reason: "projected_overshoot".into(),
+            signal_sent: "SIGTERM".into(),
+            exit_code: Some(143),
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "agent_display",
+                "exit_code",
+                "intent_id",
+                "reason",
+                "signal_sent",
+                "type",
+            ],
+            "AuditKind::BudgetPreempted wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("budget_preempted")),
+            "AuditKind discriminator slug must be snake_case 'budget_preempted'; a titlecase regression or a merge with BudgetExhausted's slug would silently collapse the killed-during-execution vs. denied-pre-dispatch split that /audit consumers filter on",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::BudgetPreempted must round-trip through serde_json verbatim",
+        );
+
+        // exit_code is Option<i32>; None must serialize as JSON null
+        // and round-trip to None. Required-field tests below check the
+        // non-optional surface; this check pins the optional surface
+        // separately so a refactor that dropped Option or applied
+        // skip_serializing_if would surface.
+        let none_kind = AuditKind::BudgetPreempted {
+            agent_display: "research@local".into(),
+            intent_id: Uuid::nil(),
+            reason: "projected_overshoot".into(),
+            signal_sent: "none".into(),
+            exit_code: None,
+        };
+        let none_wire = serde_json::to_value(&none_kind).unwrap();
+        assert_eq!(
+            none_wire.as_object().and_then(|o| o.get("exit_code")),
+            Some(&serde_json::Value::Null),
+            "BudgetPreempted::exit_code must serialize as null when None; skip_serializing_if would hide the signal-terminated case from consumers that filter on the key's presence"
+        );
+        let back: AuditKind = serde_json::from_value(none_wire).unwrap();
+        assert_eq!(back, none_kind);
+
+        // exit_code is Option<i32>; serde decodes Option from a missing
+        // wire key as None, so it is intentionally NOT in the
+        // required-omission walk. The wire-key count assertion above
+        // (six keys including exit_code) catches a stray
+        // skip_serializing_if regression; the null-on-wire round-trip
+        // catches a refactor that dropped Option entirely.
+        for required in ["agent_display", "intent_id", "reason", "signal_sent"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::BudgetPreempted wire form must reject a payload missing {required:?}; a stray #[serde(default)] would silently let an invalid preempt row decode",
+            );
+        }
+    }
+
+    #[test]
+    fn audit_kind_budget_preempt_failed_serde_pins_four_field_variant() {
+        // BudgetPreemptFailed is the security-relevant counterpart of
+        // BudgetPreempted. errno=ESRCH means the subprocess already
+        // exited (benign — the daemon may also choose to emit
+        // BudgetPreempted with signal_sent="none"); errno=EPERM means
+        // the daemon ran without permission to signal that pid, which
+        // is a configuration or security incident. The four fields
+        // plus 'type' are load-bearing.
+        let kind = AuditKind::BudgetPreemptFailed {
+            agent_display: "research@local".into(),
+            intent_id: Uuid::nil(),
+            reason: "projected_overshoot".into(),
+            errno: 1, // EPERM
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["agent_display", "errno", "intent_id", "reason", "type"],
+            "AuditKind::BudgetPreemptFailed wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("budget_preempt_failed")),
+            "AuditKind discriminator slug must be snake_case 'budget_preempt_failed'; a merge with BudgetPreempted's slug would silently collapse the successful-preempt vs. failed-signal split that operator incident triage joins on",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["agent_display", "intent_id", "reason", "errno"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::BudgetPreemptFailed wire form must reject a payload missing {required:?}",
             );
         }
     }

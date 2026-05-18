@@ -4897,6 +4897,8 @@ fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
             | AuditKind::A2ARecipientRejected { .. }
             | AuditKind::CapabilityRevokeRejected { .. }
             | AuditKind::BudgetExhausted { .. }
+            | AuditKind::BudgetPreempted { .. }
+            | AuditKind::BudgetPreemptFailed { .. }
     )
 }
 

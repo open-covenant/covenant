@@ -128,6 +128,37 @@ pub fn sse_response_headers() -> [(HeaderName, HeaderValue); 3] {
     ]
 }
 
+/// Concatenate per-envelope SSE event blocks into a single response
+/// body.
+///
+/// The upcoming route-wiring slice (ADR 0010 slice 6.h+) calls this on
+/// the `Vec<StreamEnvelope>` returned by
+/// [`crate::Server::recent_memory_envelopes`] /
+/// [`crate::Server::recent_audit_envelopes`] /
+/// [`crate::Server::submit_intent_envelopes`], then sends the
+/// resulting string as the axum response body. The single-envelope
+/// encoder already terminates each event with `\n\n` (the SSE
+/// blank-line delimiter), so concatenation requires no separator —
+/// inserting one would surface as off-by-N byte drift in a future
+/// transport migration.
+///
+/// The iteration order matches the input slice; the consumer that
+/// reads the SSE stream sees the envelopes in the same order the
+/// collector produced them. An empty slice returns an empty string,
+/// which is what an HTTP response body of length zero looks like —
+/// the response headers still carry `Content-Type: text/event-stream`
+/// because that's the contract the SSE-Accept gate selected, even if
+/// the stream itself is empty.
+pub fn render_envelopes_as_sse_body(
+    envelopes: &[StreamEnvelope],
+) -> Result<String, serde_json::Error> {
+    let mut out = String::new();
+    for env in envelopes {
+        out.push_str(&encode_stream_envelope_as_sse(env)?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +391,92 @@ mod tests {
         assert_eq!(
             content_type, "text/event-stream",
             "content-type must be the bare media type; strict EventSource implementations reject 'charset=utf-8' suffixes"
+        );
+    }
+
+    #[test]
+    fn render_envelopes_as_sse_body_empty_slice_returns_empty_string() {
+        let body = render_envelopes_as_sse_body(&[]).expect("infallible on empty");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn render_envelopes_as_sse_body_single_envelope_matches_encoder() {
+        let env = StreamEnvelope::StreamBegin {
+            stream_id: Uuid::nil(),
+            response_kind: "memories".to_string(),
+        };
+        let body = render_envelopes_as_sse_body(std::slice::from_ref(&env)).expect("encode");
+        let expected = encode_stream_envelope_as_sse(&env).expect("encode");
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn render_envelopes_as_sse_body_three_envelopes_preserves_order() {
+        let stream_id = Uuid::from_u128(0x99);
+        let envs = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".to_string(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: json!({"id": "a"}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+        let body = render_envelopes_as_sse_body(&envs).expect("encode");
+        let parts: Vec<&str> = body.split("\n\n").collect();
+        assert_eq!(
+            parts.len(),
+            4,
+            "3 events terminated by \\n\\n produces 3 non-empty parts plus one trailing empty part; got {parts:?}"
+        );
+        assert_eq!(
+            parts[3], "",
+            "trailing terminator yields an empty final part"
+        );
+        for (i, env) in envs.iter().enumerate() {
+            let event_block = format!("{}\n\n", parts[i]);
+            let expected = encode_stream_envelope_as_sse(env).expect("encode");
+            assert_eq!(
+                event_block, expected,
+                "envelope at index {i} must match the single-envelope encoder output"
+            );
+        }
+    }
+
+    #[test]
+    fn render_envelopes_as_sse_body_byte_count_matches_sum_of_per_envelope_lengths() {
+        let stream_id = Uuid::nil();
+        let envs = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "audit_events".to_string(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: json!({"event": "x"}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+        let body = render_envelopes_as_sse_body(&envs).expect("encode");
+        let expected_len: usize = envs
+            .iter()
+            .map(|e| encode_stream_envelope_as_sse(e).expect("encode").len())
+            .sum();
+        assert_eq!(
+            body.len(),
+            expected_len,
+            "concatenated body must be the sum of per-envelope encoder lengths (no separator overhead)"
         );
     }
 }

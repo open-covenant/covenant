@@ -177,8 +177,3 @@ The scheduler remains:
 - limited to tasks marked safe to duplicate with an explicit idempotency key;
 - observable (`a2_a_auto_retry_scheduler_scan` audit summaries plus per-requeue `auto_requeue` audit rows);
 - bounded (interval, minimum lease age, max attempts, max requeues, and scan limit are operator-configurable).
-
-## Remaining Work
-
-- Keep delegated repair automation blocked behind the internal release-review gate until a human accepts the release marker.
-- Add an explicit A2A task-kind field so idempotency cache keys no longer depend on intent text.

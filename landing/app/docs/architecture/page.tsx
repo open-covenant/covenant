@@ -9,8 +9,8 @@ export default function ArchitecturePage() {
       <h1>System architecture</h1>
       <p>
         Covenant is a single long-running daemon — <code>covenantd</code> —
-        plus a thin set of clients (the CLI, the web UI, third-party tooling
-        over HTTP) and a number of agent processes. The daemon is the only
+        plus a thin set of clients (the CLI, the TUI, the web UI, third-party
+        tooling over HTTP) and a number of agent processes. The daemon is the only
         component that holds state; everything else is replaceable.
       </p>
 
@@ -93,7 +93,7 @@ export default function ArchitecturePage() {
 
       <ol>
         <li>
-          A client (CLI, web UI, third-party caller) sends a{" "}
+          A client (CLI, TUI, web UI, third-party caller) sends a{" "}
           <code>SubmitIntent</code> request over the Unix socket or HTTP.
         </li>
         <li>

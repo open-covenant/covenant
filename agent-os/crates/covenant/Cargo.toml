@@ -1,7 +1,7 @@
 [package]
 name = "covenant"
 version = "0.1.0"
-description = "Covenant CLI. Submits intents to covenantd over the local IPC socket."
+description = "Covenant CLI for the local daemon. Submits intents and drives memory, capabilities, receipts, chain, audit, tools, A2A, and peer-registry surfaces over the local IPC socket."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -181,7 +181,9 @@ export default function ConceptsPage() {
       <p>
         Every state-changing operation emits an <code>AuditEvent</code>:
         intent dispatch, capability check, capability grant, capability
-        revocation, ignored intent. Events are appended to{" "}
+        revoke rejection, ignored intent. Successful revocations are
+        tombstone writes to <code>capabilities/revoked.jsonl</code>, not
+        an audit row. Events are appended to{" "}
         <code>$COVENANT_HOME/audit/events.jsonl</code> under a deterministic
         schema. The audit log is the system of record;{" "}
         <code>covenant verify</code> cross-checks it against the other

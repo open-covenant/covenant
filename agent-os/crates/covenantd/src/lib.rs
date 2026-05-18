@@ -19,6 +19,7 @@ use covenant_budget::{
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
+    StreamEnvelope,
 };
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
@@ -4005,6 +4006,84 @@ impl Server {
         let result = stream_dispatch::emit_memory_stream(writer, stream_id, &records).await;
         self.stream_tracker.unregister(connection_id, stream_id);
         result
+    }
+
+    /// ADR 0010 slice 6.d — Vec-based sibling of
+    /// [`Self::stream_recent_memory`] for the HTTP SSE response path.
+    ///
+    /// The writer-based form is right for the IPC socket: the daemon
+    /// writes length-prefixed JSON frames as they're emitted. The HTTP
+    /// gateway can't use that contract directly because axum needs the
+    /// streamed bytes assembled into a body before the response is
+    /// returned. This method performs the same capability check,
+    /// tracker register/unregister bracketing, and chunk construction
+    /// but returns the `StreamBegin` / `StreamChunk*` / `StreamEnd`
+    /// sequence as a `Vec<StreamEnvelope>`. The upcoming HTTP SSE
+    /// route handler encodes each entry with
+    /// [`crate::sse::encode_stream_envelope_as_sse`] and concatenates
+    /// the bytes into the response body.
+    ///
+    /// The error arm is the daemon's "streaming refused, render this
+    /// as a buffered response" signal, not a generic error. A
+    /// `Response::Error` from the capability gate is returned as
+    /// `Err(Response::Error)` so the HTTP handler can fall back to a
+    /// regular JSON response with the same payload. A future
+    /// unification slice can re-express the writer-based form as a
+    /// wrapper around this method; for now the two methods coexist so
+    /// integrated code is untouched.
+    #[allow(dead_code)]
+    pub async fn recent_memory_envelopes(
+        &self,
+        tier: Option<MemoryTier>,
+        limit: usize,
+        peer: &AgentId,
+        connection_id: Uuid,
+    ) -> Result<Vec<StreamEnvelope>, Response> {
+        let response = self.recent_memory(tier, limit, peer).await;
+        let records = match response {
+            Response::Memories { records } => records,
+            other => return Err(other),
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "RecentMemory".into(),
+                schema: stream_dispatch::MEMORY_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let mut envelopes = Vec::with_capacity(records.len() + 2);
+        envelopes.push(StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: stream_dispatch::MEMORY_RESPONSE_KIND.to_string(),
+        });
+        for (sequence, record) in records.iter().enumerate() {
+            let chunk = match serde_json::to_value(record) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.stream_tracker.unregister(connection_id, stream_id);
+                    return Err(Response::Error {
+                        message: format!("memory stream serialize: {e}"),
+                    });
+                }
+            };
+            envelopes.push(StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: sequence as u32,
+                chunk,
+            });
+        }
+        envelopes.push(StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: None,
+        });
+
+        self.stream_tracker.unregister(connection_id, stream_id);
+        Ok(envelopes)
     }
 
     /// ADR 0010 streaming orchestrator for `Request::RecentAudit`
@@ -10387,6 +10466,112 @@ required = {caps:?}
         assert_ne!(
             id_a, id_b,
             "consecutive streams must allocate fresh stream_ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_memory_envelopes_happy_path_returns_begin_chunks_end() {
+        // Capability granted, three records in store. The collector
+        // returns Ok([Begin, Chunk×3, End]); the StreamBegin's
+        // response_kind matches the writer-based form; chunk
+        // sequences are 0/1/2 in order; the StreamEnd carries no
+        // summary; tracker is empty after the call.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        for i in 0..3u8 {
+            s.memory
+                .put(MemoryRecord {
+                    id: Uuid::from_bytes([i + 1; 16]),
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: format!("memory {i}"),
+                    embedding: Vec::new(),
+                    metadata: serde_json::json!({}),
+                    created_at: 100 + i as u64,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let connection_id = Uuid::new_v4();
+        let envelopes = s
+            .recent_memory_envelopes(None, 10, &me, connection_id)
+            .await
+            .expect("happy path must return Ok");
+        assert_eq!(envelopes.len(), 5, "begin + 3 chunks + end = 5 envelopes");
+        match &envelopes[0] {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, stream_dispatch::MEMORY_RESPONSE_KIND);
+            }
+            other => panic!("expected StreamBegin, got {other:?}"),
+        }
+        for (i, env) in envelopes[1..=3].iter().enumerate() {
+            match env {
+                StreamEnvelope::StreamChunk { sequence, .. } => {
+                    assert_eq!(*sequence, i as u32, "chunk {i} must have sequence {i}");
+                }
+                other => panic!("expected StreamChunk at index {}, got {other:?}", i + 1),
+            }
+        }
+        assert!(matches!(
+            envelopes[4],
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful recent_memory_envelopes"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_memory_envelopes_empty_records_returns_begin_end_only() {
+        // Capability granted but no memory records. The collector
+        // returns Ok([Begin, End]) — the begin+end pair is emitted
+        // even on empty pages so a dead daemon is never confused with
+        // an empty stream at the protocol layer.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let envelopes = s
+            .recent_memory_envelopes(None, 10, &me, connection_id)
+            .await
+            .expect("empty page must return Ok");
+        assert_eq!(envelopes.len(), 2, "begin + end = 2 envelopes (no chunks)");
+        assert!(matches!(envelopes[0], StreamEnvelope::StreamBegin { .. }));
+        assert!(matches!(
+            envelopes[1],
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn recent_memory_envelopes_capability_fail_returns_err_response() {
+        // No grant. Expected: Err(Response::Error) so the HTTP handler
+        // can render a buffered JSON response instead of an empty SSE
+        // stream. Tracker must stay empty — register+unregister never
+        // runs when capability fails.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let err = s
+            .recent_memory_envelopes(None, 10, &me, connection_id)
+            .await
+            .expect_err("missing memory.read scope must produce Err(Response::Error)");
+        match err {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory read requires"),
+                    "capability-failure message must come through verbatim; got {message:?}"
+                );
+            }
+            other => panic!("expected Response::Error, got {other:?}"),
+        }
+        assert!(
+            s.stream_tracker.is_empty(),
+            "capability-failure path must NOT touch the tracker"
         );
     }
 

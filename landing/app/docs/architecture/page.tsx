@@ -400,9 +400,12 @@ export default function ArchitecturePage() {
               <code>covenant-budget</code>
             </td>
             <td>
-              Token-bucket budget ledger with debit records, exhaustion
-              signals, and pause/resume checkpoints used by{" "}
-              <code>covenantd</code>.
+              Per-agent token-bucket budget ledger:{" "}
+              <code>BudgetLedger</code> trait with in-memory and
+              JSONL-backed event-log backends, a separate pause/resume
+              checkpoint store, and bounded compaction that emits
+              per-agent Snapshot events at the cutoff alongside debit
+              records and exhaustion signals.
             </td>
           </tr>
           <tr>

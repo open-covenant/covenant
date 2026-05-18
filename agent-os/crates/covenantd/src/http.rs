@@ -238,13 +238,56 @@ struct SubmitIntentBody {
     text: String,
 }
 
+/// Dual-mode `POST /intent` handler per ADR 0010 slice 6.j.
+///
+/// Symmetric with [`memory_recent`] and [`audit_recent`]: `Accept:
+/// text/event-stream` selects the SSE response path that streams the
+/// intent dispatch as one `AgentResult` chunk plus a `StreamEnd`
+/// summary carrying `intent_id`, `status`, and `settlement`. Any other
+/// Accept (or absent Accept) keeps the v1-byte-identical buffered
+/// `Json<Response>` shape.
+///
+/// Axum extractor ordering matters here: `HeaderMap` is a non-body
+/// extractor and must come BEFORE the `Json<SubmitIntentBody>` body
+/// extractor — body consumers must be last in the parameter list.
+///
+/// The collector's `Err(Response)` arm covers capability failures,
+/// ignore-rule matches, and budget exhaustion. Per the ADR 0010
+/// 'daemon decides per verb' clause, the daemon renders these as a
+/// buffered JSON response regardless of the client's Accept header —
+/// the buffered shape is the daemon's 'streaming refused' signal,
+/// distinct from a mid-flight `stream_error` SSE frame (which is
+/// reserved for streams that opened then failed).
 async fn submit_intent(
     State(s): State<HttpState>,
     Extension(peer): Extension<AgentId>,
+    headers: HeaderMap,
     Json(b): Json<SubmitIntentBody>,
-) -> Result<Json<Response>, ApiError> {
-    Ok(Json(
-        s.server
+) -> Result<AxumResponse, ApiError> {
+    let accept = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok());
+    if sse::wants_event_stream(accept) {
+        let connection_id = uuid::Uuid::new_v4();
+        match s
+            .server
+            .submit_intent_envelopes(b.text, &peer, connection_id)
+            .await
+        {
+            Ok(envelopes) => {
+                let body = sse::render_envelopes_as_sse_body(&envelopes)
+                    .map_err(|e| ApiError(anyhow::anyhow!("sse encode: {e}")))?;
+                let mut response = AxumResponse::new(Body::from(body));
+                for (name, value) in sse::sse_response_headers() {
+                    response.headers_mut().insert(name, value);
+                }
+                Ok(response)
+            }
+            Err(response) => Ok(Json(response).into_response()),
+        }
+    } else {
+        let response = s
+            .server
             .respond(
                 Request::SubmitIntent {
                     text: b.text,
@@ -252,8 +295,9 @@ async fn submit_intent(
                 },
                 &peer,
             )
-            .await,
-    ))
+            .await;
+        Ok(Json(response).into_response())
+    }
 }
 
 #[derive(Deserialize, Default)]

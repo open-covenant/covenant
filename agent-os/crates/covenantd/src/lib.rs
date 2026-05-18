@@ -855,6 +855,61 @@ impl Server {
         }
     }
 
+    /// Walk every in-flight tracker entry, ask the budget ledger whether
+    /// the owning agent's bucket is exhausted, and dispatch
+    /// [`Server::preempt_intent`] for every flagged entry. Returns the
+    /// number of successful preempts (`PreemptResult::Preempted`).
+    ///
+    /// This is the single-iteration core of the budget projection tick.
+    /// The companion follow-on slice wires a `tokio::time::interval`
+    /// driver that calls this on each tick; the iteration is exposed as
+    /// a separate `pub async fn` so tests can drive it deterministically
+    /// without time-mocking, and so the driver slice can focus only on
+    /// scheduling concerns (cadence, shutdown signal, policy).
+    ///
+    /// `would_exceed(agent, 1)` is the v0.x exhaustion trigger: the
+    /// [`BudgetLedger`] trait does not expose per-agent capacity, so the
+    /// `LinearExtrapolation` policy from
+    /// [`covenant_budget::project_overshoot`] needs a per-intent
+    /// debit-rate signal that the ledger schema does not yet carry.
+    /// Exhaustion-as-trigger delivers the operator-promised hard-guarantee
+    /// shape ("tokens_remaining == 0 → kill the in-flight subprocess")
+    /// without expanding the budget trait surface.
+    ///
+    /// Error policy: `BudgetError::NoCapacity` for an agent that was
+    /// deprovisioned mid-flight skips that entry silently — the agent
+    /// has no bucket so the in-flight intent is left to complete or
+    /// fail on its own next debit attempt. Any other `BudgetError`
+    /// produces a `warn!` and the entry is skipped; the next tick will
+    /// retry.
+    pub async fn run_projection_tick_iteration(&self, grace: std::time::Duration) -> usize {
+        let mut preempted = 0;
+        for (intent_id, entry) in self.subprocess_tracker.snapshot() {
+            let agent = agent_id_for_card_id(&entry.agent_id);
+            match self.budget.would_exceed(&agent, 1).await {
+                Ok(true) => {
+                    if let PreemptResult::Preempted { .. } = self
+                        .preempt_intent(intent_id, "budget_overshoot".into(), grace)
+                        .await
+                    {
+                        preempted += 1;
+                    }
+                }
+                Ok(false) => {}
+                Err(BudgetError::NoCapacity(_)) => {}
+                Err(e) => {
+                    warn!(
+                        agent = %entry.agent_id,
+                        ?intent_id,
+                        error = %e,
+                        "projection-tick: budget lookup failed; skipping entry until next tick"
+                    );
+                }
+            }
+        }
+        preempted
+    }
+
     pub async fn serve(&self, listener: UnixListener) -> Result<()> {
         loop {
             let (stream, _peer) = listener.accept().await?;
@@ -5313,11 +5368,21 @@ fn budget_pause_checkpoint(
 /// `<local>@<host>` shape so the synthesised id round-trips through
 /// `JsonlLedger`'s serde without rejection.
 fn agent_id_for_card(card: &AgentCard) -> AgentId {
+    agent_id_for_card_id(&card.id)
+}
+
+/// Same mapping as [`agent_id_for_card`] but keyed off the raw manifest
+/// id rather than the full `AgentCard`. `SubprocessTracker` entries
+/// store `card.id` as a `String` (`TrackedSubprocess::agent_id`); the
+/// projection tick uses this helper to rederive the same budget key the
+/// dispatch path produces, so a `would_exceed` lookup on the tracked
+/// agent reads the bucket the dispatcher debits into.
+fn agent_id_for_card_id(card_id: &str) -> AgentId {
     let mut pk = [0u8; 32];
-    for (i, b) in card.id.bytes().take(32).enumerate() {
+    for (i, b) in card_id.bytes().take(32).enumerate() {
         pk[i] = b;
     }
-    AgentId::new(format!("{}@agent", card.id), pk)
+    AgentId::new(format!("{card_id}@agent"), pk)
 }
 
 #[cfg(test)]
@@ -14687,6 +14752,201 @@ budget_credits_per_hour = {credits}
         assert_eq!(
             found, 1,
             "preempt_intent must emit exactly one BudgetPreempted audit row keyed by the supplied intent_id; events seen: {events:?}"
+        );
+    }
+
+    fn server_with_audit_and_budget(
+        audit: Arc<covenant_audit::InMemoryAuditLog>,
+        budget: Arc<covenant_budget::InMemoryLedger>,
+    ) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit,
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget,
+        )
+    }
+
+    #[tokio::test]
+    async fn server_projection_tick_iteration_empty_tracker_returns_zero() {
+        // Baseline: nothing in flight means nothing to preempt and no
+        // audit emission. A refactor that emitted a heartbeat audit row
+        // per tick would surface here as a non-empty audit log.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget);
+
+        let count = server
+            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .await;
+
+        assert_eq!(
+            count, 0,
+            "empty tracker must produce zero preempts; got {count}",
+        );
+        let events = audit.recent(8).await.expect("audit recent must succeed");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::BudgetPreempted { .. })),
+            "empty-tracker tick must not emit BudgetPreempted; got {events:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn server_projection_tick_iteration_skips_non_exhausted_agent() {
+        // Tracker holds a live entry but the agent's bucket still has
+        // tokens — the projection must not preempt. A refactor that
+        // inverted the would_exceed branch (kill when budget OK) would
+        // surface here as a Preempted return value and an audit row.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let agent_card_id = "stillhealthy";
+        let agent = agent_id_for_card_id(agent_card_id);
+        budget
+            .set_capacity(&agent, 1000)
+            .await
+            .expect("set_capacity must succeed");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: agent_card_id.into(),
+                // pid 0 is a sentinel: would_exceed must short-circuit
+                // before the dispatcher ever reads it. If the test
+                // observes a NotInFlight/AlreadyDead, the refactor
+                // wired the kill path on a non-exhausted bucket.
+                pid: 0,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let count = server
+            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .await;
+
+        assert_eq!(
+            count, 0,
+            "non-exhausted agent must not be preempted; got {count}",
+        );
+        let events = audit.recent(8).await.expect("audit recent must succeed");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::BudgetPreempted { .. })),
+            "non-exhausted-agent tick must not emit BudgetPreempted; got {events:?}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_projection_tick_iteration_preempts_exhausted_agent() {
+        // Spawn a real sleep subprocess in its own process group,
+        // register the entry, exhaust the agent's budget via try_debit,
+        // then drive a single projection iteration. The tick must
+        // observe would_exceed(agent, 1) == true and dispatch
+        // preempt_intent, which signals the group and emits the
+        // BudgetPreempted audit row. A refactor that dropped the
+        // exhaustion->preempt arm would surface here as count == 0
+        // and a missing audit row.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let agent_card_id = "burnsdown";
+        let agent = agent_id_for_card_id(agent_card_id);
+        budget
+            .set_capacity(&agent, 1)
+            .await
+            .expect("set_capacity must succeed");
+        budget
+            .try_debit(&agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit must drain bucket");
+        let exceed = budget
+            .would_exceed(&agent, 1)
+            .await
+            .expect("would_exceed must succeed");
+        assert!(
+            exceed,
+            "test precondition: bucket must be exhausted before driving the projection tick",
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: agent_card_id.into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (count, _exit) = tokio::join!(
+            server.run_projection_tick_iteration(std::time::Duration::from_millis(250)),
+            child.wait(),
+        );
+
+        assert_eq!(
+            count, 1,
+            "exhausted agent with one tracked subprocess must produce exactly one preempt; got {count}",
+        );
+
+        let events = audit.recent(16).await.expect("audit recent must succeed");
+        let preempted = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                AuditKind::BudgetPreempted {
+                    intent_id: id,
+                    reason,
+                    signal_sent,
+                    ..
+                } if *id == intent_id => Some((reason.clone(), signal_sent.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            preempted.len(),
+            1,
+            "projection tick must emit exactly one BudgetPreempted row for the killed intent; events seen: {events:?}",
+        );
+        let (reason, signal_sent) = preempted.into_iter().next().unwrap();
+        assert_eq!(
+            reason, "budget_overshoot",
+            "projection tick must tag the preempt with reason=budget_overshoot so post-mortem can distinguish it from operator-driven preempts",
+        );
+        assert!(
+            matches!(signal_sent.as_str(), "SIGTERM" | "SIGKILL" | "none"),
+            "projection tick BudgetPreempted must carry a valid signal_sent variant; got {signal_sent:?}",
         );
     }
 

@@ -61,8 +61,8 @@ export default function SettlementPage() {
 
       <h2>Future on-chain flush</h2>
       <p>
-        The planned on-chain side is an Anchor program for Solana. Its
-        scaffold exposes three instruction shapes:
+        The planned on-chain side is an Anchor program for Solana. Three
+        of its instruction shapes describe the credit flow:
       </p>
 
       <ul>

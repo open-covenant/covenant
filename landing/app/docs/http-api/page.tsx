@@ -24,7 +24,12 @@ export default function HttpApiPage() {
       <h2>Conventions</h2>
       <ul>
         <li>
-          Request bodies are JSON; responses are JSON.
+          Request bodies are JSON; responses default to JSON. The{" "}
+          <code>/memory/recent</code>, <code>/audit/recent</code>, and{" "}
+          <code>/intent</code> routes additionally opt into Server-Sent
+          Events when the request sets{" "}
+          <code>Accept: text/event-stream</code>. See{" "}
+          <a href="#streaming-responses">Streaming responses</a> below.
         </li>
         <li>
           Validation-level conditions (missing capability, no agent
@@ -44,6 +49,81 @@ export default function HttpApiPage() {
           <code>COVENANT_HTTP_ORIGINS</code>.
         </li>
       </ul>
+
+      <h2 id="streaming-responses">Streaming responses</h2>
+      <p>
+        Three read-style routes — <code>GET /memory/recent</code>,{" "}
+        <code>GET /audit/recent</code>, and{" "}
+        <code>POST /intent</code> — accept a per-request switch
+        between the default buffered JSON response and a Server-Sent
+        Events stream of the same logical content. Clients opt in by
+        sending <code>Accept: text/event-stream</code>; any other
+        Accept value (or absent header) keeps the v1 buffered shape
+        byte-identical with the pre-streaming contract.
+      </p>
+      <p>
+        The Accept gate matches exactly. <code>text/event-stream</code>
+        comparison is case-insensitive and tolerates{" "}
+        <code>q=</code> values; comma-separated media types are split
+        and trimmed. <code>*/*</code> and <code>text/*</code> do{" "}
+        <em>not</em> trigger the SSE branch — the buffered fallback is
+        the safe default for callers that did not explicitly ask to
+        stream.
+      </p>
+      <p>SSE responses carry a fixed header set:</p>
+      <pre>
+        <code>{`Content-Type:     text/event-stream
+Cache-Control:    no-cache
+X-Accel-Buffering: no`}</code>
+      </pre>
+      <p>
+        <code>Content-Type</code> is the bare media type — strict{" "}
+        <code>EventSource</code> implementations reject a{" "}
+        <code>charset=utf-8</code> suffix. <code>Cache-Control</code>
+        keeps intermediate caches forwarding every chunk;{" "}
+        <code>X-Accel-Buffering</code> defeats nginx&apos;s default
+        response buffering.
+      </p>
+      <p>Each event frame on the wire is:</p>
+      <pre>
+        <code>{`event: <kind>
+data: <single-line JSON of the envelope>
+
+`}</code>
+      </pre>
+      <p>
+        <code>{"<kind>"}</code> is one of <code>stream_begin</code>,{" "}
+        <code>stream_chunk</code>, <code>stream_end</code>, or{" "}
+        <code>stream_error</code>. The trailing blank line is the SSE
+        delimiter; the JSON <code>data:</code> line carries the full
+        envelope (including its own <code>kind</code> field, so a
+        consumer that reads only <code>data:</code> still has the
+        discriminator).
+      </p>
+      <p>
+        <code>stream_begin</code> announces the response variant the
+        stream materializes via its <code>response_kind</code> field:{" "}
+        <code>memories</code> for <code>/memory/recent</code>,{" "}
+        <code>audit_events</code> for <code>/audit/recent</code>, and{" "}
+        <code>intent_result</code> for <code>/intent</code>.{" "}
+        <code>stream_chunk</code> frames carry a monotonic{" "}
+        <code>sequence</code> counter and the per-verb payload (a{" "}
+        memory record, an audit event, or an <code>AgentResult</code>).{" "}
+        <code>stream_end</code> closes the stream; for{" "}
+        <code>/intent</code> it carries a <code>summary</code> object
+        with <code>intent_id</code>, <code>status</code>, and{" "}
+        <code>settlement</code>.
+      </p>
+      <p>
+        <code>stream_error</code> is reserved for streams that opened
+        successfully and then failed mid-flight. <em>Streaming
+        refused</em> (capability gate failure, ignore-rule match,
+        budget exhaustion on <code>/intent</code>) renders as a
+        buffered JSON document with{" "}
+        <code>Content-Type: application/json</code> regardless of the
+        Accept header — distinguishing the two on the wire keeps a
+        consumer&apos;s error-handling logic honest.
+      </p>
 
       <h2>Routes</h2>
 
@@ -90,6 +170,31 @@ POST /intents/resume
 → 200 { "kind": "intent_result", ... }`}</code>
       </pre>
       <p>
+        With <code>Accept: text/event-stream</code>, <code>POST /intent</code>{" "}
+        returns the same logical result as a Server-Sent Events stream
+        of begin/chunk/end envelopes (see{" "}
+        <a href="#streaming-responses">Streaming responses</a>):
+      </p>
+      <pre>
+        <code>{`POST /intent
+Accept:       text/event-stream
+Content-Type: application/json
+Body: { "text": "summarise recent work on agent memory" }
+
+→ 200 Content-Type: text/event-stream
+
+event: stream_begin
+data: { "kind": "stream_begin", "stream_id": "…", "response_kind": "intent_result" }
+
+event: stream_chunk
+data: { "kind": "stream_chunk", "stream_id": "…", "sequence": 0,
+        "chunk": { "text": "…", "sources": [...], "runtime_events": [] } }
+
+event: stream_end
+data: { "kind": "stream_end", "stream_id": "…",
+        "summary": { "intent_id": "…", "status": "ok", "settlement": null } }`}</code>
+      </pre>
+      <p>
         <code>/intents/resume</code> re-dispatches a previously paused
         intent by replaying its original text from the recent audit window
         (the last 1024 events). The caller must be the same peer that
@@ -115,6 +220,30 @@ POST /memory/compact
    or  { "kind": "memory_purged", "purged": 42 }
    or  { "kind": "memory_repaired", ... }
    or  { "kind": "memory_compacted", ... }`}</code>
+      </pre>
+      <p>
+        With <code>Accept: text/event-stream</code>,{" "}
+        <code>GET /memory/recent</code> streams one{" "}
+        <code>stream_chunk</code> per record (see{" "}
+        <a href="#streaming-responses">Streaming responses</a>):
+      </p>
+      <pre>
+        <code>{`GET /memory/recent?tier=working&limit=10
+Accept: text/event-stream
+
+→ 200 Content-Type: text/event-stream
+
+event: stream_begin
+data: { "kind": "stream_begin", "stream_id": "…", "response_kind": "memories" }
+
+event: stream_chunk
+data: { "kind": "stream_chunk", "stream_id": "…", "sequence": 0,
+        "chunk": { "id": "uuid", "tier": "working", "text": "…", ... } }
+
+# … one stream_chunk per record …
+
+event: stream_end
+data: { "kind": "stream_end", "stream_id": "…" }`}</code>
       </pre>
 
       <h3>Receipts</h3>
@@ -271,6 +400,30 @@ GET /audit/verify
 POST /audit/purge
   Body: { "before_ms": 1714938000000 }
 → 200 { "kind": "audit_purged", "purged": 42 }`}</code>
+      </pre>
+      <p>
+        With <code>Accept: text/event-stream</code>,{" "}
+        <code>GET /audit/recent</code> streams one{" "}
+        <code>stream_chunk</code> per event (see{" "}
+        <a href="#streaming-responses">Streaming responses</a>):
+      </p>
+      <pre>
+        <code>{`GET /audit/recent?limit=20
+Accept: text/event-stream
+
+→ 200 Content-Type: text/event-stream
+
+event: stream_begin
+data: { "kind": "stream_begin", "stream_id": "…", "response_kind": "audit_events" }
+
+event: stream_chunk
+data: { "kind": "stream_chunk", "stream_id": "…", "sequence": 0,
+        "chunk": { "issuer": { ... }, "kind": { ... }, "timestamp_ms": 1714938000000, ... } }
+
+# … one stream_chunk per event …
+
+event: stream_end
+data: { "kind": "stream_end", "stream_id": "…" }`}</code>
       </pre>
 
       <h3>Agent-to-agent</h3>

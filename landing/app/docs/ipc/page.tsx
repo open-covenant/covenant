@@ -273,7 +273,7 @@ export default function IpcPage() {
       <p>
         The HTTP gateway exposes this same v2 surface as Server-Sent
         Events: see{" "}
-        <Link href="/docs/http-api#streaming-responses">
+        <Link href="/http-api#streaming-responses">
           Streaming responses
         </Link>{" "}
         on the HTTP API page for the per-frame SSE encoding.

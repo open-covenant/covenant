@@ -63,11 +63,8 @@ export default function ArchitecturePage() {
           <code>$COVENANT_HOME/memory.db</code>,
         </li>
         <li>
-          append-only JSONL stores at{" "}
-          <code>audit/events.jsonl</code>,{" "}
-          <code>capabilities/granted.jsonl</code>,{" "}
-          <code>capabilities/revoked.jsonl</code>, and{" "}
-          <code>receipts/working.jsonl</code>,
+          append-only JSONL stores under <code>$COVENANT_HOME</code> for
+          audit, capabilities, peers, receipts, and budget,
         </li>
         <li>
           the local ed25519 identity key.

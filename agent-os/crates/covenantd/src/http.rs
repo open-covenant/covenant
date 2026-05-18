@@ -527,23 +527,64 @@ async fn list_tools(
     Ok(Json(s.server.respond(Request::ListTools, &peer).await))
 }
 
+/// Dual-mode `GET /audit/recent` handler per ADR 0010 slice 6.i.
+///
+/// Symmetric with [`memory_recent`]: `Accept: text/event-stream`
+/// selects the SSE response path that streams the audit-events page
+/// as one event per audit row; any other Accept (or absent Accept)
+/// keeps the v1-byte-identical buffered `Json<Response>` shape.
+///
+/// Unlike memory, `recent_audit` filters by `peer.pubkey ==
+/// event.issuer.pubkey` inside [`crate::Server::recent_audit`]; there
+/// is no capability gate, so the `Err(Response)` arm of
+/// [`crate::Server::recent_audit_envelopes`] is unreachable in
+/// practice. The Result shape is preserved for symmetry, and a future
+/// per-event audience gate that produces a non-`AuditEvents` Response
+/// would render through the buffered-fallback path without further
+/// wiring change.
 async fn audit_recent(
     State(s): State<HttpState>,
     Extension(peer): Extension<AgentId>,
     Query(q): Query<LimitParams>,
-) -> Result<Json<Response>, ApiError> {
-    Ok(Json(
-        s.server
+    headers: HeaderMap,
+) -> Result<AxumResponse, ApiError> {
+    let limit = q.limit.unwrap_or(20);
+    let since_ms = q.since_ms;
+    let accept = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok());
+    if sse::wants_event_stream(accept) {
+        let connection_id = uuid::Uuid::new_v4();
+        match s
+            .server
+            .recent_audit_envelopes(limit, since_ms, &peer, connection_id)
+            .await
+        {
+            Ok(envelopes) => {
+                let body = sse::render_envelopes_as_sse_body(&envelopes)
+                    .map_err(|e| ApiError(anyhow::anyhow!("sse encode: {e}")))?;
+                let mut response = AxumResponse::new(Body::from(body));
+                for (name, value) in sse::sse_response_headers() {
+                    response.headers_mut().insert(name, value);
+                }
+                Ok(response)
+            }
+            Err(response) => Ok(Json(response).into_response()),
+        }
+    } else {
+        let response = s
+            .server
             .respond(
                 Request::RecentAudit {
-                    limit: q.limit.unwrap_or(20),
-                    since_ms: q.since_ms,
+                    limit,
+                    since_ms,
                     prefer_stream: None,
                 },
                 &peer,
             )
-            .await,
-    ))
+            .await;
+        Ok(Json(response).into_response())
+    }
 }
 
 async fn audit_verify(

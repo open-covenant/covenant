@@ -416,6 +416,58 @@ export default function AuditPage() {
         exhausted row.
       </p>
 
+      <h3>
+        <code>MemoryRepairApplied</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":      "memory_repair_applied",
+  "memory_id": "uuid",
+  "action":    "detach_parent" | "delete_record" | "backfill_provenance",
+  "mode":      "apply" | "dry_run",
+  "changed":   true,
+  "reason":    "operator-corrected receipt"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>covenantd::Server::repair_memory</code>{" "}
+        completes a scoped repair against a single memory record. The
+        full before/after record shape is returned to the caller
+        through the repair response; the audit row keeps the durable
+        who/what/why envelope without duplicating memory text into the
+        audit log. The issuer is the requesting peer (operator-as-issuer
+        audience — the recording path asserts the issuer&apos;s pubkey
+        matches the acting peer&apos;s), recorded only after the
+        dispatch-time capability check and the{" "}
+        <code>memory.repair.{`<mode>`}</code> scope check both pass; if
+        either fails the daemon emits a <code>CapabilityCheck</code> or{" "}
+        <code>CapabilityScopeRejected</code> row instead, so a{" "}
+        <code>MemoryRepairApplied</code> row never coexists with a
+        rejection row for the same request. <code>action</code> and{" "}
+        <code>mode</code> are parser-fixed snake_case tokens produced by{" "}
+        <code>memory_repair_action</code> and{" "}
+        <code>memory_repair_mode</code> in covenantd — the three valid{" "}
+        <code>action</code> values are{" "}
+        <code>&quot;detach_parent&quot;</code>,{" "}
+        <code>&quot;delete_record&quot;</code>, and{" "}
+        <code>&quot;backfill_provenance&quot;</code>; the two valid{" "}
+        <code>mode</code> values are <code>&quot;apply&quot;</code> and{" "}
+        <code>&quot;dry_run&quot;</code>. <code>changed</code> is{" "}
+        <code>true</code> only when <code>mode</code> is{" "}
+        <code>&quot;apply&quot;</code> <em>and</em> the planner reported
+        a would-change outcome — a dry-run row always reports{" "}
+        <code>changed: false</code>, and an apply that found the record
+        already in the requested state also reports{" "}
+        <code>changed: false</code>. The flag is the mutation-vs-no-op
+        triage signal that distinguishes a repair that actually edited
+        from one that found nothing to change; a refactor that{" "}
+        <code>#[serde(default)]</code>-ed it would mask that signal.
+        Distinct from <code>MemoryCompactionApplied</code> (bulk path
+        with <code>deleted</code>, <code>stale_marked</code>, and{" "}
+        <code>parents_detached</code> id lists; one row per compaction
+        run rather than per record).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

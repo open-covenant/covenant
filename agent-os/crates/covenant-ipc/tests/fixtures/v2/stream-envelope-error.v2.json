@@ -1,0 +1,5 @@
+{
+  "kind": "stream_error",
+  "stream_id": "00000000-0000-0000-0000-000000000000",
+  "message": "io: broken pipe"
+}

@@ -24,7 +24,7 @@
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
-//!   covenant audit recent [--limit N] [--since-ms <epoch_ms>] [--json]
+//!   covenant audit recent [--limit N] [--since-ms <epoch_ms>] [--json] [--stream]
 //!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]
@@ -139,7 +139,7 @@ fn print_usage() {
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
     eprintln!(
-        "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied"
+        "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json] [--stream]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied; --stream opts into v2 streaming response framing"
     );
     eprintln!("  covenant audit verify [--json]         verify local audit hash-chain sidecar");
     eprintln!(
@@ -297,6 +297,17 @@ fn decode_memory_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<MemoryReco
         .map(|(i, chunk)| {
             serde_json::from_value::<MemoryRecord>(chunk)
                 .with_context(|| format!("decode memory stream chunk {i}"))
+        })
+        .collect()
+}
+
+fn decode_audit_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<AuditEvent>> {
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            serde_json::from_value::<AuditEvent>(chunk)
+                .with_context(|| format!("decode audit stream chunk {i}"))
         })
         .collect()
 }
@@ -1720,6 +1731,7 @@ async fn main() -> Result<()> {
                     let mut limit: usize = 50;
                     let mut since_ms: Option<u64> = None;
                     let mut as_json = false;
+                    let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1735,6 +1747,7 @@ async fn main() -> Result<()> {
                                     Some(v.parse().context("--since-ms must be an integer")?);
                             }
                             "--json" => as_json = true,
+                            "--stream" => prefer_stream = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1744,11 +1757,24 @@ async fn main() -> Result<()> {
                         &Request::RecentAudit {
                             limit,
                             since_ms,
-                            prefer_stream: None,
+                            prefer_stream: prefer_stream.then_some(true),
                         },
                     )
                     .await?;
-                    match read_frame::<_, Response>(&mut stream).await? {
+                    let response = match read_response_or_stream(&mut stream).await? {
+                        ResponseOrStream::Terminal(r) => r,
+                        ResponseOrStream::Stream(collected) => {
+                            if collected.response_kind != "audit_events" {
+                                bail!(
+                                    "unexpected stream response_kind '{}' (expected 'audit_events')",
+                                    collected.response_kind
+                                );
+                            }
+                            let events = decode_audit_chunks(collected.chunks)?;
+                            Response::AuditEvents { events }
+                        }
+                    };
+                    match response {
                         Response::AuditEvents { events } => {
                             if as_json {
                                 println!(

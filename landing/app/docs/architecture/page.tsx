@@ -77,14 +77,19 @@ export default function ArchitecturePage() {
       <p>
         Subprocess-style agents (<code>rust-bin</code>,{" "}
         <code>python3</code>, <code>node</code>) run as child processes
-        spawned on demand when an intent is dispatched; the runtime
-        wall-clocks each one against the budget declared in its manifest
-        and kills processes that overrun. <code>hermes</code>-runtime
-        agents are not subprocesses — the daemon delegates the intent to
-        a configured Hermes HTTP endpoint and treats the response as the
-        agent result. In either model, agents have no direct access to
-        the daemon&apos;s state; every interaction goes through the
-        daemon.
+        spawned on demand when an intent is dispatched. The runtime
+        registers each subprocess in an in-memory tracker, walks the
+        tracker on a periodic projection tick, and preempts via{" "}
+        <code>SIGTERM</code> with a grace window before{" "}
+        <code>SIGKILL</code> whenever <code>project_overshoot</code>{" "}
+        flags an in-flight process as on track to exceed its remaining
+        credit budget. The wall-clock kill at the agent-declared{" "}
+        <code>cpu_ms_per_task</code> remains as the final backstop.{" "}
+        <code>hermes</code>-runtime agents are not subprocesses — the
+        daemon delegates the intent to a configured Hermes HTTP endpoint
+        and treats the response as the agent result. In either model,
+        agents have no direct access to the daemon&apos;s state; every
+        interaction goes through the daemon.
       </p>
 
       <h2>Request lifecycle</h2>
@@ -113,8 +118,11 @@ export default function ArchitecturePage() {
         </li>
         <li>
           On success, the runtime spawns the agent, sends the intent on
-          stdin, reads the result on stdout, and enforces the
-          wall-clock budget.
+          stdin, reads the result on stdout, and enforces the budget
+          via both the wall-clock kill at <code>cpu_ms_per_task</code>{" "}
+          and the periodic projection tick that preempts via{" "}
+          <code>SIGTERM</code>/grace/<code>SIGKILL</code> on projected
+          overshoot.
         </li>
         <li>
           The daemon writes a working-tier <code>MemoryRecord</code>{" "}
@@ -271,8 +279,8 @@ export default function ArchitecturePage() {
               <code>covenant-runtime</code>
             </td>
             <td>
-              Subprocess agent runner with stdin/stdout JSON protocol
-              and a wall-clock budget.
+              Subprocess agent runner with stdin/stdout JSON protocol,
+              wall-clock budget, and hard-preempt on projected overshoot.
             </td>
           </tr>
           <tr>

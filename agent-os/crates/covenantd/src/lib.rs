@@ -1145,6 +1145,21 @@ impl Server {
                     .await?;
                 continue;
             }
+            // ADR 0010 slice 5.d streaming dispatch fork for SubmitIntent.
+            // Symmetric to the RecentMemory/RecentAudit forks above but
+            // text is String (not Copy) — the destructure borrows via
+            // ref text and the call clones it. req stays owned for the
+            // v1 fallthrough so a Some(false)/None client gets the v1
+            // Response::IntentResult shape.
+            if let Request::SubmitIntent {
+                text,
+                prefer_stream: Some(true),
+            } = &req
+            {
+                self.stream_submit_intent(&mut stream, connection_id, text.clone(), &peer)
+                    .await?;
+                continue;
+            }
             let resp = self.respond(req, &peer).await;
             write_frame(&mut stream, &resp).await?;
         }
@@ -16391,6 +16406,147 @@ budget_credits_per_hour = {credits}
         match resp {
             Response::AuditEvents { events } => assert_eq!(events.len(), 2),
             other => panic!("expected Response::AuditEvents on Some(false), got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    async fn server_with_authenticated_intent() -> (Arc<Server>, PeerToken, AgentId) {
+        let s = Arc::new(server_with_ignore(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+            IgnoreSet::default(),
+        ));
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+        let token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: me.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .expect("register peer token");
+        (s, token, me)
+    }
+
+    #[tokio::test]
+    async fn submit_intent_with_prefer_stream_true_routes_to_streaming_path() {
+        // ADR 0010 slice 5.d dispatch fork. With required grants in
+        // place, sending prefer_stream:Some(true) must yield
+        // StreamBegin (response_kind "intent_result") + 1 StreamChunk
+        // + StreamEnd (with summary). A regression that left the
+        // dispatch on the v1 path would decode the first frame as
+        // Response::IntentResult and skip the StreamEnvelope path.
+        let (s, token, _me) = server_with_authenticated_intent().await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: Some(true),
+            },
+        )
+        .await
+        .expect("send submit_intent");
+
+        let begin: StreamEnvelope = read_frame(&mut client).await.expect("read stream_begin");
+        match begin {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, "intent_result");
+            }
+            other => panic!("expected StreamBegin, got {other:?}"),
+        }
+        let chunk: StreamEnvelope = read_frame(&mut client).await.expect("read stream_chunk");
+        assert!(matches!(
+            chunk,
+            StreamEnvelope::StreamChunk { sequence: 0, .. }
+        ));
+        let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
+        match end {
+            StreamEnvelope::StreamEnd { summary, .. } => {
+                let s = summary.expect("StreamEnd.summary must carry IntentResult bookkeeping");
+                assert_eq!(s["status"], "ok");
+            }
+            other => panic!("expected StreamEnd, got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn submit_intent_with_prefer_stream_omitted_returns_v1_response() {
+        // v1 fixture replay protection: a request without prefer_stream
+        // MUST receive a v1 Response::IntentResult terminal frame,
+        // byte-equivalent to pre-ADR-0010 behavior.
+        let (s, token, _me) = server_with_authenticated_intent().await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            },
+        )
+        .await
+        .expect("send submit_intent");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::IntentResult { text, status, .. } => {
+                assert_eq!(text, "mocked summary");
+                assert_eq!(status, "ok");
+            }
+            other => panic!("expected Response::IntentResult, got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn submit_intent_with_prefer_stream_false_returns_v1_response() {
+        // ADR 0010 contract pin: prefer_stream:Some(false) is
+        // wire-distinct from None. The dispatch must match exactly
+        // Some(true), so Some(false) falls through to the v1 path.
+        let (s, token, _me) = server_with_authenticated_intent().await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: Some(false),
+            },
+        )
+        .await
+        .expect("send submit_intent");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::IntentResult { status, .. } => assert_eq!(status, "ok"),
+            other => panic!("expected Response::IntentResult on Some(false), got {other:?}"),
         }
 
         drop(client);

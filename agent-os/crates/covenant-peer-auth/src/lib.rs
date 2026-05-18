@@ -12,6 +12,15 @@
 //! (or every HTTP request), and uses that resolved `AgentId` as the
 //! capability subject.
 //!
+//! Full tokens are secrets and never leave the daemon: [`PeerToken`]'s
+//! `Debug` impl truncates to a 6-char b58 prefix, [`PeerSummary`]
+//! carries only that `token_prefix` into operator-facing listings, and
+//! the operator triage flow revokes by prefix via
+//! [`PeerRegistry::find_unique_live_by_token_prefix`] and
+//! [`PeerRegistry::revoke_by_token_prefix`]. List queries take a
+//! [`PeerStatusFilter`] so callers can ask for live, revoked, or all
+//! entries on demand.
+//!
 //! Two storage backends implement [`PeerRegistry`]:
 //! [`JsonlPeerRegistry`] for production (event log replays on
 //! `open()`), and [`InMemoryPeerRegistry`] for tests. Both honour

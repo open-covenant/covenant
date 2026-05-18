@@ -80,7 +80,7 @@ async fn live_cli_version_reads_protocol_info_without_token() {
     assert_eq!(body["protocol"], "covenant.ipc");
     assert_eq!(body["version"], 1);
     assert_eq!(body["min_supported"], 1);
-    assert_eq!(body["max_supported"], 1);
+    assert_eq!(body["max_supported"], 2);
 
     let _ = child.kill().await;
 }

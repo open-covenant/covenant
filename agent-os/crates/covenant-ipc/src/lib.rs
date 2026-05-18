@@ -67,7 +67,16 @@ pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
 pub const PROTOCOL_NAME: &str = "covenant.ipc";
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
-pub const MAX_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION;
+/// Decoupled from [`PROTOCOL_VERSION`] in ADR 0010: the daemon
+/// defaults to emitting v1 frames (PROTOCOL_VERSION) so v1 fixture
+/// replay stays byte-for-byte, but advertises max_supported = 2
+/// because all three streamable verbs (RecentMemory, RecentAudit,
+/// SubmitIntent) are wired end-to-end via prefer_stream Some(true).
+/// A v2-aware client sees max_supported = 2 in ProtocolInfo and
+/// enables prefer_stream; v1 clients ignore it. A future bump to
+/// MAX_PROTOCOL_VERSION = 3 would re-couple to a new PROTOCOL_VERSION
+/// only after v3-shaped frames replace v1 as the default.
+pub const MAX_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolInfo {
@@ -92,19 +101,20 @@ pub fn protocol_info() -> ProtocolInfo {
 /// version is added here first (so the codec can parse a v(n+1) envelope
 /// from a forward-compatible client without rejecting the frame), and only
 /// later promoted into the advertised range once at least one verb actually
-/// serves that version. ADR 0010 introduces v2 streaming envelopes; the
-/// promotion to `MAX_PROTOCOL_VERSION = 2` waits for the first streamable
-/// verb to land.
+/// serves that version. ADR 0010's streamable verbs (RecentMemory,
+/// RecentAudit, SubmitIntent) all landed via slices 3.d-5.d; the
+/// codec's `CODEC_MAX_KNOWN_VERSION = 2` and the advertised
+/// `MAX_PROTOCOL_VERSION = 2` now agree.
 pub const CODEC_MAX_KNOWN_VERSION: u32 = 2;
 
 /// Returns the negotiated protocol version the codec can handle for a given
 /// client-advertised version, or `None` if the client is outside the
 /// codec-known range. The negotiation uses [`MIN_PROTOCOL_VERSION`] as the
-/// floor and [`CODEC_MAX_KNOWN_VERSION`] as the ceiling so a v2-aware client
-/// is accepted at the codec layer even while the daemon still advertises
-/// `max_supported = 1` in [`ProtocolInfo`]. Callers wiring this into the
-/// daemon handshake must additionally enforce `negotiated <=
-/// MAX_PROTOCOL_VERSION` until the corresponding streamable verb ships.
+/// floor and [`CODEC_MAX_KNOWN_VERSION`] as the ceiling. With ADR 0010's
+/// streamable verbs landed, [`CODEC_MAX_KNOWN_VERSION`] and
+/// [`MAX_PROTOCOL_VERSION`] both equal 2; the codec-vs-advertised
+/// distinction remains for future versions that land in the codec
+/// before any daemon serves them.
 pub fn accept_protocol_version(client_version: u32) -> Option<u32> {
     if (MIN_PROTOCOL_VERSION..=CODEC_MAX_KNOWN_VERSION).contains(&client_version) {
         Some(client_version)
@@ -736,19 +746,23 @@ mod tests {
         //   PROTOCOL_NAME = "covenant.ipc"
         //   PROTOCOL_VERSION = 1
         //   MIN_PROTOCOL_VERSION = 1
-        //   MAX_PROTOCOL_VERSION = PROTOCOL_VERSION
+        //   MAX_PROTOCOL_VERSION = 2
         //
+        // ADR 0010 promoted MAX_PROTOCOL_VERSION from
+        // PROTOCOL_VERSION to literal 2 after the third streamable
+        // verb (SubmitIntent) landed end-to-end; the daemon now
+        // advertises support for v2 streaming while still emitting v1
+        // frames by default so v1 fixture replay stays byte-for-byte.
         // protocol_info_serde_pins_four_required_fields pins the
         // ProtocolInfo wire form but does not pin the literal values
-        // or the cross-constant alias and ordering invariants. A
-        // refactor that changed PROTOCOL_NAME would silently fail
-        // every CLI's negotiation handshake; a refactor that
-        // decoupled MAX_PROTOCOL_VERSION from PROTOCOL_VERSION (e.g.,
-        // MAX = PROTOCOL_VERSION + 1 to reserve the next slot) would
-        // let an in-development version > max_supported decode as
-        // valid before any daemon implements it; a refactor that
-        // lowered MIN_PROTOCOL_VERSION below 1 (e.g., to 0) would
-        // let an unversioned client decode as version-0 and skip the
+        // or the ordering invariants. A refactor that changed
+        // PROTOCOL_NAME would silently fail every CLI's negotiation
+        // handshake; a refactor that re-coupled MAX_PROTOCOL_VERSION
+        // = PROTOCOL_VERSION (lowering MAX back to 1) would make the
+        // daemon advertise v2 as unsupported even though all three
+        // streamable verbs are wired; a refactor that lowered
+        // MIN_PROTOCOL_VERSION below 1 (e.g., to 0) would let an
+        // unversioned client decode as version-0 and skip the
         // negotiation gate.
 
         assert_eq!(
@@ -784,15 +798,14 @@ mod tests {
         );
 
         assert_eq!(
-            MAX_PROTOCOL_VERSION, PROTOCOL_VERSION,
-            "MAX_PROTOCOL_VERSION must alias PROTOCOL_VERSION — pins \
-             the line-70 cross-constant invariant. A refactor that \
-             decoupled them (e.g., MAX_PROTOCOL_VERSION = \
-             PROTOCOL_VERSION + 1 to reserve the next version slot in \
-             development) would let an in-development version > \
-             max_supported decode as valid before any daemon \
-             implements it; consumers would then attempt to negotiate \
-             a version the daemon cannot serve",
+            MAX_PROTOCOL_VERSION, 2,
+            "MAX_PROTOCOL_VERSION must remain 2 — pins ADR 0010's \
+             post-streaming-verbs advertisement. The constant was \
+             decoupled from PROTOCOL_VERSION (still 1) once the third \
+             streamable verb landed end-to-end; lowering it back to 1 \
+             would make the daemon advertise v2 as unsupported even \
+             though prefer_stream Some(true) round-trips work, and \
+             v2-aware clients would silently disable streaming.",
         );
 
         assert!(
@@ -5949,11 +5962,18 @@ mod tests {
             "v2 fixture staging directory must document the migration contract"
         );
 
+        // ADR 0010 introduced a staged bump: MAX_PROTOCOL_VERSION is
+        // promoted to 2 once streamable verbs land while
+        // PROTOCOL_VERSION stays at 1 (the wire form the daemon emits
+        // by default). The gate keys off MAX_PROTOCOL_VERSION so v2
+        // fixtures unlock as soon as the daemon advertises v2 support;
+        // a future re-coupling that bumps PROTOCOL_VERSION to 2 keeps
+        // this test passing.
         let v2_fixtures = fixture_json_files(2);
-        if PROTOCOL_VERSION < 2 {
+        if MAX_PROTOCOL_VERSION < 2 {
             assert!(
                 v2_fixtures.is_empty(),
-                "v2 fixtures must not be committed while PROTOCOL_VERSION is still {PROTOCOL_VERSION}"
+                "v2 fixtures must not be committed while MAX_PROTOCOL_VERSION is still {MAX_PROTOCOL_VERSION}"
             );
         }
     }

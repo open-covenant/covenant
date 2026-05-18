@@ -99,7 +99,7 @@ async fn live_http_gateway_health_version_and_bearer_auth() {
     assert_eq!(version["info"]["protocol"], "covenant.ipc");
     assert_eq!(version["info"]["version"], 1);
     assert_eq!(version["info"]["min_supported"], 1);
-    assert_eq!(version["info"]["max_supported"], 1);
+    assert_eq!(version["info"]["max_supported"], 2);
 
     let denied = reqwest::get(format!("{base}/tools"))
         .await

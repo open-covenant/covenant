@@ -88,7 +88,7 @@ export default function DocsIndexPage() {
       <p>
         Covenant is an open, agent-native operating layer. It runs locally on
         the host and exposes eight operating-layer primitives — intent,
-        runtime, memory, identity, permissions, comms, audit, and
+        runtime, memory, identity, permissions, comms, compositor, and
         settlement — through which human users, software agents, and tools
         coordinate work, share state, and settle usage.
       </p>

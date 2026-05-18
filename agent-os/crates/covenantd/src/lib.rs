@@ -632,6 +632,16 @@ pub struct Server {
     budget: Arc<dyn BudgetLedger>,
     budget_checkpoints: Option<Arc<JsonlPauseCheckpointStore>>,
     active_budget_pauses: Arc<Mutex<BTreeMap<Uuid, BudgetPauseCheckpoint>>>,
+    /// In-flight IPC v2 streaming-response tracker (ADR 0010). Shared
+    /// across connection handlers; entries are keyed by
+    /// `(connection_id, stream_id)`. The Server allocates a fresh
+    /// `Uuid::new_v4()` connection_id per accepted connection in
+    /// `serve()` and the handler's `PurgeOnDrop` guard calls
+    /// `purge_connection` on every exit path so a client disconnect
+    /// cleans up its in-flight streams. No production code path
+    /// currently writes to this tracker — per-verb streaming dispatch
+    /// slices will fill it in.
+    stream_tracker: Arc<stream_tracker::StreamTracker>,
     /// `$COVENANT_HOME` for this daemon — set via [`Server::with_home`]
     /// in the binary's `main`. Required by [`Server::rotate_operator_token`]
     /// (which needs to read the current operator token from
@@ -675,8 +685,17 @@ impl Server {
             budget,
             budget_checkpoints: None,
             active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
+            stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
             home: None,
         }
+    }
+
+    /// Returns a clone of the shared in-flight stream tracker. Tests
+    /// hold this Arc to pre-register synthetic entries and assert the
+    /// connection handler's purge-on-close behavior; production callers
+    /// will use it once per-verb streaming dispatch lands.
+    pub fn stream_tracker(&self) -> Arc<stream_tracker::StreamTracker> {
+        self.stream_tracker.clone()
     }
 
     /// Bind a `$COVENANT_HOME` path so [`Server::rotate_operator_token`]
@@ -724,17 +743,44 @@ impl Server {
     pub async fn serve(&self, listener: UnixListener) -> Result<()> {
         loop {
             let (stream, _peer) = listener.accept().await?;
-            debug!("accepted connection");
+            // One `connection_id` per accepted connection. ADR 0010
+            // requires stream_ids to be connection-scoped, so the
+            // tuple key `(connection_id, stream_id)` must be unique
+            // even when two clients allocate the same stream_id.
+            // Uuid::new_v4 is collision-safe within the daemon's
+            // lifetime; the id is Copy so the spawned task owns it
+            // without lifetime gymnastics.
+            let connection_id = Uuid::new_v4();
+            debug!(?connection_id, "accepted connection");
             let me = self.clone();
             tokio::spawn(async move {
-                if let Err(e) = me.handle(stream).await {
-                    warn!(error = %e, "connection failed");
+                if let Err(e) = me.handle(connection_id, stream).await {
+                    warn!(?connection_id, error = %e, "connection failed");
                 }
             });
         }
     }
 
-    async fn handle(&self, mut stream: UnixStream) -> Result<()> {
+    async fn handle(&self, connection_id: Uuid, mut stream: UnixStream) -> Result<()> {
+        // Drop guard: regardless of how this fn exits (success, error,
+        // panic-unwinding), purge every StreamTracker entry the
+        // connection registered. No production code path writes to
+        // the tracker yet, so this is a no-op in v0; once per-verb
+        // streaming dispatch slices land it closes the
+        // disconnect-leaks-entries failure mode automatically.
+        struct PurgeOnDrop<'a> {
+            tracker: &'a stream_tracker::StreamTracker,
+            connection_id: Uuid,
+        }
+        impl Drop for PurgeOnDrop<'_> {
+            fn drop(&mut self) {
+                self.tracker.purge_connection(self.connection_id);
+            }
+        }
+        let _purge = PurgeOnDrop {
+            tracker: &self.stream_tracker,
+            connection_id,
+        };
         // The daemon accepts any number of `ProtocolInfo` probes before
         // authentication. The first non-probe frame must authenticate the peer;
         // anything else terminates the connection after one failure reply.
@@ -14398,5 +14444,54 @@ budget_credits_per_hour = {credits}
             }
         }
         panic!("could not find token starting with {prefix:?} after 10000 tries");
+    }
+
+    #[tokio::test]
+    async fn server_handle_purges_stream_tracker_entries_for_dropped_connection() {
+        // Pre-register a synthetic entry under a chosen connection_id,
+        // then call Server::handle with a UnixStream whose other end
+        // has been closed. handle() must return cleanly (EOF on first
+        // read), and the PurgeOnDrop guard must remove the entry.
+        // A refactor that scoped the guard inside the auth-success
+        // arm (instead of at the top of handle's body) would surface
+        // here as a surviving entry on the unauthenticated-drop path.
+        let server = server_with_ignore(vec![], "", IgnoreSet::default());
+        let tracker = server.stream_tracker();
+
+        let connection_id = Uuid::new_v4();
+        let stream_id = Uuid::new_v4();
+        tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "synthetic".into(),
+                schema: "covenant.ipc.v2.chunk.memory-record.v1".into(),
+                started_at_ms: 0,
+            },
+        );
+        assert_eq!(tracker.len(), 1);
+
+        // Pair of connected UnixStreams. Dropping the client end
+        // before the server reads makes the server see EOF on the
+        // first frame; ProtocolInfo's pre-auth loop returns Ok in
+        // that case.
+        let (client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        drop(client);
+
+        server
+            .handle(connection_id, server_side)
+            .await
+            .expect("handle must return Ok on immediate EOF — pre-auth UnexpectedEof is the documented clean exit path");
+
+        assert_eq!(
+            tracker.len(),
+            0,
+            "PurgeOnDrop guard must drop the synthetic entry on every handle() exit path, including pre-auth EOF; a guard scoped inside the auth-success arm would leak entries when the client disconnects before authenticating"
+        );
+        assert_eq!(
+            tracker.get(connection_id, stream_id),
+            None,
+            "the specific (connection_id, stream_id) tuple must be gone after handle returns; a refactor that called purge_connection on a different id would surface here"
+        );
     }
 }

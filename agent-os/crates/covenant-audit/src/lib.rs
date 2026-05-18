@@ -10,7 +10,7 @@
 //! for tests. [`AuditLog::verify_integrity`] returns an
 //! [`AuditIntegrityReport`] computed from the per-event hash chain;
 //! this is the verdict that `covenant audit verify` and the HTTP
-//! `/audit/integrity-report` surface consume.
+//! `GET /audit/verify` surface consume.
 
 #![deny(unsafe_code)]
 

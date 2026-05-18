@@ -86,6 +86,102 @@ pub fn protocol_info() -> ProtocolInfo {
     }
 }
 
+/// Highest IPC protocol version this codec recognizes when parsing inbound
+/// frames. Distinct from [`MAX_PROTOCOL_VERSION`], which is the version the
+/// daemon advertises in [`ProtocolInfo`] as fully supported. A protocol
+/// version is added here first (so the codec can parse a v(n+1) envelope
+/// from a forward-compatible client without rejecting the frame), and only
+/// later promoted into the advertised range once at least one verb actually
+/// serves that version. ADR 0010 introduces v2 streaming envelopes; the
+/// promotion to `MAX_PROTOCOL_VERSION = 2` waits for the first streamable
+/// verb to land.
+pub const CODEC_MAX_KNOWN_VERSION: u32 = 2;
+
+/// Returns the negotiated protocol version the codec can handle for a given
+/// client-advertised version, or `None` if the client is outside the
+/// codec-known range. The negotiation uses [`MIN_PROTOCOL_VERSION`] as the
+/// floor and [`CODEC_MAX_KNOWN_VERSION`] as the ceiling so a v2-aware client
+/// is accepted at the codec layer even while the daemon still advertises
+/// `max_supported = 1` in [`ProtocolInfo`]. Callers wiring this into the
+/// daemon handshake must additionally enforce `negotiated <=
+/// MAX_PROTOCOL_VERSION` until the corresponding streamable verb ships.
+pub fn accept_protocol_version(client_version: u32) -> Option<u32> {
+    if (MIN_PROTOCOL_VERSION..=CODEC_MAX_KNOWN_VERSION).contains(&client_version) {
+        Some(client_version)
+    } else {
+        None
+    }
+}
+
+/// IPC v2 streaming envelope. Distinct from [`Response`] because each
+/// envelope is one frame on the wire and a single logical streaming response
+/// emits many frames (one [`StreamEnvelope::Begin`], zero or more
+/// [`StreamEnvelope::Chunk`], terminated by exactly one
+/// [`StreamEnvelope::End`] or [`StreamEnvelope::Error`]). All variants carry
+/// `stream_id: Uuid` so the consumer can demultiplex interleaved streams on
+/// a shared connection and the daemon-side tracker (separate slice) can
+/// enforce uniqueness via UUID semantics. `chunk` and `summary` are typed as
+/// `serde_json::Value` so the envelope is generic over the streamed
+/// response shape; the per-verb wiring slices will narrow these by
+/// convention.
+//
+// `PartialEq` only — `chunk` and `summary` carry `serde_json::Value` which
+// isn't `Eq`. Symmetric with [`Response`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamEnvelope {
+    /// Opens a streaming response. `response_kind` names the logical
+    /// [`Response`] variant whose body the subsequent chunks belong to
+    /// (e.g. `"memories"` for a streamed `Response::Memories`); the kind
+    /// stays a string at the codec layer so the per-verb wiring slices can
+    /// add variants without changing the envelope schema.
+    StreamBegin {
+        stream_id: Uuid,
+        response_kind: String,
+    },
+    /// Carries one chunk of the streaming response body. `sequence` is the
+    /// monotonically increasing index within `stream_id`, starting at 0.
+    /// `chunk` is a free-form JSON value whose shape is set by the
+    /// `response_kind` declared in the matching `StreamBegin`.
+    StreamChunk {
+        stream_id: Uuid,
+        sequence: u32,
+        chunk: serde_json::Value,
+    },
+    /// Successful terminal frame for `stream_id`. `summary` is an optional
+    /// terminal payload (e.g. an `orphans_total` rollup) the consumer can
+    /// surface alongside the last chunk.
+    StreamEnd {
+        stream_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<serde_json::Value>,
+    },
+    /// Error terminal frame for `stream_id`. The stream is dead after this
+    /// envelope; no further `StreamChunk` or `StreamEnd` frames are
+    /// permitted for the same `stream_id`.
+    StreamError { stream_id: Uuid, message: String },
+}
+
+/// Inbound frame the v2-aware decoder accepts on the response side. Tries
+/// [`Response`] (the v1 terminal shape) first so every existing fixture
+/// keeps deserializing unchanged; only on parse failure does it attempt a
+/// [`StreamEnvelope`]. The variant order matters — serde walks `untagged`
+/// alternatives in declaration order and the first successful parse wins,
+/// so adding a future variant whose discriminator collides with `Response`
+/// would silently shadow the v1 path.
+// `Frame::Response` is large because `Response` itself is large (~392 bytes);
+// boxing it would heap-allocate every decoded response without buying real
+// memory benefit, since the decoder consumes the frame immediately and the
+// value never lives in a long-held collection. Suppress the lint at the type
+// level; revisit if Frame ever ends up in a queue or vector.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Frame {
+    Response(Response),
+    Stream(StreamEnvelope),
+}
+
 // `PartialEq` only — `A2ATaskResult` (carried in `PostA2AResult`) holds a
 // `serde_json::Value` which isn't `Eq`. Symmetric with `Response`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -9440,5 +9536,360 @@ mod tests {
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_ipc::IpcError::Serde source() must downcast_ref to serde_json::Error so daemon-side IPC frame-parse diagnostics can call serde_json::Error::line/column/classify for malformed-frame identification, including the TUI's IpcError::Frame wrapper that chains source delegation through covenant_ipc::IpcError; a refactor that wrapped the inner in a project-local newtype (e.g., IpcSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies IPC frame parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn codec_max_known_version_pins_value_and_relation_to_advertised_max() {
+        // CODEC_MAX_KNOWN_VERSION is the codec-layer ceiling separate from
+        // MAX_PROTOCOL_VERSION (the daemon-advertised ceiling carried by
+        // ProtocolInfo). A v2-aware client can negotiate at the codec
+        // layer even while the daemon still advertises max_supported=1.
+        // The promotion of MAX_PROTOCOL_VERSION to 2 lands with the
+        // first streamable verb (ADR 0010); until then this constant is
+        // the *only* place the codec acknowledges v2 exists.
+        assert_eq!(
+            CODEC_MAX_KNOWN_VERSION, 2,
+            "CODEC_MAX_KNOWN_VERSION must remain 2 — pins the codec-known ceiling \
+             at v2 so v2 envelopes parse and accept_protocol_version returns Some(2). \
+             A refactor that lowered this to 1 under a 'collapse to advertised range' \
+             rationale would silently make StreamEnvelope inert (no client could \
+             negotiate the version that carries it); a refactor that raised it to 3 \
+             without adding the v3 envelope types would let accept_protocol_version \
+             advertise a version the codec cannot actually parse."
+        );
+        assert!(
+            MAX_PROTOCOL_VERSION <= CODEC_MAX_KNOWN_VERSION,
+            "well-ordering: MAX_PROTOCOL_VERSION (advertised) must be <= \
+             CODEC_MAX_KNOWN_VERSION (codec-known). A refactor that advertised \
+             a version higher than the codec can parse would let clients \
+             negotiate a wire shape the daemon then cannot decode."
+        );
+    }
+
+    #[test]
+    fn accept_protocol_version_returns_some_within_range_and_none_outside() {
+        // The negotiation helper accepts every version in
+        // [MIN_PROTOCOL_VERSION, CODEC_MAX_KNOWN_VERSION] and rejects
+        // everything outside. A future bump that widens the range silently
+        // (e.g. accepting v0 under a "permissive legacy" rationale, or
+        // accepting v3 before the codec knows the shape) would let the
+        // daemon negotiate a version it cannot serve.
+        assert_eq!(
+            accept_protocol_version(MIN_PROTOCOL_VERSION),
+            Some(MIN_PROTOCOL_VERSION),
+            "accept_protocol_version must accept MIN_PROTOCOL_VERSION — pins the \
+             negotiation floor at the documented minimum so a v1-only client can \
+             still negotiate a v1 session against a v2-aware codec."
+        );
+        assert_eq!(
+            accept_protocol_version(CODEC_MAX_KNOWN_VERSION),
+            Some(CODEC_MAX_KNOWN_VERSION),
+            "accept_protocol_version must accept CODEC_MAX_KNOWN_VERSION — without \
+             this the codec's v2 envelopes are unreachable from any client because \
+             negotiation rejects the only version that carries them."
+        );
+        assert_eq!(
+            accept_protocol_version(0),
+            None,
+            "accept_protocol_version must reject 0 — an unversioned client must \
+             not slip through as version-0 and skip the negotiation gate."
+        );
+        assert_eq!(
+            accept_protocol_version(CODEC_MAX_KNOWN_VERSION + 1),
+            None,
+            "accept_protocol_version must reject versions beyond CODEC_MAX_KNOWN_VERSION \
+             — the codec cannot parse a shape it does not know, and silently advertising \
+             support for it would produce frame-decode failures the operator could not \
+             attribute to the negotiation."
+        );
+    }
+
+    #[test]
+    fn stream_envelope_begin_serde_pins_two_field_variant() {
+        // StreamEnvelope::StreamBegin opens every v2 streaming response.
+        // stream_id is Uuid so the daemon-side tracker (separate slice)
+        // can enforce uniqueness via UUID semantics; response_kind stays
+        // a String at the codec layer so per-verb wiring can add variants
+        // without changing the envelope schema.
+        let stream_id = Uuid::nil();
+        let env = StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: "memories".into(),
+        };
+        let wire = serde_json::to_value(&env).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("StreamEnvelope::StreamBegin serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "response_kind", "stream_id"],
+            "StreamEnvelope::StreamBegin wire form must contain exactly the three documented fields; \
+             an addition or rename would break the v2 stream-begin schema that every consumer \
+             demultiplexes on."
+        );
+        assert_eq!(
+            obj.get("kind").and_then(|v| v.as_str()),
+            Some("stream_begin")
+        );
+        let decoded: StreamEnvelope = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded, env);
+
+        for required in ["stream_id", "response_kind"] {
+            let mut shortened = obj.clone();
+            shortened.remove(required);
+            assert!(
+                serde_json::from_value::<StreamEnvelope>(serde_json::Value::Object(shortened))
+                    .is_err(),
+                "StreamEnvelope::StreamBegin must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] would silently let a malformed v2 stream-begin decode \
+                 with a nil UUID or an empty response_kind."
+            );
+        }
+    }
+
+    #[test]
+    fn stream_envelope_chunk_serde_pins_three_field_variant() {
+        // StreamEnvelope::StreamChunk carries one chunk of a streaming
+        // response. sequence is u32 starting at 0; chunk is a free-form
+        // JSON value typed by the matching StreamBegin's response_kind.
+        let stream_id = Uuid::nil();
+        let env = StreamEnvelope::StreamChunk {
+            stream_id,
+            sequence: 0,
+            chunk: serde_json::json!({"record_id": "abc"}),
+        };
+        let wire = serde_json::to_value(&env).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("StreamEnvelope::StreamChunk serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["chunk", "kind", "sequence", "stream_id"],
+            "StreamEnvelope::StreamChunk wire form must contain exactly the four documented fields."
+        );
+        assert_eq!(
+            obj.get("kind").and_then(|v| v.as_str()),
+            Some("stream_chunk")
+        );
+        let decoded: StreamEnvelope = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded, env);
+
+        for required in ["stream_id", "sequence", "chunk"] {
+            let mut shortened = obj.clone();
+            shortened.remove(required);
+            assert!(
+                serde_json::from_value::<StreamEnvelope>(serde_json::Value::Object(shortened))
+                    .is_err(),
+                "StreamEnvelope::StreamChunk must reject a wire payload that omits {required}; \
+                 a stray #[serde(default)] would silently let a malformed chunk decode with a \
+                 nil UUID, sequence=0, or chunk=null."
+            );
+        }
+    }
+
+    #[test]
+    fn stream_envelope_end_serde_pins_optional_summary_and_skip_serializing_when_none() {
+        // StreamEnvelope::StreamEnd is the successful terminal frame.
+        // summary is Option so a streamable verb without a rollup can
+        // emit StreamEnd without ceremony; skip_serializing_if drops the
+        // key when None so the wire form matches the documented two-key
+        // shape.
+        let stream_id = Uuid::nil();
+        let env_no_summary = StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: None,
+        };
+        let wire = serde_json::to_value(&env_no_summary).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("StreamEnvelope::StreamEnd serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "stream_id"],
+            "StreamEnvelope::StreamEnd with summary=None must omit the summary key on the wire \
+             — a refactor that dropped skip_serializing_if would surface a 'summary: null' field \
+             that consumers documented as absent must then handle."
+        );
+        assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("stream_end"));
+        let decoded: StreamEnvelope = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, env_no_summary);
+
+        let env_with_summary = StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: Some(serde_json::json!({"orphans_total": 0})),
+        };
+        let wire = serde_json::to_value(&env_with_summary).unwrap();
+        let obj = wire.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "stream_id", "summary"],
+            "StreamEnvelope::StreamEnd with summary=Some must emit the summary key."
+        );
+        let decoded: StreamEnvelope = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, env_with_summary);
+
+        let mut shortened = serde_json::to_value(&env_with_summary)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        shortened.remove("stream_id");
+        assert!(
+            serde_json::from_value::<StreamEnvelope>(serde_json::Value::Object(shortened)).is_err(),
+            "StreamEnvelope::StreamEnd must reject a wire payload that omits stream_id; without it \
+             the consumer cannot map the terminal frame back to the originating stream."
+        );
+    }
+
+    #[test]
+    fn stream_envelope_error_serde_pins_two_field_variant() {
+        // StreamEnvelope::StreamError is the failure terminal frame. The
+        // stream is dead after it; no further chunks or end frames are
+        // permitted for the same stream_id (enforced by the daemon-side
+        // tracker in a separate slice).
+        let stream_id = Uuid::nil();
+        let env = StreamEnvelope::StreamError {
+            stream_id,
+            message: "io: broken pipe".into(),
+        };
+        let wire = serde_json::to_value(&env).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("StreamEnvelope::StreamError serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["kind", "message", "stream_id"],
+            "StreamEnvelope::StreamError wire form must contain exactly the three documented fields."
+        );
+        assert_eq!(
+            obj.get("kind").and_then(|v| v.as_str()),
+            Some("stream_error")
+        );
+        let decoded: StreamEnvelope = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded, env);
+
+        for required in ["stream_id", "message"] {
+            let mut shortened = obj.clone();
+            shortened.remove(required);
+            assert!(
+                serde_json::from_value::<StreamEnvelope>(serde_json::Value::Object(shortened))
+                    .is_err(),
+                "StreamEnvelope::StreamError must reject a wire payload that omits {required}."
+            );
+        }
+    }
+
+    #[test]
+    fn stream_envelope_rejects_unknown_kind_discriminator() {
+        // Serde's externally-tagged enum (#[serde(tag = "kind")]) rejects
+        // unknown discriminators by default. A refactor that added
+        // #[serde(other)] for forward compatibility would silently swallow
+        // a typo or a future-version envelope as an unknown variant and
+        // produce a parse error far from the actual mismatch.
+        let payload = serde_json::json!({
+            "kind": "stream_unknown",
+            "stream_id": Uuid::nil(),
+        });
+        assert!(
+            serde_json::from_value::<StreamEnvelope>(payload).is_err(),
+            "StreamEnvelope must reject an unknown 'kind' discriminator so a typo or a \
+             future-version envelope surfaces as a parse error at the codec boundary instead \
+             of decoding silently."
+        );
+    }
+
+    #[test]
+    fn frame_round_trips_v1_protocol_info_response_through_untagged_alternation() {
+        // Frame's untagged enum tries Response first and StreamEnvelope
+        // second. A v1 ProtocolInfo response must round-trip through
+        // Frame byte-for-byte equal to the same response serialized
+        // directly — proving the Frame wrapper does not perturb the v1
+        // wire shape that every existing fixture depends on.
+        let response = Response::ProtocolInfo {
+            info: protocol_info(),
+        };
+        let direct = serde_json::to_value(&response).unwrap();
+        let frame = Frame::Response(response.clone());
+        let wrapped = serde_json::to_value(&frame).unwrap();
+        assert_eq!(
+            direct, wrapped,
+            "Frame::Response(r) must serialize identically to r directly — the untagged enum \
+             must be transparent on the wire so v1 fixtures keep round-tripping."
+        );
+        let decoded: Frame = serde_json::from_value(direct).unwrap();
+        match decoded {
+            Frame::Response(Response::ProtocolInfo { info }) => {
+                assert_eq!(info, protocol_info());
+            }
+            other => panic!(
+                "Frame must decode the v1 ProtocolInfo response into Frame::Response, not {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn frame_round_trips_v1_protocol_info_fixture_through_untagged_alternation() {
+        // Same v1-fallback proof as the round-trip above, but anchored to
+        // the checked-in v1 fixture so a refactor that changed the
+        // ProtocolInfo wire form would fail this test against a real
+        // historical bytes-on-disk payload, not just a freshly-serialized
+        // round-trip.
+        let fixture_path = fixtures_dir().join("protocol-info.v1.json");
+        let bytes = std::fs::read(&fixture_path).unwrap();
+        let frame: Frame = serde_json::from_slice(&bytes).unwrap();
+        match &frame {
+            Frame::Response(Response::ProtocolInfo { info }) => {
+                assert_eq!(info, &protocol_info());
+            }
+            other => panic!(
+                "v1 protocol-info fixture must decode into Frame::Response(ProtocolInfo), got {other:?}"
+            ),
+        }
+        let reserialized = serde_json::to_value(&frame).unwrap();
+        let original: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            reserialized, original,
+            "v1 protocol-info fixture must reserialize from Frame byte-equivalent to disk."
+        );
+    }
+
+    #[test]
+    fn frame_decodes_v2_stream_envelopes_after_v1_response_alternative_fails() {
+        // The decoder's contract: try Response first, fall through to
+        // StreamEnvelope only when Response rejects. A v2 stream_begin
+        // payload has no matching Response variant, so the untagged enum
+        // must select Frame::Stream after Response fails. If a future
+        // Response variant were ever named `StreamBegin` (or any v2
+        // discriminator), this test would catch the silent shadowing.
+        let stream_id = Uuid::nil();
+        let payload = serde_json::json!({
+            "kind": "stream_begin",
+            "stream_id": stream_id,
+            "response_kind": "memories",
+        });
+        let decoded: Frame = serde_json::from_value(payload).unwrap();
+        match decoded {
+            Frame::Stream(StreamEnvelope::StreamBegin {
+                stream_id: sid,
+                response_kind,
+            }) => {
+                assert_eq!(sid, stream_id);
+                assert_eq!(response_kind, "memories");
+            }
+            other => panic!(
+                "v2 stream_begin payload must decode into Frame::Stream(StreamBegin), not {other:?}"
+            ),
+        }
     }
 }

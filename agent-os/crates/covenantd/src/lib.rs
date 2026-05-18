@@ -4143,6 +4143,77 @@ impl Server {
         result
     }
 
+    /// ADR 0010 slice 6.e — Vec-based sibling of
+    /// [`Self::stream_recent_audit`] for the HTTP SSE response path.
+    /// Symmetric with [`Self::recent_memory_envelopes`]; the contract
+    /// is identical at the type level, with `Ok(envelopes)` for the
+    /// streamable path and `Err(Response)` reserved for the daemon's
+    /// "streaming refused, render as buffered" signal.
+    ///
+    /// Unlike memory, `recent_audit` has no capability gate — it
+    /// filters by `peer.pubkey == event.issuer.pubkey` inside
+    /// [`Self::recent_audit`] — so the `Err(Response::Error)` arm is
+    /// unreachable in practice on this verb. The Result shape stays
+    /// for symmetry so the upcoming HTTP route handler can use one
+    /// common pattern across memory and audit. An empty page (no
+    /// events visible to the peer) is a happy-path `Ok` with the
+    /// begin+end pair (no chunks); a stream that never opens is never
+    /// indistinguishable from a dead daemon at the protocol layer.
+    #[allow(dead_code)]
+    pub async fn recent_audit_envelopes(
+        &self,
+        limit: usize,
+        since_ms: Option<u64>,
+        peer: &AgentId,
+        connection_id: Uuid,
+    ) -> Result<Vec<StreamEnvelope>, Response> {
+        let response = self.recent_audit(limit, since_ms, peer).await;
+        let events = match response {
+            Response::AuditEvents { events } => events,
+            other => return Err(other),
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "RecentAudit".into(),
+                schema: stream_dispatch::AUDIT_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let mut envelopes = Vec::with_capacity(events.len() + 2);
+        envelopes.push(StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: stream_dispatch::AUDIT_RESPONSE_KIND.to_string(),
+        });
+        for (sequence, event) in events.iter().enumerate() {
+            let chunk = match serde_json::to_value(event) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.stream_tracker.unregister(connection_id, stream_id);
+                    return Err(Response::Error {
+                        message: format!("audit stream serialize: {e}"),
+                    });
+                }
+            };
+            envelopes.push(StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: sequence as u32,
+                chunk,
+            });
+        }
+        envelopes.push(StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: None,
+        });
+
+        self.stream_tracker.unregister(connection_id, stream_id);
+        Ok(envelopes)
+    }
+
     /// ADR 0010 streaming orchestrator for `Request::SubmitIntent`
     /// with `prefer_stream: Some(true)`. Symmetric with
     /// [`Self::stream_recent_memory`] and [`Self::stream_recent_audit`]
@@ -10680,6 +10751,81 @@ required = {caps:?}
             id_a, id_b,
             "consecutive audit streams must allocate fresh stream_ids"
         );
+    }
+
+    #[tokio::test]
+    async fn recent_audit_envelopes_happy_path_returns_begin_chunks_end() {
+        // Pre-populate two audit events visible to `me` via the
+        // peer-scoped recorder. The collector returns
+        // Ok([Begin, Chunk×2, End]); response_kind matches the audit
+        // const; chunk sequences are 0/1 in order; tracker is empty
+        // after.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        for i in 0..2u8 {
+            let event = AuditEvent {
+                id: Uuid::from_bytes([i + 10; 16]),
+                timestamp_ms: 1_700_000_000_000 + i as u64,
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::from_bytes([i + 20; 16]),
+                    intent_text: format!("intent {i}"),
+                    matched_agent: Some("test-agent".into()),
+                    result_hash_hex: format!("{:064x}", i as u64),
+                    status: "ok".into(),
+                },
+            };
+            s.record_peer_event(&me, event).await;
+        }
+
+        let connection_id = Uuid::new_v4();
+        let envelopes = s
+            .recent_audit_envelopes(10, None, &me, connection_id)
+            .await
+            .expect("audit happy path must return Ok");
+        assert_eq!(envelopes.len(), 4, "begin + 2 chunks + end = 4 envelopes");
+        match &envelopes[0] {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, stream_dispatch::AUDIT_RESPONSE_KIND);
+            }
+            other => panic!("expected StreamBegin, got {other:?}"),
+        }
+        for (i, env) in envelopes[1..=2].iter().enumerate() {
+            match env {
+                StreamEnvelope::StreamChunk { sequence, .. } => {
+                    assert_eq!(*sequence, i as u32);
+                }
+                other => panic!("expected StreamChunk at index {}, got {other:?}", i + 1),
+            }
+        }
+        assert!(matches!(
+            envelopes[3],
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful recent_audit_envelopes"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_audit_envelopes_empty_events_returns_begin_end_only() {
+        // No audit events. The collector still emits begin+end so a
+        // stream that never opens is never confused with a dead daemon
+        // at the protocol layer.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let envelopes = s
+            .recent_audit_envelopes(10, None, &me, connection_id)
+            .await
+            .expect("empty audit page must return Ok");
+        assert_eq!(envelopes.len(), 2, "begin + end = 2 envelopes (no chunks)");
+        assert!(matches!(envelopes[0], StreamEnvelope::StreamBegin { .. }));
+        assert!(matches!(
+            envelopes[1],
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
     }
 
     #[tokio::test]

@@ -47,8 +47,9 @@ export default function SecurityPage() {
             <td>Partial</td>
             <td>
               Capability checks at dispatch, wall-clock budget,
-              JSON-line stdin/stdout protocol, and daemon-owned
-              attribution. This is not a sandbox against hostile code.
+              hard-preempt on projected overshoot, JSON-line
+              stdin/stdout protocol, and daemon-owned attribution.
+              This is not a sandbox against hostile code.
             </td>
           </tr>
           <tr>
@@ -105,8 +106,17 @@ export default function SecurityPage() {
           recorded.
         </li>
         <li>
-          A registered agent exceeding its CPU budget. The runtime
-          kills the process; the dispatch returns an error.
+          A registered agent exceeding its CPU budget. A periodic
+          projection tick walks an in-memory subprocess tracker and
+          preempts via <code>SIGTERM</code>/grace/<code>SIGKILL</code>{" "}
+          when <code>project_overshoot</code> flags an in-flight
+          process. The wall-clock kill at the agent-declared{" "}
+          <code>cpu_ms_per_task</code> is the backstop. Either path
+          emits <code>BudgetPreempted</code> or{" "}
+          <code>BudgetPreemptFailed</code> in the audit log, and the
+          dispatch returns an error. A daemon crash between the
+          projection decision and the signal dispatch can leave an
+          orphan subprocess; recovery on restart is a documented gap.
         </li>
         <li>
           A registered agent injecting forged audit entries.

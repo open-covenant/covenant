@@ -431,7 +431,9 @@ export default function ArchitecturePage() {
             <td>
               Agent-to-agent task and result envelopes; async Mailbox
               trait with an in-memory backend and a durable JSONL-backed
-              implementation over a leased task queue.
+              implementation over a leased task queue, plus a
+              receiver-side idempotency cache, operator-facing repair
+              commands, and an opt-in auto-retry policy.
             </td>
           </tr>
           <tr>

@@ -55,7 +55,6 @@ const MILESTONES: Milestone[] = [
       "Unified model provider — plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
       "Plugin catalog — install vetted tools from a one-click catalog inside the console, starting with filesystem access",
       "Production-grade isolated runtime for untrusted agent code on Linux",
-      "Terminal user interface",
       "Mid-task save and resume when an agent reaches its resource budget",
       "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
       "Stable wire formats for SDK and integration compatibility",

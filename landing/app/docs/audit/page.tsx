@@ -185,6 +185,36 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>PeerRevoked</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "peer_revoked",
+  "peer_display":    "guest@local",
+  "peer_pubkey_b58": "9hYz…Lk6w",
+  "token_prefix":    "4qXP6t"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the operator successfully revokes a peer registry
+        entry via <code>RevokePeer</code>. The issuer is the operator
+        (peer-event audience: the recording path asserts that the
+        issuer&apos;s pubkey matches the acting peer&apos;s);{" "}
+        <code>peer_display</code> and <code>peer_pubkey_b58</code>{" "}
+        describe the <em>revoked</em> peer, not the operator;{" "}
+        <code>peer_pubkey_b58</code> is the unforgeable identifier
+        (display is wire-supplied). <code>token_prefix</code> is the
+        same 6-char base58 redaction that{" "}
+        <code>OperatorTokenRotated</code> records — full token bytes
+        never enter the audit log, and the prefix lets an operator
+        confirm a revoked entry matches the durable on-disk peer
+        registry. Distinct from <code>OperatorPeerRevokeRejected</code>{" "}
+        (daemon-issuer probe by a non-operator) and{" "}
+        <code>PeerSelfRevokeBlocked</code> (operator-issuer fat-finger
+        on their own bootstrap token).
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

@@ -140,7 +140,7 @@ export default function IpcPage() {
     "protocol": "covenant.ipc",
     "version": 1,
     "min_supported": 1,
-    "max_supported": 1
+    "max_supported": 2
   } }
 
 { "kind": "authenticated",

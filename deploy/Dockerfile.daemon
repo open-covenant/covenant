@@ -12,11 +12,13 @@ RUN apt-get update \
 WORKDIR /src
 COPY agent-os/ ./agent-os/
 WORKDIR /src/agent-os
-# Build only the daemon and the operator CLI; skip the on-chain settlement
-# program (Solana toolchain not available, not needed by the demo).
+# Build the daemon, operator CLI, and the Haiku-backed demo agent; skip
+# the on-chain settlement program (Solana toolchain not available, not
+# needed by the demo).
 RUN cargo build --release \
       --bin covenantd \
-      --bin covenant
+      --bin covenant \
+      --bin demo
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
@@ -30,9 +32,11 @@ WORKDIR /home/covenant
 COPY --from=builder /src/agent-os/target/release/covenantd /usr/local/bin/covenantd
 COPY --from=builder /src/agent-os/target/release/covenant /usr/local/bin/covenant
 
-# Demo seed bundle: hello-agent + entrypoint that primes operator token,
-# baseline capabilities, and waits for daemon readiness.
-COPY examples/hello-agent /opt/covenant/hello-agent
+# Demo seed bundle: Haiku-backed demo-agent package (manifest + binary) +
+# entrypoint that primes operator token, baseline capabilities, and waits
+# for daemon readiness.
+COPY examples/demo-agent /opt/covenant/demo-agent
+COPY --from=builder /src/agent-os/target/release/demo /opt/covenant/demo-agent/demo
 COPY deploy/entrypoint.sh /usr/local/bin/covenant-demo-entrypoint
 RUN chmod +x /usr/local/bin/covenant-demo-entrypoint
 

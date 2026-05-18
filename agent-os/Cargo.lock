@@ -1363,6 +1363,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo-agent"
+version = "0.1.0"
+dependencies = [
+ "covenant-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

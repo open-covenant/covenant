@@ -471,6 +471,34 @@ a {
   background: transparent;
 }
 
+.btn.chip {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--dim);
+  padding: 6px 10px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: none;
+}
+
+.btn.chip:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--faint);
+  border-style: solid;
+}
+
+.sample-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sample-chips .eyebrow {
+  margin-right: 2px;
+}
+
 .field {
   display: grid;
   gap: 6px;

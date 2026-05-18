@@ -3,15 +3,34 @@
 import Link from "next/link";
 import { useCallback, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
-import { formatRelative, formatTimestamp, stripDaemonEcho } from "@/lib/format";
+import { formatRelative, formatTimestamp } from "@/lib/format";
 import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
-const SAMPLE_INTENT =
-  process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() || "Say hi and tell me what you can do.";
+
+// Sample prompts shown as chips beneath the dispatch box in demo mode.
+// The first entry is the default "Try a sample task" target; the env var
+// override is kept for ops who want to swap it without a code change.
+const DEMO_SAMPLES: { label: string; intent: string }[] = [
+  {
+    label: "Say hi",
+    intent:
+      process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() ||
+      "Say hi and tell me what you can do.",
+  },
+  {
+    label: "What is Covenant?",
+    intent: "What is Covenant in one short paragraph?",
+  },
+  {
+    label: "What just happened?",
+    intent:
+      "Walk me through what just happened when I sent this task — capability check, dispatch, signing, audit log.",
+  },
+];
 
 type OverviewSnapshot = Awaited<ReturnType<typeof loadOverview>>;
 
@@ -47,10 +66,9 @@ export default function OverviewPage() {
       try {
         const r = await api.submitIntent(trimmed);
         if (r.kind === "intent_result") {
-          const body = stripDaemonEcho(r.text);
-          setLastResult(body);
+          setLastResult(r.text);
           setLastIntentId(r.intent_id);
-          saveReply(r.intent_id, body);
+          saveReply(r.intent_id, r.text);
         } else {
           setLastError(r.message);
         }
@@ -79,7 +97,6 @@ export default function OverviewPage() {
     [intent, sendIntent],
   );
 
-  const onTrySample = useCallback(() => sendIntent(SAMPLE_INTENT), [sendIntent]);
 
   const onVerify = useCallback(async () => {
     setVerifying(true);
@@ -176,17 +193,23 @@ export default function OverviewPage() {
             <button type="submit" className="btn primary" disabled={dispatching || !intent}>
               {dispatching ? "Sending" : "Send"}
             </button>
-            {DEMO_MODE && (
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={onTrySample}
-                disabled={dispatching}
-              >
-                Try a sample task
-              </button>
-            )}
           </div>
+          {DEMO_MODE && (
+            <div className="sample-chips">
+              <span className="eyebrow text-muted">try</span>
+              {DEMO_SAMPLES.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  className="btn chip"
+                  onClick={() => sendIntent(s.intent)}
+                  disabled={dispatching}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
         </form>
 
         {(lastResult || lastError || dispatching) && (

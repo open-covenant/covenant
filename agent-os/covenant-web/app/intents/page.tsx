@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { formatTimestamp, shortHash, truncate } from "@/lib/format";
+import { formatAgentId, formatTimestamp, shortHash, truncate } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -63,7 +63,7 @@ export default function TasksPage() {
                     <span className="agent">
                       {event.kind.matched_agent ? (
                         <>
-                          Ran by <strong>{event.kind.matched_agent}</strong>
+                          Ran by <strong>{formatAgentId(event.kind.matched_agent)}</strong>
                         </>
                       ) : (
                         <em>no agent matched</em>

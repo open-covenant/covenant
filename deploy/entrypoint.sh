@@ -4,7 +4,7 @@
 ## - Honors COVENANT_OPERATOR_TOKEN env (b58 string) by writing it to the
 ##   on-disk operator.token before the daemon starts, so both services share
 ##   the same bearer credential.
-## - Copies the bundled hello-agent into $COVENANT_HOME/agents.
+## - Copies the bundled demo-agent (Haiku-backed) into $COVENANT_HOME/agents.
 ## - Waits for the daemon HTTP gateway to come up, then grants baseline
 ##   capabilities so a fresh container is immediately useful.
 
@@ -25,9 +25,9 @@ if [[ -n "${COVENANT_OPERATOR_TOKEN:-}" ]]; then
   echo "entrypoint: wrote operator token from env (mode 0600)"
 fi
 
-if [[ ! -d "$COVENANT_HOME/agents/hello" ]]; then
-  cp -R /opt/covenant/hello-agent "$COVENANT_HOME/agents/hello"
-  echo "entrypoint: seeded hello-agent"
+if [[ ! -d "$COVENANT_HOME/agents/demo" ]]; then
+  cp -R /opt/covenant/demo-agent "$COVENANT_HOME/agents/demo"
+  echo "entrypoint: seeded demo-agent"
 fi
 
 echo "entrypoint: starting covenantd on $HTTP_HOST:$HTTP_PORT"

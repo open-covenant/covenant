@@ -1,0 +1,33 @@
+## Demo agent for the public sandbox.
+##
+## Calls Anthropic Haiku via covenant-llm when ANTHROPIC_API_KEY is set on
+## the daemon's environment. Has a daily request quota
+## (COVENANT_DEMO_DAILY_REQUESTS, default 500) so a public URL can't drain
+## the key. Falls back to a canned reply when quota is hit, the key is
+## missing, or the Anthropic call errors.
+##
+## The deploy Dockerfile builds the `demo` binary from
+## `agent-os/agents/demo/` and drops it next to this manifest in the
+## packaged image; the entrypoint then copies the package into
+## $COVENANT_HOME/agents/demo at startup.
+
+[agent]
+id      = "demo"
+name    = "Covenant Demo"
+version = "0.1.0"
+runtime = "rust-bin"
+entry   = "demo"
+
+[capabilities]
+required = ["intent.subscribe"]
+optional = []
+
+[resources]
+cpu_ms_per_task = 30_000
+memory_mb       = 128
+disk_mb         = 10
+network         = "outbound-https-only"
+
+[settlement]
+budget_credits_per_hour = 0
+priority                = "normal"

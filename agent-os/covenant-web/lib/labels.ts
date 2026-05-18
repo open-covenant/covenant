@@ -10,7 +10,7 @@
 // re-surfaces technical names beside the friendly labels.
 
 import type { AuditEvent, AuditKind } from "./api";
-import { formatHashStatus, formatPeerName, shortHash } from "./format";
+import { formatAgentId, formatHashStatus, formatPeerName, shortHash } from "./format";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Capability namespace catalog. Maps every signed action the daemon emits to a
@@ -228,7 +228,7 @@ export function eventLabel(event: AuditEvent): EventLabel {
     case "intent_dispatched":
       return {
         headline: kind.matched_agent
-          ? `Task ran on ${kind.matched_agent}`
+          ? `Task ran on ${formatAgentId(kind.matched_agent)}`
           : "No agent for this task",
         body: kind.matched_agent
           ? `“${truncate(kind.intent_text, 80)}”. ${formatHashStatus(kind.result_hash_hex, "Result")}.`

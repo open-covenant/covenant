@@ -20,6 +20,7 @@ members = [
     "crates/covenantd",
     "crates/covenant",
     "crates/covenant-tui",
+    "agents/demo",
     "agents/research",
     "programs/settlement",
 ]

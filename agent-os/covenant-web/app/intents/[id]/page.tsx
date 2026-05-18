@@ -4,7 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { eventsForIntent } from "@/lib/audit";
-import { formatTimestamp, shortHash } from "@/lib/format";
+import { formatAgentId, formatTimestamp, shortHash } from "@/lib/format";
 import { loadReply } from "@/lib/intentReplies";
 import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
@@ -69,7 +69,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         subhead={
           dispatchKind
             ? dispatchKind.matched_agent
-              ? `Ran by ${dispatchKind.matched_agent}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
+              ? `Ran by ${formatAgentId(dispatchKind.matched_agent)}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
               : "No agent is set up to handle this kind of task. Covenant returned a default response."
             : "Loading the task’s steps…"
         }
@@ -93,7 +93,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         </article>
         <article className="meta-cell">
           <p className="eyebrow">ran by</p>
-          <strong>{dispatchKind?.matched_agent ?? "—"}</strong>
+          <strong>{formatAgentId(dispatchKind?.matched_agent)}</strong>
         </article>
         <article className="meta-cell">
           <p className="eyebrow">status</p>

@@ -1,0 +1,19 @@
+[package]
+name = "covenant-sap-bridge"
+version = "0.0.0"
+description = "Opt-in bridge between Covenant and Synapse Agent Protocol on Solana."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+covenant-identity = { path = "../covenant-identity" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+url = "2"

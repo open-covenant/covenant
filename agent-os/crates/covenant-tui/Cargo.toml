@@ -1,7 +1,7 @@
 [package]
 name = "covenant-tui"
 version = "0.1.0"
-description = "Covenant terminal UI. Reads daemon state over the local IPC socket and renders intents, memory, audit, and capability views."
+description = "Covenant terminal UI. Reads daemon state over the local IPC socket and renders intent, memory, audit, capabilities, A2A, chain-receipts, and peer-registry views."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -642,6 +642,14 @@ pub struct Server {
     /// currently writes to this tracker — per-verb streaming dispatch
     /// slices will fill it in.
     stream_tracker: Arc<stream_tracker::StreamTracker>,
+    /// Daemon-shared in-flight subprocess tracker. `SubprocessRunner`
+    /// and `GvisorRunner` register `intent_id → TrackedSubprocess`
+    /// entries on each spawn; `Server::preempt_intent` reads them to
+    /// signal the kernel-visible pid. By default `Server::new` creates
+    /// a fresh tracker; the daemon's `main` overrides this via
+    /// `Server::with_subprocess_tracker` to share one Arc with the
+    /// runner so the lookup actually finds the runner's entries.
+    subprocess_tracker: Arc<covenant_runtime::SubprocessTracker>,
     /// `$COVENANT_HOME` for this daemon — set via [`Server::with_home`]
     /// in the binary's `main`. Required by [`Server::rotate_operator_token`]
     /// (which needs to read the current operator token from
@@ -686,6 +694,7 @@ impl Server {
             budget_checkpoints: None,
             active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
             stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
+            subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
         }
     }
@@ -696,6 +705,31 @@ impl Server {
     /// will use it once per-verb streaming dispatch lands.
     pub fn stream_tracker(&self) -> Arc<stream_tracker::StreamTracker> {
         self.stream_tracker.clone()
+    }
+
+    /// Returns a clone of the shared in-flight subprocess tracker.
+    /// Tests use this to register synthetic entries before calling
+    /// `preempt_intent`. The daemon's `main` calls
+    /// `with_subprocess_tracker` to wire the same Arc into both the
+    /// Server and the runner.
+    pub fn subprocess_tracker(&self) -> Arc<covenant_runtime::SubprocessTracker> {
+        self.subprocess_tracker.clone()
+    }
+
+    /// Replace the Server's subprocess tracker with one the caller
+    /// already owns. The daemon's `main` constructs one
+    /// `Arc<SubprocessTracker>` and passes a clone to both the runner
+    /// (via `runtime_runner_composite`) and the Server (via this
+    /// builder) so `preempt_intent` finds the entries the runner
+    /// registered. Without this, the Server's default tracker and the
+    /// runner's tracker are distinct allocations and `preempt_intent`
+    /// always returns `NotInFlight`.
+    pub fn with_subprocess_tracker(
+        mut self,
+        tracker: Arc<covenant_runtime::SubprocessTracker>,
+    ) -> Self {
+        self.subprocess_tracker = tracker;
+        self
     }
 
     /// Bind a `$COVENANT_HOME` path so [`Server::rotate_operator_token`]
@@ -738,6 +772,87 @@ impl Server {
                 })?;
         }
         Ok(())
+    }
+
+    /// Preempt one in-flight intent by intent_id. The Server looks up
+    /// the runner-registered pid in `subprocess_tracker`, hands it to
+    /// [`covenant_runtime::preempt_subprocess_pg`] with the supplied
+    /// grace window, maps the returned `PreemptOutcome` to either a
+    /// `BudgetPreempted` or `BudgetPreemptFailed` audit row, and
+    /// returns a [`PreemptResult`] for the caller (today: tests; soon:
+    /// the daemon-side projection tick).
+    ///
+    /// The lookup and the kill happen back-to-back; there is no
+    /// intermediate await between `tracker.get` and `preempt_subprocess_pg`,
+    /// so a fast natural-exit racing with the dispatcher cannot make
+    /// the daemon kill a recycled pid. The audit append is the last
+    /// step: a kill that succeeded but whose audit row failed to
+    /// persist surfaces as `AuditWriteFailed` so the caller can choose
+    /// whether to retry, log, or escalate.
+    pub async fn preempt_intent(
+        &self,
+        intent_id: Uuid,
+        reason: String,
+        grace: std::time::Duration,
+    ) -> PreemptResult {
+        let Some(entry) = self.subprocess_tracker.get(&intent_id) else {
+            return PreemptResult::NotInFlight;
+        };
+        let outcome = covenant_runtime::preempt_subprocess_pg(entry.pid, grace).await;
+        let audit_kind = match &outcome {
+            covenant_runtime::PreemptOutcome::AlreadyDead => Some(AuditKind::BudgetPreempted {
+                agent_display: entry.agent_id.clone(),
+                intent_id,
+                reason: reason.clone(),
+                signal_sent: "none".into(),
+                exit_code: None,
+            }),
+            covenant_runtime::PreemptOutcome::ExitedDuringGrace => {
+                Some(AuditKind::BudgetPreempted {
+                    agent_display: entry.agent_id.clone(),
+                    intent_id,
+                    reason: reason.clone(),
+                    signal_sent: "SIGTERM".into(),
+                    exit_code: None,
+                })
+            }
+            covenant_runtime::PreemptOutcome::SigKilled => Some(AuditKind::BudgetPreempted {
+                agent_display: entry.agent_id.clone(),
+                intent_id,
+                reason: reason.clone(),
+                signal_sent: "SIGKILL".into(),
+                exit_code: None,
+            }),
+            covenant_runtime::PreemptOutcome::PermissionDenied { errno } => {
+                Some(AuditKind::BudgetPreemptFailed {
+                    agent_display: entry.agent_id.clone(),
+                    intent_id,
+                    reason: reason.clone(),
+                    errno: *errno,
+                })
+            }
+            covenant_runtime::PreemptOutcome::UnsupportedPlatform => None,
+        };
+        if let Some(kind) = audit_kind {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind,
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return PreemptResult::AuditWriteFailed {
+                    outcome,
+                    error: e.to_string(),
+                };
+            }
+        }
+        match outcome {
+            covenant_runtime::PreemptOutcome::UnsupportedPlatform => {
+                PreemptResult::UnsupportedPlatform
+            }
+            other => PreemptResult::Preempted { outcome: other },
+        }
     }
 
     pub async fn serve(&self, listener: UnixListener) -> Result<()> {
@@ -4905,6 +5020,38 @@ struct PeerScopeCheck {
     allowed: bool,
     #[allow(dead_code)]
     has_matching_action: bool,
+}
+
+/// Outcome surface for [`Server::preempt_intent`]. Distinguishes the
+/// success arm (the dispatcher returned an outcome and the matching
+/// audit row landed) from the failure modes a caller (today: tests;
+/// soon: the projection tick) needs to handle independently:
+///
+/// - [`PreemptResult::NotInFlight`] means the tracker has no entry for
+///   the requested intent_id — either it never spawned, it already
+///   finished, or the runner unregistered it before the projection
+///   tick fired. The caller should NOT retry as a kill — the intent
+///   is no longer a subprocess to preempt.
+/// - [`PreemptResult::UnsupportedPlatform`] means the runtime crate's
+///   dispatcher returned [`covenant_runtime::PreemptOutcome::UnsupportedPlatform`]
+///   on a non-Unix host. No audit row is emitted; this is a daemon
+///   configuration error the operator must fix, not a per-call audit
+///   event.
+/// - [`PreemptResult::AuditWriteFailed`] means the kill landed (the
+///   `outcome` reflects what happened to the subprocess) but the
+///   matching audit row failed to persist. The caller can choose to
+///   retry the append, escalate, or surface the discrepancy.
+#[derive(Debug)]
+pub enum PreemptResult {
+    Preempted {
+        outcome: covenant_runtime::PreemptOutcome,
+    },
+    NotInFlight,
+    UnsupportedPlatform,
+    AuditWriteFailed {
+        outcome: covenant_runtime::PreemptOutcome,
+        error: String,
+    },
 }
 
 /// Wraps a [`BudgetError`] from [`Server::register_agent_budgets`] with
@@ -14444,6 +14591,103 @@ budget_credits_per_hour = {credits}
             }
         }
         panic!("could not find token starting with {prefix:?} after 10000 tries");
+    }
+
+    #[tokio::test]
+    async fn server_preempt_intent_returns_not_in_flight_when_tracker_empty() {
+        // The most basic preempt_intent contract: an intent_id that
+        // was never registered (or already unregistered) must surface
+        // as NotInFlight. A refactor that returned Preempted{outcome:
+        // AlreadyDead} for the unknown case would be wrong — AlreadyDead
+        // means "we tried to kill it and it was gone", which implies a
+        // syscall happened. NotInFlight means no syscall.
+        let server = server_with_ignore(vec![], "", IgnoreSet::default());
+        let intent_id = Uuid::new_v4();
+        let result = server
+            .preempt_intent(
+                intent_id,
+                "test".into(),
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+        assert!(
+            matches!(result, PreemptResult::NotInFlight),
+            "preempt_intent on an unknown intent_id must return NotInFlight; got {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_kills_tracked_subprocess_and_emits_budget_preempted_audit() {
+        // Spawn a real sleep subprocess (configured into its own
+        // process group), register its pid in the Server's tracker
+        // under a chosen intent_id, then call preempt_intent with a
+        // short grace. The dispatcher SIGTERMs the group, the sleep
+        // ignores cooperative termination only for the grace window,
+        // so SIGKILL fires; the test asserts PreemptResult::Preempted
+        // with outcome=SigKilled and that a BudgetPreempted audit
+        // event was recorded under the chosen intent_id.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let server = server_with_audit(audit.clone());
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "tracked@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (result, _exit) = tokio::join!(
+            server.preempt_intent(
+                intent_id,
+                "test:budget_overshoot".into(),
+                std::time::Duration::from_millis(250)
+            ),
+            child.wait(),
+        );
+
+        assert!(
+            matches!(
+                result,
+                PreemptResult::Preempted {
+                    outcome: covenant_runtime::PreemptOutcome::SigKilled
+                        | covenant_runtime::PreemptOutcome::ExitedDuringGrace,
+                }
+            ),
+            "preempt_intent on a tracked, alive subprocess must return Preempted with SigKilled or ExitedDuringGrace; got {result:?}"
+        );
+
+        let events = audit.recent(16).await.expect("audit recent must succeed");
+        let found = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    AuditKind::BudgetPreempted { intent_id: id, .. } if *id == intent_id
+                )
+            })
+            .count();
+        assert_eq!(
+            found, 1,
+            "preempt_intent must emit exactly one BudgetPreempted audit row keyed by the supplied intent_id; events seen: {events:?}"
+        );
     }
 
     #[tokio::test]

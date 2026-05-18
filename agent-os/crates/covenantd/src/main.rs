@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     let runner = covenantd::runtime_runner_composite(
         &runtime_config,
         hermes_config.as_ref(),
-        subprocess_tracker,
+        subprocess_tracker.clone(),
     );
     info!(
         backend = runtime_config.backend_name(),
@@ -273,7 +273,8 @@ async fn main() -> Result<()> {
         budget,
     )
     .with_home(home.clone())
-    .with_budget_checkpoints(budget_checkpoints);
+    .with_budget_checkpoints(budget_checkpoints)
+    .with_subprocess_tracker(subprocess_tracker);
 
     server
         .register_agent_budgets()

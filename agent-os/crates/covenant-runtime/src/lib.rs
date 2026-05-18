@@ -9,8 +9,11 @@
 //! a wall-clock kill at `cpu_ms_per_task` fires as the final backstop.
 //!
 //! The base implementation is `trusted-local` execution, not sandbox-grade
-//! isolation. Stronger backends plug in via the [`Runner`] trait without
-//! changing the dispatch contract.
+//! isolation. Three concrete backends implement the [`Runner`] trait:
+//! [`SubprocessRunner`] for the trusted-local path, [`GvisorRunner`] for
+//! sandboxed dispatch via the `runsc` OCI runtime, and [`HermesRunner`]
+//! for the Hermes agent runtime. Additional backends plug in via the
+//! same trait without changing the dispatch contract.
 
 // Production builds reject unsafe code by default. Two narrowly scoped
 // surfaces hold a function-level `#[allow(unsafe_code)]`: the test that

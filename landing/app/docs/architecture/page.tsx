@@ -64,7 +64,7 @@ export default function ArchitecturePage() {
         </li>
         <li>
           append-only JSONL stores under <code>$COVENANT_HOME</code> for
-          audit, capabilities, peers, receipts, and budget,
+          audit, capabilities, peers, receipts, budget, and a2a,
         </li>
         <li>
           the local ed25519 identity key.

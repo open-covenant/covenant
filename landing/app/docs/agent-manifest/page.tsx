@@ -343,6 +343,66 @@ priority                = "normal"`}</code>
         </tbody>
       </table>
 
+      <h3>
+        <code>[hermes]</code>
+      </h3>
+      <p>
+        Optional block consulted when <code>runtime = &quot;hermes&quot;</code>;
+        ignored otherwise. Hermes manages its tool allowlist
+        server-side today, so both fields are documentary — they pin
+        the contract the agent author expects, surface in operator
+        listings, and act as the enforcement seam once Hermes exposes
+        per-run controls.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>tools_allowed</code>
+            </td>
+            <td>list of strings</td>
+            <td>
+              <code>[]</code>
+            </td>
+            <td>
+              Tools the agent expects the run to invoke. Names match
+              Hermes&apos;s tool-registry slugs (e.g.{" "}
+              <code>terminal</code>, <code>read_file</code>,{" "}
+              <code>web</code>). Operators can spot a manifest that
+              over-asks before granting capabilities.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>approval_policy</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>operator-prompt</code>
+            </td>
+            <td>
+              How the runner should handle Hermes{" "}
+              <code>approval.request</code> events when no operator is
+              online. <code>operator-prompt</code> blocks until an
+              operator answers via the console;{" "}
+              <code>auto-deny</code> short-circuits to a denied
+              response; <code>auto-once</code> accepts a single
+              approval and stops. Reserved — runtime enforcement lands
+              once the Hermes runner learns to post{" "}
+              <code>/v1/runs/&#123;id&#125;/approval</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
       <h2>Runtime contract</h2>
       <p>
         At dispatch, the runtime spawns the agent according to{" "}

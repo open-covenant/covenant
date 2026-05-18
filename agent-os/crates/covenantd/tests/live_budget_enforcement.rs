@@ -184,6 +184,7 @@ budget_credits_per_hour = 1
         &Request::RecentAudit {
             limit: 50,
             since_ms: None,
+            prefer_stream: None,
         },
     )
     .await

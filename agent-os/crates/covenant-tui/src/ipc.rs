@@ -396,6 +396,7 @@ pub async fn recent_audit(home: &Path, limit: usize) -> Result<AuditFetchOutcome
         &Request::RecentAudit {
             limit,
             since_ms: None,
+            prefer_stream: None,
         },
     )
     .await?;

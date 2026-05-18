@@ -211,6 +211,7 @@ async fn resolve_intents_resume_intent_id(
             &Request::RecentAudit {
                 limit,
                 since_ms: None,
+                prefer_stream: None,
             },
         )
         .await?;
@@ -1705,7 +1706,15 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    write_frame(&mut stream, &Request::RecentAudit { limit, since_ms }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RecentAudit {
+                            limit,
+                            since_ms,
+                            prefer_stream: None,
+                        },
+                    )
+                    .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::AuditEvents { events } => {
                             if as_json {

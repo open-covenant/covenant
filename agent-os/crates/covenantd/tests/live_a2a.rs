@@ -396,6 +396,7 @@ async fn live_covenantd_a2a_auto_retry_scheduler_requeues_idempotent_task() {
         Request::RecentAudit {
             limit: 50,
             since_ms: None,
+            prefer_stream: None,
         },
     )
     .await
@@ -719,6 +720,7 @@ async fn live_covenantd_a2a_repair_rejects_peer_mismatched_delegation() {
             Request::RecentAudit {
                 limit: 50,
                 since_ms: None,
+                prefer_stream: None,
             },
         )
         .await

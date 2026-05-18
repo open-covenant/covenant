@@ -298,6 +298,16 @@ pub enum Request {
         limit: usize,
         #[serde(default)]
         since_ms: Option<u64>,
+        /// ADR 0010 v2 streaming opt-in. Mirror of
+        /// [`Request::RecentMemory::prefer_stream`]: when `Some(true)`
+        /// and the negotiated protocol version is 2, the daemon may
+        /// answer with a streamed [`StreamEnvelope`] sequence instead
+        /// of a terminal [`Response::AuditEvents`]. `None`/absent
+        /// keeps the v1 terminal-frame behaviour byte-for-byte —
+        /// `skip_serializing_if` drops the key on the wire so existing
+        /// v1 audit-tail fixtures replay unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefer_stream: Option<bool>,
     },
     VerifyAuditIntegrity,
     /// Drop audit events strictly older than `before_ms`. Operator-driven
@@ -4014,6 +4024,7 @@ mod tests {
         let unbounded = Request::RecentAudit {
             limit: 10,
             since_ms: None,
+            prefer_stream: None,
         };
 
         let wire = serde_json::to_value(&unbounded).unwrap();
@@ -4026,11 +4037,16 @@ mod tests {
             keys,
             vec!["kind", "limit", "since_ms"],
             "Request::RecentAudit wire form must be exactly three \
-             top-level keys: 'kind' plus the two variant fields \
-             ('limit', 'since_ms'). A refactor that added \
-             #[serde(skip_serializing_if = \"Option::is_none\")] to \
-             since_ms would shrink the unbounded wire form from \
-             three keys to two and silently break CLI/HTTP audit \
+             top-level keys: 'kind' plus the two pre-v2 variant \
+             fields ('limit', 'since_ms'). The ADR 0010 prefer_stream \
+             field is Option<bool> with skip_serializing_if = \
+             \"Option::is_none\", so the None-case wire form stays \
+             at three keys — a refactor that dropped \
+             skip_serializing_if would surface prefer_stream:null in \
+             every v1 audit frame and break fixture replay. A \
+             refactor that added skip_serializing_if to since_ms \
+             would also shrink the unbounded wire form from three \
+             keys to two and silently break CLI/HTTP audit \
              consumers that switch on the since_ms key's presence \
              to distinguish bounded-vs-unbounded pages",
         );
@@ -4073,6 +4089,7 @@ mod tests {
         let bounded = Request::RecentAudit {
             limit: 25,
             since_ms: Some(1_700_000_000_000),
+            prefer_stream: None,
         };
         let bounded_wire = serde_json::to_value(&bounded).unwrap();
         let bounded_obj = bounded_wire.as_object().unwrap();
@@ -4116,6 +4133,99 @@ mod tests {
              limit, returning an empty page where operators expect \
              the latest audit events",
         );
+    }
+
+    #[test]
+    fn request_recent_audit_serde_pins_prefer_stream_v2_optin() {
+        // ADR 0010 slice 3.b: prefer_stream is the streaming opt-in
+        // flag on Request::RecentAudit. Mirror of the freshly-landed
+        // Request::RecentMemory prefer_stream pin — same three
+        // contracts, same expected wire shape, different verb slug.
+        // Keeping the pins symmetric is the regression net for a
+        // future refactor that touches RecentMemory's prefer_stream
+        // shape without remembering to update RecentAudit (or vice
+        // versa).
+        //
+        // 1. None round-trip via a literal v1-shape frame (no
+        //    prefer_stream key) — pins serde(default) plus
+        //    skip_serializing_if = "Option::is_none" so v1 audit
+        //    fixtures replay byte-for-byte.
+        // 2. Some(true) round-trip with literal "prefer_stream":true
+        //    on the wire — pins the field name and placement at the
+        //    top level of the audit Request frame.
+        // 3. Some(false) round-trip with literal "prefer_stream":false
+        //    on the wire — keeps None and Some(false) distinct so a
+        //    future dispatcher can honor an explicit opt-out.
+        let none_form = Request::RecentAudit {
+            limit: 10,
+            since_ms: None,
+            prefer_stream: None,
+        };
+        let none_wire = serde_json::to_string(&none_form).unwrap();
+        assert!(
+            !none_wire.contains("prefer_stream"),
+            "prefer_stream: None must NOT surface on the wire for \
+             RecentAudit — skip_serializing_if keeps v1 audit-tail \
+             fixtures byte-identical; got: {none_wire}",
+        );
+        let decoded: Request = serde_json::from_str(&none_wire).unwrap();
+        assert_eq!(decoded, none_form);
+
+        let v1_input = r#"{"kind":"recent_audit","limit":10,"since_ms":null}"#;
+        let decoded_v1: Request = serde_json::from_str(v1_input).unwrap();
+        assert_eq!(
+            decoded_v1, none_form,
+            "v1-shape RecentAudit frame must decode to \
+             prefer_stream == None; a refactor that dropped \
+             #[serde(default)] would make the field required and \
+             reject every stale audit CLI",
+        );
+
+        let stream_on = Request::RecentAudit {
+            limit: 10,
+            since_ms: None,
+            prefer_stream: Some(true),
+        };
+        let stream_on_wire = serde_json::to_value(&stream_on).unwrap();
+        assert_eq!(
+            stream_on_wire.get("prefer_stream"),
+            Some(&serde_json::json!(true)),
+            "explicit Some(true) opt-in on RecentAudit must surface \
+             as the literal JSON key 'prefer_stream':true — \
+             symmetric with the RecentMemory pin so CLI/HTTP \
+             consumers can read the same key across both verbs",
+        );
+        let stream_on_back: Request = serde_json::from_value(stream_on_wire.clone()).unwrap();
+        assert_eq!(stream_on_back, stream_on);
+        let canon_input: serde_json::Value = serde_json::from_str(
+            r#"{"kind":"recent_audit","limit":10,"since_ms":null,"prefer_stream":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stream_on_wire, canon_input,
+            "Some(true) wire form must equal the documented JSON \
+             shape (kind+limit+since_ms+prefer_stream) — a refactor \
+             that reordered fields or renamed the key would fail \
+             this byte-shape pin",
+        );
+
+        let stream_off = Request::RecentAudit {
+            limit: 10,
+            since_ms: None,
+            prefer_stream: Some(false),
+        };
+        let stream_off_wire = serde_json::to_value(&stream_off).unwrap();
+        assert_eq!(
+            stream_off_wire.get("prefer_stream"),
+            Some(&serde_json::json!(false)),
+            "Some(false) (explicit opt-out) must surface on the \
+             wire as 'prefer_stream':false for RecentAudit; skipping \
+             it would collapse the distinction between None ('don't \
+             care') and Some(false) ('do not stream') just like the \
+             RecentMemory pin",
+        );
+        let stream_off_back: Request = serde_json::from_value(stream_off_wire).unwrap();
+        assert_eq!(stream_off_back, stream_off);
     }
 
     #[test]

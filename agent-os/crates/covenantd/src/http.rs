@@ -484,6 +484,7 @@ async fn audit_recent(
                 Request::RecentAudit {
                     limit: q.limit.unwrap_or(20),
                     since_ms: q.since_ms,
+                    prefer_stream: None,
                 },
                 &peer,
             )

@@ -160,6 +160,7 @@ async fn live_covenantd_memory_write_rejects_non_operator_intent_dispatch() {
             Request::RecentAudit {
                 limit: 50,
                 since_ms: None,
+                prefer_stream: None,
             },
         )
         .await

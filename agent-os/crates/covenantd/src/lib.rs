@@ -1408,9 +1408,11 @@ impl Server {
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
-            Request::RecentAudit { limit, since_ms } => {
-                self.recent_audit(limit, since_ms, peer).await
-            }
+            Request::RecentAudit {
+                limit,
+                since_ms,
+                prefer_stream: _,
+            } => self.recent_audit(limit, since_ms, peer).await,
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
@@ -6989,6 +6991,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -7180,6 +7183,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -7832,6 +7836,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 30,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -7956,6 +7961,7 @@ required = {caps:?}
                 Request::RecentAudit {
                     limit: 30,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &delegate,
             )
@@ -8510,6 +8516,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -9048,6 +9055,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 20,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -9216,6 +9224,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 30,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -9364,6 +9373,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await
         {
@@ -9633,6 +9643,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -9680,6 +9691,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: Some(3_000),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -9701,6 +9713,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 1,
                 since_ms: Some(2_000),
+                prefer_stream: None,
             })
             .await;
         match narrow {
@@ -9759,6 +9772,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 100,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -9848,6 +9862,7 @@ required = {caps:?}
             .op_respond(Request::RecentAudit {
                 limit: 10,
                 since_ms: None,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -13059,6 +13074,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &operator,
             )
@@ -13082,6 +13098,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &foreign,
             )
@@ -13420,6 +13437,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &operator,
             )
@@ -13440,6 +13458,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &foreign,
             )
@@ -13890,6 +13909,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &operator,
             )
@@ -13910,6 +13930,7 @@ budget_credits_per_hour = {credits}
                 Request::RecentAudit {
                     limit: 50,
                     since_ms: None,
+                    prefer_stream: None,
                 },
                 &foreign,
             )

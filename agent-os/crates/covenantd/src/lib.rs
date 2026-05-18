@@ -18,6 +18,7 @@ use covenant_budget::{
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
+    StreamEnvelope,
 };
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
@@ -1105,6 +1106,30 @@ impl Server {
                 }
                 Err(e) => return Err(e.into()),
             };
+            // ADR 0010 slice 3.d streaming dispatch fork. v1 clients
+            // never set prefer_stream; v2 clients that explicitly
+            // request streaming (prefer_stream == Some(true)) route
+            // through Server::stream_recent_memory, which emits
+            // StreamEnvelope frames directly to the writer. Some(false)
+            // is wire-distinct from None and means "I know about v2
+            // streaming but want the v1 terminal shape this call" —
+            // it must fall through to the respond + write_frame path.
+            // Matching exactly on Some(true) keeps the contract; a
+            // shortcut like prefer_stream.unwrap_or(false) routes
+            // Some(false) into the streaming branch and breaks the
+            // v1-compatible fallback. tier and limit are Copy so the
+            // destructure borrows req — req stays owned for the
+            // fallthrough self.respond(req, &peer) call.
+            if let Request::RecentMemory {
+                tier,
+                limit,
+                prefer_stream: Some(true),
+            } = &req
+            {
+                self.stream_recent_memory(&mut stream, connection_id, *tier, *limit, &peer)
+                    .await?;
+                continue;
+            }
             let resp = self.respond(req, &peer).await;
             write_frame(&mut stream, &resp).await?;
         }
@@ -15792,5 +15817,175 @@ budget_credits_per_hour = {credits}
             None,
             "the specific (connection_id, stream_id) tuple must be gone after handle returns; a refactor that called purge_connection on a different id would surface here"
         );
+    }
+
+    async fn server_with_authenticated_memory(records: usize) -> (Arc<Server>, PeerToken, AgentId) {
+        let s = Arc::new(server_with_ignore(vec![], "", IgnoreSet::default()));
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        let token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: me.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .expect("register peer token");
+        for i in 0..records as u8 {
+            s.memory
+                .put(MemoryRecord {
+                    id: Uuid::from_bytes([i + 1; 16]),
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: format!("memory {i}"),
+                    embedding: Vec::new(),
+                    metadata: serde_json::json!({}),
+                    created_at: 100 + i as u64,
+                    parent: None,
+                })
+                .await
+                .expect("put memory");
+        }
+        (s, token, me)
+    }
+
+    async fn authenticate_client(client: &mut tokio::net::UnixStream, token: PeerToken) {
+        write_frame(
+            client,
+            &Request::Authenticate {
+                token_b58: token.to_b58(),
+            },
+        )
+        .await
+        .expect("send authenticate");
+        let resp: Response = read_frame(client).await.expect("read auth response");
+        match resp {
+            Response::Authenticated { .. } => {}
+            other => panic!("expected Authenticated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_memory_with_prefer_stream_true_routes_to_streaming_path() {
+        // ADR 0010 slice 3.d dispatch fork. With memory.read granted
+        // and two records present, sending prefer_stream:Some(true)
+        // must yield StreamBegin + 2 StreamChunk + StreamEnd
+        // envelopes — NOT a Response::Memories terminal frame. A
+        // regression that left the dispatch on the v1 path would
+        // decode the first frame as Response::Memories and skip the
+        // StreamEnvelope assertions.
+        let (s, token, _me) = server_with_authenticated_memory(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: Some(true),
+            },
+        )
+        .await
+        .expect("send recent_memory");
+
+        let begin: StreamEnvelope = read_frame(&mut client).await.expect("read stream_begin");
+        match begin {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, "memories");
+            }
+            other => panic!("expected StreamBegin, got {other:?}"),
+        }
+        for i in 0..2u32 {
+            let chunk: StreamEnvelope = read_frame(&mut client).await.expect("read stream_chunk");
+            match chunk {
+                StreamEnvelope::StreamChunk { sequence, .. } => assert_eq!(sequence, i),
+                other => panic!("expected StreamChunk at i={i}, got {other:?}"),
+            }
+        }
+        let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
+        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn recent_memory_with_prefer_stream_omitted_returns_v1_response() {
+        // v1 fixture replay protection: a request without
+        // prefer_stream (Option<bool>::None) MUST receive a v1
+        // Response::Memories terminal frame, byte-equivalent to
+        // pre-ADR-0010 behavior. A dispatch that always streams
+        // would break every existing IPC client.
+        let (s, token, _me) = server_with_authenticated_memory(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: None,
+            },
+        )
+        .await
+        .expect("send recent_memory");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::Memories { records } => assert_eq!(records.len(), 2),
+            other => panic!("expected Response::Memories, got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn recent_memory_with_prefer_stream_false_returns_v1_response() {
+        // ADR 0010 contract pin: prefer_stream:Some(false) is
+        // wire-distinct from None and means "I know about v2
+        // streaming but want the v1 shape this call". The dispatch
+        // must match exactly Some(true), not .is_some() or
+        // .unwrap_or(false), so Some(false) falls through to the v1
+        // path. A regression that broadened the match would decode
+        // the first frame as StreamEnvelope and fail Response decode.
+        let (s, token, _me) = server_with_authenticated_memory(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: Some(false),
+            },
+        )
+        .await
+        .expect("send recent_memory");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::Memories { records } => assert_eq!(records.len(), 2),
+            other => panic!("expected Response::Memories on Some(false), got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
     }
 }

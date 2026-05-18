@@ -435,8 +435,13 @@ export default function ArchitecturePage() {
               <code>covenant-tools</code>
             </td>
             <td>
-              Tool provider trait with mock, Brave, and SerpAPI search
-              implementations.
+              <code>SearchProvider</code> trait with{" "}
+              <code>MockSearch</code>, <code>BraveSearch</code>, and{" "}
+              <code>SerpApiSearch</code> implementations, a{" "}
+              <code>SearchConfig</code> reader for the{" "}
+              <code>[search]</code> section of <code>secrets.toml</code>,
+              and a <code>pick_search</code> helper that falls back to{" "}
+              <code>MockSearch</code> when nothing is configured.
             </td>
           </tr>
           <tr>

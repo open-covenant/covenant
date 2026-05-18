@@ -300,6 +300,34 @@ export default function AuditPage() {
         forced terminations.
       </p>
 
+      <h3>
+        <code>BudgetPreemptFailed</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":          "budget_preempt_failed",
+  "agent_display": "research@local",
+  "intent_id":     "uuid",
+  "reason":        "kill(SIGTERM) returned ESRCH",
+  "errno":         3
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the budget-hard-preempt path attempted to signal
+        the subprocess but the signal-send syscall returned an error.
+        The <code>errno</code> field is operationally load-bearing
+        for triage: <code>3</code> (<code>ESRCH</code>) is benign — the
+        subprocess exited before the daemon could signal it, which the
+        daemon may also surface as a <code>BudgetPreempted</code> row
+        with <code>signal_sent: &quot;none&quot;</code> on a different
+        code path. <code>1</code> (<code>EPERM</code>) is a security
+        incident: the daemon lacks signal-send permission for that
+        pid, and an operator should investigate before the bucket fills
+        again. The four fields are load-bearing for incident triage and
+        for any future tooling that classifies the
+        cooperative-race-vs-privilege-regression axis.
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

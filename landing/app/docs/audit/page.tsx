@@ -267,6 +267,39 @@ export default function AuditPage() {
         load-bearing.
       </p>
 
+      <h3>
+        <code>BudgetPreempted</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":          "budget_preempted",
+  "agent_display": "research@local",
+  "intent_id":     "uuid",
+  "reason":        "projected cpu overshoot at 28.4s/30s",
+  "signal_sent":   "SIGTERM",
+  "exit_code":     null
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the budget-hard-preempt path successfully
+        terminates a still-running over-budget subprocess. Distinct
+        from <code>BudgetExhausted</code> (a post-completion debit
+        rejection on a finished run): preempt actively kills a
+        running process. <code>signal_sent</code> classifies the
+        path the daemon took — <code>&quot;SIGTERM&quot;</code> for
+        the cooperative-grace attempt, <code>&quot;SIGKILL&quot;</code>{" "}
+        when the subprocess outlived the grace window, and{" "}
+        <code>&quot;none&quot;</code> when the subprocess exited
+        naturally inside the grace window before any signal was
+        needed. <code>exit_code</code> is <code>null</code> for
+        signal-terminated processes (the daemon observed termination
+        via <code>child.wait()</code> only); the field surfaces as
+        JSON null on the wire so the schema stays stable across
+        cooperative-exit and forced-kill rows. The five fields are
+        load-bearing for post-mortems that classify cooperative vs.
+        forced terminations.
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

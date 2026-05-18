@@ -1,7 +1,7 @@
 [package]
 name = "covenant-audit"
 version = "0.1.0"
-description = "Append-only JSONL audit log for Covenant. Records intent dispatch, capability checks, capability grants, and capability revocations."
+description = "Append-only JSONL audit log for Covenant. Records intent dispatch, capability checks, capability grants, and budget enforcement events."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

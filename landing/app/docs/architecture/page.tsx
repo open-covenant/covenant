@@ -428,9 +428,13 @@ export default function ArchitecturePage() {
               <code>covenant-mcp</code>
             </td>
             <td>
-              Model Context Protocol integration — tool trait,
-              in-process registry, native tools, stdio JSON-RPC
-              transport for external servers.
+              Model Context Protocol integration — tool trait following
+              the public MCP wire shapes (<code>name</code>,{" "}
+              <code>description</code>, <code>inputSchema</code>,{" "}
+              <code>Content</code> blocks, <code>isError</code>) so the
+              same trait backs native Rust implementations and external
+              MCP servers, in-process registry, native tools, stdio
+              JSON-RPC 2.0 transport for external servers.
             </td>
           </tr>
           <tr>

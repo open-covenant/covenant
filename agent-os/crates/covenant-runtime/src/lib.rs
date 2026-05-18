@@ -10,7 +10,13 @@
 //! backends plug in via the [`Runner`] trait without changing the dispatch
 //! contract.
 
-#![deny(unsafe_code)]
+// Production builds reject unsafe code. The `getpgid` test in this module
+// needs one libc call to read the kernel-reported process group id of a
+// spawned child — the only way to prove `process_group(0)` actually took
+// effect, per failure mode 5 of the budget-hard-preempt-subprocess parent
+// task. Relaxing the deny under `cfg(test)` keeps production safety while
+// allowing the assertion that closes that failure mode.
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 use async_trait::async_trait;
 use covenant_manifest::{FilesystemPolicy, NetworkPolicy, Runtime as RuntimeKind, SandboxBackend};
@@ -18,13 +24,15 @@ use covenant_router::AgentCard;
 use covenant_types::Intent;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 mod hermes;
 pub use hermes::{HermesCapabilities, HermesRunner};
@@ -143,6 +151,82 @@ fn workspace_entry(entry: &str) -> String {
     format!("/workspace/{entry}")
 }
 
+/// In-memory record of a running subprocess managed by the daemon. The
+/// fields are the minimum the budget-hard-preempt path needs: `pid` for
+/// the signal target, `agent_id` for audit attribution, and
+/// `started_at_ms` for projection extrapolation. This struct is the
+/// stable primitive that future sub-slices (projection, signal dispatch,
+/// audit emission) join against; this slice defines the type without
+/// integrating it into the runner spawn path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedSubprocess {
+    pub agent_id: String,
+    pub pid: u32,
+    pub started_at_ms: u64,
+}
+
+/// Daemon-side in-memory tracker of subprocesses spawned for in-flight
+/// intents. Keyed by `intent_id: Uuid` so the budget-projection tick
+/// (sub-slice B) and signal dispatcher (sub-slice C) can look up the
+/// spawn record without scanning the entire process table.
+///
+/// In-memory only by design: a daemon restart loses the tracker and the
+/// orphan subprocesses outlive their preempt window. Recovery via
+/// pidfile or `/proc` scan is a separate followup slice documented in
+/// the parent task's expected failure mode 3.
+#[derive(Debug, Default)]
+pub struct SubprocessTracker {
+    entries: RwLock<HashMap<Uuid, TrackedSubprocess>>,
+}
+
+impl SubprocessTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserts a tracker entry. If `intent_id` is already present the
+    /// existing entry is overwritten — this should not happen under
+    /// normal dispatch flow and may indicate a race in the runner
+    /// integration that this slice intentionally does not yet wire.
+    pub fn register(&self, intent_id: Uuid, entry: TrackedSubprocess) {
+        let mut guard = self
+            .entries
+            .write()
+            .expect("subprocess tracker rwlock poisoned");
+        guard.insert(intent_id, entry);
+    }
+
+    /// Removes the tracker entry for `intent_id` if present, returning
+    /// the previous value for callers that want to audit the lifetime.
+    pub fn unregister(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
+        let mut guard = self
+            .entries
+            .write()
+            .expect("subprocess tracker rwlock poisoned");
+        guard.remove(intent_id)
+    }
+
+    pub fn get(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
+        let guard = self
+            .entries
+            .read()
+            .expect("subprocess tracker rwlock poisoned");
+        guard.get(intent_id).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        let guard = self
+            .entries
+            .read()
+            .expect("subprocess tracker rwlock poisoned");
+        guard.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 pub struct SubprocessRunner;
 
 impl SubprocessRunner {
@@ -154,6 +238,36 @@ impl SubprocessRunner {
             });
         }
         Ok(())
+    }
+
+    /// Configures the underlying std command so the spawned subprocess
+    /// becomes the leader of a new process group. This is the
+    /// load-bearing precondition for hard-preempt: a future
+    /// `libc::kill(-pid, SIGTERM)` will then reach every grandchild the
+    /// agent forked, not just the immediate child. Without this, an
+    /// agent that forks before exiting leaves orphan processes running
+    /// past the budget window.
+    ///
+    /// Tokio's `Command` wraps `std::process::Command`; the Unix
+    /// extension's `process_group` must be set on the std command
+    /// *before* `spawn`. Calling it via `as_std_mut()` here keeps the
+    /// rest of the spawn path on the tokio Command.
+    #[cfg(unix)]
+    fn configure_process_group(cmd: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        // `process_group(0)` requests a new process group whose group
+        // id equals the child's pid — i.e. the child becomes its own
+        // group leader. Subsequent signals to `-pid` target every
+        // process in that group.
+        cmd.as_std_mut().process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    fn configure_process_group(_cmd: &mut Command) {
+        // Process groups are a POSIX concept; on non-Unix platforms
+        // the budget-hard-preempt path falls back to per-pid kill,
+        // which loses the grandchild guarantee. The covenantd
+        // documentation calls this out as a platform gap.
     }
 }
 
@@ -193,6 +307,7 @@ impl Runner for SubprocessRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        Self::configure_process_group(&mut cmd);
 
         debug!(agent = %card.id, entry = %card.manifest.agent.entry, "spawning agent");
         let mut child = cmd.spawn()?;
@@ -2217,5 +2332,79 @@ cpu_ms_per_task = 5000
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_runtime::RunnerError::Serde source() must downcast_ref to serde_json::Error so daemon-side runtime diagnostics can call serde_json::Error::line/column/classify for generic JSON-parse-fault triage; a refactor that wrapped the inner in a project-local newtype (e.g., RunnerSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant or merge with MalformedStdout' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies generic runtime JSON-parse faults AND would blur the AgentResult-stdout vs generic-JSON-parse discriminator pinned in runner_error_malformed_stdout_source_delegation_pin (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    fn subprocess_tracker_registers_and_unregisters_entries() {
+        // Asserts the SubprocessTracker primitive used by future
+        // budget-hard-preempt sub-slices (projection, signal dispatch).
+        // Sub-slice (A) ships the tracker type without integrating it
+        // into the runner spawn path; this test pins the lifecycle
+        // semantics (register → get → unregister → returns prior
+        // value → entry is gone) so the integration slice cannot
+        // silently regress register/unregister ordering.
+        let tracker = SubprocessTracker::new();
+        assert!(tracker.is_empty());
+
+        let intent_id = Uuid::nil();
+        let entry = TrackedSubprocess {
+            agent_id: "agent.research@local".into(),
+            pid: 12345,
+            started_at_ms: 1_700_000_000_000,
+        };
+        tracker.register(intent_id, entry.clone());
+        assert_eq!(tracker.len(), 1);
+        assert_eq!(tracker.get(&intent_id), Some(entry.clone()));
+
+        let removed = tracker.unregister(&intent_id);
+        assert_eq!(removed, Some(entry));
+        assert!(tracker.is_empty());
+        assert_eq!(tracker.get(&intent_id), None);
+        assert_eq!(tracker.unregister(&intent_id), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn subprocess_runner_spawn_places_child_in_its_own_process_group() {
+        // The kernel-reported pgid of the spawned child must equal the
+        // child's own pid — i.e. the child is the leader of a new
+        // process group. Without this, a future
+        // libc::kill(-pid, SIGTERM) would target the daemon's own
+        // group and either hit too narrowly (only the immediate
+        // child) or too broadly (the daemon itself), and the
+        // budget-hard-preempt guarantee silently degrades.
+        //
+        // The test uses Command directly so it doesn't depend on the
+        // agent-manifest scaffolding; it exercises the same
+        // configure_process_group call SubprocessRunner uses on the
+        // spawn path, so a refactor that dropped the call from one
+        // site but not the other still fails here.
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("30");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        SubprocessRunner::configure_process_group(&mut cmd);
+
+        let mut child = cmd.spawn().expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        // SAFETY: getpgid is a thread-safe POSIX syscall on a pid we
+        // just spawned and have not yet reaped, so the pid is
+        // guaranteed to refer to a live process or to a zombie we
+        // still own. errno on failure is read out-of-band via -1.
+        let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+        assert_ne!(
+            pgid, -1,
+            "getpgid(child_pid) must succeed; errno path indicates the child exited before the syscall or the kernel rejected the request"
+        );
+        assert_eq!(
+            pgid as u32, pid,
+            "configure_process_group(0) must make the spawned child the leader of a new process group (pgid == pid); a refactor that dropped as_std_mut().process_group(0) or moved it after spawn would surface here. Without this, libc::kill(-pid, SIGTERM) in the future signal-dispatch slice would not reach grandchildren forked by the subprocess."
+        );
+
+        child.kill().await.expect("kill spawned sleep");
+        let _ = child.wait().await;
     }
 }

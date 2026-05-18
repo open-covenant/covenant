@@ -1061,6 +1061,7 @@ dependencies = [
  "covenant-router",
  "covenant-types",
  "futures",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

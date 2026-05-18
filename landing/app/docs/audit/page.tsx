@@ -328,6 +328,33 @@ export default function AuditPage() {
         cooperative-race-vs-privilege-regression axis.
       </p>
 
+      <h3>
+        <code>BudgetUnseeded</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":          "budget_unseeded",
+  "agent_display": "research@local",
+  "intent_id":     "uuid",
+  "requested":     1024
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>dispatch_intent</code> falls into the
+        NoCapacity fail-open arm: the manifest opted in to budget
+        enforcement (<code>budget_credits_per_hour &gt; 0</code>) but
+        no bucket was seeded for the agent — the operator forgot to
+        call <code>register_agent_budgets</code>, or a hot-reload
+        added the manifest without re-seeding. v0 logs the row and
+        passes the dispatch. The variant is deliberately distinct
+        from <code>BudgetExhausted</code> so <code>/audit</code>{" "}
+        consumers can filter operator-misconfig from policy-rejection
+        without special-casing sentinel values: a collapsed schema
+        would force consumers to disambiguate by inspecting
+        <code>tokens_remaining</code>, which only exists on the
+        exhausted row.
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

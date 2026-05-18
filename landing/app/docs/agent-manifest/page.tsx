@@ -512,10 +512,15 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
         <code>$COVENANT_HOME/agents/</code> and loads each subdirectory
         that contains an <code>agent.toml</code>; flat{" "}
         <code>*.toml</code> files at the top of <code>agents/</code>{" "}
-        are silently skipped. Online registration is not supported;
-        the daemon must be restarted after a new manifest is added.
-        Existing manifests may be edited in place and are re-read on
-        the next daemon start.
+        and subdirectories without an <code>agent.toml</code> are
+        silently skipped. The loader sorts the returned cards by{" "}
+        <code>agent.id</code> so routing tie-breaking between
+        equal-scoring agents is deterministic across hosts regardless
+        of filesystem read order (APFS, ext4, and ntfs all return{" "}
+        <code>read_dir</code> entries in different orders). Online
+        registration is not supported; the daemon must be restarted
+        after a new manifest is added. Existing manifests may be
+        edited in place and are re-read on the next daemon start.
       </p>
 
       <h2>Related</h2>

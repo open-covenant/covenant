@@ -38,6 +38,10 @@ pub enum GitlawbError {
     /// JSON serialization or deserialization failure.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// External attestation construction or verification failed.
+    #[error("attest: {0}")]
+    Attest(#[from] gitlawb_attest::AttestError),
 }
 
 pub type Result<T> = std::result::Result<T, GitlawbError>;

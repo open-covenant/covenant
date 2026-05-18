@@ -239,10 +239,10 @@ export default function ConceptsPage() {
         A successful intent dispatch exercises every primitive. The daemon
         receives the intent, validates the issuer&apos;s capabilities,
         selects an agent through the router, executes the agent under a
-        wall-clock budget, captures the result, persists a memory record,
-        emits a settlement receipt, and writes the corresponding audit
-        events. Operational state is fully reconstructible from the audit
-        log.
+        wall-clock budget with hard-preempt on projected overshoot,
+        captures the result, persists a memory record, emits a settlement
+        receipt, and writes the corresponding audit events. Operational
+        state is fully reconstructible from the audit log.
       </p>
     </>
   );

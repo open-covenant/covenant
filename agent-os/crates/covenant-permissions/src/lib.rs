@@ -11,6 +11,16 @@
 //! [`JsonlCapabilityStore`] for production and
 //! [`InMemoryCapabilityStore`] for tests. Both honour revocation
 //! tombstones written via [`CapabilityStore::revoke`].
+//!
+//! Scope predicates live in this crate, not above it. The daemon calls
+//! [`validate_scope`] at grant time and the dispatch-time predicates
+//! [`tool_call_scope_allows`], [`audit_purge_scope_allows`],
+//! [`capabilities_purge_scope_allows`], [`a2a_scope_allows`],
+//! [`peer_scope_allows`], [`chain_scope_allows`], and the
+//! `memory_*_scope_allows` family ([`memory_purge_scope_allows`],
+//! [`memory_read_scope_allows`], [`memory_read_record_scope_allows`],
+//! [`memory_write_scope_allows`], [`memory_repair_scope_allows`],
+//! [`memory_compaction_scope_allows`]) on every privileged action.
 
 #![deny(unsafe_code)]
 

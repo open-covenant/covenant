@@ -373,7 +373,11 @@ export default function ArchitecturePage() {
               <code>covenant-permissions</code>
             </td>
             <td>
-              Capability tokens — sign, verify, persist, revoke. Plus
+              Capability-token primitive: ed25519-signed{" "}
+              <code>SignedCapability</code>s over a deterministic
+              canonical message, persistent JSONL and in-memory{" "}
+              <code>CapabilityStore</code> backends, revocation
+              tombstones, and verify-with-clock for expiry. Plus
               grant-time scope validation and dispatch-time scope
               predicates for tool-call argument allowlists, before-ms
               cutoffs, and per-namespace memory, A2A, peer, chain, and

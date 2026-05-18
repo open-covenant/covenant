@@ -215,6 +215,36 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>PeerSelfRevokeBlocked</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "peer_self_revoke_blocked",
+  "peer_display":    "user@local",
+  "peer_pubkey_b58": "9hYz…Lk6w",
+  "token_prefix":    "4qXP6t"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the operator&apos;s <code>RevokePeer</code>{" "}
+        request would have revoked their own bootstrap token but{" "}
+        <code>force</code> was <code>false</code>. The daemon returns{" "}
+        <code>RevokeOutcome::SelfRevokeForbidden</code> and the
+        registry is unchanged. The operator IS both the issuer and the
+        audience here, so the row surfaces in their own{" "}
+        <code>/audit</code> feed for self-fat-finger triage —
+        deliberately distinct from <code>OperatorPeerRevokeRejected</code>,
+        which records a non-operator&apos;s probe under the
+        daemon-as-issuer audience so the operator can see the probe on
+        their feed without exposing it to the rejected peer.{" "}
+        <code>peer_pubkey_b58</code> is the unforgeable operator
+        identity (the <code>display</code> is wire-supplied) and{" "}
+        <code>token_prefix</code> is the same 6-char base58 redaction{" "}
+        <code>PeerRevoked</code> and <code>OperatorTokenRotated</code>{" "}
+        record.
+      </p>
+
+      <h3>
         <code>OperatorTokenRotated</code>
       </h3>
       <pre>

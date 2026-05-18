@@ -126,6 +126,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Control plane | `covenantd`, `covenant`, `covenant-router`, `covenant-runtime` |
 | Trust and policy | `covenant-identity`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
 | State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a` |
+| Compositor | `covenant-tui` |
 | Settlement | `covenant-settlement`, `programs/settlement` |
 
 ## Operating Model

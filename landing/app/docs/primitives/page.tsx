@@ -35,9 +35,10 @@ export default function PrimitivesPage() {
       <p>
         The mechanism for actually executing an agent. Today the runtime
         spawns each agent as a child process and shuttles JSON over
-        stdin/stdout under a wall-clock budget. The trait is small and
-        designed to back stricter isolation — gVisor, Firecracker —
-        without changing the dispatch contract.
+        stdin/stdout under a wall-clock budget with hard-preempt on
+        projected overshoot. The trait is small and designed to back
+        stricter isolation — gVisor, Firecracker — without changing the
+        dispatch contract.
       </p>
       <p>
         Agents declare their runtime in{" "}

@@ -1369,7 +1369,10 @@ impl Server {
                     reason: "unknown or revoked token".into(),
                 },
             },
-            Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
+            Request::SubmitIntent {
+                text,
+                prefer_stream: _,
+            } => self.dispatch_intent(text, peer).await,
             Request::RecentMemory {
                 tier,
                 limit,
@@ -5940,6 +5943,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -5965,6 +5969,7 @@ required = {caps:?}
         grant_action(&s, "memory.write").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
+            prefer_stream: None,
         })
         .await;
 
@@ -6795,6 +6800,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -6828,6 +6834,7 @@ required = {caps:?}
         let r = s
             .op_respond(Request::SubmitIntent {
                 text: "find papers".into(),
+                prefer_stream: None,
             })
             .await;
         assert!(matches!(r, Response::IntentResult { .. }));
@@ -6845,6 +6852,7 @@ required = {caps:?}
         let r2 = s
             .op_respond(Request::SubmitIntent {
                 text: "find papers".into(),
+                prefer_stream: None,
             })
             .await;
         assert!(matches!(r2, Response::Error { .. }));
@@ -6857,6 +6865,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "zzz no keywords".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -6886,6 +6895,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -7030,6 +7040,7 @@ required = {caps:?}
         // Dispatch will be rejected, but the capability check event is still recorded.
         s.op_respond(Request::SubmitIntent {
             text: "find papers".into(),
+            prefer_stream: None,
         })
         .await;
         let events = audit.recent(10).await.unwrap();
@@ -7064,6 +7075,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "summarise ~/.ssh/id_rsa".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -10143,6 +10155,7 @@ required = {caps:?}
         grant_action(&s, "memory.read").await;
         s.op_respond(Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
+            prefer_stream: None,
         })
         .await;
         let me = s.identity.agent_id();
@@ -10319,6 +10332,7 @@ required = {caps:?}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         let intent_id = match resp {
@@ -10777,6 +10791,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -10830,6 +10845,7 @@ budget_credits_per_hour = {credits}
         let first = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers".into(),
+                prefer_stream: None,
             })
             .await;
         assert!(matches!(first, Response::IntentResult { .. }));
@@ -10839,6 +10855,7 @@ budget_credits_per_hour = {credits}
         let second = s
             .op_respond(Request::SubmitIntent {
                 text: "find more recent papers".into(),
+                prefer_stream: None,
             })
             .await;
         match second {
@@ -10923,7 +10940,8 @@ budget_credits_per_hour = {credits}
 
         assert!(matches!(
             s.op_respond(Request::SubmitIntent {
-                text: "find recent papers".into()
+                text: "find recent papers".into(),
+                prefer_stream: None,
             })
             .await,
             Response::IntentResult { .. }
@@ -10931,7 +10949,8 @@ budget_credits_per_hour = {credits}
         let second_text = "find more recent papers";
         assert!(matches!(
             s.op_respond(Request::SubmitIntent {
-                text: second_text.into()
+                text: second_text.into(),
+                prefer_stream: None,
             })
             .await,
             Response::Error { .. }
@@ -11075,6 +11094,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers".into(),
+                prefer_stream: None,
             })
             .await;
         // Dispatch passes (v0 fail-open).
@@ -12504,6 +12524,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -12653,6 +12674,7 @@ budget_credits_per_hour = {credits}
         let resp = s
             .op_respond(Request::SubmitIntent {
                 text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
             })
             .await;
         assert!(matches!(resp, Response::IntentResult { .. }));

@@ -174,6 +174,7 @@ budget_credits_per_hour = 1
         &mut stream,
         &Request::SubmitIntent {
             text: "test ping the preempt fixture".into(),
+            prefer_stream: None,
         },
     )
     .await

@@ -149,6 +149,7 @@ budget_credits_per_hour = 1
         &mut stream,
         &Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
+            prefer_stream: None,
         },
     )
     .await
@@ -163,6 +164,7 @@ budget_credits_per_hour = 1
         &mut stream,
         &Request::SubmitIntent {
             text: "find another batch of papers on agent memory".into(),
+            prefer_stream: None,
         },
     )
     .await

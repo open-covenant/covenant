@@ -584,7 +584,14 @@ async fn main() -> Result<()> {
                 std::process::exit(2);
             }
             let request_text = text_parts.join(" ");
-            write_frame(&mut stream, &Request::SubmitIntent { text: request_text }).await?;
+            write_frame(
+                &mut stream,
+                &Request::SubmitIntent {
+                    text: request_text,
+                    prefer_stream: None,
+                },
+            )
+            .await?;
             match read_frame::<_, Response>(&mut stream).await? {
                 Response::IntentResult {
                     intent_id,

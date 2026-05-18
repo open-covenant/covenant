@@ -244,6 +244,7 @@ pub async fn submit_intent(home: &Path, text: &str) -> Result<SubmissionOutcome,
         &mut stream,
         &Request::SubmitIntent {
             text: text.to_string(),
+            prefer_stream: None,
         },
     )
     .await?;

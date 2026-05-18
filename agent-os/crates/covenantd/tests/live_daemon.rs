@@ -93,6 +93,7 @@ async fn live_covenantd_ping_intent_echo_loop() {
         &mut stream,
         &Request::SubmitIntent {
             text: "what is the meaning of life".into(),
+            prefer_stream: None,
         },
     )
     .await

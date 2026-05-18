@@ -199,6 +199,20 @@ pub enum Request {
     },
     SubmitIntent {
         text: String,
+        /// ADR 0010 v2 streaming opt-in. Mirror of
+        /// [`Request::RecentMemory::prefer_stream`] and
+        /// [`Request::RecentAudit::prefer_stream`]: when `Some(true)`
+        /// and the negotiated protocol version is 2, the daemon may
+        /// answer with a streamed [`StreamEnvelope`] sequence
+        /// carrying `AgentResult` content chunks (per-chunk schema
+        /// `covenant.ipc.v2.chunk.agent-result.v1`) instead of
+        /// buffering the full reply into a terminal
+        /// [`Response::IntentResult`]. `None`/absent keeps the v1
+        /// terminal-frame behaviour byte-for-byte —
+        /// `skip_serializing_if` drops the key on the wire so
+        /// existing v1 intent-submission fixtures replay unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefer_stream: Option<bool>,
     },
     RecentMemory {
         #[serde(default)]
@@ -1475,6 +1489,7 @@ mod tests {
         // missing-field decode error on the daemon side.
         let event = Request::SubmitIntent {
             text: "summarise the audit log".into(),
+            prefer_stream: None,
         };
 
         let wire = serde_json::to_value(&event).unwrap();
@@ -1487,14 +1502,20 @@ mod tests {
             keys,
             vec!["kind", "text"],
             "Request::SubmitIntent wire form must be exactly two \
-             top-level keys: 'kind' plus the single 'text' field. \
-             A refactor that promoted the variant from struct to \
-             newtype wrapping a payload struct would nest 'text' \
-             one level deeper and every operator's `covenant \
-             intents submit` call would fail to decode on the \
-             daemon side — the operator's primary intent-submission \
-             flow would silently start returning Error responses \
-             instead of IntentResult",
+             top-level keys: 'kind' plus the single pre-v2 'text' \
+             field. The ADR 0010 prefer_stream field is Option<bool> \
+             with skip_serializing_if = \"Option::is_none\", so the \
+             None-case wire form stays at two keys — a refactor \
+             that dropped skip_serializing_if would surface \
+             prefer_stream:null in every v1 intent-submission frame \
+             and break fixture replay byte-for-byte. A refactor \
+             that promoted the variant from struct to newtype \
+             wrapping a payload struct would also nest 'text' one \
+             level deeper and every operator's `covenant intents \
+             submit` call would fail to decode on the daemon side \
+             — the operator's primary intent-submission flow would \
+             silently start returning Error responses instead of \
+             IntentResult",
         );
         assert_eq!(
             obj.get("kind"),
@@ -1537,6 +1558,101 @@ mod tests {
              audit row would falsely attribute to the operator \
              without the operator having submitted anything",
         );
+    }
+
+    #[test]
+    fn request_submit_intent_serde_pins_prefer_stream_v2_optin() {
+        // ADR 0010 slice 3.c: prefer_stream is the streaming opt-in
+        // flag on Request::SubmitIntent — the LLM-content streaming
+        // verb. Mirror of the freshly-landed RecentMemory and
+        // RecentAudit prefer_stream pins. Three contracts get pinned
+        // so a future refactor cannot silently break v1
+        // backwards-compatibility or asymmetrically diverge from
+        // the other two streamable verbs.
+        //
+        // 1. None round-trip via a literal v1-shape frame (no
+        //    prefer_stream key) — pins serde(default) plus
+        //    skip_serializing_if = "Option::is_none" so v1
+        //    intent-submission fixtures replay byte-for-byte.
+        // 2. Some(true) round-trip with literal "prefer_stream":true
+        //    on the wire — pins the field name and placement at the
+        //    top level of the SubmitIntent Request frame.
+        // 3. Some(false) round-trip with literal "prefer_stream":false
+        //    on the wire — keeps None and Some(false) distinct so a
+        //    future LLM-content dispatcher can honor an explicit
+        //    opt-out separately from the "don't care" default.
+        let none_form = Request::SubmitIntent {
+            text: "summarise the audit log".into(),
+            prefer_stream: None,
+        };
+        let none_wire = serde_json::to_string(&none_form).unwrap();
+        assert!(
+            !none_wire.contains("prefer_stream"),
+            "prefer_stream: None must NOT surface on the wire for \
+             SubmitIntent — skip_serializing_if keeps v1 \
+             intent-submission fixtures byte-identical; got: \
+             {none_wire}",
+        );
+        let decoded: Request = serde_json::from_str(&none_wire).unwrap();
+        assert_eq!(decoded, none_form);
+
+        let v1_input = r#"{"kind":"submit_intent","text":"summarise the audit log"}"#;
+        let decoded_v1: Request = serde_json::from_str(v1_input).unwrap();
+        assert_eq!(
+            decoded_v1, none_form,
+            "v1-shape SubmitIntent frame must decode to \
+             prefer_stream == None; a refactor that dropped \
+             #[serde(default)] would make the field required and \
+             reject every stale `covenant intents submit` call",
+        );
+
+        let stream_on = Request::SubmitIntent {
+            text: "summarise the audit log".into(),
+            prefer_stream: Some(true),
+        };
+        let stream_on_wire = serde_json::to_value(&stream_on).unwrap();
+        assert_eq!(
+            stream_on_wire.get("prefer_stream"),
+            Some(&serde_json::json!(true)),
+            "explicit Some(true) opt-in on SubmitIntent must surface \
+             as the literal JSON key 'prefer_stream':true — \
+             symmetric with the RecentMemory and RecentAudit pins so \
+             a v2-aware CLI/HTTP consumer reads the same key across \
+             all three streamable verbs",
+        );
+        let stream_on_back: Request = serde_json::from_value(stream_on_wire.clone()).unwrap();
+        assert_eq!(stream_on_back, stream_on);
+        let canon_input: serde_json::Value = serde_json::from_str(
+            r#"{"kind":"submit_intent","text":"summarise the audit log","prefer_stream":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stream_on_wire, canon_input,
+            "Some(true) wire form must equal the documented JSON \
+             shape (kind+text+prefer_stream) — a refactor that \
+             nested prefer_stream inside text or renamed the key \
+             would fail this byte-shape pin",
+        );
+
+        let stream_off = Request::SubmitIntent {
+            text: "summarise the audit log".into(),
+            prefer_stream: Some(false),
+        };
+        let stream_off_wire = serde_json::to_value(&stream_off).unwrap();
+        assert_eq!(
+            stream_off_wire.get("prefer_stream"),
+            Some(&serde_json::json!(false)),
+            "Some(false) (explicit opt-out) must surface on the \
+             wire as 'prefer_stream':false for SubmitIntent; \
+             skipping it would collapse the distinction between \
+             None ('don't care') and Some(false) ('do not stream') \
+             just like the RecentMemory and RecentAudit pins — \
+             critical for the LLM-content path so a non-streaming \
+             agent runtime can be forced even when the daemon would \
+             otherwise default to streaming",
+        );
+        let stream_off_back: Request = serde_json::from_value(stream_off_wire).unwrap();
+        assert_eq!(stream_off_back, stream_off);
     }
 
     #[test]
@@ -5275,6 +5391,7 @@ mod tests {
         let (mut a, mut b) = tokio::io::duplex(8192);
         let req = Request::SubmitIntent {
             text: "hello".into(),
+            prefer_stream: None,
         };
         write_frame(&mut a, &req).await.unwrap();
         let got: Request = read_frame(&mut b).await.unwrap();

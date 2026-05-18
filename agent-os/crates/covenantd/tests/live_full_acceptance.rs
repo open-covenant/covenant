@@ -143,6 +143,7 @@ cpu_ms_per_task = 60000
         &mut stream,
         &Request::SubmitIntent {
             text: "Reply in one short sentence: what is 2+2?".into(),
+            prefer_stream: None,
         },
     )
     .await

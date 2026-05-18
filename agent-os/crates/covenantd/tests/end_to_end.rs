@@ -134,6 +134,7 @@ async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
         &mut stream,
         &Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
+            prefer_stream: None,
         },
     )
     .await

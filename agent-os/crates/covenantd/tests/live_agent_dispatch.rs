@@ -150,6 +150,7 @@ required = ["tool.web_search"]
         &mut stream,
         &Request::SubmitIntent {
             text: "find recent papers on agent memory".into(),
+            prefer_stream: None,
         },
     )
     .await

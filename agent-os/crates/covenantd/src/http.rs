@@ -244,7 +244,13 @@ async fn submit_intent(
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server
-            .respond(Request::SubmitIntent { text: b.text }, &peer)
+            .respond(
+                Request::SubmitIntent {
+                    text: b.text,
+                    prefer_stream: None,
+                },
+                &peer,
+            )
             .await,
     ))
 }

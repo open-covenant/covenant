@@ -131,6 +131,7 @@ async fn live_covenantd_memory_write_rejects_non_operator_intent_dispatch() {
             &mut stream,
             Request::SubmitIntent {
                 text: "delegated memory.write denial probe".into(),
+                            prefer_stream: None,
             },
         )
         .await

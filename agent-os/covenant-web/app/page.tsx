@@ -23,12 +23,12 @@ const DEMO_SAMPLES: { label: string; intent: string }[] = [
   },
   {
     label: "What is Covenant?",
-    intent: "What is Covenant in one short paragraph?",
+    intent: "Hi — explain Covenant in one short paragraph.",
   },
   {
     label: "What just happened?",
     intent:
-      "Walk me through what just happened when I sent this task — capability check, dispatch, signing, audit log.",
+      "Hi — walk me through what just happened when I sent this: capability check, dispatch, signing, audit log.",
   },
 ];
 

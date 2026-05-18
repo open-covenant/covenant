@@ -159,6 +159,9 @@ export default function IpcPage() {
 
 { "kind": "memories",        "records":   [ ... ] }
 { "kind": "memory_purged",   "purged":    42 }
+{ "kind": "audit_purged",    "purged":    42 }
+{ "kind": "capabilities_purged", "purged": 42 }
+{ "kind": "peers_purged",    "purged":    42 }
 { "kind": "receipts",        "receipts":  [ ... ] }
 { "kind": "capabilities",    "capabilities": [ ... ] }
 { "kind": "capability_granted",

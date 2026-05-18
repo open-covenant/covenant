@@ -10,4 +10,4 @@ Each supported protocol version above v1 must have a `vN.md` note before the con
 - fixture files added for replay;
 - expected client behavior during rollout.
 
-No v2 migration note exists yet because the implementation still advertises protocol v1 only.
+[v2.md](./v2.md) is the first concrete migration note. It records the staged bump introduced by ADR 0010: `PROTOCOL_VERSION` stays `1` (default emitted wire form) while `MAX_PROTOCOL_VERSION` is `2` (advertised support for opt-in streaming responses), and lists the `StreamEnvelope` fixture set under `agent-os/crates/covenant-ipc/tests/fixtures/v2/`.

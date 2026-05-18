@@ -215,6 +215,36 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>OperatorTokenRotated</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":             "operator_token_rotated",
+  "peer_display":     "user@local",
+  "old_token_prefix": "4qXP6t",
+  "new_token_prefix": "8wPN3z"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the operator rotates their bootstrap token via{" "}
+        <code>RotateOperatorToken</code>. The issuer is the operator
+        (peer-event audience — the recording path asserts the
+        issuer&apos;s pubkey matches the acting peer&apos;s). Full
+        token bytes never enter the audit log: both prefixes are the
+        same 6-char base58 redaction that <code>PeerRevoked</code>{" "}
+        records and that <code>PeerToken::Debug</code> formats, so an
+        operator can correlate a rotation row with the on-disk token
+        file&apos;s first chars without ever exposing the secret.{" "}
+        <code>new_token_prefix</code> is load-bearing: it lets an
+        operator confirm, after any rotation they did or did not
+        initiate, that the file on disk came from this row rather than
+        a silent compromise. Distinct from{" "}
+        <code>OperatorTokenRotationRejected</code>, the daemon-issuer
+        probe row recorded when a non-operator peer authenticates but
+        fails the identity-pubkey equality gate.
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

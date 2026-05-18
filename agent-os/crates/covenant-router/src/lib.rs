@@ -1,9 +1,30 @@
 //! Intent router for Covenant.
 //!
-//! Routes incoming intents to registered agent capability cards via
-//! keyword-overlap matching. Reserved capability namespaces in agent
-//! manifests drive the keyword tables; new agents are picked up by
-//! placing an `agent.toml` under `$COVENANT_HOME/agents/`.
+//! [`Router`] holds a [`Vec`] of [`AgentCard`]s and scores incoming intent
+//! text against each card's capability list via keyword-overlap matching.
+//! [`Router::route`] lowercases the input before checking the keyword
+//! table, so operator queries match regardless of case; ties between
+//! equal-scoring agents resolve to the first-registered card via Vec
+//! iteration order. Returns [`RouteMatch`] (agent id plus score) or
+//! [`None`] when no capability keyword overlaps the intent.
+//!
+//! [`AgentCard`] is the routing-relevant projection of a manifest plus the
+//! runtime-relevant `package_dir` that downstream runners resolve
+//! `manifest.agent.entry` against. [`AgentCard::from_manifest_and_dir`]
+//! concatenates `capabilities.required` then `capabilities.optional` in
+//! their declared order with no dedup, preserving the full
+//! [`covenant_manifest::Manifest`] so sandbox/resources/entry fields stay
+//! available at dispatch time.
+//!
+//! [`load_agents_from_dir`] walks `$COVENANT_HOME/agents/` for
+//! `<package>/agent.toml` files and returns cards sorted by manifest id so
+//! routing tie-breaking is deterministic across hosts regardless of
+//! `std::fs::read_dir` filesystem order. Missing directories return an
+//! empty vec rather than an error; malformed manifests surface as
+//! [`RouterError::Manifest`] with the offending path and the inner
+//! [`covenant_manifest::ManifestError`] preserved via `#[source]`; IO
+//! failures on the walk surface as [`RouterError::Io`] with the inner
+//! [`std::io::Error`] preserved for retry-policy downcasts.
 
 #![deny(unsafe_code)]
 

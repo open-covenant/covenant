@@ -14,14 +14,16 @@ description = "Outbound x402 client for Covenant agents — capability-scoped pa
 [features]
 default = []
 # Pulls in solana-sdk + SPL crates to enable the real on-chain
-# payment signer. Off by default so consumers that only want the
-# types and the 402-loop don't pay the Solana dep-tree cost.
+# payment signer and the xona-demo binary. Off by default so
+# consumers that only want the types and the 402-loop don't pay
+# the Solana dep-tree cost.
 solana = [
     "dep:solana-sdk",
     "dep:spl-token",
     "dep:spl-associated-token-account",
     "dep:base64",
     "dep:bincode",
+    "dep:tokio",
 ]
 
 [dependencies]
@@ -33,13 +35,19 @@ tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "2"
 
-# Solana signer — optional, gated by the `solana` feature.
+# Solana signer + demo binary — optional, gated by the `solana` feature.
 solana-sdk = { version = "4", optional = true }
 spl-token = { version = "9", optional = true }
 spl-associated-token-account = { version = "8", optional = true }
 base64 = { version = "0.22", optional = true }
 bincode = { version = "1.3", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
+
+[[bin]]
+name = "xona-demo"
+path = "src/bin/xona-demo.rs"
+required-features = ["solana"]

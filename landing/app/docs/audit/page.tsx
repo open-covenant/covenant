@@ -158,6 +158,33 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>AuthenticationFailed</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":      "authentication_failed",
+  "transport": "http",
+  "reason":    "missing Authorization header"
+}`}</code>
+      </pre>
+      <p>
+        Emitted on every rejected authentication attempt — a bad first
+        frame on the IPC socket, a missing or malformed{" "}
+        <code>Authorization</code> header on HTTP, or a token the
+        registry does not resolve. <code>transport</code> is{" "}
+        <code>&quot;ipc&quot;</code> or <code>&quot;http&quot;</code>;{" "}
+        <code>reason</code> is the same short message the caller saw.
+        Because the caller failed to authenticate, no peer identity is
+        bound to the row: the issuer is the daemon&apos;s own
+        <code>AgentId</code>, which keeps probe-attribution events
+        visible on the operator&apos;s <code>/audit</code> feed
+        independent of the cross-peer audit-feed isolation filter.
+        Distinct from <code>OperatorTokenRotationRejected</code> and{" "}
+        <code>OperatorPeerRevokeRejected</code>, which fire after a peer
+        authenticates and then fails an authorization gate.
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

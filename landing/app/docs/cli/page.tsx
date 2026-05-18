@@ -22,7 +22,8 @@ export default function CliPage() {
                                      agent's required capabilities (plus
                                      memory.write); idempotent — already
                                      granted actions are skipped.
-  intent [--json] <text>             Submit an intent and print the result.
+  intent [--json] [--stream] <text>  Submit an intent and print the result;
+                                     --stream opts into v2 streaming response framing.
   intents resume (<intent-id>|latest)
         [--json]                     Re-dispatch a budget-rejected intent.
   ping [--json]                      Check the daemon is responsive.
@@ -30,7 +31,8 @@ export default function CliPage() {
                                      (pre-auth; no operator token required).
 
   memory recent [--tier T] [-n N]
-        [--json]                     List recent memory records.
+        [--json] [--stream]          List recent memory records;
+                                     --stream opts into v2 streaming response framing.
   memory search <query>
         [--tier T] [-n N]
         [--min-relevance F] [--json] Cosine-similarity search via embeddings;
@@ -108,11 +110,12 @@ export default function CliPage() {
   verify [--window N] [--json]       Cross-check audit log vs other state.
 
   audit recent [-n N]
-        [--since-ms <epoch_ms>] [--json]
-                                     List recent audit events as JSONL
+        [--since-ms <epoch_ms>]
+        [--json] [--stream]          List recent audit events as JSONL
                                      or one JSON envelope;
                                      --since-ms drops events older than epoch
-                                     before --limit is applied.
+                                     before --limit is applied;
+                                     --stream opts into v2 streaming response framing.
   audit verify [--json]              Verify the local audit hash-chain.
   audit purge
         (--before-ms M

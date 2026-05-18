@@ -200,8 +200,9 @@ priority                = "normal"`}</code>
               <code>30000</code>
             </td>
             <td>
-              Wall-clock budget. The runtime kills the process when
-              the budget elapses.
+              CPU budget. The runtime preempts the process when the
+              projection tick flags projected overshoot and kills it
+              at the elapsed cap as the backstop.
             </td>
           </tr>
           <tr>
@@ -385,10 +386,14 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
       <p>
         Stderr output is captured by the daemon&apos;s tracing subsystem
         and surfaces in operator logs. The agent process must terminate
-        within <code>resources.cpu_ms_per_task</code>; processes that
-        exceed the budget are killed and the dispatch returns an error.
-        Successful processes with malformed stdout are rejected as runtime
-        failures, not accepted as successful dispatches.
+        within <code>resources.cpu_ms_per_task</code>; the runtime
+        preempts the process via <code>SIGTERM</code>/grace/<code>SIGKILL</code>{" "}
+        when the periodic projection tick observes that the process is
+        on track to exceed the cap, and falls back to the wall-clock
+        kill at the cap if preempt did not fire. Either path produces
+        a dispatch error. Successful processes with malformed stdout
+        are rejected as runtime failures, not accepted as successful
+        dispatches.
         The current subprocess runner is trusted-local. If{" "}
         <code>sandbox.required</code> is true, it fails closed instead of
         silently running the agent without sandbox-grade isolation.

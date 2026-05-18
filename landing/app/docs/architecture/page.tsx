@@ -347,7 +347,9 @@ export default function ArchitecturePage() {
             </td>
             <td>
               ed25519 identity: keypair generation, on-disk persistence,
-              signing, and verification helpers.
+              signing, and verification helpers — the same key signs
+              on-chain settlement transactions, so there is no second
+              keypair system.
             </td>
           </tr>
           <tr>

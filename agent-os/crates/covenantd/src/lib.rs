@@ -3951,6 +3951,63 @@ impl Server {
         result
     }
 
+    /// ADR 0010 streaming orchestrator for `Request::RecentAudit`
+    /// with `prefer_stream: Some(true)`. Symmetric with
+    /// [`Self::stream_recent_memory`]: wraps [`Self::recent_audit`]
+    /// so the peer-scoped filter and `since_ms` truncation stay
+    /// defined in one place, then forks on the response variant.
+    ///
+    /// On `Response::AuditEvents { events }`, allocates a fresh
+    /// `stream_id`, registers a [`stream_tracker::StreamEntry`] with
+    /// `verb = "RecentAudit"` and
+    /// `schema = stream_dispatch::AUDIT_CHUNK_SCHEMA`, drives
+    /// [`stream_dispatch::emit_audit_stream`] through the caller's
+    /// writer, then unregisters the tracker entry regardless of the
+    /// emit result. Any other `Response` variant is written as a
+    /// v1-shape terminal frame and skips tracker bookkeeping.
+    ///
+    /// Unlike memory, `recent_audit` has no capability gate — it
+    /// filters by `peer.pubkey == event.issuer.pubkey` instead — so
+    /// the orchestrator's "fresh, no rows" path returns
+    /// `Response::AuditEvents { events: [] }` and produces the
+    /// begin+end pair. There is no audit equivalent of the memory
+    /// capability-failure path.
+    ///
+    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
+    /// fork lives in the follow-up wiring slice.
+    #[allow(dead_code)]
+    pub async fn stream_recent_audit<W>(
+        &self,
+        writer: &mut W,
+        connection_id: Uuid,
+        limit: usize,
+        since_ms: Option<u64>,
+        peer: &AgentId,
+    ) -> Result<(), IpcError>
+    where
+        W: tokio::io::AsyncWriteExt + Unpin,
+    {
+        let response = self.recent_audit(limit, since_ms, peer).await;
+        let events = match response {
+            Response::AuditEvents { events } => events,
+            other => return write_frame(writer, &other).await,
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "RecentAudit".into(),
+                schema: stream_dispatch::AUDIT_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+        let result = stream_dispatch::emit_audit_stream(writer, stream_id, &events).await;
+        self.stream_tracker.unregister(connection_id, stream_id);
+        result
+    }
+
     /// Returns settlement receipts where `peer` is the payer.
     /// `SettlementReceipt.payer` is set to the authenticated peer in
     /// `dispatch_intent`, so the filter keys directly off the dispatch
@@ -10192,6 +10249,113 @@ required = {caps:?}
         assert_ne!(
             id_a, id_b,
             "consecutive streams must allocate fresh stream_ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_audit_happy_path_emits_begin_chunks_end_and_purges_tracker() {
+        // Pre-populate two audit events via record_peer_event so
+        // recent_audit's peer-scoped filter returns both. Drive the
+        // orchestrator through a Vec<u8>, decode 4 frames, assert
+        // tracker is empty after.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        for i in 0..2u8 {
+            let event = AuditEvent {
+                id: Uuid::from_bytes([i + 10; 16]),
+                timestamp_ms: 1_700_000_000_000 + i as u64,
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::from_bytes([i + 20; 16]),
+                    intent_text: format!("intent {i}"),
+                    matched_agent: Some("test-agent".into()),
+                    result_hash_hex: format!("{:064x}", i as u64),
+                    status: "ok".into(),
+                },
+            };
+            s.record_peer_event(&me, event).await;
+        }
+
+        let connection_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        s.stream_recent_audit(&mut buf, connection_id, 10, None, &me)
+            .await
+            .expect("audit happy path must succeed");
+
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let mut envelopes = Vec::new();
+        while let Ok(env) =
+            covenant_ipc::read_frame::<_, covenant_ipc::StreamEnvelope>(&mut cursor).await
+        {
+            envelopes.push(env);
+        }
+        assert_eq!(envelopes.len(), 4, "begin + 2 chunks + end = 4 frames");
+        assert!(matches!(
+            envelopes[0],
+            covenant_ipc::StreamEnvelope::StreamBegin { .. }
+        ));
+        assert!(matches!(
+            envelopes[3],
+            covenant_ipc::StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful stream_recent_audit"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_audit_with_zero_events_emits_begin_then_end_and_purges_tracker() {
+        // Audit has no capability gate; an empty audit log still
+        // streams begin+end and leaves the tracker empty.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        s.stream_recent_audit(&mut buf, connection_id, 10, None, &me)
+            .await
+            .expect("empty audit must still emit begin+end");
+
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let mut envelopes = Vec::new();
+        while let Ok(env) =
+            covenant_ipc::read_frame::<_, covenant_ipc::StreamEnvelope>(&mut cursor).await
+        {
+            envelopes.push(env);
+        }
+        assert_eq!(envelopes.len(), 2, "empty audit emits exactly begin+end");
+        assert!(s.stream_tracker.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stream_recent_audit_two_calls_use_distinct_stream_ids() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+
+        let mut buf_a = Vec::new();
+        s.stream_recent_audit(&mut buf_a, connection_id, 10, None, &me)
+            .await
+            .unwrap();
+        let mut buf_b = Vec::new();
+        s.stream_recent_audit(&mut buf_b, connection_id, 10, None, &me)
+            .await
+            .unwrap();
+
+        async fn read_first_begin(buf: &[u8]) -> Uuid {
+            let mut cursor = std::io::Cursor::new(buf);
+            let env: covenant_ipc::StreamEnvelope =
+                covenant_ipc::read_frame(&mut cursor).await.unwrap();
+            match env {
+                covenant_ipc::StreamEnvelope::StreamBegin { stream_id, .. } => stream_id,
+                other => panic!("expected StreamBegin, got {other:?}"),
+            }
+        }
+        let id_a = read_first_begin(&buf_a).await;
+        let id_b = read_first_begin(&buf_b).await;
+        assert_ne!(
+            id_a, id_b,
+            "consecutive audit streams must allocate fresh stream_ids"
         );
     }
 

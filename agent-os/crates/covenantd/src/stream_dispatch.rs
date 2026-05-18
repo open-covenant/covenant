@@ -209,15 +209,27 @@ where
 /// Emit a v2 streaming-response sequence for one SubmitIntent
 /// dispatch.
 ///
-/// Symmetric with [`emit_memory_stream`] and [`emit_audit_stream`]:
-/// writes exactly one [`StreamEnvelope::StreamBegin`]
+/// Structurally symmetric with [`emit_memory_stream`] and
+/// [`emit_audit_stream`]: writes exactly one
+/// [`StreamEnvelope::StreamBegin`]
 /// (`response_kind = "intent_result"`), one
 /// [`StreamEnvelope::StreamChunk`] per `AgentResult` in `results`
 /// (sequence counting from `0`, chunk = `serde_json::to_value(result)`
-/// verbatim), then one [`StreamEnvelope::StreamEnd`] with
-/// `summary: None`. An empty `results` slice still emits the
-/// begin+end pair so a stream that never opens is never confused with
-/// a dead daemon at the protocol layer.
+/// verbatim), then one [`StreamEnvelope::StreamEnd`] carrying
+/// `summary`. An empty `results` slice still emits the begin+end pair
+/// so a stream that never opens is never confused with a dead daemon
+/// at the protocol layer.
+///
+/// The `summary` parameter is the asymmetry with memory/audit. The
+/// `Response::IntentResult` variant carries `intent_id`, `status`, and
+/// `settlement` fields that aren't part of `AgentResult` and don't fit
+/// in an AgentResult chunk. ADR 0010's `StreamEnvelope::StreamEnd`
+/// already exposes a `summary: Option<serde_json::Value>` field for
+/// exactly this kind of trailing metadata; passing `Some(value)` here
+/// puts that value on the wire in the terminal frame. Passing `None`
+/// matches the memory/audit terminal-frame shape. Slice 5.c — the
+/// `Server::stream_submit_intent` orchestrator — will populate the
+/// summary from the dispatched `Response::IntentResult`.
 ///
 /// `stream_id` is a parameter so the caller can pre-register the
 /// entry in [`crate::stream_tracker::StreamTracker`] before the first
@@ -232,14 +244,15 @@ where
 /// Today the only caller will pass a single-element slice carrying
 /// the final `AgentResult` once the synchronous runner returns; the
 /// fallback shape is byte-equivalent to a v1 terminal response
-/// wrapped in v2 frames. The slice surface keeps the helper symmetric
-/// with `emit_memory_stream`/`emit_audit_stream` and gives a future
-/// streaming runtime extension a path to emit multiple partial
-/// `AgentResult` chunks without changing this signature.
+/// wrapped in v2 frames with the IntentResult bookkeeping in
+/// `summary`. The slice surface gives a future streaming runtime
+/// extension a path to emit multiple partial `AgentResult` chunks
+/// without changing this signature.
 pub async fn emit_intent_stream<W>(
     writer: &mut W,
     stream_id: Uuid,
     results: &[AgentResult],
+    summary: Option<serde_json::Value>,
 ) -> Result<(), IpcError>
 where
     W: AsyncWriteExt + Unpin,
@@ -268,10 +281,7 @@ where
 
     write_frame(
         writer,
-        &StreamEnvelope::StreamEnd {
-            stream_id,
-            summary: None,
-        },
+        &StreamEnvelope::StreamEnd { stream_id, summary },
     )
     .await?;
 
@@ -631,7 +641,7 @@ mod tests {
         // indistinguishable from a dead daemon.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[]).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
         let envelopes = drain_envelopes(&buf).await;
         assert_eq!(
             envelopes.len(),
@@ -678,7 +688,7 @@ mod tests {
             fixture_intent_result(3, "gamma"),
         ];
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &results)
+        emit_intent_stream(&mut buf, stream_id, &results, None)
             .await
             .unwrap();
         let envelopes = drain_envelopes(&buf).await;
@@ -727,7 +737,7 @@ mod tests {
             fixture_intent_result(6, "two"),
         ];
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &results)
+        emit_intent_stream(&mut buf, stream_id, &results, None)
             .await
             .unwrap();
         let envelopes = drain_envelopes(&buf).await;
@@ -749,7 +759,7 @@ mod tests {
         // break every v2-aware intent consumer at the routing layer.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[]).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
         let envelopes = drain_envelopes(&buf).await;
         match &envelopes[0] {
             StreamEnvelope::StreamBegin { response_kind, .. } => {
@@ -769,5 +779,73 @@ mod tests {
             INTENT_RESULT_CHUNK_SCHEMA,
             "covenant.ipc.v2.chunk.agent-result.v1"
         );
+    }
+
+    #[tokio::test]
+    async fn emit_intent_stream_with_summary_threads_value_to_stream_end() {
+        // The IntentResult-only bookkeeping (intent_id, status,
+        // settlement) doesn't fit inside an AgentResult chunk, so it
+        // rides in StreamEnvelope::StreamEnd.summary. The orchestrator
+        // (slice 5.c) will build this Value from the dispatched
+        // Response::IntentResult; this test pins that the helper
+        // threads whatever Value the caller passes verbatim to the
+        // terminal frame.
+        let stream_id = Uuid::new_v4();
+        let summary = serde_json::json!({
+            "intent_id": "00000000-0000-0000-0000-000000000001",
+            "status": "ok",
+            "settlement": serde_json::Value::Null,
+        });
+        let mut buf = Vec::new();
+        emit_intent_stream(&mut buf, stream_id, &[], Some(summary.clone()))
+            .await
+            .unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        assert_eq!(envelopes.len(), 2, "empty results still emits begin+end");
+        match &envelopes[1] {
+            StreamEnvelope::StreamEnd {
+                stream_id: sid,
+                summary: end_summary,
+            } => {
+                assert_eq!(*sid, stream_id);
+                assert_eq!(
+                    end_summary.as_ref(),
+                    Some(&summary),
+                    "StreamEnd.summary must equal the caller's Value byte-for-byte"
+                );
+            }
+            other => panic!("frame 1 must be StreamEnd, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_intent_stream_with_summary_none_keeps_terminal_frame_unchanged() {
+        // Passing None must produce StreamEnd.summary.is_none() — the
+        // memory/audit-style terminal shape. The contract pin: None
+        // and Some(Value::Null) are wire-distinct (Some(Null) would
+        // serialize as "summary":null where None serializes as
+        // "summary" absent or null depending on serde config). This
+        // test exercises None specifically so the orchestrator slice
+        // can opt out of the summary when there's nothing to report.
+        let stream_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        emit_intent_stream(&mut buf, stream_id, &[], None)
+            .await
+            .unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        assert_eq!(envelopes.len(), 2);
+        match &envelopes[1] {
+            StreamEnvelope::StreamEnd {
+                stream_id: sid,
+                summary,
+            } => {
+                assert_eq!(*sid, stream_id);
+                assert!(
+                    summary.is_none(),
+                    "passing None must produce summary:None terminal frame, got {summary:?}"
+                );
+            }
+            other => panic!("frame 1 must be StreamEnd, got {other:?}"),
+        }
     }
 }

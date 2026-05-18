@@ -1,7 +1,10 @@
 //! Length-prefixed JSON IPC for the covenant daemon and CLI.
 //!
 //! Wire format: 4-byte big-endian length, then that many bytes of JSON.
-//! Frames over [`MAX_FRAME`] bytes are rejected on the read side.
+//! Frames over [`MAX_FRAME`] bytes are rejected on the read side. The
+//! protocol shape is versioned: [`PROTOCOL_VERSION`] = 1 is the current
+//! baseline emitted by the daemon, and [`MAX_PROTOCOL_VERSION`] = 2 is
+//! reserved for streaming responses (ADR 0010).
 
 #![deny(unsafe_code)]
 

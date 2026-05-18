@@ -426,8 +426,13 @@ export default function ArchitecturePage() {
               <code>covenant-llm</code>
             </td>
             <td>
-              Provider trait with mock, Ollama, Anthropic, and
-              OpenAI-compatible implementations.
+              <code>Provider</code> trait with <code>MockProvider</code>,{" "}
+              <code>OllamaProvider</code>, <code>AnthropicProvider</code>,
+              and an OpenAI-compatible implementation, a separate{" "}
+              <code>Embedder</code> trait, and a <code>pick_provider</code>{" "}
+              helper that returns the highest-priority configured backend,
+              falling back to Ollama if reachable and to{" "}
+              <code>MockProvider</code> otherwise.
             </td>
           </tr>
           <tr>

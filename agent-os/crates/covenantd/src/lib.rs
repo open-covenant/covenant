@@ -6,6 +6,7 @@
 #![deny(unsafe_code)]
 
 pub mod http;
+pub mod stream_dispatch;
 pub mod stream_tracker;
 
 use anyhow::{Context, Result};

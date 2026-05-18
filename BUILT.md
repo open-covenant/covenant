@@ -16,7 +16,7 @@ The repository already contains concrete substrate for agentic operation:
 | 4 | Identity | `covenant-identity` and peer auth | Local sessions and commits can be tied to scoped identities. |
 | 5 | Permissions | `covenant-permissions` | Security-sensitive operations are expected to pass capability and review gates. |
 | 6 | Comms | `covenant-ipc`, `covenantd` HTTP gateway, `covenant-mcp`, `covenant-a2a` | Tool and peer boundaries are explicit, not implicit process sharing. |
-| 7 | Compositor | `agent-os/covenant-web` Next.js console | Operator-facing surface for agent state, decisions, and audit; richer TUI deferred. |
+| 7 | Compositor | `agent-os/covenant-web` Next.js console and `covenant-tui` terminal binary | Operator-facing surface for agent state, decisions, and audit; the TUI renders intent, memory, audit, capabilities, A2A, chain-receipts, and peer-registry views over the daemon IPC. |
 | 8 | Settlement | `covenant-settlement` plus `programs/settlement` Solana scaffold | Resource accounting exists locally; on-chain settlement is not production. |
 
 Audit (`covenant-audit`) is a cross-cutting accountability layer underlying Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations.

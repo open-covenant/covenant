@@ -80,6 +80,10 @@ export default function IpcPage() {
   "tier": "working" | "episodic" | "longterm" | null,
   "before_ms": 1714938000000 }
 
+{ "kind": "purge_audit",        "before_ms": 1714938000000 }
+{ "kind": "purge_capabilities", "before_ms": 1714938000000 }
+{ "kind": "purge_peers",        "before_ms": 1714938000000 }
+
 { "kind": "recent_receipts",
   "limit":    10,
   "since_ms": null | 1714938000000 }

@@ -309,7 +309,24 @@ export default function ArchitecturePage() {
               <code>covenant-manifest</code>
             </td>
             <td>
-              Parser and validator for <code>agent.toml</code>.
+              Parser and validator for <code>agent.toml</code> manifests.
+              Reads the <code>agent</code>, <code>capabilities</code>,{" "}
+              <code>resources</code>, <code>sandbox</code>,{" "}
+              <code>settlement</code>, and <code>hermes</code> sections;
+              parses <code>Runtime</code> (<code>python3</code>,{" "}
+              <code>node</code>, <code>rust-bin</code>, <code>hermes</code>),{" "}
+              <code>NetworkPolicy</code> (<code>off</code>,{" "}
+              <code>outbound-https-only</code>, <code>full</code>),{" "}
+              <code>SandboxBackend</code> (<code>trusted-local</code>,{" "}
+              <code>linux-gvisor</code>), <code>FilesystemPolicy</code>{" "}
+              (<code>read-only-package</code>, <code>ephemeral</code>,{" "}
+              <code>host</code>), and <code>HermesApprovalPolicy</code>{" "}
+              (<code>operator-prompt</code>, <code>auto-deny</code>,{" "}
+              <code>auto-once</code>); pins <code>RESERVED_NAMESPACES</code>{" "}
+              (<code>intent.</code>, <code>memory.</code>,{" "}
+              <code>identity.</code>, <code>tool.</code>, <code>agent.</code>)
+              for capability ids; and surfaces <code>ManifestError</code>{" "}
+              <code>Parse</code>, <code>Io</code>, and <code>Validation</code>.
             </td>
           </tr>
           <tr>

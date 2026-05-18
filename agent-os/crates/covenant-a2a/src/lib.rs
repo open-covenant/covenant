@@ -1,9 +1,16 @@
 //! Agent-to-agent task and result envelopes for Covenant.
 //!
-//! Defines the [`A2ATask`] and [`A2ATaskResult`] wire types, an async
-//! [`Mailbox`] trait, and an in-memory implementation suitable for
-//! tests and for orchestrator agents that fan tasks within a single
-//! daemon process.
+//! Defines the [`A2ATask`] and [`A2ATaskResult`] wire types and an async
+//! [`Mailbox`] trait. Ships two backends: [`InMemoryMailbox`] for tests
+//! and single-process orchestration, and [`JsonlMailbox`] for the durable
+//! JSONL-backed path the production daemon uses. Both backends share a
+//! leased task queue ([`A2ATaskQueueState`], [`A2ATaskQueueEntry`]), a
+//! receiver-side idempotency cache ([`A2AIdempotency`],
+//! [`A2AIdempotencyCacheKey`], [`A2AIdempotencyCachedResult`]), an
+//! operator-facing repair surface ([`A2ARepairCommand`],
+//! [`A2ARepairRequest`], [`A2ARepairAction`], [`A2ARepairState`],
+//! [`A2ARepairOutcome`]), and an opt-in [`A2AAutoRetryPolicy`] with
+//! [`A2AAutoRetryDecision`] and [`A2AAutoRetryReport`].
 //!
 //! [`A2ATask`] is a request from one agent to another; [`A2ATaskResult`]
 //! is the response. Tasks form a tree via [`A2ATask::parent`] so an

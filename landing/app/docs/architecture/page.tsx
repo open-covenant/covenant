@@ -178,6 +178,13 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>audit/events.chain.jsonl</code>
+            </td>
+            <td>JSONL, append-only hash-chain sidecar</td>
+            <td>covenant-audit</td>
+          </tr>
+          <tr>
+            <td>
               <code>capabilities/granted.jsonl</code>
             </td>
             <td>JSONL, append-only</td>
@@ -192,10 +199,38 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>peers/registry.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-peer-auth</td>
+          </tr>
+          <tr>
+            <td>
+              <code>peers/operator.token</code>
+            </td>
+            <td>opaque token bytes, mode 0600</td>
+            <td>covenant-peer-auth</td>
+          </tr>
+          <tr>
+            <td>
               <code>receipts/working.jsonl</code>
             </td>
             <td>JSONL, append-only</td>
             <td>covenant-settlement</td>
+          </tr>
+          <tr>
+            <td>
+              <code>budget/ledger.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-budget</td>
+          </tr>
+          <tr>
+            <td>
+              <code>budget/checkpoints.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-budget</td>
           </tr>
           <tr>
             <td>
@@ -217,6 +252,13 @@ export default function ArchitecturePage() {
             </td>
             <td>gitignore-style patterns</td>
             <td>covenant-memory</td>
+          </tr>
+          <tr>
+            <td>
+              <code>runtime/gvisor</code>
+            </td>
+            <td>scratch directory</td>
+            <td>covenant-runtime</td>
           </tr>
           <tr>
             <td>

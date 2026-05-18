@@ -11,6 +11,10 @@
 //! [`pick_provider`] returns the highest-priority configured backend,
 //! falling back to Ollama if reachable and to [`MockProvider`]
 //! otherwise.
+//!
+//! A separate [`Embedder`] trait covers the embedding side, with
+//! [`EmbedderConfig`] sourcing its configuration from the same
+//! `secrets.toml` file.
 
 #![deny(unsafe_code)]
 

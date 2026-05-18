@@ -1,4 +1,25 @@
 //! Parser and validator for Covenant agent manifests (`agent.toml`).
+//!
+//! [`Manifest`] reads the agent metadata in [`Agent`] (with [`Runtime`] picking
+//! one of `python3`, `node`, `rust-bin`, or `hermes`) plus the
+//! [`Capabilities`], [`Resources`], [`Sandbox`], [`Settlement`], and
+//! [`HermesAgent`] sections.
+//!
+//! Policy enums constrain the operator-facing surface:
+//! [`NetworkPolicy`] (`off`, `outbound-https-only`, `full`),
+//! [`SandboxBackend`] (`trusted-local`, `linux-gvisor`; see
+//! [`SandboxBackend::is_sandbox_grade`]),
+//! [`FilesystemPolicy`] (`read-only-package`, `ephemeral`, `host`), and
+//! [`HermesApprovalPolicy`] (`operator-prompt`, `auto-deny`, `auto-once`).
+//!
+//! Capability ids must use one of the reserved namespaces pinned in
+//! [`RESERVED_NAMESPACES`] (`intent.`, `memory.`, `identity.`, `tool.`,
+//! `agent.`).
+//!
+//! [`Manifest::parse`] and [`Manifest::from_path`] return [`ManifestError`],
+//! which separates [`ManifestError::Parse`], [`ManifestError::Io`], and
+//! [`ManifestError::Validation`] so callers can distinguish TOML parse
+//! failures from filesystem errors and semantic rejections.
 
 #![deny(unsafe_code)]
 

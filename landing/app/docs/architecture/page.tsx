@@ -393,8 +393,13 @@ export default function ArchitecturePage() {
               <code>covenant-audit</code>
             </td>
             <td>
-              Append-only audit log with JSONL and in-memory backends,
-              plus hash-chain integrity verification.
+              Append-only audit log: <code>AuditLog</code> trait with
+              JSONL and in-memory backends, per-event hash-chain
+              integrity verification surfaced via{" "}
+              <code>verify_integrity</code>, and recorded event kinds
+              spanning intent dispatch, capability checks, capability
+              grants, capability revoke rejections, and budget
+              enforcement events.
             </td>
           </tr>
           <tr>

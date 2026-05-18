@@ -140,9 +140,22 @@ pub fn runtime_runner_config_from_values(
     }
 }
 
-pub fn runtime_runner_from_config(config: &RuntimeRunnerConfig) -> Arc<dyn Runner> {
+/// Builds the per-backend runner. `tracker` is wired into the
+/// trusted-local SubprocessRunner so the daemon's future budget-preempt
+/// projection tick can walk in-flight subprocesses by intent_id. The
+/// gVisor branch does NOT register with the tracker in this slice — its
+/// pid lifecycle is owned by runsc's OCI bundle path and warrants its
+/// own wiring slice. Until that lands, COVENANT_RUNTIME_BACKEND=linux-gvisor
+/// operators get an empty tracker and no hard-preempt guarantee for
+/// sandbox-required agents.
+pub fn runtime_runner_from_config(
+    config: &RuntimeRunnerConfig,
+    tracker: Arc<covenant_runtime::SubprocessTracker>,
+) -> Arc<dyn Runner> {
     match config {
-        RuntimeRunnerConfig::TrustedLocal => Arc::new(covenant_runtime::SubprocessRunner),
+        RuntimeRunnerConfig::TrustedLocal => {
+            Arc::new(covenant_runtime::SubprocessRunner::with_tracker(tracker))
+        }
         RuntimeRunnerConfig::LinuxGvisor {
             runsc_path,
             rootfs,
@@ -196,8 +209,9 @@ pub fn hermes_gateway_config_from_values(
 pub fn runtime_runner_composite(
     local: &RuntimeRunnerConfig,
     hermes: Option<&HermesGatewayConfig>,
+    tracker: Arc<covenant_runtime::SubprocessTracker>,
 ) -> Arc<dyn Runner> {
-    let local_runner = runtime_runner_from_config(local);
+    let local_runner = runtime_runner_from_config(local, tracker);
     let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(|cfg| {
         match covenant_runtime::HermesRunner::new(cfg.base_url.clone(), cfg.api_key.clone()) {
             Ok(r) => Some(Arc::new(r) as Arc<dyn Runner>),
@@ -11332,25 +11346,32 @@ budget_credits_per_hour = {credits}
 
     #[test]
     fn runtime_runner_from_config_pins_backend_dispatch() {
-        let _: fn() -> covenant_runtime::SubprocessRunner = || covenant_runtime::SubprocessRunner;
+        let _: fn(Arc<covenant_runtime::SubprocessTracker>) -> covenant_runtime::SubprocessRunner =
+            covenant_runtime::SubprocessRunner::with_tracker;
         let _: fn(PathBuf, PathBuf, PathBuf) -> covenant_runtime::GvisorRunner =
             |runsc, rootfs, scratch| {
                 covenant_runtime::GvisorRunner::with_paths(runsc, rootfs, scratch)
             };
 
-        let local_a = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
-        let local_b = runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal);
+        let tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+        let local_a =
+            runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal, tracker.clone());
+        let local_b =
+            runtime_runner_from_config(&RuntimeRunnerConfig::TrustedLocal, tracker.clone());
         assert!(
             !Arc::ptr_eq(&local_a, &local_b),
             "expected a fresh Arc per call; a singleton would mask a per-config swap"
         );
         assert!(Arc::strong_count(&local_a) >= 1);
 
-        let gvisor = runtime_runner_from_config(&RuntimeRunnerConfig::LinuxGvisor {
-            runsc_path: PathBuf::from("/usr/local/bin/runsc"),
-            rootfs: PathBuf::from("/r"),
-            scratch_root: PathBuf::from("/s"),
-        });
+        let gvisor = runtime_runner_from_config(
+            &RuntimeRunnerConfig::LinuxGvisor {
+                runsc_path: PathBuf::from("/usr/local/bin/runsc"),
+                rootfs: PathBuf::from("/r"),
+                scratch_root: PathBuf::from("/s"),
+            },
+            tracker.clone(),
+        );
         assert!(Arc::strong_count(&gvisor) >= 1);
         assert!(
             !Arc::ptr_eq(&local_a, &gvisor),

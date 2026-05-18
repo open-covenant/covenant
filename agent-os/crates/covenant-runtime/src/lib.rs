@@ -342,9 +342,44 @@ pub async fn preempt_subprocess_pg(_pid: u32, _grace: Duration) -> PreemptOutcom
     PreemptOutcome::UnsupportedPlatform
 }
 
-pub struct SubprocessRunner;
+#[derive(Default)]
+pub struct SubprocessRunner {
+    tracker: Option<Arc<SubprocessTracker>>,
+}
+
+/// RAII guard that keeps a [`SubprocessTracker`] entry alive for the
+/// duration of one dispatch. The runner constructs this immediately
+/// after `cmd.spawn` returns with a known pid and binds it to `_guard`
+/// for the rest of `run()`; on every exit path (success, error,
+/// timeout-driven kill, panic) the Drop impl removes the entry so the
+/// tracker cannot leak rows for completed dispatches. Failure mode 1
+/// of the parent task closes here.
+struct TrackerGuard<'a> {
+    tracker: &'a SubprocessTracker,
+    intent_id: Uuid,
+}
+
+impl Drop for TrackerGuard<'_> {
+    fn drop(&mut self) {
+        self.tracker.unregister(&self.intent_id);
+    }
+}
 
 impl SubprocessRunner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builds a runner that registers each spawned subprocess in the
+    /// provided [`SubprocessTracker`] keyed by `intent.id`. The runner
+    /// holds the `Arc` so the daemon can keep its own clone to walk
+    /// later (projection tick, dispatcher consumer).
+    pub fn with_tracker(tracker: Arc<SubprocessTracker>) -> Self {
+        Self {
+            tracker: Some(tracker),
+        }
+    }
+
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
         if card.manifest.sandbox.required {
             return Err(RunnerError::SandboxRequired {
@@ -426,6 +461,34 @@ impl Runner for SubprocessRunner {
 
         debug!(agent = %card.id, entry = %card.manifest.agent.entry, "spawning agent");
         let mut child = cmd.spawn()?;
+
+        // Track the subprocess for the dispatch's lifetime when the
+        // runner was constructed with a tracker. The guard's Drop impl
+        // unregisters on every exit path (success, error, timeout-driven
+        // kill); the binding to `_tracker_guard` must outlive the
+        // child.wait() below so a stdin-write or readback failure does
+        // not silently drop the registration while the child is still
+        // alive.
+        let _tracker_guard = match (self.tracker.as_ref(), child.id()) {
+            (Some(tracker), Some(pid)) => {
+                tracker.register(
+                    intent.id,
+                    TrackedSubprocess {
+                        agent_id: card.id.clone(),
+                        pid,
+                        started_at_ms: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
+                    },
+                );
+                Some(TrackerGuard {
+                    tracker,
+                    intent_id: intent.id,
+                })
+            }
+            _ => None,
+        };
 
         let mut stdin = child.stdin.take().expect("stdin piped");
         let mut stdout = child.stdout.take().expect("stdout piped");
@@ -1273,7 +1336,10 @@ entry = "./agent.sh"
 cpu_ms_per_task = 5000
 "#;
         let card = card_for(manifest_toml, dir.path().to_path_buf());
-        let r = SubprocessRunner.run(&card, &dummy_intent()).await.unwrap();
+        let r = SubprocessRunner::new()
+            .run(&card, &dummy_intent())
+            .await
+            .unwrap();
         assert_eq!(r.text, "sh agent ok");
         assert_eq!(r.sources, vec!["s1".to_string()]);
     }
@@ -1303,7 +1369,7 @@ entry = "./malformed.sh"
 cpu_ms_per_task = 5000
 "#;
         let card = card_for(manifest_toml, dir.path().to_path_buf());
-        let result = SubprocessRunner.run(&card, &dummy_intent()).await;
+        let result = SubprocessRunner::new().run(&card, &dummy_intent()).await;
         match result {
             Err(RunnerError::MalformedStdout { source }) => {
                 assert!(source.is_syntax() || source.is_data());
@@ -1334,8 +1400,134 @@ entry = "./slow.sh"
 cpu_ms_per_task = 150
 "#;
         let card = card_for(manifest_toml, dir.path().to_path_buf());
-        let r = SubprocessRunner.run(&card, &dummy_intent()).await;
+        let r = SubprocessRunner::new().run(&card, &dummy_intent()).await;
         assert!(matches!(r, Err(RunnerError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn subprocess_runner_tracker_records_entry_during_dispatch_and_clears_after() {
+        // Spawns a slow-but-completing script and polls the tracker
+        // concurrently. While the dispatch is in flight there must be
+        // exactly one entry keyed by intent.id with the spawned pid and
+        // a fresh started_at_ms; after the dispatch returns the tracker
+        // must be empty. Failure mode 1 of the wire-tracker slice closes
+        // here: a RegisterGuard whose Drop ran before child.wait()
+        // would surface as an empty tracker during the poll.
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("slow_ok.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nsleep 0.3\nprintf '%s\\n' '{\"text\":\"ok\",\"sources\":[]}'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "tracked"
+name = "Tracked"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./slow_ok.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let mut intent = dummy_intent();
+        intent.id = Uuid::new_v4();
+
+        let tracker = Arc::new(SubprocessTracker::new());
+        let runner = SubprocessRunner::with_tracker(tracker.clone());
+        let intent_id = intent.id;
+        let probe = tracker.clone();
+
+        let started = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let dispatch = tokio::spawn(async move { runner.run(&card, &intent).await });
+
+        let mut seen = None;
+        let deadline = std::time::Instant::now() + Duration::from_millis(800);
+        while std::time::Instant::now() < deadline {
+            if let Some(entry) = probe.get(&intent_id) {
+                seen = Some(entry);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let entry = seen.expect(
+            "tracker must record the spawned subprocess while the dispatch is in flight; a missing entry indicates the RegisterGuard was dropped before child.wait() or the runner never reached the spawn path",
+        );
+        assert!(entry.pid > 0, "tracker pid must be > 0 (got {})", entry.pid);
+        assert_eq!(
+            entry.agent_id, "tracked",
+            "tracker agent_id must match card.id verbatim"
+        );
+        assert!(
+            entry.started_at_ms >= started,
+            "tracker started_at_ms must be >= dispatch start ({} vs {})",
+            entry.started_at_ms,
+            started
+        );
+
+        let result = dispatch
+            .await
+            .expect("dispatch task did not panic")
+            .expect("dispatch must complete successfully (script returns valid JSON)");
+        assert_eq!(result.text, "ok");
+        assert!(
+            tracker.is_empty(),
+            "tracker must be empty after dispatch returns (len={}); the TrackerGuard's Drop impl must run on the happy path",
+            tracker.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn subprocess_runner_tracker_clears_on_timeout_kill_path() {
+        // The TrackerGuard must unregister on every exit path, not just
+        // the happy path. A subprocess that never returns within
+        // cpu_ms_per_task ends in RunnerError::Timeout and child.kill();
+        // after the run future returns, the tracker must be empty.
+        // Failure mode 1 close-out: a guard that lived only in the
+        // success arm would surface here as len()==1.
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("never.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "never"
+name = "Never"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./never.sh"
+
+[resources]
+cpu_ms_per_task = 150
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let mut intent = dummy_intent();
+        intent.id = Uuid::new_v4();
+        let tracker = Arc::new(SubprocessTracker::new());
+        let runner = SubprocessRunner::with_tracker(tracker.clone());
+
+        let result = runner.run(&card, &intent).await;
+        assert!(
+            matches!(result, Err(RunnerError::Timeout(_))),
+            "dispatch must end in Timeout; got {result:?}"
+        );
+        assert!(
+            tracker.is_empty(),
+            "tracker must be empty after the timeout-kill path (len={}); a RegisterGuard scoped only inside the happy branch would leak an entry here",
+            tracker.len()
+        );
     }
 
     /// Failing script → `NonZeroExit`.
@@ -1364,7 +1556,7 @@ entry = "./bad.sh"
 cpu_ms_per_task = 5000
 "#;
         let card = card_for(manifest_toml, dir.path().to_path_buf());
-        let r = SubprocessRunner.run(&card, &dummy_intent()).await;
+        let r = SubprocessRunner::new().run(&card, &dummy_intent()).await;
         match r {
             Err(RunnerError::NonZeroExit { status, stderr }) => {
                 assert_eq!(status, 7);
@@ -1396,7 +1588,7 @@ required = true
 backend = "linux-gvisor"
 "#;
         let card = card_for(manifest_toml, dir.path().to_path_buf());
-        let result = SubprocessRunner.run(&card, &dummy_intent()).await;
+        let result = SubprocessRunner::new().run(&card, &dummy_intent()).await;
         match result {
             Err(RunnerError::SandboxRequired { agent, required }) => {
                 assert_eq!(agent, "needs-sandbox");
@@ -2104,7 +2296,7 @@ cpu_ms_per_task = 5000
         let dir = tempdir().unwrap();
         let card = card_for(&hermes_manifest(), dir.path().to_path_buf());
 
-        let runner = SubprocessRunner;
+        let runner = SubprocessRunner::new();
         let err = runner.run(&card, &dummy_intent()).await.unwrap_err();
         match err {
             RunnerError::WrongRuntime {

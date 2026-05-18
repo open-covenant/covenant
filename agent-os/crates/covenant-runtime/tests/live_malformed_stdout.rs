@@ -64,7 +64,7 @@ async fn live_subprocess_runner_rejects_malformed_stdout() {
     }
 
     let card = malformed_card(package.path().to_path_buf());
-    let result = SubprocessRunner.run(&card, &intent()).await;
+    let result = SubprocessRunner::new().run(&card, &intent()).await;
     match result {
         Err(RunnerError::MalformedStdout { source }) => {
             assert!(source.is_syntax() || source.is_data());

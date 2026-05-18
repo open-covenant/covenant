@@ -56,7 +56,12 @@ async fn main() -> Result<()> {
     let router = Arc::new(covenant_router::Router::from_cards(cards));
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
-    let runner = covenantd::runtime_runner_composite(&runtime_config, hermes_config.as_ref());
+    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    let runner = covenantd::runtime_runner_composite(
+        &runtime_config,
+        hermes_config.as_ref(),
+        subprocess_tracker,
+    );
     info!(
         backend = runtime_config.backend_name(),
         hermes = hermes_config.is_some(),

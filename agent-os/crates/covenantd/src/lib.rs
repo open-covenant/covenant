@@ -18,7 +18,6 @@ use covenant_budget::{
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{
     read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
-    StreamEnvelope,
 };
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
@@ -1127,6 +1126,22 @@ impl Server {
             } = &req
             {
                 self.stream_recent_memory(&mut stream, connection_id, *tier, *limit, &peer)
+                    .await?;
+                continue;
+            }
+            // ADR 0010 slice 4.d streaming dispatch fork for RecentAudit.
+            // Symmetric to the RecentMemory fork above; matches exactly
+            // on Some(true) so Some(false) and None fall through to the
+            // v1 respond + write_frame path. since_ms is Option<u64>
+            // (Copy) and limit is usize (Copy), so the destructure
+            // borrows req — req stays owned for the fallthrough.
+            if let Request::RecentAudit {
+                limit,
+                since_ms,
+                prefer_stream: Some(true),
+            } = &req
+            {
+                self.stream_recent_audit(&mut stream, connection_id, *limit, *since_ms, &peer)
                     .await?;
                 continue;
             }
@@ -5627,6 +5642,7 @@ fn agent_id_for_card_id(card_id: &str) -> AgentId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use covenant_ipc::StreamEnvelope;
     use covenant_manifest::Manifest;
     use covenant_memory::InMemoryStore;
     use covenant_router::AgentCard;
@@ -15983,6 +15999,153 @@ budget_credits_per_hour = {credits}
         match resp {
             Response::Memories { records } => assert_eq!(records.len(), 2),
             other => panic!("expected Response::Memories on Some(false), got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    async fn server_with_authenticated_audit(events: usize) -> (Arc<Server>, PeerToken, AgentId) {
+        let s = Arc::new(server_with_ignore(vec![], "", IgnoreSet::default()));
+        let me = s.identity.agent_id();
+        let token = PeerToken::generate();
+        s.peers
+            .register(PeerEntry {
+                token,
+                agent_id: me.clone(),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .expect("register peer token");
+        for i in 0..events as u8 {
+            let event = AuditEvent {
+                id: Uuid::from_bytes([i + 30; 16]),
+                timestamp_ms: 1_700_000_000_000 + i as u64,
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::from_bytes([i + 40; 16]),
+                    intent_text: format!("intent {i}"),
+                    matched_agent: Some("test-agent".into()),
+                    result_hash_hex: format!("{:064x}", i as u64),
+                    status: "ok".into(),
+                },
+            };
+            s.record_peer_event(&me, event).await;
+        }
+        (s, token, me)
+    }
+
+    #[tokio::test]
+    async fn recent_audit_with_prefer_stream_true_routes_to_streaming_path() {
+        // ADR 0010 slice 4.d dispatch fork. With two audit events
+        // recorded under the authenticated peer, sending
+        // prefer_stream:Some(true) must yield StreamBegin (response_kind
+        // "audit_events") + 2 StreamChunk + StreamEnd envelopes — NOT a
+        // Response::AuditEvents terminal frame. A regression that left
+        // the dispatch on the v1 path would decode the first frame as
+        // Response::AuditEvents and skip the StreamEnvelope assertions.
+        let (s, token, _me) = server_with_authenticated_audit(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+                prefer_stream: Some(true),
+            },
+        )
+        .await
+        .expect("send recent_audit");
+
+        let begin: StreamEnvelope = read_frame(&mut client).await.expect("read stream_begin");
+        match begin {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, "audit_events");
+            }
+            other => panic!("expected StreamBegin, got {other:?}"),
+        }
+        for i in 0..2u32 {
+            let chunk: StreamEnvelope = read_frame(&mut client).await.expect("read stream_chunk");
+            match chunk {
+                StreamEnvelope::StreamChunk { sequence, .. } => assert_eq!(sequence, i),
+                other => panic!("expected StreamChunk at i={i}, got {other:?}"),
+            }
+        }
+        let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
+        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn recent_audit_with_prefer_stream_omitted_returns_v1_response() {
+        // v1 fixture replay protection: a request without prefer_stream
+        // MUST receive a v1 Response::AuditEvents terminal frame,
+        // byte-equivalent to pre-ADR-0010 behavior.
+        let (s, token, _me) = server_with_authenticated_audit(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+                prefer_stream: None,
+            },
+        )
+        .await
+        .expect("send recent_audit");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::AuditEvents { events } => assert_eq!(events.len(), 2),
+            other => panic!("expected Response::AuditEvents, got {other:?}"),
+        }
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn recent_audit_with_prefer_stream_false_returns_v1_response() {
+        // ADR 0010 contract pin: prefer_stream:Some(false) is
+        // wire-distinct from None. The dispatch must match exactly
+        // Some(true), so Some(false) falls through to the v1 path.
+        let (s, token, _me) = server_with_authenticated_audit(2).await;
+        let (mut client, server_side) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = {
+            let s = Arc::clone(&s);
+            tokio::spawn(async move { s.handle(Uuid::new_v4(), server_side).await })
+        };
+
+        authenticate_client(&mut client, token).await;
+        write_frame(
+            &mut client,
+            &Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+                prefer_stream: Some(false),
+            },
+        )
+        .await
+        .expect("send recent_audit");
+
+        let resp: Response = read_frame(&mut client).await.expect("read response");
+        match resp {
+            Response::AuditEvents { events } => assert_eq!(events.len(), 2),
+            other => panic!("expected Response::AuditEvents on Some(false), got {other:?}"),
         }
 
         drop(client);

@@ -28,10 +28,16 @@ pub mod orbit;
 pub mod signer;
 pub mod types;
 
+#[cfg(feature = "solana")]
+pub mod solana;
+
 pub use client::Client;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};
 pub use types::{Capability, PaymentRequirements};
+
+#[cfg(feature = "solana")]
+pub use solana::SolanaSigner;
 
 /// Errors surfaced by the x402 client.
 ///

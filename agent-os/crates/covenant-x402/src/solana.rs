@@ -1,0 +1,389 @@
+//! Solana SPL signer for the x402 payment loop.
+//!
+//! Gated by the `solana` cargo feature. When the feature is on, the
+//! crate exports [`SolanaSigner`] — a [`crate::Signer`]
+//! implementation that builds an SPL `TransferChecked` instruction
+//! against the recipient's Associated Token Account, signs it with
+//! a [`solana_sdk::signer::keypair::Keypair`], and wraps the signed
+//! transaction in the canonical x402 payment envelope.
+//!
+//! ## Envelope
+//!
+//! The `x-payment` header value is a base64-encoded JSON envelope:
+//!
+//! ```json
+//! {
+//!   "x402Version": 1,
+//!   "scheme":      "<from requirements>",
+//!   "network":     "<from requirements>",
+//!   "payload":     { "transaction": "<base64 of bincode-serialized signed tx>" }
+//! }
+//! ```
+//!
+//! This matches the Coinbase x402 reference. Facilitators that
+//! expect a different envelope (Kamiyo's Kizuna, for example) need
+//! a parallel signer impl — the trait surface stays the same.
+//!
+//! ## Decimals
+//!
+//! `TransferChecked` requires the mint's decimal count. v1
+//! hardcodes USDC mainnet + devnet (both 6). Other mints return
+//! [`crate::X402Error::Sign`] with a message asking to extend
+//! [`decimals_for_mint`]. A future PR can add an on-chain decimals
+//! lookup via the mint account.
+//!
+//! ## RPC dependency
+//!
+//! The signer needs a fresh blockhash. It hits the configured RPC
+//! URL with a minimal `getLatestBlockhash` JSON-RPC call (no
+//! `solana-client` dep — just `reqwest`).
+
+use std::str::FromStr;
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use solana_sdk::{
+    hash::Hash,
+    pubkey::Pubkey,
+    signer::{keypair::Keypair, Signer as SolanaKeypairSigner},
+    transaction::Transaction,
+};
+use spl_associated_token_account::get_associated_token_address;
+use tracing::debug;
+
+use crate::{PaymentRequirements, Result, Signer, X402Error};
+
+/// USDC mint on Solana mainnet-beta.
+pub const USDC_MAINNET_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+/// USDC mint on Solana devnet (Circle's official devnet mint).
+pub const USDC_DEVNET_MINT: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+/// Real Solana payment signer.
+pub struct SolanaSigner {
+    keypair: Keypair,
+    rpc_url: String,
+    http: reqwest::Client,
+}
+
+impl SolanaSigner {
+    /// Builds a signer with a default reqwest client.
+    pub fn new(keypair: Keypair, rpc_url: impl Into<String>) -> Self {
+        Self::with(keypair, rpc_url, reqwest::Client::new())
+    }
+
+    /// Customised builder — pass an existing reqwest client when
+    /// you want to share connection pooling.
+    pub fn with(
+        keypair: Keypair,
+        rpc_url: impl Into<String>,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            keypair,
+            rpc_url: rpc_url.into(),
+            http,
+        }
+    }
+
+    /// The signer's pubkey, useful for funding the account or
+    /// pre-creating the sender's ATA.
+    pub fn pubkey(&self) -> Pubkey {
+        self.keypair.pubkey()
+    }
+
+    async fn latest_blockhash(&self) -> Result<Hash> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestBlockhash",
+            "params": [{"commitment": "confirmed"}]
+        });
+        let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(X402Error::Sign(format!(
+                "rpc status {}: {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            )));
+        }
+        let parsed: serde_json::Value = resp.json().await?;
+        let blockhash_str = parsed
+            .pointer("/result/value/blockhash")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                X402Error::Sign(format!(
+                    "rpc: no blockhash in response: {}",
+                    parsed
+                ))
+            })?;
+        Hash::from_str(blockhash_str)
+            .map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
+    }
+}
+
+#[async_trait::async_trait]
+impl Signer for SolanaSigner {
+    async fn build_payment(
+        &self,
+        requirements: &PaymentRequirements,
+    ) -> Result<String> {
+        if !requirements.network.starts_with("solana:") {
+            return Err(X402Error::Sign(format!(
+                "SolanaSigner cannot handle network {:?}",
+                requirements.network
+            )));
+        }
+
+        let mint = Pubkey::from_str(&requirements.asset)
+            .map_err(|e| X402Error::Sign(format!("parse asset {:?}: {e}", requirements.asset)))?;
+        let pay_to = Pubkey::from_str(&requirements.pay_to)
+            .map_err(|e| X402Error::Sign(format!("parse pay_to {:?}: {e}", requirements.pay_to)))?;
+        let amount: u64 = requirements
+            .amount
+            .parse()
+            .map_err(|e| X402Error::Sign(format!("parse amount {:?}: {e}", requirements.amount)))?;
+        let decimals = decimals_for_mint(&mint).ok_or_else(|| {
+            X402Error::Sign(format!(
+                "unknown mint decimals for {} — extend decimals_for_mint or add on-chain lookup",
+                requirements.asset
+            ))
+        })?;
+
+        let blockhash = self.latest_blockhash().await?;
+        debug!(
+            payer = %self.pubkey(),
+            mint = %mint,
+            recipient = %pay_to,
+            amount,
+            "SolanaSigner building transfer"
+        );
+
+        let tx = build_transfer_transaction(
+            &self.keypair,
+            mint,
+            pay_to,
+            amount,
+            decimals,
+            blockhash,
+        )?;
+
+        let serialized = bincode::serialize(&tx)
+            .map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
+        let tx_b64 = BASE64.encode(serialized);
+
+        let envelope = serde_json::json!({
+            "x402Version": 1,
+            "scheme":      requirements.scheme,
+            "network":     requirements.network,
+            "payload":     { "transaction": tx_b64 },
+        });
+        Ok(BASE64.encode(envelope.to_string().as_bytes()))
+    }
+}
+
+/// Looks up decimals for known SPL mints. Returns None for unknown
+/// mints — callers should surface that as a configuration error so
+/// the operator knows to register the mint.
+pub fn decimals_for_mint(mint: &Pubkey) -> Option<u8> {
+    let s = mint.to_string();
+    if s == USDC_MAINNET_MINT || s == USDC_DEVNET_MINT {
+        Some(6)
+    } else {
+        None
+    }
+}
+
+/// Builds a signed `TransferChecked` transaction from the payer's
+/// USDC ATA to the recipient's USDC ATA.
+///
+/// Assumes both ATAs already exist. If the recipient has no ATA
+/// for `mint`, the transaction lands but the SPL program rejects
+/// it — the caller should pre-create the ATA out of band, or this
+/// helper should be extended to prepend a CreateAssociatedTokenAccount
+/// instruction (out of scope for v1).
+pub fn build_transfer_transaction(
+    payer: &Keypair,
+    mint: Pubkey,
+    recipient: Pubkey,
+    amount: u64,
+    decimals: u8,
+    recent_blockhash: Hash,
+) -> Result<Transaction> {
+    let payer_pubkey = payer.pubkey();
+    let source_ata = get_associated_token_address(&payer_pubkey, &mint);
+    let dest_ata = get_associated_token_address(&recipient, &mint);
+
+    let ix = spl_token::instruction::transfer_checked(
+        &spl_token::ID,
+        &source_ata,
+        &mint,
+        &dest_ata,
+        &payer_pubkey,
+        &[&payer_pubkey],
+        amount,
+        decimals,
+    )
+    .map_err(|e| X402Error::Sign(format!("build transfer_checked: {e}")))?;
+
+    let mut tx = Transaction::new_with_payer(&[ix], Some(&payer_pubkey));
+    tx.try_sign(&[payer], recent_blockhash)
+        .map_err(|e| X402Error::Sign(format!("sign tx: {e}")))?;
+    Ok(tx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    fn xona_requirements(network: &str, asset: &str, amount: &str) -> PaymentRequirements {
+        PaymentRequirements {
+            network: network.into(),
+            asset: asset.into(),
+            amount: amount.into(),
+            amount_usdc: 0.08,
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
+            scheme: "exact".into(),
+        }
+    }
+
+    #[test]
+    fn usdc_mainnet_decimals_are_six() {
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        assert_eq!(decimals_for_mint(&mint), Some(6));
+    }
+
+    #[test]
+    fn usdc_devnet_decimals_are_six() {
+        let mint = Pubkey::from_str(USDC_DEVNET_MINT).unwrap();
+        assert_eq!(decimals_for_mint(&mint), Some(6));
+    }
+
+    #[test]
+    fn unknown_mint_returns_none() {
+        // Arbitrary, valid base58 pubkey that isn't one of the
+        // hardcoded USDC mints.
+        let mint = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        assert!(decimals_for_mint(&mint).is_none());
+    }
+
+    #[test]
+    fn build_transaction_has_single_signature_and_instruction() {
+        let payer = Keypair::new();
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        let recipient = Pubkey::from_str(
+            "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        )
+        .unwrap();
+        let blockhash = Hash::new_from_array([7u8; 32]);
+
+        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
+            .expect("build tx");
+
+        assert_eq!(tx.signatures.len(), 1, "payer is the only signer");
+        assert_eq!(
+            tx.message.instructions.len(),
+            1,
+            "v1 emits exactly one TransferChecked instruction",
+        );
+        assert_eq!(
+            tx.message.recent_blockhash, blockhash,
+            "recent_blockhash must round-trip from input",
+        );
+    }
+
+    #[test]
+    fn build_transaction_targets_correct_atas() {
+        let payer = Keypair::new();
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        let recipient = Pubkey::from_str(
+            "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        )
+        .unwrap();
+        let blockhash = Hash::new_from_array([7u8; 32]);
+
+        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
+            .expect("build tx");
+
+        let expected_source = get_associated_token_address(&payer.pubkey(), &mint);
+        let expected_dest = get_associated_token_address(&recipient, &mint);
+
+        // Account keys order: signer/payer first, then writable
+        // accounts in instruction order. The TransferChecked
+        // instruction references source, mint, destination, owner.
+        let keys = &tx.message.account_keys;
+        assert!(keys.contains(&expected_source), "source ATA must appear in account keys");
+        assert!(keys.contains(&expected_dest), "dest ATA must appear in account keys");
+        assert!(keys.contains(&mint), "mint must appear in account keys");
+    }
+
+    #[tokio::test]
+    async fn build_payment_round_trips_envelope() {
+        // Wiremock acts as the RPC. It serves a fixed blockhash so
+        // the test can assert on the envelope structure
+        // deterministically.
+        let server = MockServer::start().await;
+        let fixed_blockhash = "11111111111111111111111111111112"; // base58 of [0,..,0,1]
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "context": {"slot": 1},
+                        "value": {
+                            "blockhash": fixed_blockhash,
+                            "lastValidBlockHeight": 1
+                        }
+                    }
+                }),
+            ))
+            .mount(&server)
+            .await;
+
+        let payer = Keypair::new();
+        let signer = SolanaSigner::new(payer, server.uri());
+
+        let req = xona_requirements(
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            USDC_MAINNET_MINT,
+            "80000",
+        );
+        let header = signer.build_payment(&req).await.expect("build");
+
+        // The header is base64(JSON). Round-trip to verify the
+        // envelope shape we promised in the module docstring.
+        let envelope_bytes = BASE64.decode(header).expect("base64 decode");
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&envelope_bytes).expect("json decode");
+        assert_eq!(envelope["x402Version"], 1);
+        assert_eq!(envelope["scheme"], "exact");
+        assert_eq!(envelope["network"], req.network);
+        assert!(envelope["payload"]["transaction"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn build_payment_rejects_non_solana_network() {
+        let server = MockServer::start().await; // never hit
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let req = xona_requirements("base:8453", USDC_MAINNET_MINT, "80000");
+        let err = signer.build_payment(&req).await.expect_err("non-solana");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("base:8453")));
+    }
+
+    #[tokio::test]
+    async fn build_payment_rejects_unknown_mint() {
+        let server = MockServer::start().await; // never hit
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let req = xona_requirements(
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "11111111111111111111111111111111",
+            "80000",
+        );
+        let err = signer.build_payment(&req).await.expect_err("unknown mint");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("unknown mint decimals")));
+    }
+}

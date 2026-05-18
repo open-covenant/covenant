@@ -309,9 +309,11 @@ export default function IpcPage() {
         </li>
         <li>
           <strong>Compatibility.</strong> <code>protocol_info</code> is
-          intentionally minimal and treated as stable for protocol
-          version 1. Clients should ignore unknown fields; adding new
-          required fields implies a protocol version bump.
+          intentionally minimal and treated as stable across protocol
+          versions 1 and 2 — the response shape did not change at the
+          v2 bump, only <code>max_supported</code> advanced. Clients
+          should ignore unknown fields; adding new required fields
+          implies a protocol version bump.
         </li>
       </ul>
 

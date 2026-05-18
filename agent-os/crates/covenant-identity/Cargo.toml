@@ -1,7 +1,7 @@
 [package]
 name = "covenant-identity"
 version = "0.1.0"
-description = "Local ed25519 identity for Covenant. Keypair generation, on-disk persistence, signing, and verification."
+description = "Local ed25519 identity for Covenant. Keypair generation, on-disk persistence, signing, and verification — the same key is reused to sign on-chain settlement transactions, so there is no second keypair system."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

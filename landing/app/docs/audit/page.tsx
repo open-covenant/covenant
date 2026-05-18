@@ -107,6 +107,36 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>CapabilityScopeRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":     "capability_scope_rejected",
+  "agent_id": "memory:write",
+  "action":   "memory.write",
+  "reason":   "tier 'long_term' outside scope"
+}`}</code>
+      </pre>
+      <p>
+        Emitted at dispatch time when the caller holds a capability for{" "}
+        <code>action</code> but the request falls outside its{" "}
+        <code>scope</code> — for example, an{" "}
+        <code>audit.purge</code> call whose <code>before_ms</code>{" "}
+        predates the scope window, or a <code>memory.write</code> at a
+        tier the grant did not authorise. <code>agent_id</code> is a
+        synthetic id naming the runtime surface that performed the
+        check (<code>memory:write</code>, <code>tool:web_search</code>,{" "}
+        <code>audit:purge</code>); <code>action</code> is the
+        capability action string; <code>reason</code> is the
+        scope-mismatch message returned to the caller. Distinct from{" "}
+        <code>CapabilityCheck</code> with{" "}
+        <code>passed: false</code>, which fires when a required action
+        is missing entirely from the issuer&apos;s capability set —
+        scope rejection assumes the action <em>is</em> present and the
+        rejection is on its bound scope.
+      </p>
+
+      <h3>
         <code>CapabilityRevokeRejected</code>
       </h3>
       <pre>

@@ -453,8 +453,10 @@ export default function ArchitecturePage() {
               <code>covenantd</code>
             </td>
             <td>
-              The daemon binary. Wires the primitives together; exposes
-              the IPC and HTTP surfaces.
+              The daemon binary. Wires the primitives together and
+              exposes intent dispatch, agent runtime, memory, identity,
+              permissions, audit, and settlement over a Unix socket and
+              an HTTP gateway.
             </td>
           </tr>
           <tr>

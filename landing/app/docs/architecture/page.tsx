@@ -402,10 +402,12 @@ export default function ArchitecturePage() {
               <code>covenant-settlement</code>
             </td>
             <td>
-              Settlement primitive: <code>Settlement</code> trait with
-              in-memory and JSONL receipt-store backends; receipts,
-              credits, and off-chain accounting that pair with the
-              on-chain program.
+              Settlement primitive implementing the credits-and-buyback
+              model: <code>Settlement</code> trait with in-memory and
+              JSONL receipt-store backends; receipts accumulate in a
+              local JSONL log until batched and flushed to the on-chain
+              settlement program, at which point each receipt&apos;s{" "}
+              <code>onchain_sig</code> is populated.
             </td>
           </tr>
           <tr>

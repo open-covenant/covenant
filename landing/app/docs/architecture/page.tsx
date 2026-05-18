@@ -328,7 +328,8 @@ export default function ArchitecturePage() {
             </td>
             <td>
               Three-tier memory store (SQLite + in-memory) with cosine
-              similarity search over stored vectors.
+              similarity search over stored vectors, tier-scoped purge,
+              bounded compaction, and scoped repair commands.
             </td>
           </tr>
           <tr>

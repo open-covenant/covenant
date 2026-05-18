@@ -338,9 +338,11 @@ export default function ArchitecturePage() {
               <code>covenant-memory</code>
             </td>
             <td>
-              Three-tier memory store (SQLite + in-memory) with cosine
-              similarity search over stored vectors, tier-scoped purge,
-              bounded compaction, and scoped repair commands.
+              Three-tier memory store (working, episodic, long-term):{" "}
+              <code>MemoryStore</code> trait with SQLite-backed
+              persistence and an in-memory backend for tests, cosine
+              similarity search over embedded vectors, tier-scoped
+              purge, bounded compaction, and scoped repair commands.
             </td>
           </tr>
           <tr>

@@ -1,7 +1,7 @@
 [package]
 name = "covenant-budget"
 version = "0.1.0"
-description = "Per-agent token-bucket ledger backing `Settlement.budget_credits_per_hour` (manifest §5). Async trait with in-memory and JSONL-backed event-log implementations."
+description = "Per-agent token-bucket ledger backing `Settlement.budget_credits_per_hour` (manifest §5). Async trait with in-memory and JSONL-backed event-log implementations, a separate pause/resume checkpoint store so replay cannot charge the same work twice, and bounded compaction that emits per-agent Snapshot events at the cutoff."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -465,9 +465,28 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
       </p>
       <ul>
         <li>
-          omit any of <code>agent.id</code>, <code>agent.name</code>,
-          <code>agent.version</code>, <code>agent.entry</code>, or
-          have any of those fields empty;
+          omit or leave empty any of <code>agent.id</code>,{" "}
+          <code>agent.name</code>, or <code>agent.version</code>;
+        </li>
+        <li>
+          omit or leave empty <code>agent.entry</code> when{" "}
+          <code>runtime</code> is <code>python3</code>,{" "}
+          <code>node</code>, or <code>rust-bin</code>{" "}
+          (<code>runtime = &quot;hermes&quot;</code> ignores{" "}
+          <code>agent.entry</code> entirely);
+        </li>
+        <li>
+          contain characters in <code>agent.id</code> outside
+          ASCII <code>[A-Za-z0-9_.-]+</code> — <code>agent.id</code>{" "}
+          flows into the daemon&apos;s synthesised{" "}
+          <code>AgentId</code> display and round-trips through that
+          charset filter on every JSONL replay;
+        </li>
+        <li>
+          declare an <code>agent.entry</code> that is absolute or
+          contains <code>..</code> / root / drive components for a
+          subprocess runtime — entries must be relative paths inside
+          the agent package directory;
         </li>
         <li>
           declare a <code>required</code> or <code>optional</code>{" "}

@@ -1,7 +1,10 @@
-//! Covenant daemon library — Phase 0/1/2 listener wired to router + runner +
-//! memory + settlement + audit + capabilities. Per-dispatch we write a
-//! working-tier memory record, a settlement receipt, an audit event, AND a
-//! capability check (audit-only — observe-then-enforce migration path).
+//! Covenant daemon library. Local-first coordination layer exposing intent
+//! dispatch, agent runtime, memory, identity, permissions, audit, and
+//! settlement over a Unix socket and an HTTP gateway. Per-dispatch we
+//! write a working-tier memory record, a settlement receipt, an audit
+//! event, and a `CapabilityCheck` audit row that records the dispatch
+//! attribution alongside the dispatch-time scope predicates enforced in
+//! [`covenant_permissions`].
 
 #![deny(unsafe_code)]
 

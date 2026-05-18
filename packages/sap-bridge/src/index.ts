@@ -53,6 +53,14 @@ export interface SapBridgeOptions {
   config?: ResolvedSynapseConfig;
 }
 
+export interface BridgeStatus {
+  enabled: boolean;
+  cluster: string;
+  programId: string;
+  rpcUrl: string;
+  explorerUrl: string;
+}
+
 export class SapBridge {
   readonly config: ResolvedSynapseConfig;
 
@@ -64,6 +72,19 @@ export class SapBridge {
     if (!this.config.enabled) {
       throw new BridgeDisabledError();
     }
+  }
+
+  // Snapshot of the resolved bridge config. Safe to expose over an
+  // operator surface — never returns secrets and does not touch the
+  // network.
+  status(): BridgeStatus {
+    return {
+      enabled: this.config.enabled,
+      cluster: this.config.network.key,
+      programId: this.config.programId,
+      rpcUrl: this.config.rpcUrl,
+      explorerUrl: this.config.explorerUrl,
+    };
   }
 
   async publishAgent(_manifest: AgentManifest): Promise<PublishedAgent> {

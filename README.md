@@ -67,7 +67,7 @@ Conventional developer environments assume a human operator is present at every 
 - **Continuity:** persistent memory, resumable task state, repair workflows, and structured handoff.
 - **Accountability:** append-only audit logs, integrity reports, signed actions, and commit-scoped provenance.
 - **Interoperability:** native tools, MCP integration, A2A messaging, local gateway APIs, and protocol adapters.
-- **Execution:** daemon-mediated runtime dispatch with timeout enforcement and sandbox-aware agent manifests.
+- **Execution:** daemon-mediated runtime dispatch with budget enforcement and sandbox-aware agent manifests.
 - **Settlement:** local receipts and protocol scaffolding for accountable resource use and agent coordination economics.
 
 ## Architecture
@@ -77,7 +77,7 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 | # | Primitive | Role |
 |---|---|---|
 | 1 | Intent | Normalized request shapes for CLI, IPC, HTTP, routing, and daemon dispatch. |
-| 2 | Runtime | Agent execution with timeout enforcement, manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
+| 2 | Runtime | Agent execution with budget enforcement (projection-tick preempt and wall-clock backstop at `cpu_ms_per_task`), manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
 | 3 | Memory | SQLite-backed working, episodic, and long-term records with embedding hooks, ignore rules, drift reports, repair, and bounded compaction. |
 | 4 | Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
 | 5 | Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |

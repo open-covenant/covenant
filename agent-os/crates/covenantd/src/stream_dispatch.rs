@@ -19,6 +19,7 @@
 //! [`crate::stream_tracker::StreamTracker`] before the first frame
 //! goes out.
 
+use covenant_audit::AuditEvent;
 use covenant_ipc::{write_frame, IpcError, StreamEnvelope};
 use covenant_types::MemoryRecord;
 use tokio::io::AsyncWriteExt;
@@ -40,6 +41,19 @@ pub const MEMORY_CHUNK_SCHEMA: &str = "covenant.ipc.v2.chunk.memory-record.v1";
 /// decoder. A rename breaks every v2 memory consumer at the routing
 /// layer.
 pub const MEMORY_RESPONSE_KIND: &str = "memories";
+
+/// Per-chunk schema string ADR 0010 names for streamed audit events.
+/// Symmetric with [`MEMORY_CHUNK_SCHEMA`]; pinned as a const so the
+/// emit helper, future tracker register call, and any fixture
+/// validator stay in sync. A rename here is a v2 break.
+pub const AUDIT_CHUNK_SCHEMA: &str = "covenant.ipc.v2.chunk.audit-event.v1";
+
+/// Logical `response_kind` for a streamed audit-events page. ADR
+/// 0010 doesn't name this literal explicitly; the convention follows
+/// the terminal `Response` variant name (`Response::AuditEvents`)
+/// snake-cased to `"audit_events"`. A v2-aware audit consumer
+/// matches on this literal to route the subsequent chunks.
+pub const AUDIT_RESPONSE_KIND: &str = "audit_events";
 
 /// Emit a v2 streaming-response sequence for one memory page.
 ///
@@ -91,6 +105,66 @@ where
 
     for (sequence, record) in records.iter().enumerate() {
         let chunk = serde_json::to_value(record).map_err(IpcError::Serde)?;
+        write_frame(
+            writer,
+            &StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: sequence as u32,
+                chunk,
+            },
+        )
+        .await?;
+    }
+
+    write_frame(
+        writer,
+        &StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: None,
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Emit a v2 streaming-response sequence for one audit-events page.
+///
+/// Symmetric with [`emit_memory_stream`]: writes exactly one
+/// [`StreamEnvelope::StreamBegin`] (`response_kind = "audit_events"`),
+/// one [`StreamEnvelope::StreamChunk`] per event (sequence counting
+/// from `0`, chunk = `serde_json::to_value(event)` verbatim), then
+/// one [`StreamEnvelope::StreamEnd`] with `summary: None`. Empty
+/// `events` still emits the begin+end pair so a stream that never
+/// opens is never confused with a dead daemon at the protocol layer.
+///
+/// `stream_id` is a parameter so the caller can pre-register the
+/// entry in [`crate::stream_tracker::StreamTracker`] before the
+/// first frame goes out. Capability gating happens BEFORE the
+/// helper is called — the caller has already filtered `events` to
+/// the audience the peer is authorized to read.
+///
+/// The per-chunk payload schema is [`AUDIT_CHUNK_SCHEMA`]; consumers
+/// route via [`AUDIT_RESPONSE_KIND`] on the StreamBegin frame.
+pub async fn emit_audit_stream<W>(
+    writer: &mut W,
+    stream_id: Uuid,
+    events: &[AuditEvent],
+) -> Result<(), IpcError>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    write_frame(
+        writer,
+        &StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: AUDIT_RESPONSE_KIND.to_string(),
+        },
+    )
+    .await?;
+
+    for (sequence, event) in events.iter().enumerate() {
+        let chunk = serde_json::to_value(event).map_err(IpcError::Serde)?;
         write_frame(
             writer,
             &StreamEnvelope::StreamChunk {
@@ -300,5 +374,149 @@ mod tests {
             MEMORY_CHUNK_SCHEMA,
             "covenant.ipc.v2.chunk.memory-record.v1"
         );
+    }
+
+    fn fixture_event(seed: u8) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::from_bytes([seed; 16]),
+            timestamp_ms: 1_700_000_000_000 + seed as u64,
+            issuer: AgentId::new("test@local", [seed; 32]),
+            kind: covenant_audit::AuditKind::IntentDispatched {
+                intent_id: Uuid::from_bytes([seed.wrapping_add(1); 16]),
+                intent_text: format!("intent {seed}"),
+                matched_agent: Some("test-agent".into()),
+                result_hash_hex: format!("{:064x}", seed as u64),
+                status: "ok".into(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_audit_stream_empty_events_emits_exactly_begin_then_end() {
+        // Symmetric to the memory empty-records pin. Every helper
+        // call must emit begin+end regardless of event count so the
+        // protocol layer can distinguish 'opened, no rows' from
+        // 'never opened'.
+        let stream_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        emit_audit_stream(&mut buf, stream_id, &[]).await.unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        assert_eq!(
+            envelopes.len(),
+            2,
+            "empty page must emit exactly two frames"
+        );
+        match &envelopes[0] {
+            StreamEnvelope::StreamBegin {
+                stream_id: sid,
+                response_kind,
+            } => {
+                assert_eq!(*sid, stream_id);
+                assert_eq!(response_kind, AUDIT_RESPONSE_KIND);
+            }
+            other => panic!("frame 0 must be StreamBegin, got {other:?}"),
+        }
+        match &envelopes[1] {
+            StreamEnvelope::StreamEnd {
+                stream_id: sid,
+                summary,
+            } => {
+                assert_eq!(*sid, stream_id);
+                assert!(summary.is_none());
+            }
+            other => panic!("frame 1 must be StreamEnd, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_audit_stream_three_events_emits_begin_three_chunks_end_with_monotonic_sequence() {
+        // Symmetric to the memory monotonic-sequence pin. ADR 0010
+        // requires sequence to count from 0 by 1 — assert exact
+        // values, not just distinct.
+        let stream_id = Uuid::new_v4();
+        let events = vec![fixture_event(1), fixture_event(2), fixture_event(3)];
+        let mut buf = Vec::new();
+        emit_audit_stream(&mut buf, stream_id, &events)
+            .await
+            .unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        assert_eq!(envelopes.len(), 5, "begin + 3 chunks + end = 5 frames");
+
+        assert!(
+            matches!(&envelopes[0], StreamEnvelope::StreamBegin { stream_id: sid, .. } if *sid == stream_id)
+        );
+
+        for (i, event) in events.iter().enumerate() {
+            match &envelopes[1 + i] {
+                StreamEnvelope::StreamChunk {
+                    stream_id: sid,
+                    sequence,
+                    chunk,
+                } => {
+                    assert_eq!(*sid, stream_id);
+                    assert_eq!(*sequence, i as u32);
+                    let expected = serde_json::to_value(event).unwrap();
+                    assert_eq!(
+                        *chunk, expected,
+                        "chunk payload must equal serde_json::to_value(&event) verbatim"
+                    );
+                }
+                other => panic!("frame {} must be StreamChunk, got {other:?}", 1 + i),
+            }
+        }
+
+        assert!(matches!(
+            &envelopes[4],
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn emit_audit_stream_id_constant_across_every_frame() {
+        // Symmetric to the memory stream_id-constancy pin. A
+        // refactor that re-allocated stream_id per chunk would
+        // break multiplexing silently.
+        let stream_id = Uuid::new_v4();
+        let events = vec![fixture_event(5), fixture_event(6)];
+        let mut buf = Vec::new();
+        emit_audit_stream(&mut buf, stream_id, &events)
+            .await
+            .unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        for (i, env) in envelopes.iter().enumerate() {
+            let sid = match env {
+                StreamEnvelope::StreamBegin { stream_id, .. } => *stream_id,
+                StreamEnvelope::StreamChunk { stream_id, .. } => *stream_id,
+                StreamEnvelope::StreamEnd { stream_id, .. } => *stream_id,
+                StreamEnvelope::StreamError { stream_id, .. } => *stream_id,
+            };
+            assert_eq!(sid, stream_id, "frame {i} stream_id diverged");
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_audit_stream_response_kind_pins_audit_events_literal() {
+        // Response::AuditEvents → snake_case 'audit_events'. A
+        // refactor that drifted to 'audit' or 'audit_log' would
+        // break every v2-aware audit consumer at the routing layer.
+        let stream_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        emit_audit_stream(&mut buf, stream_id, &[]).await.unwrap();
+        let envelopes = drain_envelopes(&buf).await;
+        match &envelopes[0] {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, "audit_events");
+                assert_eq!(response_kind, AUDIT_RESPONSE_KIND);
+            }
+            other => panic!("frame 0 must be StreamBegin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_chunk_schema_pins_adr_0010_literal() {
+        // Symmetric to the memory schema-const pin. ADR 0010 names
+        // this literal; a rename here breaks every future fixture
+        // validator and operator-facing snapshot label.
+        assert_eq!(AUDIT_CHUNK_SCHEMA, "covenant.ipc.v2.chunk.audit-event.v1");
     }
 }

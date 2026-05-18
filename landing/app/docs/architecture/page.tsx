@@ -416,8 +416,9 @@ export default function ArchitecturePage() {
               <code>covenant-a2a</code>
             </td>
             <td>
-              Agent-to-agent task and result envelopes; in-process
-              mailbox.
+              Agent-to-agent task and result envelopes; async Mailbox
+              trait with an in-memory backend and a durable JSONL-backed
+              implementation over a leased task queue.
             </td>
           </tr>
           <tr>

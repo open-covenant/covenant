@@ -3,9 +3,11 @@
 //! `main.rs`; everything in this module is `#[cfg(test)]`-friendly and
 //! does not touch stdout, stdin, raw mode, or the alternate screen.
 //!
-//! Future slices extend [`App`] with screens (memory tail, audit tail,
-//! capabilities, etc.); each screen adds state here and a match arm
-//! in [`App::on_key`]. The I/O layer in `main.rs` does not change shape.
+//! [`App`] renders intent, memory, audit, capabilities, A2A,
+//! chain-receipts, and peer-registry views over the daemon IPC; each
+//! view is a [`Mode`] variant with state held on [`App`] and a match
+//! arm in [`App::on_key`]. The I/O layer in `main.rs` does not change
+//! shape as views are added.
 
 use covenant_a2a::A2ATask;
 use covenant_audit::AuditEvent;

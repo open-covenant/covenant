@@ -3886,6 +3886,71 @@ impl Server {
         }
     }
 
+    /// ADR 0010 streaming orchestrator for `Request::RecentMemory`
+    /// with `prefer_stream: Some(true)`. Wraps [`Self::recent_memory`]
+    /// so capability and scope checks stay defined in one place: on
+    /// `Response::Memories { records }`, allocates a fresh
+    /// `stream_id`, registers a [`stream_tracker::StreamEntry`] with
+    /// `verb = "RecentMemory"`, drives
+    /// [`stream_dispatch::emit_memory_stream`] to write the
+    /// `StreamBegin`/`StreamChunk*`/`StreamEnd` sequence, then
+    /// unregisters the tracker entry regardless of the emit result.
+    ///
+    /// Any non-`Memories` variant — including `Response::Error` from
+    /// the capability gate — is written as a v1-shape terminal
+    /// `Response` frame and skips tracker bookkeeping entirely. ADR
+    /// 0010 explicitly allows the daemon to decide per-request
+    /// whether to honor the streaming preference; a capability
+    /// failure surfaces as the same `Response::Error` the v1 client
+    /// already handles, so a v2-aware client codepath stays
+    /// identical between streamable and non-streamable verbs on the
+    /// failure path.
+    ///
+    /// Register-before-emit, unregister-after-emit ordering is
+    /// load-bearing: a future operator-snapshot endpoint reads
+    /// in-flight streams from the tracker, so registration must
+    /// happen before the first frame goes out and unregistration
+    /// must run on every exit (Ok and Err alike). The emit result
+    /// is captured into a local so an `?`-propagated error from
+    /// `write_frame` does not skip the unregister.
+    ///
+    /// This method is not yet wired into [`Self::handle`]; the
+    /// per-verb dispatch fork lives in a follow-up slice. Keeping
+    /// the orchestrator method-level keeps it reachable from unit
+    /// tests without requiring an IPC handshake.
+    #[allow(dead_code)]
+    pub async fn stream_recent_memory<W>(
+        &self,
+        writer: &mut W,
+        connection_id: Uuid,
+        tier: Option<MemoryTier>,
+        limit: usize,
+        peer: &AgentId,
+    ) -> Result<(), IpcError>
+    where
+        W: tokio::io::AsyncWriteExt + Unpin,
+    {
+        let response = self.recent_memory(tier, limit, peer).await;
+        let records = match response {
+            Response::Memories { records } => records,
+            other => return write_frame(writer, &other).await,
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "RecentMemory".into(),
+                schema: stream_dispatch::MEMORY_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+        let result = stream_dispatch::emit_memory_stream(writer, stream_id, &records).await;
+        self.stream_tracker.unregister(connection_id, stream_id);
+        result
+    }
+
     /// Returns settlement receipts where `peer` is the payer.
     /// `SettlementReceipt.payer` is set to the authenticated peer in
     /// `dispatch_intent`, so the filter keys directly off the dispatch
@@ -9996,6 +10061,138 @@ required = {caps:?}
             Response::Error { message } => assert!(message.contains("memory read requires")),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn stream_recent_memory_happy_path_emits_begin_chunks_end_and_purges_tracker() {
+        // Capability granted, two records in store. The orchestrator
+        // routes through emit_memory_stream, the tracker holds one
+        // entry mid-flight, and the entry is gone after the method
+        // returns Ok.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        for i in 0..2u8 {
+            s.memory
+                .put(MemoryRecord {
+                    id: Uuid::from_bytes([i + 1; 16]),
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: format!("memory {i}"),
+                    embedding: Vec::new(),
+                    metadata: serde_json::json!({}),
+                    created_at: 100 + i as u64,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let connection_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        s.stream_recent_memory(&mut buf, connection_id, None, 10, &me)
+            .await
+            .expect("stream_recent_memory must succeed on the happy path");
+
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let mut envelopes = Vec::new();
+        while let Ok(env) =
+            covenant_ipc::read_frame::<_, covenant_ipc::StreamEnvelope>(&mut cursor).await
+        {
+            envelopes.push(env);
+        }
+        assert_eq!(envelopes.len(), 4, "begin + 2 chunks + end = 4 frames");
+        assert!(matches!(
+            envelopes[0],
+            covenant_ipc::StreamEnvelope::StreamBegin { .. }
+        ));
+        assert!(matches!(
+            envelopes[3],
+            covenant_ipc::StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful stream_recent_memory; register-without-unregister leaks entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_memory_capability_failure_writes_v1_error_and_skips_tracker() {
+        // No grant. Expected: writer received a v1-shape
+        // Response::Error frame (NOT a StreamEnvelope), tracker
+        // stays empty. ADR 0010's 'daemon decides per verb' clause
+        // permits the v1 fallback frame.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let mut buf = Vec::new();
+        s.stream_recent_memory(&mut buf, connection_id, None, 10, &me)
+            .await
+            .expect("capability-failure path must still return Ok — error went out on the wire");
+
+        // The capability-failure path writes a v1 Response, not a
+        // StreamEnvelope. Decoding as Response succeeds; decoding as
+        // StreamEnvelope must fail because the JSON does not match
+        // any envelope variant.
+        let mut cursor = std::io::Cursor::new(buf.as_slice());
+        let resp: covenant_ipc::Response = covenant_ipc::read_frame(&mut cursor)
+            .await
+            .expect("first frame must decode as v1 Response");
+        match resp {
+            covenant_ipc::Response::Error { message } => {
+                assert!(
+                    message.contains("memory read requires"),
+                    "expected capability-failure message, got {message:?}"
+                );
+            }
+            other => panic!("expected v1 Response::Error, got {other:?}"),
+        }
+        // No more frames — the v1 fallback writes exactly one.
+        assert!(
+            cursor.position() == buf.len() as u64,
+            "v1 fallback path must write exactly one frame; got extra bytes"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "capability-failure path must NOT touch the tracker"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_memory_two_calls_use_distinct_stream_ids() {
+        // Two back-to-back calls on the same connection must emit
+        // distinct stream_ids in their StreamBegin frames. A
+        // refactor that took stream_id from a connection-level
+        // field would surface here.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+
+        let mut buf_a = Vec::new();
+        s.stream_recent_memory(&mut buf_a, connection_id, None, 10, &me)
+            .await
+            .unwrap();
+        let mut buf_b = Vec::new();
+        s.stream_recent_memory(&mut buf_b, connection_id, None, 10, &me)
+            .await
+            .unwrap();
+
+        async fn read_first_begin(buf: &[u8]) -> Uuid {
+            let mut cursor = std::io::Cursor::new(buf);
+            let env: covenant_ipc::StreamEnvelope =
+                covenant_ipc::read_frame(&mut cursor).await.unwrap();
+            match env {
+                covenant_ipc::StreamEnvelope::StreamBegin { stream_id, .. } => stream_id,
+                other => panic!("expected StreamBegin, got {other:?}"),
+            }
+        }
+        let id_a = read_first_begin(&buf_a).await;
+        let id_b = read_first_begin(&buf_b).await;
+        assert_ne!(
+            id_a, id_b,
+            "consecutive streams must allocate fresh stream_ids"
+        );
     }
 
     #[tokio::test]

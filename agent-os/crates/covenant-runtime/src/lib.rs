@@ -2,13 +2,15 @@
 //!
 //! Spawns an agent as a subprocess, feeds the [`Intent`] as one JSON
 //! line on stdin, reads the [`AgentResult`] as one JSON line on
-//! stdout, and kills the process if it exceeds the wall-clock budget
-//! declared in the agent's manifest (`resources.cpu_ms_per_task`).
+//! stdout, and enforces the per-task budget declared in the agent's
+//! manifest (`resources.cpu_ms_per_task`) via two paths: the daemon's
+//! projection tick preempts subprocesses on projected overshoot through
+//! [`preempt_subprocess_pg`] (`SIGTERM` with grace, then `SIGKILL`), and
+//! a wall-clock kill at `cpu_ms_per_task` fires as the final backstop.
 //!
-//! The base implementation enforces only the wall-clock timeout. It is
-//! `trusted-local` execution, not sandbox-grade isolation. Stronger
-//! backends plug in via the [`Runner`] trait without changing the dispatch
-//! contract.
+//! The base implementation is `trusted-local` execution, not sandbox-grade
+//! isolation. Stronger backends plug in via the [`Runner`] trait without
+//! changing the dispatch contract.
 
 // Production builds reject unsafe code by default. Two narrowly scoped
 // surfaces hold a function-level `#[allow(unsafe_code)]`: the test that

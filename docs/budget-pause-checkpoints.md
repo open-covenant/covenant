@@ -18,7 +18,7 @@ The implementation spans `covenant-types`, `covenant-budget`, and the daemon run
 - Resume claims do not mutate the budget ledger or append a debit. The debit that funded already-started work remains the only spend record.
 - `resume_state` must be portable JSON. Machine-local absolute paths are rejected and are not echoed in error messages.
 
-This gives the daemon a durable handoff record for the implemented pause sources without claiming full preemptive runner suspension.
+This gives the daemon a durable handoff record for the implemented pause sources, distinct from the hard-preempt path, which kills the subprocess rather than suspending it for resume.
 
 ## Runtime Integration Path
 
@@ -32,7 +32,7 @@ The daemon uses the checkpoint store when an in-flight task must stop before com
 
 The checkpoint store is deliberately separate from the token bucket ledger. The ledger records resource consumption; the checkpoint store records resumability.
 
-Current runtime coverage is explicit rather than magical: budget-exhausted dispatches and daemon shutdown drains are checkpointed. Hard preemption of an already-running subprocess remains a later runtime capability.
+Current runtime coverage is explicit rather than magical: budget-exhausted dispatches and daemon shutdown drains are checkpointed. Hard preemption of an already-running subprocess ships via the projection-tick preempt path documented in [runtime-sandbox-security.md](./runtime-sandbox-security.md#budget-driven-preempt), but that path kills the subprocess rather than checkpointing it; resumable suspension of an in-flight subprocess remains a later runtime capability.
 
 ## Verification
 

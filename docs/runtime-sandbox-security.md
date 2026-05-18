@@ -29,7 +29,7 @@ The trusted-local runner is useful for first-party automation and local developm
 Trusted-local protects:
 
 - Covenant-mediated state mutations through daemon-side capability checks.
-- Runtime wall-clock budget by killing long-running subprocesses.
+- Runtime budget enforcement via projection-tick preempt on projected overshoot, with a wall-clock kill at `cpu_ms_per_task` as the final backstop.
 - Agent protocol attribution because the daemon chooses which manifest produced a result.
 
 Trusted-local does not protect:

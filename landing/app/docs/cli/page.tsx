@@ -413,7 +413,8 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
             </td>
             <td>
               Root of all on-disk state — socket, identity, memory,
-              receipts, audit, capabilities, agents.
+              receipts, audit, capabilities, peers, budget, agents,
+              and the runtime/gvisor scratch directory.
             </td>
             <td>
               <code>$HOME/.covenant</code>

@@ -1,0 +1,4 @@
+# Standalone crate while the client is not in the workspace. The lock
+# file is regenerated on every `cargo test` and offers no value pinned.
+Cargo.lock
+target/

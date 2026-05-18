@@ -1,0 +1,25 @@
+[package]
+name = "covenant-x402"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Covenant contributors"]
+repository = "https://github.com/open-covenant/covenant"
+description = "Outbound x402 client for Covenant agents — capability-scoped paid HTTP."
+
+# Standalone crate for now — not a workspace member. Joins
+# `agent-os/Cargo.toml` once wired into the daemon.
+[workspace]
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"

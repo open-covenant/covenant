@@ -4295,6 +4295,99 @@ impl Server {
         emit_result
     }
 
+    /// ADR 0010 slice 6.f — Vec-based sibling of
+    /// [`Self::stream_submit_intent`] for the HTTP SSE response path.
+    /// Symmetric with [`Self::recent_memory_envelopes`] and
+    /// [`Self::recent_audit_envelopes`] in shape but specialized for
+    /// the intent-result chunk transformation.
+    ///
+    /// On a successful `Response::IntentResult`, builds one
+    /// [`AgentResult`] chunk carrying `text` and `sources` with an
+    /// empty `runtime_events` Vec — `dispatch_intent` already folded
+    /// runtime events into the audit chain, so re-emitting them in
+    /// the chunk would double-publish on the wire. The `StreamEnd`
+    /// carries a summary `serde_json::Value` packing `intent_id`,
+    /// `status`, and `settlement`: IntentResult-only bookkeeping that
+    /// doesn't fit in an AgentResult chunk.
+    ///
+    /// Any other `Response` variant (capability failure, ignore-rule
+    /// match, budget exhaustion) returns `Err(Response)` so the HTTP
+    /// handler renders a buffered JSON response with the same payload.
+    ///
+    /// The Vec is sized for the current single-chunk shape (begin + 1
+    /// chunk + end). A future streaming runtime extension that emits
+    /// multiple partial `AgentResult` chunks is its own slice and
+    /// updates this allocation accordingly.
+    #[allow(dead_code)]
+    pub async fn submit_intent_envelopes(
+        &self,
+        text: String,
+        peer: &AgentId,
+        connection_id: Uuid,
+    ) -> Result<Vec<StreamEnvelope>, Response> {
+        let response = self.dispatch_intent(text, peer).await;
+        let (result, summary) = match response {
+            Response::IntentResult {
+                intent_id,
+                status,
+                text,
+                sources,
+                settlement,
+            } => {
+                let result = AgentResult {
+                    text,
+                    sources,
+                    runtime_events: Vec::new(),
+                };
+                let summary = serde_json::json!({
+                    "intent_id": intent_id,
+                    "status": status,
+                    "settlement": settlement,
+                });
+                (result, summary)
+            }
+            other => return Err(other),
+        };
+
+        let stream_id = Uuid::new_v4();
+        self.stream_tracker.register(
+            connection_id,
+            stream_id,
+            stream_tracker::StreamEntry {
+                verb: "SubmitIntent".into(),
+                schema: stream_dispatch::INTENT_RESULT_CHUNK_SCHEMA.into(),
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let mut envelopes = Vec::with_capacity(3);
+        envelopes.push(StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: stream_dispatch::INTENT_RESPONSE_KIND.to_string(),
+        });
+        let chunk = match serde_json::to_value(&result) {
+            Ok(v) => v,
+            Err(e) => {
+                self.stream_tracker.unregister(connection_id, stream_id);
+                return Err(Response::Error {
+                    message: format!("intent stream serialize: {e}"),
+                });
+            }
+        };
+        envelopes.push(StreamEnvelope::StreamChunk {
+            stream_id,
+            sequence: 0,
+            chunk,
+        });
+        envelopes.push(StreamEnvelope::StreamEnd {
+            stream_id,
+            summary: Some(summary),
+        });
+
+        self.stream_tracker.unregister(connection_id, stream_id);
+        Ok(envelopes)
+    }
+
     /// Returns settlement receipts where `peer` is the payer.
     /// `SettlementReceipt.payer` is set to the authenticated peer in
     /// `dispatch_intent`, so the filter keys directly off the dispatch
@@ -10989,6 +11082,115 @@ required = {caps:?}
         assert_ne!(
             id_a, id_b,
             "consecutive intent streams must allocate fresh stream_ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_intent_envelopes_happy_path_returns_begin_chunk_end_with_summary() {
+        // Symmetric setup with stream_submit_intent's happy-path test:
+        // agent card matches "find" + "papers", required caps granted.
+        // The collector returns Ok([Begin, Chunk, End]); the
+        // AgentResult chunk has an empty runtime_events Vec
+        // (dispatch_intent already folded events into the audit
+        // chain); the StreamEnd's summary carries intent_id, status,
+        // and settlement. Tracker is empty after.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let envelopes = s
+            .submit_intent_envelopes(
+                "find recent papers on agent memory".into(),
+                &me,
+                connection_id,
+            )
+            .await
+            .expect("intent happy path must return Ok");
+        assert_eq!(envelopes.len(), 3, "begin + 1 chunk + end = 3 envelopes");
+        match &envelopes[0] {
+            StreamEnvelope::StreamBegin { response_kind, .. } => {
+                assert_eq!(response_kind, stream_dispatch::INTENT_RESPONSE_KIND);
+            }
+            other => panic!("frame 0 must be StreamBegin, got {other:?}"),
+        }
+        match &envelopes[1] {
+            StreamEnvelope::StreamChunk {
+                sequence, chunk, ..
+            } => {
+                assert_eq!(*sequence, 0);
+                assert_eq!(chunk["text"], "mocked summary");
+                assert!(
+                    chunk["runtime_events"].as_array().unwrap().is_empty(),
+                    "runtime_events must be empty on the chunk — double-publishing would surface here"
+                );
+            }
+            other => panic!("frame 1 must be StreamChunk, got {other:?}"),
+        }
+        let summary = match &envelopes[2] {
+            StreamEnvelope::StreamEnd { summary, .. } => summary
+                .as_ref()
+                .expect("StreamEnd.summary must carry IntentResult bookkeeping"),
+            other => panic!("frame 2 must be StreamEnd, got {other:?}"),
+        };
+        assert!(
+            summary.get("intent_id").is_some(),
+            "summary must include intent_id key"
+        );
+        assert!(
+            summary.get("status").is_some(),
+            "summary must include status key"
+        );
+        assert!(
+            summary.get("settlement").is_some(),
+            "summary must include settlement key"
+        );
+        assert_eq!(summary["status"], "ok");
+        let intent_id_str = summary["intent_id"]
+            .as_str()
+            .expect("intent_id must serialize as a string");
+        Uuid::parse_str(intent_id_str).expect("intent_id must round-trip through Uuid::parse_str");
+        assert!(
+            s.stream_tracker.is_empty(),
+            "tracker must be empty after a successful submit_intent_envelopes"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_intent_envelopes_capability_failure_returns_err_response() {
+        // No grants — dispatch_intent's capability gate produces a
+        // non-IntentResult Response. The collector returns Err(response)
+        // so the HTTP handler can render a buffered JSON response with
+        // the verbatim payload. Tracker stays empty — register+unregister
+        // never runs on the non-IntentResult path.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        let me = s.identity.agent_id();
+        let connection_id = Uuid::new_v4();
+        let err = s
+            .submit_intent_envelopes(
+                "find recent papers on agent memory".into(),
+                &me,
+                connection_id,
+            )
+            .await
+            .expect_err("missing capability must produce Err(Response)");
+        match err {
+            Response::IntentResult { .. } => {
+                panic!("Err arm must NOT carry Response::IntentResult — that's the streamable variant")
+            }
+            other => {
+                let _ = other;
+            }
+        }
+        assert!(
+            s.stream_tracker.is_empty(),
+            "capability-failure path must NOT touch the tracker"
         );
     }
 

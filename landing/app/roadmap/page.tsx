@@ -36,7 +36,7 @@ const MILESTONES: Milestone[] = [
     intro:
       "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [
-      "Daemon, CLI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
+      "Daemon, CLI, TUI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
       "Subprocess runtime with budget enforcement (projection-tick preempt and wall-clock backstop) and an opt-in Linux isolation path",
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records and commit-scoped provenance for every privileged action",

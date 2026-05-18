@@ -82,6 +82,29 @@ export default function AuditPage() {
 }`}</code>
       </pre>
 
+      <h3>
+        <code>BudgetExhausted</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":             "budget_exhausted",
+  "agent_display":    "research@local",
+  "intent_id":        "uuid",
+  "intent_text":      "…",
+  "requested":        1024,
+  "tokens_remaining": 256,
+  "refill_eta_ms":    600000
+}`}</code>
+      </pre>
+      <p>
+        Emitted by the daemon when the matched agent&apos;s token-bucket
+        ledger refuses a debit. The same row doubles as the resume
+        queue:{" "}
+        <code>covenant intents resume {`<intent-id>`}</code>{" "}
+        re-dispatches from this event, so the six fields above are
+        load-bearing.
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

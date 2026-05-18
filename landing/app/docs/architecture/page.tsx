@@ -420,9 +420,9 @@ export default function ArchitecturePage() {
               <code>covenant-mcp</code>
             </td>
             <td>
-              Model Context Protocol integration — tool trait, registry,
-              native tools, stdio JSON-RPC transport for external
-              servers.
+              Model Context Protocol integration — tool trait,
+              in-process registry, native tools, stdio JSON-RPC
+              transport for external servers.
             </td>
           </tr>
           <tr>

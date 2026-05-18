@@ -450,7 +450,10 @@ export default function ArchitecturePage() {
               <code>covenant-ipc</code>
             </td>
             <td>
-              Length-prefixed JSON IPC protocol for the local socket.
+              Length-prefixed JSON IPC for the local socket: 4-byte
+              big-endian length prefix, frames bounded at 8 MB via{" "}
+              <code>MAX_FRAME</code>, and a versioned protocol shape (v1
+              baseline, v2 reserved for streaming responses).
             </td>
           </tr>
           <tr>

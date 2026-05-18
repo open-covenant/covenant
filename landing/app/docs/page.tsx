@@ -124,8 +124,8 @@ export default function DocsIndexPage() {
       <h2>Status</h2>
       <p>
         Covenant is pre-1.0 systems infrastructure. The local daemon, CLI,
-        TUI, identity, permissions, memory, audit, peer auth, and local receipt
-        ledger are implemented in the repository. MCP, A2A, the local web
+        TUI, identity, permissions, memory, audit, peer auth, budget, and
+        local receipt ledger are implemented in the repository. MCP, A2A, the local web
         console, autonomous workflow records, live coverage matrix, and
         provenance envelopes are actively hardening. Runtime isolation includes
         manifest-level requirements, trusted-local fail-closed behavior,

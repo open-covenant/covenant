@@ -383,8 +383,10 @@ export default function ArchitecturePage() {
               <code>covenant-settlement</code>
             </td>
             <td>
-              Settlement primitive: receipts, credits, off-chain
-              accounting that pairs with the on-chain program.
+              Settlement primitive: <code>Settlement</code> trait with
+              in-memory and JSONL receipt-store backends; receipts,
+              credits, and off-chain accounting that pair with the
+              on-chain program.
             </td>
           </tr>
           <tr>

@@ -58,6 +58,36 @@ pub fn encode_stream_envelope_as_sse(env: &StreamEnvelope) -> Result<String, ser
     Ok(format!("event: {event_name}\ndata: {json}\n\n"))
 }
 
+/// Classify an incoming HTTP request's `Accept` header as
+/// SSE-opt-in or not.
+///
+/// ADR 0010 names the explicit opt-in: "A client sets `Accept:
+/// text/event-stream`; the gateway responds with `Content-Type:
+/// text/event-stream` ... Clients without SSE Accept get the
+/// accumulated terminal response." This helper is the gate. Returns
+/// `true` only when the Accept value contains `text/event-stream`
+/// (case-insensitive, q-values stripped) as one of its media-type
+/// entries.
+///
+/// The non-acceptance of `*/*` and `text/*` is deliberate. SSE and
+/// the buffered-JSON fallback have different content types, framing,
+/// and connection lifetimes; a browser or CLI that didn't explicitly
+/// ask for SSE must not be flipped onto the long-lived `text/event-
+/// stream` path. The buffered-fallback path is the safe default.
+///
+/// `accept` is `Option<&str>` so the caller can pass the raw header
+/// value from any header map (axum, hyper, reqwest test client)
+/// without coupling this helper to a specific HTTP type. `None` and
+/// the empty/whitespace-only string both return `false`.
+pub fn wants_event_stream(accept: Option<&str>) -> bool {
+    let Some(value) = accept else { return false };
+    value
+        .split(',')
+        .map(str::trim)
+        .map(|part| part.split(';').next().unwrap_or("").trim())
+        .any(|media_type| media_type.eq_ignore_ascii_case("text/event-stream"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +227,63 @@ mod tests {
             newlines_in_body, 1,
             "frame body must contain exactly one newline (between event and data lines); embedded JSON newlines must be escaped. got body={body:?}"
         );
+    }
+
+    #[test]
+    fn wants_event_stream_returns_false_for_none() {
+        assert!(!wants_event_stream(None));
+    }
+
+    #[test]
+    fn wants_event_stream_returns_false_for_empty_or_whitespace() {
+        assert!(!wants_event_stream(Some("")));
+        assert!(!wants_event_stream(Some("   ")));
+    }
+
+    #[test]
+    fn wants_event_stream_returns_true_for_exact_match() {
+        assert!(wants_event_stream(Some("text/event-stream")));
+    }
+
+    #[test]
+    fn wants_event_stream_is_case_insensitive() {
+        assert!(wants_event_stream(Some("TEXT/EVENT-STREAM")));
+        assert!(wants_event_stream(Some("Text/Event-Stream")));
+    }
+
+    #[test]
+    fn wants_event_stream_returns_true_when_in_comma_list() {
+        assert!(wants_event_stream(Some(
+            "application/json, text/event-stream"
+        )));
+        assert!(wants_event_stream(Some(
+            "text/event-stream, application/json"
+        )));
+    }
+
+    #[test]
+    fn wants_event_stream_strips_q_values() {
+        assert!(wants_event_stream(Some("text/event-stream; q=1.0")));
+        assert!(wants_event_stream(Some(
+            "application/json; q=1.0, text/event-stream; q=0.5"
+        )));
+    }
+
+    #[test]
+    fn wants_event_stream_rejects_wildcards() {
+        assert!(!wants_event_stream(Some("*/*")));
+        assert!(!wants_event_stream(Some("text/*")));
+    }
+
+    #[test]
+    fn wants_event_stream_handles_whitespace_padding() {
+        assert!(wants_event_stream(Some(
+            "  text/event-stream  ; q=1.0  , application/json"
+        )));
+    }
+
+    #[test]
+    fn wants_event_stream_returns_false_for_plain_json() {
+        assert!(!wants_event_stream(Some("application/json")));
     }
 }

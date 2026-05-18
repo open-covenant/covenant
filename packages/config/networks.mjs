@@ -150,3 +150,12 @@ export function explorerHref(kind, value, network = resolveCovenantNetwork()) {
   const clusterQuery = network.key === 'mainnet' ? '' : `?cluster=${network.cluster}`;
   return `${network.explorerUrl.replace(/\/$/, '')}/${kind}/${value}${clusterQuery}`;
 }
+
+// Compose a link into the Synapse explorer. Mirrors `explorerHref` so
+// the operator console can render a "View on Synapse" link next to the
+// existing Solana explorer link without re-deriving cluster handling.
+export function synapseExplorerHref(kind, value, synapse = resolveSynapseConfig()) {
+  const cluster = synapse.network?.cluster ?? synapse.network?.key ?? 'mainnet-beta';
+  const clusterQuery = cluster === 'mainnet-beta' ? '' : `?cluster=${cluster}`;
+  return `${synapse.explorerUrl.replace(/\/$/, '')}/${kind}/${value}${clusterQuery}`;
+}

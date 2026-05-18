@@ -64,3 +64,8 @@ export function resolveSynapseConfig(
     };
   },
 ): ResolvedSynapseConfig;
+export function synapseExplorerHref(
+  kind: 'address' | 'tx' | 'agent',
+  value: string,
+  synapse?: ResolvedSynapseConfig,
+): string;

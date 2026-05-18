@@ -139,15 +139,19 @@ GET /version
       "protocol": "covenant.ipc",
       "version": 1,
       "min_supported": 1,
-      "max_supported": 1
+      "max_supported": 2
     }
   }`}</code>
       </pre>
       <p>
         <code>/version</code> mirrors the unauthenticated{" "}
-        <code>protocol_info</code> IPC probe. The response is intentionally
-        minimal and stable for protocol version 1; adding required fields
-        implies a protocol version bump.
+        <code>protocol_info</code> IPC probe. The response shape is stable
+        across protocol versions 1 and 2; <code>max_supported</code>
+        advertises the highest version the daemon understands, while the
+        top-level <code>version</code> reflects the negotiated wire version
+        (v1 unless a client opts into v2 streaming per request). Adding
+        required fields to the shape implies a future protocol version
+        bump.
       </p>
 
       <h3>Intents</h3>

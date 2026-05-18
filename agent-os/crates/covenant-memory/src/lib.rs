@@ -2,9 +2,11 @@
 //!
 //! [`MemoryRecord`] values live in one of three tiers — working,
 //! episodic, or long-term — backed by SQLite for persistence with an
-//! in-memory implementation suitable for tests. The trait covers
-//! recent-record reads, embedded-vector cosine search, and tier-scoped
-//! garbage collection.
+//! in-memory implementation suitable for tests. The [`MemoryStore`]
+//! trait covers recent-record reads, embedded-vector cosine search,
+//! tier-scoped purge ([`MemoryStore::purge_older_than`]), bounded
+//! compaction ([`MemoryStore::compact`]), and scoped repair commands
+//! ([`MemoryStore::repair`]).
 
 #![deny(unsafe_code)]
 

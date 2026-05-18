@@ -226,7 +226,7 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
       <h3>Inspect daemon protocol metadata</h3>
       <pre>
         <code>{`$ covenant version
-{"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":1}`}</code>
+{"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":2}`}</code>
       </pre>
 
       <h3>Probe daemon health</h3>

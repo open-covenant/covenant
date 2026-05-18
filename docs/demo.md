@@ -130,7 +130,7 @@ One receipt was produced for the compute consumed by the agent subprocess. No on
 | Identity    | ✓            | peer registry, peer revocation                   |
 | Permissions | ✓            | scope predicates beyond `intent.subscribe`       |
 | Comms       | ✓ (CLI → IPC)| MCP adapter, A2A mailbox                         |
-| Compositor  | —            | operator console at `agent-os/covenant-web`      |
+| Compositor  | —            | operator console (`agent-os/covenant-web`) and `covenant-tui` terminal UI |
 | Settlement  | ✓ (local receipt) | on-chain burn, treasury, provider payout    |
 
 Add a network-using tool to the agent manifest and re-run to exercise MCP and the `tool.call.<name>` predicate. Add a sandbox section with `required = true, backend = "linux-gvisor"` to exercise the fail-closed dispatch invariant.

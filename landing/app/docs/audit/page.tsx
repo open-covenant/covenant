@@ -468,6 +468,55 @@ export default function AuditPage() {
         run rather than per record).
       </p>
 
+      <h3>
+        <code>MemoryCompactionApplied</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":             "memory_compaction_applied",
+  "mode":             "apply" | "dry_run",
+  "changed":          true,
+  "reason":           "operator-bounded compaction",
+  "deleted":          ["uuid", "…"],
+  "stale_marked":     ["uuid", "…"],
+  "parents_detached": ["uuid", "…"]
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>covenantd::Server::compact_memory</code>{" "}
+        completes a bounded compaction run. The issuer is the requesting
+        peer (operator-as-issuer audience), recorded only after the{" "}
+        <code>memory.compact.{`<mode>`}</code> capability gate{" "}
+        <em>and</em> a follow-up operator-identity equality check both
+        pass — even a guest peer that somehow holds{" "}
+        <code>memory.compact.apply</code> is rejected with an
+        operator-identity error before any compaction runs, so a
+        non-operator <code>issuer</code> on this row should be read as a
+        regression. Capability-scope failures emit{" "}
+        <code>CapabilityScopeRejected</code> instead, so a{" "}
+        <code>MemoryCompactionApplied</code> row never coexists with a
+        rejection row for the same request. <code>mode</code> shares the
+        parser-fixed snake_case vocabulary produced by{" "}
+        <code>memory_repair_mode</code> in covenantd —{" "}
+        <code>&quot;apply&quot;</code> or{" "}
+        <code>&quot;dry_run&quot;</code>. <code>deleted</code>,{" "}
+        <code>stale_marked</code>, and <code>parents_detached</code>{" "}
+        carry the id arrays that classify what the run touched: ids
+        only, never memory text, so the audit stream stays redactable
+        while operators retain enough to correlate against{" "}
+        <code>memory plan-compaction</code> dry-run output.{" "}
+        <code>changed</code> is the compaction-mutation-vs-no-op triage
+        signal — a refactor that{" "}
+        <code>#[serde(default)]</code>-ed any of the three id lists
+        would let a malformed row decode with empty lists and erase
+        which ids were touched (the test pin in{" "}
+        <code>covenant-audit</code> documents this exact regression).
+        Distinct from <code>MemoryRepairApplied</code> (single-record
+        path keyed on a <code>memory_id</code> and one of three{" "}
+        <code>action</code> tokens — bulk compaction reports id arrays
+        instead, one row per run rather than per record).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

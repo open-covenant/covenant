@@ -83,6 +83,30 @@ export default function AuditPage() {
       </pre>
 
       <h3>
+        <code>CapabilityGrantRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "capability_grant_rejected",
+  "subject_display": "user@local",
+  "action":          "memory.write",
+  "reason":          "scope schema: missing tier"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the daemon refuses a <code>CreateCapability</code>{" "}
+        request at scope validation — for example, a{" "}
+        <code>memory.write</code> grant whose scope object does not
+        match the action&apos;s schema. Distinct from{" "}
+        <code>CapabilityRevokeRejected</code> (rejection on the revoke
+        path, keyed on signature) and from <code>CapabilityCheck</code>{" "}
+        (a dispatch-time check against an already-issued capability):
+        no capability is issued here, and <code>reason</code> carries
+        the validator message the caller saw. The requesting peer is
+        the issuer of the row.
+      </p>
+
+      <h3>
         <code>CapabilityRevokeRejected</code>
       </h3>
       <pre>

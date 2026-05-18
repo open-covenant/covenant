@@ -113,7 +113,7 @@ export default function PrimitivesPage() {
       <ul>
         <li>
           <strong>Local IPC</strong> — length-prefixed JSON over a Unix
-          socket. The CLI uses this. Documented in{" "}
+          socket. The CLI and TUI use this. Documented in{" "}
           <Link href="/ipc">Local IPC</Link>.
         </li>
         <li>

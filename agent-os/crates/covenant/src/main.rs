@@ -639,7 +639,15 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    write_frame(&mut stream, &Request::RecentMemory { tier, limit }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RecentMemory {
+                            tier,
+                            limit,
+                            prefer_stream: None,
+                        },
+                    )
+                    .await?;
                     print_memory_response(
                         &mut stream,
                         as_json.then_some(MemoryReadJsonArgs {
@@ -834,7 +842,15 @@ async fn main() -> Result<()> {
                         i += 1;
                     }
 
-                    write_frame(&mut stream, &Request::RecentMemory { tier: None, limit }).await?;
+                    write_frame(
+                        &mut stream,
+                        &Request::RecentMemory {
+                            tier: None,
+                            limit,
+                            prefer_stream: None,
+                        },
+                    )
+                    .await?;
                     let memories = match read_frame::<_, Response>(&mut stream).await? {
                         Response::Memories { records } => records,
                         Response::Error { message } => bail!("daemon error: {message}"),

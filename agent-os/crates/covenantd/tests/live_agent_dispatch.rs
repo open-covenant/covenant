@@ -183,6 +183,7 @@ required = ["tool.web_search"]
         &Request::RecentMemory {
             tier: None,
             limit: 10,
+            prefer_stream: None,
         },
     )
     .await

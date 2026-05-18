@@ -266,6 +266,7 @@ async fn memory_recent(
                 Request::RecentMemory {
                     tier: q.tier,
                     limit: q.limit.unwrap_or(10),
+                    prefer_stream: None,
                 },
                 &peer,
             )

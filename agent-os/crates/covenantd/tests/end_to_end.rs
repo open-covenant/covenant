@@ -159,6 +159,7 @@ async fn protocol_info_probe_then_full_loop_ping_intent_memory_receipts() {
         &Request::RecentMemory {
             tier: Some(MemoryTier::Working),
             limit: 5,
+            prefer_stream: None,
         },
     )
     .await

@@ -134,6 +134,7 @@ async fn live_covenantd_memory_read_and_purge_reject_non_operator_without_grant(
             Request::RecentMemory {
                 tier: None,
                 limit: 10,
+                prefer_stream: None,
             },
         )
         .await
@@ -277,6 +278,7 @@ async fn live_covenantd_memory_read_allows_tier_scoped_delegate() {
             Request::RecentMemory {
                 tier: Some(MemoryTier::Working),
                 limit: 10,
+                prefer_stream: None,
             },
         )
         .await
@@ -334,6 +336,7 @@ async fn live_covenantd_memory_read_allows_tier_scoped_delegate() {
             Request::RecentMemory {
                 tier: Some(MemoryTier::Working),
                 limit: 10,
+                prefer_stream: None,
             },
         )
         .await
@@ -363,6 +366,7 @@ async fn live_covenantd_memory_read_allows_tier_scoped_delegate() {
             Request::RecentMemory {
                 tier: Some(MemoryTier::Episodic),
                 limit: 10,
+                prefer_stream: None,
             },
         )
         .await

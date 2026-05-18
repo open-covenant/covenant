@@ -1370,7 +1370,11 @@ impl Server {
                 },
             },
             Request::SubmitIntent { text } => self.dispatch_intent(text, peer).await,
-            Request::RecentMemory { tier, limit } => self.recent_memory(tier, limit, peer).await,
+            Request::RecentMemory {
+                tier,
+                limit,
+                prefer_stream: _,
+            } => self.recent_memory(tier, limit, peer).await,
             Request::RecentReceipts { limit, since_ms } => {
                 self.recent_receipts(limit, since_ms, peer).await
             }
@@ -9928,6 +9932,7 @@ required = {caps:?}
             .op_respond(Request::RecentMemory {
                 tier: None,
                 limit: 100,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -9956,6 +9961,7 @@ required = {caps:?}
             .op_respond(Request::RecentMemory {
                 tier: None,
                 limit: 10,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -10009,6 +10015,7 @@ required = {caps:?}
             .op_respond(Request::RecentMemory {
                 tier: None,
                 limit: 10,
+                prefer_stream: None,
             })
             .await;
         match resp {
@@ -10023,6 +10030,7 @@ required = {caps:?}
             .op_respond(Request::RecentMemory {
                 tier: Some(MemoryTier::Episodic),
                 limit: 10,
+                prefer_stream: None,
             })
             .await;
         match rejected {
@@ -10127,6 +10135,7 @@ required = {caps:?}
             .op_respond(Request::RecentMemory {
                 tier: None,
                 limit: 10,
+                prefer_stream: None,
             })
             .await;
         match resp {

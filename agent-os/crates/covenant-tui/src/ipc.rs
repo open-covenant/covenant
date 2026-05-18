@@ -348,7 +348,15 @@ pub async fn recent_memory(
         }
     }
     let limit = limit.min(RECENT_MEMORY_LIMIT_CAP);
-    write_frame(&mut stream, &Request::RecentMemory { tier, limit }).await?;
+    write_frame(
+        &mut stream,
+        &Request::RecentMemory {
+            tier,
+            limit,
+            prefer_stream: None,
+        },
+    )
+    .await?;
     match read_frame::<_, Response>(&mut stream).await? {
         Response::Memories { records } => Ok(MemoryFetchOutcome::Fetched { records }),
         Response::Error { message } => Ok(MemoryFetchOutcome::Failed { message }),

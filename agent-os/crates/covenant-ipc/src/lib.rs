@@ -205,6 +205,14 @@ pub enum Request {
         tier: Option<MemoryTier>,
         #[serde(default = "default_recent_limit")]
         limit: usize,
+        /// ADR 0010 v2 streaming opt-in. When `Some(true)` and the negotiated
+        /// protocol version is 2, the daemon may answer with a streamed
+        /// [`StreamEnvelope`] sequence instead of a terminal
+        /// [`Response::Memories`]. `None`/absent keeps the v1 terminal-frame
+        /// behaviour byte-for-byte: `skip_serializing_if` drops the key on
+        /// the wire so existing v1 fixtures replay unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefer_stream: Option<bool>,
     },
     RecentReceipts {
         #[serde(default = "default_recent_limit")]
@@ -3625,6 +3633,7 @@ mod tests {
         let miss = Request::RecentMemory {
             tier: None,
             limit: 10,
+            prefer_stream: None,
         };
 
         let wire = serde_json::to_value(&miss).unwrap();
@@ -3637,13 +3646,18 @@ mod tests {
             keys,
             vec!["kind", "limit", "tier"],
             "Request::RecentMemory wire form must be exactly three \
-             top-level keys: 'kind' plus the two variant fields \
-             ('tier', 'limit'). A refactor that added \
-             #[serde(skip_serializing_if = \"Option::is_none\")] to \
-             tier would shrink the miss-path wire form from three \
-             keys to two and silently break CLI/HTTP consumers \
-             that switch on the tier key's presence to distinguish \
-             scoped-vs-all-tier pages",
+             top-level keys: 'kind' plus the two pre-v2 variant fields \
+             ('tier', 'limit'). The ADR 0010 prefer_stream field is \
+             Option<bool> with #[serde(skip_serializing_if = \
+             \"Option::is_none\")], so the None-case wire form stays \
+             at three keys — a refactor that dropped \
+             skip_serializing_if would surface prefer_stream:null in \
+             every v1 frame and break fixture replay byte-for-byte. \
+             A refactor that added #[serde(skip_serializing_if = \
+             \"Option::is_none\")] to tier would also shrink the \
+             miss-path wire form from three keys to two and silently \
+             break CLI/HTTP consumers that switch on the tier key's \
+             presence to distinguish scoped-vs-all-tier pages",
         );
         assert_eq!(
             obj.get("kind"),
@@ -3685,6 +3699,7 @@ mod tests {
         let hit = Request::RecentMemory {
             tier: Some(covenant_types::MemoryTier::Working),
             limit: 25,
+            prefer_stream: None,
         };
         let hit_wire = serde_json::to_value(&hit).unwrap();
         let hit_obj = hit_wire.as_object().unwrap();
@@ -3729,6 +3744,115 @@ mod tests {
              limit, returning an empty page where operators expect \
              the latest rows",
         );
+    }
+
+    #[test]
+    fn request_recent_memory_serde_pins_prefer_stream_v2_optin() {
+        // ADR 0010 slice 3.a: prefer_stream is the streaming opt-in
+        // flag on Request::RecentMemory. Three contracts get pinned
+        // here so future refactors cannot silently break v1
+        // backwards compatibility or the v2 wiring contract:
+        //
+        // 1. None round-trip: a v1-shape frame (no prefer_stream
+        //    key) decodes to prefer_stream == None and re-serializes
+        //    byte-identically. This is the byte-for-byte v1
+        //    fixture-replay guarantee — `serde(default)` plus
+        //    `skip_serializing_if = "Option::is_none"` together
+        //    enforce absent-on-decode AND absent-on-encode.
+        //
+        // 2. Some(true) round-trip: explicit streaming opt-in
+        //    decodes to Some(true) and the wire form carries
+        //    "prefer_stream":true. The wire key name is part of the
+        //    durable contract — a refactor that renamed it (e.g.,
+        //    via #[serde(rename = "prefer-stream")]) would silently
+        //    pass Rust-side equality but break HTTP gateway and CLI
+        //    consumers that read the literal key.
+        //
+        // 3. Some(false) round-trip: an explicit non-streaming
+        //    intent decodes to Some(false) and re-serializes with
+        //    "prefer_stream":false on the wire. This pins the
+        //    asymmetric semantics ADR 0010 calls out: None means
+        //    "don't care, daemon picks", Some(false) means "do not
+        //    stream, terminal frame only". A refactor that mapped
+        //    Some(false) to skip-on-serialize would erase the
+        //    distinction and let a future dispatcher misread an
+        //    opt-out as a don't-care.
+        let none_form = Request::RecentMemory {
+            tier: None,
+            limit: 10,
+            prefer_stream: None,
+        };
+        let none_wire = serde_json::to_string(&none_form).unwrap();
+        assert!(
+            !none_wire.contains("prefer_stream"),
+            "prefer_stream: None must NOT surface on the wire — \
+             skip_serializing_if + serde(default) keeps v1 fixture \
+             replay byte-identical; got: {none_wire}",
+        );
+        let decoded: Request = serde_json::from_str(&none_wire).unwrap();
+        assert_eq!(decoded, none_form);
+
+        // Decode a literal v1-shape frame (no prefer_stream key at
+        // all). Must yield prefer_stream == None. This is the
+        // durable v1 input contract for every CLI built before
+        // ADR 0010 landed.
+        let v1_input = r#"{"kind":"recent_memory","tier":null,"limit":10}"#;
+        let decoded_v1: Request = serde_json::from_str(v1_input).unwrap();
+        assert_eq!(
+            decoded_v1, none_form,
+            "v1-shape RecentMemory frame must decode to \
+             prefer_stream == None; a refactor that dropped \
+             #[serde(default)] would make the field required and \
+             reject every stale CLI",
+        );
+
+        let stream_on = Request::RecentMemory {
+            tier: None,
+            limit: 10,
+            prefer_stream: Some(true),
+        };
+        let stream_on_wire = serde_json::to_value(&stream_on).unwrap();
+        assert_eq!(
+            stream_on_wire.get("prefer_stream"),
+            Some(&serde_json::json!(true)),
+            "explicit Some(true) opt-in must surface as the literal \
+             JSON key 'prefer_stream':true — ADR 0010 pins the key \
+             name at the top level of the Request frame so HTTP \
+             gateway and CLI consumers can read it without per-verb \
+             unwrapping",
+        );
+        let stream_on_back: Request = serde_json::from_value(stream_on_wire.clone()).unwrap();
+        assert_eq!(stream_on_back, stream_on);
+        let stream_on_input =
+            r#"{"kind":"recent_memory","tier":null,"limit":10,"prefer_stream":true}"#;
+        let canon_input: serde_json::Value = serde_json::from_str(stream_on_input).unwrap();
+        assert_eq!(
+            stream_on_wire, canon_input,
+            "Some(true) wire form must equal the documented \
+             JSON shape (kind+tier+limit+prefer_stream) — a \
+             refactor that reordered fields or renamed the key \
+             would fail this byte-shape pin",
+        );
+
+        let stream_off = Request::RecentMemory {
+            tier: None,
+            limit: 10,
+            prefer_stream: Some(false),
+        };
+        let stream_off_wire = serde_json::to_value(&stream_off).unwrap();
+        assert_eq!(
+            stream_off_wire.get("prefer_stream"),
+            Some(&serde_json::json!(false)),
+            "Some(false) (explicit opt-out) must surface on the \
+             wire as 'prefer_stream':false; skipping it would \
+             collapse the distinction between None ('don't care') \
+             and Some(false) ('do not stream'), which ADR 0010 \
+             keeps as separate signals so a future dispatcher can \
+             honor an explicit opt-out even when streaming is the \
+             default for the verb",
+        );
+        let stream_off_back: Request = serde_json::from_value(stream_off_wire).unwrap();
+        assert_eq!(stream_off_back, stream_off);
     }
 
     #[test]
@@ -5676,9 +5800,14 @@ mod tests {
         let json = r#"{"kind":"recent_memory"}"#;
         let req: Request = serde_json::from_str(json).unwrap();
         match req {
-            Request::RecentMemory { tier, limit } => {
+            Request::RecentMemory {
+                tier,
+                limit,
+                prefer_stream,
+            } => {
                 assert!(tier.is_none());
                 assert_eq!(limit, 10);
+                assert!(prefer_stream.is_none());
             }
             other => panic!("unexpected: {other:?}"),
         }

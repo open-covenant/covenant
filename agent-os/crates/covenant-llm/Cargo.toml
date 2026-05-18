@@ -1,7 +1,7 @@
 [package]
 name = "covenant-llm"
 version = "0.1.0"
-description = "LLM provider abstraction for Covenant. Trait-based interface with mock, Ollama, Anthropic, and OpenAI-compatible implementations."
+description = "LLM provider abstraction for Covenant. `Provider` trait with `MockProvider`, `OllamaProvider`, `AnthropicProvider`, and an OpenAI-compatible implementation, a separate `Embedder` trait, a `ProviderConfig` reader for `~/.covenant/secrets.toml`, and a `pick_provider` helper that returns the highest-priority configured backend, falling back to Ollama if reachable and to `MockProvider` otherwise."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

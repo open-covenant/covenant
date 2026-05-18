@@ -354,7 +354,11 @@ export default function ArchitecturePage() {
               <code>covenant-permissions</code>
             </td>
             <td>
-              Capability tokens — sign, verify, persist, revoke.
+              Capability tokens — sign, verify, persist, revoke. Plus
+              grant-time scope validation and dispatch-time scope
+              predicates for tool-call argument allowlists, before-ms
+              cutoffs, and per-namespace memory, A2A, peer, chain, and
+              audit-purge enforcement.
             </td>
           </tr>
           <tr>

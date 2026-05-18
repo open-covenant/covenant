@@ -1,7 +1,7 @@
 [package]
 name = "covenant-ipc"
 version = "0.1.0"
-description = "Length-prefixed JSON IPC protocol shared by covenantd and the covenant CLI."
+description = "Length-prefixed JSON IPC shared by covenantd and the covenant CLI. 4-byte big-endian length prefix, frames bounded at 8 MB via MAX_FRAME, and a versioned protocol shape (PROTOCOL_VERSION 1 baseline, MAX_PROTOCOL_VERSION 2 reserved for streaming responses)."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

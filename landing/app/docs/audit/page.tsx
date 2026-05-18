@@ -83,6 +83,27 @@ export default function AuditPage() {
       </pre>
 
       <h3>
+        <code>CapabilityRevokeRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":          "capability_revoke_rejected",
+  "signature_b58": "4qXP…8tF1",
+  "reason":        "issuer mismatch"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the daemon refuses a capability revocation
+        request — for example, an issuer that does not own the
+        signature or a payload whose signature does not verify.
+        Successful revocations are <em>not</em> audit events;
+        they write tombstone rows to the capability store
+        instead. The audit log only records the rejected attempt
+        so unauthorized revocation requests stay visible to
+        operators.
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

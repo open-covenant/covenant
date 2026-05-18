@@ -278,8 +278,9 @@ covenant capabilities revoke 4qXP…8tF1 --json
         <li>
           <strong>Append-only on disk.</strong> Both grants and
           revocations are append-only logs. The audit log records
-          every grant and every revocation; <code>covenant verify</code>{" "}
-          flags any capability without a matching grant audit event.
+          every grant and every revoke rejection;{" "}
+          <code>covenant verify</code> flags any capability without
+          a matching grant audit event.
         </li>
       </ul>
 
@@ -291,7 +292,7 @@ covenant capabilities revoke 4qXP…8tF1 --json
         </li>
         <li>
           <Link href="/audit">Audit log</Link> — where grants,
-          revocations, and capability checks are recorded.
+          revoke rejections, and capability checks are recorded.
         </li>
         <li>
           <Link href="/security">Security model</Link> — the

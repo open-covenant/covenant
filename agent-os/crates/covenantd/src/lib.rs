@@ -6,6 +6,7 @@
 #![deny(unsafe_code)]
 
 pub mod http;
+pub mod stream_tracker;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;

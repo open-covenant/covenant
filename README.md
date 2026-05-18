@@ -82,7 +82,7 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 | 4 | Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
 | 5 | Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |
 | 6 | Comms | IPC frames, local HTTP gateway, MCP adapter, and A2A mailbox primitives. |
-| 7 | Compositor | Next.js web console (`agent-os/covenant-web`), public landing/docs surface, and `covenant-tui` terminal UI with submit, recent, and grant-editor views over the daemon IPC. |
+| 7 | Compositor | Next.js web console (`agent-os/covenant-web`), public landing/docs surface, and `covenant-tui` terminal UI with intent, memory, audit, capabilities, A2A, chain-receipts, and peer-registry views over the daemon IPC. |
 | 8 | Settlement | Local resource receipts and protocol scaffolding for agent coordination economics. |
 
 Audit underlies Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.

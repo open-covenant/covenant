@@ -411,8 +411,9 @@ export default function ArchitecturePage() {
               <code>covenant-tui</code>
             </td>
             <td>
-              Terminal UI binary with submit, recent, and grant-editor
-              views over the daemon IPC.
+              Terminal UI binary with intent, memory, audit, capabilities,
+              A2A, chain-receipts, and peer-registry views over the daemon
+              IPC.
             </td>
           </tr>
         </tbody>

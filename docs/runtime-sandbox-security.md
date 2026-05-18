@@ -37,7 +37,7 @@ Trusted-local does not protect:
 - Host filesystem reads available to the operator user.
 - Host environment variables inherited by a child process.
 - Network access beyond whatever the host OS allows.
-- Memory, CPU, syscall, or device abuse beyond the current timeout guard.
+- Memory, CPU, syscall, or device abuse within the runtime budget window.
 - Malicious code executed as the same user outside the daemon protocol.
 
 ## Sandbox-Required Semantics

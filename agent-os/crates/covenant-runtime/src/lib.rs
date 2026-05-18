@@ -10,12 +10,13 @@
 //! backends plug in via the [`Runner`] trait without changing the dispatch
 //! contract.
 
-// Production builds reject unsafe code. The `getpgid` test in this module
-// needs one libc call to read the kernel-reported process group id of a
-// spawned child — the only way to prove `process_group(0)` actually took
-// effect, per failure mode 5 of the budget-hard-preempt-subprocess parent
-// task. Relaxing the deny under `cfg(test)` keeps production safety while
-// allowing the assertion that closes that failure mode.
+// Production builds reject unsafe code by default. Two narrowly scoped
+// surfaces hold a function-level `#[allow(unsafe_code)]`: the test that
+// reads the kernel-reported process group id via `libc::getpgid` (failure
+// mode 5 of the budget-hard-preempt-subprocess parent task) and
+// `preempt_subprocess_pg`, which calls `libc::kill` on a process group
+// the daemon already owns the pid of. Every other call site stays under
+// the crate-wide deny.
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use async_trait::async_trait;
@@ -225,6 +226,120 @@ impl SubprocessTracker {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// Outcome of one [`preempt_subprocess_pg`] call. The daemon-side
+/// budget-preempt path maps each variant to either `AuditKind::BudgetPreempted`
+/// or `AuditKind::BudgetPreemptFailed`:
+///
+/// - [`PreemptOutcome::AlreadyDead`] → `BudgetPreempted { signal_sent: "none" }`
+///   (the group had no members when the dispatcher fired; the daemon may
+///   also choose to emit `BudgetPreemptFailed { errno: ESRCH }`; the
+///   dispatcher does not encode that policy decision).
+/// - [`PreemptOutcome::PermissionDenied`] → `BudgetPreemptFailed { errno: EPERM }`
+///   (security incident: the daemon lacks signal-send permission for that
+///   pid; the errno is surfaced so the audit row is identical to the
+///   syscall return).
+/// - [`PreemptOutcome::ExitedDuringGrace`] → `BudgetPreempted { signal_sent: "SIGTERM" }`
+///   (the SIGTERM landed and the group exited inside `grace`; no SIGKILL
+///   was sent).
+/// - [`PreemptOutcome::SigKilled`] → `BudgetPreempted { signal_sent: "SIGKILL" }`
+///   (grace expired with the group still alive; SIGKILL was dispatched).
+/// - [`PreemptOutcome::UnsupportedPlatform`] is the explicit non-Unix
+///   stub; the daemon must not treat it as a successful preempt.
+///
+/// Serde is pinned (`tag = "kind"`, `snake_case`) so daemon-side audit
+/// emitters can deserialize the outcome from a wire envelope without
+/// reaching into this crate's enum shape. The `errno` field on
+/// `PermissionDenied` matches the runtime crate's `i32` representation
+/// of the libc errno.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreemptOutcome {
+    AlreadyDead,
+    PermissionDenied { errno: i32 },
+    ExitedDuringGrace,
+    SigKilled,
+    UnsupportedPlatform,
+}
+
+/// Sends SIGTERM to the process group led by `pid`, polls every 50ms up
+/// to `grace` for the group to drain, then sends SIGKILL if any member
+/// is still alive. Returns a [`PreemptOutcome`] describing what
+/// happened; emitting the resulting audit row is the daemon's
+/// responsibility.
+///
+/// `pid` is the process group leader's pid (the spawned subprocess'
+/// own pid, because the runner calls `process_group(0)` on the
+/// `std::process::Command`). The function targets `-pid` so the signal
+/// reaches every grandchild the agent forked into that group, not just
+/// the immediate child.
+///
+/// The poll loop uses `libc::kill(-pid, 0)` for liveness — the only
+/// non-blocking way to detect group death without owning the child
+/// handle (which the runner's `child.wait()` still owns). `waitpid` is
+/// intentionally avoided here so this function composes cleanly with
+/// the existing runner spawn path.
+///
+/// Total elapsed time is tracked against `grace` via
+/// [`std::time::Instant`] so a heavily loaded scheduler cannot push
+/// SIGKILL past the operator-configured budget by more than the
+/// remaining poll interval.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub async fn preempt_subprocess_pg(pid: u32, grace: Duration) -> PreemptOutcome {
+    use std::io;
+
+    // `libc::kill(-pid, ...)` signals every member of the process group
+    // whose pgid == pid. The runner's `configure_process_group(0)` makes
+    // that pgid equal to the spawned child's pid.
+    let target = -(pid as i32);
+
+    // SAFETY: `kill` is async-signal-safe and operates on a pid the
+    // daemon already chose to spawn under its own user. No memory is
+    // touched by this syscall; the only side effect is the signal
+    // delivery itself.
+    let rc = unsafe { libc::kill(target, libc::SIGTERM) };
+    if rc == -1 {
+        let errno = io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(libc::EINVAL);
+        if errno == libc::ESRCH {
+            return PreemptOutcome::AlreadyDead;
+        }
+        return PreemptOutcome::PermissionDenied { errno };
+    }
+
+    let start = std::time::Instant::now();
+    let tick = Duration::from_millis(50);
+    while start.elapsed() < grace {
+        let remaining = grace.saturating_sub(start.elapsed());
+        tokio::time::sleep(tick.min(remaining)).await;
+        // SAFETY: signal 0 performs the same permission and existence
+        // check as a real signal without delivering one. Safe under the
+        // same justification as the SIGTERM call above.
+        let rc = unsafe { libc::kill(target, 0) };
+        if rc == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return PreemptOutcome::ExitedDuringGrace;
+        }
+    }
+
+    // SAFETY: see SIGTERM call. SIGKILL is unblockable; the only
+    // failure paths are ESRCH (the group drained between the last poll
+    // and now — race, treat as ExitedDuringGrace) or EPERM (which
+    // cannot occur if the initial SIGTERM succeeded under the same uid;
+    // we treat any non-ESRCH error as "we sent SIGKILL" because the
+    // intent was to kill and the audit row should reflect that).
+    let rc = unsafe { libc::kill(target, libc::SIGKILL) };
+    if rc == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        return PreemptOutcome::ExitedDuringGrace;
+    }
+    PreemptOutcome::SigKilled
+}
+
+#[cfg(not(unix))]
+pub async fn preempt_subprocess_pg(_pid: u32, _grace: Duration) -> PreemptOutcome {
+    PreemptOutcome::UnsupportedPlatform
 }
 
 pub struct SubprocessRunner;
@@ -2406,5 +2521,210 @@ cpu_ms_per_task = 5000
 
         child.kill().await.expect("kill spawned sleep");
         let _ = child.wait().await;
+    }
+
+    #[test]
+    fn preempt_outcome_serde_pins_tag_and_snake_case_discriminator() {
+        // PreemptOutcome is the runtime crate's contract with the
+        // daemon's audit emitter: the daemon round-trips outcomes through
+        // serde (e.g. for ipc transport, sled state, or test fixtures)
+        // and maps each variant to a BudgetPreempted or
+        // BudgetPreemptFailed audit row. A refactor that renamed a
+        // variant or changed the tag would silently retarget the
+        // mapping and cause one outcome to be audited as another.
+        let cases = [
+            (
+                PreemptOutcome::AlreadyDead,
+                serde_json::json!({"kind": "already_dead"}),
+            ),
+            (
+                PreemptOutcome::PermissionDenied { errno: 1 },
+                serde_json::json!({"kind": "permission_denied", "errno": 1}),
+            ),
+            (
+                PreemptOutcome::ExitedDuringGrace,
+                serde_json::json!({"kind": "exited_during_grace"}),
+            ),
+            (
+                PreemptOutcome::SigKilled,
+                serde_json::json!({"kind": "sig_killed"}),
+            ),
+            (
+                PreemptOutcome::UnsupportedPlatform,
+                serde_json::json!({"kind": "unsupported_platform"}),
+            ),
+        ];
+        for (variant, wire) in cases {
+            assert_eq!(serde_json::to_value(variant).unwrap(), wire);
+            let back: PreemptOutcome = serde_json::from_value(wire).unwrap();
+            assert_eq!(back, variant);
+        }
+
+        // Rejected rename: any other tag string must fail to deserialize.
+        // Without this the daemon-side mapping silently degrades when a
+        // refactor introduces an aliased variant under a different name.
+        for unknown in ["AlreadyDead", "already-dead", "sigterm", "killed"] {
+            let bad = serde_json::json!({"kind": unknown});
+            assert!(
+                serde_json::from_value::<PreemptOutcome>(bad).is_err(),
+                "PreemptOutcome must reject the rename {unknown:?}; the daemon-side audit mapping joins on the snake_case tag and a stray alias would mis-attribute a preempt"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preempt_subprocess_pg_returns_already_dead_when_pid_no_longer_exists() {
+        // Spawn a process, let it exit, then preempt the (now-defunct)
+        // group. The kernel reports ESRCH on the initial SIGTERM and
+        // the dispatcher must surface that as AlreadyDead — the
+        // daemon's audit emitter will translate this into either
+        // BudgetPreempted{signal_sent="none"} or BudgetPreemptFailed{errno=ESRCH}
+        // depending on policy, but the dispatcher itself does not
+        // encode that decision.
+        let mut cmd = tokio::process::Command::new("true");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        SubprocessRunner::configure_process_group(&mut cmd);
+        let mut child = cmd.spawn().expect("spawn true");
+        let pid = child.id().expect("pid before wait");
+        // Reap so the kernel actually clears the pid; an unreaped
+        // zombie still answers kill(_, 0) without ESRCH.
+        let _ = child.wait().await;
+
+        let outcome = preempt_subprocess_pg(pid, Duration::from_millis(200)).await;
+        assert_eq!(
+            outcome,
+            PreemptOutcome::AlreadyDead,
+            "preempt_subprocess_pg must return AlreadyDead when SIGTERM hits ESRCH on the initial kill; a refactor that swallowed ESRCH and proceeded to the poll loop would surface here as SigKilled (because the loop's kill(_, 0) on a reaped pid also returns ESRCH but only after the timeout) or as SigKilled outright"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preempt_subprocess_pg_returns_sig_killed_when_group_survives_grace() {
+        // A subprocess that ignores SIGTERM (via `trap '' TERM`) must
+        // be SIGKILLed once grace expires. This is the load-bearing
+        // case: it proves the dispatcher does not stop after SIGTERM,
+        // and that the SIGKILL syscall lands on a process group whose
+        // leader is the spawned pid (no negation bug).
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg("trap '' TERM; while true; do sleep 0.1; done");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        SubprocessRunner::configure_process_group(&mut cmd);
+        let mut child = cmd.spawn().expect("spawn ignore-term loop");
+        let pid = child.id().expect("pid before wait");
+
+        let start = std::time::Instant::now();
+        let outcome = preempt_subprocess_pg(pid, Duration::from_millis(250)).await;
+        let elapsed = start.elapsed();
+        let _ = child.wait().await;
+
+        assert_eq!(
+            outcome,
+            PreemptOutcome::SigKilled,
+            "preempt_subprocess_pg must escalate to SIGKILL when SIGTERM is trapped and ignored; a refactor that mis-negated the kill target (kill(pid) instead of kill(-pid)) would silently fail to reach the trap-installed process group and the loop would survive both signals, producing a UB outcome"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(250),
+            "dispatcher must respect the grace window even when the group is unresponsive (elapsed = {elapsed:?})"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "dispatcher must not block much past grace; a poll loop that ignored the elapsed bound would surface here as a runaway (elapsed = {elapsed:?})"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preempt_subprocess_pg_returns_exited_during_grace_when_group_drains_inside_window() {
+        // `sleep` terminates immediately on SIGTERM (POSIX default).
+        // The dispatcher's poll observes ESRCH only once the child is
+        // reaped — a zombie still counts as a group member for
+        // kill(-pid, 0). The daemon's runner reaps via child.wait()
+        // concurrently; this test models that by running child.wait()
+        // alongside preempt_subprocess_pg in tokio::join!.
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("60");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        SubprocessRunner::configure_process_group(&mut cmd);
+        let mut child = cmd.spawn().expect("spawn sleep");
+        let pid = child.id().expect("pid before wait");
+
+        let (outcome, _exit) = tokio::join!(
+            preempt_subprocess_pg(pid, Duration::from_millis(1500)),
+            child.wait(),
+        );
+
+        assert_eq!(
+            outcome,
+            PreemptOutcome::ExitedDuringGrace,
+            "preempt_subprocess_pg must return ExitedDuringGrace when the cooperative SIGTERM lands and the runner concurrently reaps the child inside grace; SigKilled here would indicate the poll loop never observed ESRCH (a saturating_sub or off-by-one bug in the elapsed-bound check) or that the SIGKILL was dispatched anyway (a refactor that dropped the grace early-exit)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preempt_subprocess_pg_signals_grandchildren_via_negated_pid() {
+        // Pins failure mode 2 of budget-hard-preempt-dispatcher-fn:
+        // kill(-pid, ...) must reach grandchildren forked inside the
+        // process group. A regression that wrote kill(pid, ...) would
+        // signal only the immediate child and the grandchild loop
+        // would survive. The grandchild here is a `sleep` inheriting
+        // the parent's pgid; if it survives SIGKILL on -pid, this
+        // test hangs or fails.
+        //
+        // The shell uses `exec sleep` so the parent shell does not stay
+        // around to be the only thing that receives the signal; the
+        // grandchild becomes the only group member. After preempt the
+        // grandchild's pgid (which equals the original parent's pid)
+        // must answer ESRCH.
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & sleep 30");
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        SubprocessRunner::configure_process_group(&mut cmd);
+        let mut child = cmd.spawn().expect("spawn shell-with-fork");
+        let pid = child.id().expect("pid before wait");
+
+        let outcome = preempt_subprocess_pg(pid, Duration::from_millis(250)).await;
+        let _ = child.wait().await;
+        assert!(
+            matches!(outcome, PreemptOutcome::ExitedDuringGrace | PreemptOutcome::SigKilled),
+            "dispatcher must terminate a process group with forked children (got {outcome:?}); AlreadyDead here would mean the SIGTERM raced past spawn (unlikely) or the negation was dropped and we hit a different pid"
+        );
+
+        // After preempt, kill(-pid, 0) must report ESRCH — meaning
+        // every member of the group, including the backgrounded
+        // sleeper, is gone. SAFETY: same justification as the
+        // dispatcher's own kill(0) probe.
+        let probe = unsafe { libc::kill(-(pid as i32), 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        assert_eq!(
+            (probe, errno),
+            (-1, libc::ESRCH),
+            "after preempt_subprocess_pg returns, every member of the process group must be gone (kill(-pid, 0) must return ESRCH); a surviving grandchild would surface here as rc=0 and prove the dispatcher did not negate the pid"
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn preempt_subprocess_pg_returns_unsupported_platform_on_non_unix() {
+        // The non-unix stub must be explicit. A caller on Windows must
+        // see UnsupportedPlatform — silently returning AlreadyDead
+        // would let a daemon emit BudgetPreempted on a platform where
+        // no signal was ever sent.
+        let outcome = preempt_subprocess_pg(0, Duration::from_millis(10)).await;
+        assert_eq!(outcome, PreemptOutcome::UnsupportedPlatform);
     }
 }

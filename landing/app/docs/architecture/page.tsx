@@ -359,8 +359,13 @@ export default function ArchitecturePage() {
               <code>covenant-peer-auth</code>
             </td>
             <td>
-              Peer registry, peer tokens with prefixed visibility, token
-              rotation, and revocation tombstones.
+              Peer-token registry binding ipc/http callers to{" "}
+              <code>AgentId</code>s: per-agent random 32-byte tokens
+              with 6-char b58 prefix-only operator visibility (full
+              tokens never leave the daemon), jsonl-backed event log,
+              revocation tombstones with prefix-based discovery, and
+              live/revoked/all status-filter queries — plus an
+              in-memory backend for tests.
             </td>
           </tr>
           <tr>

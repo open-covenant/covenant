@@ -16,8 +16,17 @@ export interface ResolvedCovenantSolanaNetwork extends CovenantSolanaNetwork {
   covntMint: string | null;
 }
 
+export interface ResolvedSynapseConfig {
+  enabled: boolean;
+  network: ResolvedCovenantSolanaNetwork;
+  programId: string;
+  rpcUrl: string;
+  explorerUrl: string;
+}
+
 export declare const SOLANA_ADDRESS_REGEX: RegExp;
 export declare const DEFAULT_PROTOCOL_PROGRAM_ID: string;
+export declare const DEFAULT_SYNAPSE_PROGRAM_ID: string;
 export declare const COVENANT_CLUSTER_HEADER: 'x-covenant-cluster';
 export declare const covenantSolanaNetworks: Record<string, Readonly<CovenantSolanaNetwork>>;
 export function resolveCovenantNetwork(
@@ -39,3 +48,19 @@ export function explorerHref(
   value: string,
   network?: ResolvedCovenantSolanaNetwork,
 ): string;
+export function resolveSynapseConfig(
+  env?: Record<string, string | undefined>,
+  overrides?: {
+    enabled?: boolean;
+    programId?: string;
+    rpcUrl?: string;
+    explorerUrl?: string;
+    network?: {
+      cluster?: string;
+      rpcUrl?: string;
+      wsUrl?: string;
+      programId?: string;
+      covntMint?: string;
+    };
+  },
+): ResolvedSynapseConfig;

@@ -29,6 +29,12 @@ export const covenantSolanaNetworks = Object.freeze({
 
 export const DEFAULT_PROTOCOL_PROGRAM_ID = 'CovntSettLement1111111111111111111111111111';
 
+// Synapse Agent Protocol (SAP v2) — on-chain program managed by OOBE Protocol.
+// Single mainnet+devnet deployment as of 2026-05; we keep one default and let
+// operators override per cluster through env. The program ID lives in this
+// config module only — never inline it in crates or services.
+export const DEFAULT_SYNAPSE_PROGRAM_ID = 'SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ';
+
 // Static NEXT_PUBLIC_* references so Next.js inlines every cluster's URL
 // into the client bundle at build time. The browser can then flip clusters
 // at runtime (via overrides.cluster) without a redeploy. Dynamic property
@@ -76,6 +82,48 @@ export function resolveCovenantNetwork(env = process.env, overrides = {}) {
     covntMint:
       overrides.covntMint ?? env.NEXT_PUBLIC_COVNT_MINT ?? env.COVNT_MINT ?? null,
   };
+}
+
+// Resolve Synapse Agent Protocol config layered on top of the active Covenant
+// network. The bridge is opt-in: when `enabled` is false, callers must not
+// hit any on-chain Synapse path. Defaults to disabled so the daemon keeps
+// running fully offline when no operator has opted in.
+export function resolveSynapseConfig(env = process.env, overrides = {}) {
+  const network = resolveCovenantNetwork(env, overrides.network ?? {});
+  const upper = network.key.toUpperCase();
+  const enabled =
+    overrides.enabled ??
+    parseBoolean(
+      env.NEXT_PUBLIC_COVENANT_SAP_ENABLED ??
+        env.COVENANT_SAP_ENABLED ??
+        env[`COVENANT_SAP_${upper}_ENABLED`],
+    );
+  return {
+    enabled,
+    network,
+    programId:
+      overrides.programId ??
+      env[`COVENANT_SAP_${upper}_PROGRAM_ID`] ??
+      env.NEXT_PUBLIC_COVENANT_SAP_PROGRAM_ID ??
+      env.COVENANT_SAP_PROGRAM_ID ??
+      DEFAULT_SYNAPSE_PROGRAM_ID,
+    rpcUrl:
+      overrides.rpcUrl ??
+      env[`COVENANT_SAP_${upper}_RPC_URL`] ??
+      env.COVENANT_SAP_RPC_URL ??
+      network.rpcUrl,
+    explorerUrl:
+      overrides.explorerUrl ??
+      env.COVENANT_SAP_EXPLORER_URL ??
+      'https://explorer.oobeprotocol.ai',
+  };
+}
+
+function parseBoolean(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'boolean') return value;
+  const normalised = String(value).trim().toLowerCase();
+  return normalised === '1' || normalised === 'true' || normalised === 'yes';
 }
 
 export const COVENANT_CLUSTER_HEADER = 'x-covenant-cluster';

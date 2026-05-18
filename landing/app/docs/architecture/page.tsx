@@ -299,7 +299,8 @@ export default function ArchitecturePage() {
             <td>
               Wire-level types shared by every other crate ({" "}
               <code>Intent</code>, <code>AgentId</code>,{" "}
-              <code>Capability</code>, <code>MemoryRecord</code>,{" "}
+              <code>Priority</code>, <code>MemoryRecord</code>,{" "}
+              <code>MemoryTier</code>, <code>Capability</code>,{" "}
               <code>SettlementReceipt</code>).
             </td>
           </tr>

@@ -334,10 +334,23 @@ export default function ArchitecturePage() {
               <code>covenant-router</code>
             </td>
             <td>
-              Intent router that loads <code>agent.toml</code> manifests
-              from <code>$COVENANT_HOME/agents/</code> and routes intents
-              to registered agent capability cards via keyword-overlap
-              matching.
+              <code>Router</code> over a <code>Vec</code> of{" "}
+              <code>AgentCard</code> with <code>route</code> doing
+              case-insensitive keyword-overlap matching and
+              insertion-order tie-breaking,{" "}
+              <code>find_by_id</code>/<code>register</code>/
+              <code>from_cards</code> helpers, and the{" "}
+              <code>RouteMatch</code> result type (<code>agent_id</code>{" "}
+              plus <code>score</code>); <code>load_agents_from_dir</code>{" "}
+              walks <code>$COVENANT_HOME/agents/</code> for{" "}
+              <code>agent.toml</code> manifests and returns cards sorted
+              by manifest id for deterministic routing across hosts;{" "}
+              <code>RouterError::Io</code> and{" "}
+              <code>RouterError::Manifest</code> preserve the inner{" "}
+              <code>std::io::Error</code> and{" "}
+              <code>covenant_manifest::ManifestError</code> via{" "}
+              <code>#[source]</code> for downstream retry-policy
+              downcasts.
             </td>
           </tr>
           <tr>

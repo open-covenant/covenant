@@ -16,7 +16,8 @@ The contract is enforced by an internal validator. The validator runs in two mod
 ### File Layout
 
 - v2 response fixtures live under `agent-os/crates/covenant-ipc/tests/fixtures/v2/`.
-- Each fixture file is named `<envelope>.v2.json` where `<envelope>` matches the response envelope kind. The same envelope must reuse the same base name as its `*.v1.json` sibling so version diffs are obvious.
+- Each fixture file is named `<envelope>.v2.json` where `<envelope>` is a kebab-case identifier for the envelope variant (e.g., `stream-envelope-begin.v2.json` pins `StreamEnvelope::StreamBegin`). Distinct case shapes of the same envelope may use a suffix (e.g., `stream-envelope-end-with-summary.v2.json` for the SubmitIntent rollup case).
+- When an envelope exists in both v1 and v2 (a response variant whose wire shape gained an additive or alternative form), the `*.v2.json` file reuses the base name of its `*.v1.json` sibling so the version diff is obvious. Envelopes that are v2-only (the four `StreamEnvelope` variants today) have no `*.v1.json` sibling and the rule does not apply.
 - v1 fixtures stay at the root of `agent-os/crates/covenant-ipc/tests/fixtures/` until v1 support is intentionally removed.
 - The `tests/fixtures/v2/` directory remains a staging boundary; non-fixture files (such as the staging `README.md`) must not match the `*.v2.json` glob.
 

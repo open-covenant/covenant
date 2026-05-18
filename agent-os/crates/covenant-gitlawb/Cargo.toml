@@ -1,0 +1,31 @@
+[package]
+name = "covenant-gitlawb"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Covenant contributors"]
+repository = "https://github.com/open-covenant/covenant"
+description = "Opt-in bridge between Covenant agent identity and the gitlawb decentralized git network."
+
+# Standalone crate for now — not a workspace member. Joins
+# `agent-os/Cargo.toml` once the bridge is wired into the daemon.
+[workspace]
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bs58 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+ed25519-dalek = "2"
+hex = "0.4"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+tracing = "0.1"
+url = { version = "2", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

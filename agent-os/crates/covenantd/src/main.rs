@@ -300,6 +300,15 @@ async fn main() -> Result<()> {
         None
     };
 
+    let projection_tick = covenantd::projection_tick_config_from_env()?;
+    info!(
+        period_ms = projection_tick.period_ms,
+        grace_ms = projection_tick.grace_ms,
+        "budget projection tick driver enabled"
+    );
+    let projection_tick_handle =
+        covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
+
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
     // registry the Unix socket uses; only `/health` is open. Operator
@@ -351,6 +360,7 @@ async fn main() -> Result<()> {
     if let Some(handle) = a2a_retry_scheduler_handle {
         handle.abort();
     }
+    projection_tick_handle.abort();
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }

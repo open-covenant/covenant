@@ -389,6 +389,88 @@ fn parse_env_usize(name: &str, value: &str) -> Result<usize> {
         .with_context(|| format!("{name} must be an integer"))
 }
 
+/// Cadence and grace window for the budget projection tick driver.
+/// `period_ms` controls how often [`Server::run_projection_tick_iteration`]
+/// runs; `grace_ms` is the SIGTERM→SIGKILL window passed to every
+/// dispatched [`Server::preempt_intent`] call. Both are read from
+/// environment variables at daemon startup (see
+/// [`projection_tick_config_from_env`]) so operators can tune cadence
+/// without a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectionTickConfig {
+    pub period_ms: u64,
+    pub grace_ms: u64,
+}
+
+impl Default for ProjectionTickConfig {
+    fn default() -> Self {
+        Self {
+            period_ms: 250,
+            grace_ms: 2_000,
+        }
+    }
+}
+
+pub fn projection_tick_config_from_env() -> Result<ProjectionTickConfig> {
+    projection_tick_config_from_values(
+        std::env::var("COVENANT_BUDGET_PROJECTION_TICK_MS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_BUDGET_PREEMPT_GRACE_MS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+pub fn projection_tick_config_from_values(
+    period_ms: Option<&str>,
+    grace_ms: Option<&str>,
+) -> Result<ProjectionTickConfig> {
+    let mut config = ProjectionTickConfig::default();
+    if let Some(value) = period_ms {
+        config.period_ms = parse_env_u64("COVENANT_BUDGET_PROJECTION_TICK_MS", value)?;
+        if config.period_ms == 0 {
+            anyhow::bail!("COVENANT_BUDGET_PROJECTION_TICK_MS must be greater than zero");
+        }
+    }
+    if let Some(value) = grace_ms {
+        config.grace_ms = parse_env_u64("COVENANT_BUDGET_PREEMPT_GRACE_MS", value)?;
+    }
+    Ok(config)
+}
+
+/// Spawn the budget projection tick driver. Returns a `JoinHandle` so
+/// `main` can hold it for the lifetime of the daemon; dropping the
+/// handle lets tokio reap the task on runtime shutdown.
+///
+/// The driver loops `interval.tick().await; run_projection_tick_iteration(grace).await;`
+/// with `MissedTickBehavior::Skip` so a slow inner iteration (e.g., one
+/// preempt_intent whose grace window approaches the tick period) does
+/// not stampede preempt dispatches on resume — missed ticks are
+/// dropped and the driver yields a steady one-iteration-per-period
+/// rate regardless of contention.
+pub fn spawn_projection_tick_driver(
+    server: Server,
+    config: ProjectionTickConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let period = Duration::from_millis(config.period_ms);
+        let grace = Duration::from_millis(config.grace_ms);
+        let mut interval = tokio::time::interval(period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let preempted = server.run_projection_tick_iteration(grace).await;
+            if preempted > 0 {
+                info!(
+                    preempted,
+                    "budget projection tick preempted in-flight intents"
+                );
+            }
+        }
+    })
+}
+
 pub fn spawn_a2a_auto_retry_scheduler(
     server: Server,
     config: A2AAutoRetrySchedulerConfig,
@@ -14850,6 +14932,123 @@ budget_credits_per_hour = {credits}
                 .iter()
                 .any(|e| matches!(e.kind, AuditKind::BudgetPreempted { .. })),
             "non-exhausted-agent tick must not emit BudgetPreempted; got {events:?}",
+        );
+    }
+
+    #[test]
+    fn projection_tick_config_from_values_uses_defaults_when_unset() {
+        let config = projection_tick_config_from_values(None, None).expect("defaults");
+        assert_eq!(config.period_ms, 250);
+        assert_eq!(config.grace_ms, 2_000);
+    }
+
+    #[test]
+    fn projection_tick_config_from_values_rejects_zero_period() {
+        let err = projection_tick_config_from_values(Some("0"), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("COVENANT_BUDGET_PROJECTION_TICK_MS"),
+            "rejection must name the offending env var so an operator can find it in logs: {err:?}",
+        );
+        assert!(
+            msg.contains("greater than zero"),
+            "rejection must say what the constraint is, not just that parsing failed: {err:?}",
+        );
+    }
+
+    #[test]
+    fn projection_tick_config_from_values_accepts_zero_grace() {
+        // Zero grace is acceptable: preempt_subprocess_pg interprets it
+        // as immediate SIGKILL (no SIGTERM-then-wait). A refactor that
+        // bailed on zero grace would surface here as a returned Err.
+        let config = projection_tick_config_from_values(Some("100"), Some("0"))
+            .expect("zero grace must parse");
+        assert_eq!(config.period_ms, 100);
+        assert_eq!(config.grace_ms, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_projection_tick_driver_preempts_exhausted_agent_on_first_tick() {
+        // Spawn the driver against a Server holding one exhausted-budget
+        // tracker entry that points at a real sleep subprocess. The
+        // first interval.tick() fires immediately on tokio::time::interval
+        // construction; the driver's first run_projection_tick_iteration
+        // call observes the exhaustion and dispatches preempt_intent.
+        // The test polls the audit log for the BudgetPreempted row up
+        // to a deadline so kernel-scheduling jitter cannot flake it.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let agent_card_id = "tickdrain";
+        let agent = agent_id_for_card_id(agent_card_id);
+        budget.set_capacity(&agent, 1).await.expect("set_capacity");
+        budget
+            .try_debit(&agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit drains bucket");
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: agent_card_id.into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let handle = spawn_projection_tick_driver(
+            server.clone(),
+            ProjectionTickConfig {
+                period_ms: 50,
+                grace_ms: 100,
+            },
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let found = loop {
+            let events = audit.recent(16).await.expect("audit recent");
+            let count = events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        &e.kind,
+                        AuditKind::BudgetPreempted { intent_id: id, .. } if *id == intent_id
+                    )
+                })
+                .count();
+            if count > 0 {
+                break count;
+            }
+            if std::time::Instant::now() >= deadline {
+                break 0;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        };
+
+        handle.abort();
+        let _ = child.wait().await;
+
+        assert!(
+            found > 0,
+            "driver must dispatch at least one BudgetPreempted within the deadline; audit log: {:?}",
+            audit.recent(16).await.expect("audit recent")
         );
     }
 

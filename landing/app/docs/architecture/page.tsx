@@ -464,7 +464,9 @@ export default function ArchitecturePage() {
               <code>covenant</code>
             </td>
             <td>
-              The CLI binary.
+              The CLI binary. Submits intents and drives memory,
+              capabilities, receipts, chain, audit, tools, A2A, and
+              peer-registry surfaces over the local IPC socket.
             </td>
           </tr>
           <tr>

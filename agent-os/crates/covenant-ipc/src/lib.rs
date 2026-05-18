@@ -192,6 +192,176 @@ pub enum Frame {
     Stream(StreamEnvelope),
 }
 
+/// Result of reassembling a v2 streaming response from the
+/// [`StreamEnvelope`] sequence the daemon emits. Inverse of
+/// `covenantd::Server::recent_memory_envelopes` and friends: the daemon
+/// converts a typed body into `Vec<StreamEnvelope>`, this struct names
+/// what the client gets back after walking that vector.
+///
+/// `chunks` are raw `serde_json::Value`s in the order the daemon emitted
+/// them. The per-chunk shape is governed by the `response_kind` that the
+/// matching `StreamBegin` declared — `"memories"` produces
+/// `MemoryRecord` JSON, `"audit_events"` produces `AuditEvent` JSON, etc.
+/// `summary` mirrors the optional terminal payload on `StreamEnd`; it is
+/// `None` when the daemon emits `StreamEnd { summary: None }` and `Some`
+/// when the daemon attaches a rollup (e.g., `SubmitIntent`'s
+/// `intent_id`/`status`/`settlement`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectedStream {
+    pub stream_id: Uuid,
+    pub response_kind: String,
+    pub chunks: Vec<serde_json::Value>,
+    pub summary: Option<serde_json::Value>,
+}
+
+/// Validation failure surfaced by [`collect_stream_envelopes`]. Each
+/// variant names a specific protocol violation so the caller can decide
+/// whether to log, surface to the user, or fail closed. `StreamError`
+/// is also a variant here so the caller does not have to special-case
+/// the daemon-reported error path separately — the helper unwraps
+/// `StreamEnvelope::StreamError` into [`CollectStreamError::Reported`]
+/// with the daemon-supplied message verbatim.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum CollectStreamError {
+    #[error("stream is empty (expected StreamBegin first)")]
+    Empty,
+    #[error("first envelope must be StreamBegin, got {got}")]
+    MissingBegin { got: &'static str },
+    #[error("envelope after StreamBegin must be StreamChunk/StreamEnd/StreamError, got a second StreamBegin")]
+    DuplicateBegin,
+    #[error("envelope stream_id {got} does not match the open stream_id {expected}")]
+    MixedStreamIds { expected: Uuid, got: Uuid },
+    #[error("StreamChunk sequence gap: expected {expected}, got {got}")]
+    SequenceGap { expected: u32, got: u32 },
+    #[error("stream is missing the terminal StreamEnd/StreamError frame")]
+    MissingTerminal,
+    #[error("envelope after StreamEnd/StreamError is not allowed (got {got})")]
+    EnvelopeAfterTerminal { got: &'static str },
+    #[error("daemon reported stream error: {message}")]
+    Reported { stream_id: Uuid, message: String },
+}
+
+/// Walk a [`StreamEnvelope`] sequence and reassemble the streamed
+/// response. Pure data — no async, no I/O. Mirrors the daemon-side
+/// emitter contract documented on [`StreamEnvelope`]: exactly one
+/// `StreamBegin` first, zero or more `StreamChunk`s with monotonically
+/// increasing `sequence` starting at 0 and all sharing the same
+/// `stream_id`, then exactly one terminal `StreamEnd` or
+/// `StreamError`. Anything else is a [`CollectStreamError`].
+///
+/// A v2-aware reader that has already demultiplexed a single stream's
+/// frames off the wire (or read them from the HTTP SSE response body)
+/// passes the resulting slice here to get back a typed
+/// [`CollectedStream`]. The per-chunk JSON shape is the daemon's
+/// responsibility; this helper preserves chunk order and does not
+/// touch the chunk payload.
+pub fn collect_stream_envelopes(
+    envelopes: &[StreamEnvelope],
+) -> Result<CollectedStream, CollectStreamError> {
+    let mut iter = envelopes.iter();
+    let first = iter.next().ok_or(CollectStreamError::Empty)?;
+    let (stream_id, response_kind) = match first {
+        StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind,
+        } => (*stream_id, response_kind.clone()),
+        StreamEnvelope::StreamChunk { .. } => {
+            return Err(CollectStreamError::MissingBegin {
+                got: "stream_chunk",
+            })
+        }
+        StreamEnvelope::StreamEnd { .. } => {
+            return Err(CollectStreamError::MissingBegin { got: "stream_end" })
+        }
+        StreamEnvelope::StreamError { .. } => {
+            return Err(CollectStreamError::MissingBegin {
+                got: "stream_error",
+            })
+        }
+    };
+
+    let mut chunks = Vec::new();
+    let mut summary = None;
+    let mut next_sequence: u32 = 0;
+    let mut terminated = false;
+
+    for env in iter {
+        if terminated {
+            let got = match env {
+                StreamEnvelope::StreamBegin { .. } => "stream_begin",
+                StreamEnvelope::StreamChunk { .. } => "stream_chunk",
+                StreamEnvelope::StreamEnd { .. } => "stream_end",
+                StreamEnvelope::StreamError { .. } => "stream_error",
+            };
+            return Err(CollectStreamError::EnvelopeAfterTerminal { got });
+        }
+        match env {
+            StreamEnvelope::StreamBegin { .. } => {
+                return Err(CollectStreamError::DuplicateBegin);
+            }
+            StreamEnvelope::StreamChunk {
+                stream_id: sid,
+                sequence,
+                chunk,
+            } => {
+                if *sid != stream_id {
+                    return Err(CollectStreamError::MixedStreamIds {
+                        expected: stream_id,
+                        got: *sid,
+                    });
+                }
+                if *sequence != next_sequence {
+                    return Err(CollectStreamError::SequenceGap {
+                        expected: next_sequence,
+                        got: *sequence,
+                    });
+                }
+                chunks.push(chunk.clone());
+                next_sequence = next_sequence.saturating_add(1);
+            }
+            StreamEnvelope::StreamEnd {
+                stream_id: sid,
+                summary: end_summary,
+            } => {
+                if *sid != stream_id {
+                    return Err(CollectStreamError::MixedStreamIds {
+                        expected: stream_id,
+                        got: *sid,
+                    });
+                }
+                summary = end_summary.clone();
+                terminated = true;
+            }
+            StreamEnvelope::StreamError {
+                stream_id: sid,
+                message,
+            } => {
+                if *sid != stream_id {
+                    return Err(CollectStreamError::MixedStreamIds {
+                        expected: stream_id,
+                        got: *sid,
+                    });
+                }
+                return Err(CollectStreamError::Reported {
+                    stream_id: *sid,
+                    message: message.clone(),
+                });
+            }
+        }
+    }
+
+    if !terminated {
+        return Err(CollectStreamError::MissingTerminal);
+    }
+
+    Ok(CollectedStream {
+        stream_id,
+        response_kind,
+        chunks,
+        summary,
+    })
+}
+
 // `PartialEq` only — `A2ATaskResult` (carried in `PostA2AResult`) holds a
 // `serde_json::Value` which isn't `Eq`. Symmetric with `Response`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -10267,5 +10437,350 @@ mod tests {
                 "v2 stream_begin payload must decode into Frame::Stream(StreamBegin), not {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn collect_stream_envelopes_happy_path_returns_chunks_in_order() {
+        // Mirrors the daemon-side recent_memory_envelopes contract:
+        // StreamBegin → N StreamChunks (sequence 0..N) → StreamEnd{summary: None}.
+        // The collector must preserve chunk order, expose stream_id and
+        // response_kind from StreamBegin, and surface summary verbatim.
+        let stream_id = Uuid::from_u128(0xCAFE_F00D_BAAD_BEEF);
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".to_string(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"id": "a"}),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 1,
+                chunk: serde_json::json!({"id": "b"}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+
+        let collected = collect_stream_envelopes(&envelopes).expect("happy path collects");
+        assert_eq!(collected.stream_id, stream_id);
+        assert_eq!(collected.response_kind, "memories");
+        assert_eq!(
+            collected.chunks,
+            vec![
+                serde_json::json!({"id": "a"}),
+                serde_json::json!({"id": "b"})
+            ],
+            "chunk order must match envelope order"
+        );
+        assert_eq!(collected.summary, None);
+    }
+
+    #[test]
+    fn collect_stream_envelopes_surfaces_summary_from_stream_end() {
+        // SubmitIntent attaches an IntentResult rollup as StreamEnd.summary.
+        // Pin that the helper propagates summary verbatim rather than
+        // dropping it on the floor.
+        let stream_id = Uuid::from_u128(1);
+        let summary = serde_json::json!({"intent_id": "abc", "status": "ok"});
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "intent_result".to_string(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"text": "hello"}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: Some(summary.clone()),
+            },
+        ];
+
+        let collected = collect_stream_envelopes(&envelopes).expect("summary path collects");
+        assert_eq!(collected.summary, Some(summary));
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_empty_input() {
+        // An empty envelope slice is not the same as a fresh stream with
+        // zero chunks: the daemon always emits StreamBegin first. An empty
+        // slice means the caller demultiplexed wrong (or the connection
+        // dropped before any frame arrived), which the helper must surface.
+        assert_eq!(
+            collect_stream_envelopes(&[]),
+            Err(CollectStreamError::Empty)
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_missing_begin() {
+        // If the first envelope is a StreamChunk/StreamEnd/StreamError,
+        // either the wire was reordered or the demultiplexer dropped the
+        // StreamBegin. Either way the response_kind contract is broken;
+        // fail closed with a variant that names what arrived instead.
+        let stream_id = Uuid::nil();
+        for (first, expected_got) in [
+            (
+                StreamEnvelope::StreamChunk {
+                    stream_id,
+                    sequence: 0,
+                    chunk: serde_json::json!(null),
+                },
+                "stream_chunk",
+            ),
+            (
+                StreamEnvelope::StreamEnd {
+                    stream_id,
+                    summary: None,
+                },
+                "stream_end",
+            ),
+            (
+                StreamEnvelope::StreamError {
+                    stream_id,
+                    message: "any".into(),
+                },
+                "stream_error",
+            ),
+        ] {
+            let envelopes = vec![first];
+            match collect_stream_envelopes(&envelopes) {
+                Err(CollectStreamError::MissingBegin { got }) => {
+                    assert_eq!(got, expected_got)
+                }
+                other => panic!("expected MissingBegin {{got: {expected_got}}}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_duplicate_begin() {
+        // Two StreamBegin frames in one logical stream means the
+        // demultiplexer merged two streams. The helper must refuse
+        // rather than silently treating the second begin as a chunk.
+        let stream_id = Uuid::nil();
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "audit_events".into(),
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::DuplicateBegin)
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_mixed_stream_ids() {
+        // Stream IDs are connection-scoped per ADR 0010 but each LOGICAL
+        // stream uses one stream_id from begin to end. Any envelope whose
+        // stream_id differs from the opening StreamBegin is from a
+        // different stream and must not be merged in.
+        let opener = Uuid::from_u128(1);
+        let intruder = Uuid::from_u128(2);
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id: opener,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id: intruder,
+                sequence: 0,
+                chunk: serde_json::json!({"leak": true}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id: opener,
+                summary: None,
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::MixedStreamIds {
+                expected: opener,
+                got: intruder
+            })
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_sequence_gap() {
+        // The daemon emits sequence 0..N monotonically. A gap means
+        // wire-level frame drop or a buggy emitter; the helper must not
+        // silently paper over the gap and produce a short result.
+        let stream_id = Uuid::nil();
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"i": 0}),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 2,
+                chunk: serde_json::json!({"i": 2}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::SequenceGap {
+                expected: 1,
+                got: 2
+            })
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_first_sequence_nonzero() {
+        // Sequence MUST start at 0 (the existing daemon emitters
+        // enumerate from 0). A non-zero first chunk implies a dropped
+        // frame the helper should not hide.
+        let stream_id = Uuid::nil();
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 1,
+                chunk: serde_json::json!({"i": 1}),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::SequenceGap {
+                expected: 0,
+                got: 1
+            })
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_missing_terminal() {
+        // StreamBegin without StreamEnd/StreamError means the connection
+        // dropped mid-stream. The helper must not return what it has —
+        // the consumer can't tell truncation apart from completion.
+        let stream_id = Uuid::nil();
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({}),
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::MissingTerminal)
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_rejects_envelope_after_terminal() {
+        // A frame after StreamEnd/StreamError indicates a buggy emitter
+        // or wire reordering. The helper must not silently absorb it.
+        let stream_id = Uuid::nil();
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"after": "end"}),
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::EnvelopeAfterTerminal {
+                got: "stream_chunk"
+            })
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_unwraps_stream_error_into_reported() {
+        // StreamError is a daemon-reported terminal — distinct from
+        // StreamEnd. The collector unwraps it into CollectStreamError::Reported
+        // so the caller can surface the message verbatim without
+        // special-casing StreamEnvelope variants at the call site.
+        let stream_id = Uuid::from_u128(7);
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"i": 0}),
+            },
+            StreamEnvelope::StreamError {
+                stream_id,
+                message: "serialize failed".into(),
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&envelopes),
+            Err(CollectStreamError::Reported {
+                stream_id,
+                message: "serialize failed".into()
+            })
+        );
+    }
+
+    #[test]
+    fn collect_stream_envelopes_accepts_begin_then_end_with_zero_chunks() {
+        // The empty-result path the daemon emits on a fresh peer with
+        // no audit/memory rows: StreamBegin + StreamEnd with no chunks
+        // between. This must collect cleanly, not be flagged as
+        // MissingTerminal or SequenceGap.
+        let stream_id = Uuid::from_u128(42);
+        let envelopes = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "audit_events".into(),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            },
+        ];
+        let collected = collect_stream_envelopes(&envelopes).expect("zero-chunk path collects");
+        assert!(collected.chunks.is_empty(), "no chunks expected");
+        assert_eq!(collected.response_kind, "audit_events");
     }
 }

@@ -325,8 +325,9 @@ export default function ArchitecturePage() {
               <code>covenant-runtime</code>
             </td>
             <td>
-              Subprocess agent runner with stdin/stdout JSON protocol,
-              wall-clock budget, and hard-preempt on projected overshoot.
+              Subprocess agent runner with a stdin/stdout JSON protocol
+              and per-task budget enforcement via projection-tick
+              preempt and a wall-clock backstop.
             </td>
           </tr>
           <tr>

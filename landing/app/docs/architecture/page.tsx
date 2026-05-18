@@ -231,6 +231,13 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>a2a/events.jsonl</code>
+            </td>
+            <td>JSONL, append-only (leased-queue mailbox)</td>
+            <td>covenant-a2a</td>
+          </tr>
+          <tr>
+            <td>
               <code>agents/&lt;name&gt;/agent.toml</code>
             </td>
             <td>TOML, one manifest per package directory</td>

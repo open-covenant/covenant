@@ -317,8 +317,10 @@ export default function ArchitecturePage() {
               <code>covenant-router</code>
             </td>
             <td>
-              Loads agent manifests and matches intents to agents via
-              keyword overlap.
+              Intent router that loads <code>agent.toml</code> manifests
+              from <code>$COVENANT_HOME/agents/</code> and routes intents
+              to registered agent capability cards via keyword-overlap
+              matching.
             </td>
           </tr>
           <tr>

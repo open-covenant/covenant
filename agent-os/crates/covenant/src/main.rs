@@ -3,7 +3,7 @@
 //! ```text
 //!   covenant ping [--json]
 //!   covenant intent [--json] <text>
-//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
+//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json] [--stream]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--min-relevance F] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
@@ -49,8 +49,8 @@ use covenant_a2a::{
 };
 use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
-    read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
-    VerifyDrift,
+    read_frame, read_response_or_stream, write_frame, ChainStatus, ReceiptBatchSummary, Request,
+    Response, ResponseOrStream, VerifyCheck, VerifyDrift,
 };
 use covenant_mcp::ToolSpec;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -104,7 +104,7 @@ fn print_usage() {
         "  covenant version                        print daemon protocol metadata as JSON (no token required)"
     );
     eprintln!(
-        "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
+        "  covenant memory recent [--tier T] [-n N] [--json] [--stream]      list recent memory records (--stream opts into v2 streaming response framing)"
     );
     eprintln!(
         "  covenant memory search <query> [--tier T] [-n N] [--min-relevance F] [--json]  semantic search via embeddings; --min-relevance F drops records whose cosine score is below F (range [0.0, 1.0]) before the limit is applied"
@@ -247,7 +247,20 @@ async fn print_memory_response(
     stream: &mut UnixStream,
     json: Option<MemoryReadJsonArgs>,
 ) -> Result<()> {
-    match read_frame::<_, Response>(stream).await? {
+    let response = match read_response_or_stream(stream).await? {
+        ResponseOrStream::Terminal(r) => r,
+        ResponseOrStream::Stream(collected) => {
+            if collected.response_kind != "memories" {
+                bail!(
+                    "unexpected stream response_kind '{}' (expected 'memories')",
+                    collected.response_kind
+                );
+            }
+            let records = decode_memory_chunks(collected.chunks)?;
+            Response::Memories { records }
+        }
+    };
+    match response {
         Response::Memories { records } => {
             if let Some(args) = json {
                 println!(
@@ -275,6 +288,17 @@ async fn print_memory_response(
         Response::Error { message } => bail!("daemon error: {message}"),
         other => bail!("unexpected response: {other:?}"),
     }
+}
+
+fn decode_memory_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<MemoryRecord>> {
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            serde_json::from_value::<MemoryRecord>(chunk)
+                .with_context(|| format!("decode memory stream chunk {i}"))
+        })
+        .collect()
 }
 
 fn memory_tier_slug(tier: MemoryTier) -> &'static str {
@@ -629,6 +653,7 @@ async fn main() -> Result<()> {
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
                     let mut as_json = false;
+                    let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -643,6 +668,7 @@ async fn main() -> Result<()> {
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
                             "--json" => as_json = true,
+                            "--stream" => prefer_stream = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -652,7 +678,7 @@ async fn main() -> Result<()> {
                         &Request::RecentMemory {
                             tier,
                             limit,
-                            prefer_stream: None,
+                            prefer_stream: prefer_stream.then_some(true),
                         },
                     )
                     .await?;

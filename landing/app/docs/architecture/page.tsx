@@ -366,7 +366,8 @@ export default function ArchitecturePage() {
               <code>covenant-audit</code>
             </td>
             <td>
-              Append-only audit log with JSONL and in-memory backends.
+              Append-only audit log with JSONL and in-memory backends,
+              plus hash-chain integrity verification.
             </td>
           </tr>
           <tr>

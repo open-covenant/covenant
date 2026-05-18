@@ -121,6 +121,27 @@ Manifest values are parsed now. The initial gVisor runner enforces `read-only-pa
 
 Policies other than the initial enforced subset must not be described as available sandbox behavior.
 
+## Budget-Driven Preempt (work in progress)
+
+The current wall-clock guard kills a subprocess only after the agent-declared `cpu_ms_per_task` elapses. The hard budget-preempt path extends this so the runtime can also terminate a subprocess that is projected to exceed its remaining credit budget *before* it completes naturally. The path is being assembled across several sub-slices; this section lists what is shipped today and what is explicitly not yet wired so operators can plan around the partial state.
+
+Shipped primitives:
+
+- `covenant-runtime::SubprocessRunner` spawns every agent in a new POSIX process group via `process_group(0)` on Unix. A subsequent `kill(-pid, SIG)` targets every grandchild the agent forked, not just the immediate child. The configuration is a no-op on non-Unix; the documented gap remains.
+- `covenant-runtime::SubprocessTracker` and `TrackedSubprocess` are the in-memory primitives the daemon will use to look up a running subprocess's pid by intent id. The tracker is not yet populated by the runner spawn path.
+- `covenant-budget::project_overshoot(...)` is the pure projection function the daemon-side tick will call to decide whether an in-flight subprocess is on track to exceed its remaining budget. `BudgetProjectionPolicy::NoExtrapolation` preserves the existing post-completion-only behavior; `LinearExtrapolation` short-circuits below either an observation-window or sample-count threshold to avoid spurious early triggers.
+- `covenant-audit::AuditKind::BudgetPreempted` and `BudgetPreemptFailed` are the audit rows the preempt path will emit on successful termination and on signal failure respectively. Both are wired into `audit_kind_requires_persistence` so the daemon refuses to drop them on audit-write failure.
+
+Not yet wired:
+
+- Spawn-time tracker registration in the runner. Until this lands, the tracker is empty and the projection tick has no work to do.
+- Daemon-side projection tick that walks the tracker, calls `project_overshoot`, and pushes flagged intents onto a bounded preempt queue.
+- The signal dispatcher that consumes the queue, calls `libc::kill(-pid, SIGTERM)`, waits a grace window, then `libc::kill(-pid, SIGKILL)` if the process has not exited, and emits the matching audit row.
+- The grace window environment variable `COVENANT_BUDGET_PREEMPT_GRACE_MS` (planned default: `2000`). Operators should not depend on it until the dispatcher ships.
+- Daemon-restart recovery. The tracker is in-memory only; a crash between the projection decision and the signal dispatch leaves orphan subprocesses outliving the preempt window. Recovery via a pidfile or `/proc` scan is a separate followup.
+
+Until the dispatcher is wired, an over-budget subprocess still runs to natural completion under the existing post-completion accounting; the daemon then rejects further dispatch via `BudgetExhausted`. The hard-guarantee framing applies only after every item in *Not yet wired* lands.
+
 ## Security Review Checklist
 
 Runtime sandbox changes require review against this checklist:

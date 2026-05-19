@@ -721,6 +721,51 @@ export default function AuditPage() {
         no <code>task.sender</code> claim to compare against).
       </p>
 
+      <h3>
+        <code>A2AResultRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":    "a2_a_result_rejected",
+  "task_id": "uuid",
+  "reason":  "unknown_task"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>PostA2AResult</code> is rejected upstream of
+        any capability check — currently when{" "}
+        <code>mailbox.lookup_task_sender(task_id)</code> returns no
+        sender, meaning the supplied <code>task_id</code> was never
+        dispatched through this daemon. The reason field carries the
+        literal <code>&quot;unknown_task&quot;</code> for that path.
+        Fires before the <code>a2a.respond</code> cap check would even
+        run, so an <code>A2AResultRejected</code> row never coexists
+        with a <code>CapabilityCheck</code> for the same{" "}
+        <code>PostA2AResult</code> request. The issuer is the
+        authenticated peer that submitted the bogus{" "}
+        <code>task_id</code> (peer-as-issuer audience via{" "}
+        <code>record_peer_event</code>) — the peer&apos;s own audit
+        feed surfaces the row so a benign client bug stays visible to
+        its operator without leaking the rejection to other peers. The
+        variant is a stronger compromise indicator than a missing-cap
+        rejection: an honest agent&apos;s <code>a2a.respond</code>{" "}
+        would carry a <code>task_id</code> that was actually dispatched
+        through this daemon, so a missing-task row implies the agent
+        fabricated the id or replayed one from a different daemon. The
+        wire-form <code>type</code> slug is{" "}
+        <code>&quot;a2_a_result_rejected&quot;</code>, <em>not</em>{" "}
+        <code>a2a_result_rejected</code> — the same serde{" "}
+        <code>rename_all = &quot;snake_case&quot;</code> A2A
+        digit/upper split. Distinct from <code>CapabilityCheck</code>{" "}
+        with <code>passed: false</code> (which assumes the{" "}
+        <code>task_id</code> is valid and only the cap is short — a
+        refactor that moved the unknown-task gate behind the cap
+        check would silently absorb this stronger signal into a
+        routine cap miss) and from <code>A2ASenderMismatch</code>{" "}
+        (sender-spoof at the send path rather than result-injection at
+        the respond path).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

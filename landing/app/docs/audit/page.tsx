@@ -766,6 +766,48 @@ export default function AuditPage() {
         the respond path).
       </p>
 
+      <h3>
+        <code>HermesToolInvoked</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":             "hermes_tool_invoked",
+  "intent_id":        "uuid",
+  "run_id":           "run_abc",
+  "tool":             "terminal",
+  "preview_hash_hex": "8f1c…0c2e"
+}`}</code>
+      </pre>
+      <p>
+        Emitted by <code>covenantd</code>&apos;s runtime-trace fold (
+        <code>runtime_trace_to_audit_kind</code>) when a Hermes-runtime
+        agent starts a tool invocation inside its run loop.{" "}
+        <code>intent_id</code> stamps the parent intent so the audit
+        row ties back to the broader intent context — a refactor that
+        dropped the stamping would strand every Hermes tool invocation
+        from the originating <code>IntentDispatched</code> row.{" "}
+        <code>run_id</code> is the Hermes-side run identifier and is
+        the grouping key that pairs this row with the matching{" "}
+        <code>HermesToolCompleted</code> row (joining on{" "}
+        <code>intent_id + run_id + tool</code> reconstructs the
+        tool-call duration). <code>preview_hash_hex</code> is the
+        SHA-256 of Hermes&apos;s short tool-input preview — the raw
+        preview text is hashed via <code>covenant_audit::hash_hex</code>{" "}
+        before persisting, so the audit chain never embeds raw tool
+        input. That redaction floor is load-bearing: a refactor that
+        &quot;simplified&quot; by passing the raw preview through
+        (e.g., under a &quot;preview already operator-facing&quot;
+        rationale) would silently leak every Hermes tool-input
+        preview verbatim into the persisted audit chain, which is why
+        the wire form pins <code>preview_hash_hex</code> rather than
+        any unhashed alternative. Distinct from{" "}
+        <code>IntentDispatched</code> (one row per intent — Hermes runs
+        emit many <code>HermesToolInvoked</code> rows per intent, one
+        per tool call) and from <code>HermesToolCompleted</code>{" "}
+        (end-of-tool row carrying <code>duration_ms</code> and{" "}
+        <code>error</code>; pair them by run_id + tool + intent_id).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

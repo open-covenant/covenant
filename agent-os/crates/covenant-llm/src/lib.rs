@@ -12,9 +12,11 @@
 //! falling back to Ollama if reachable and to [`MockProvider`]
 //! otherwise.
 //!
-//! A separate [`Embedder`] trait covers the embedding side, with
-//! [`EmbedderConfig`] sourcing its configuration from the same
-//! `secrets.toml` file.
+//! A separate [`Embedder`] trait covers the embedding side, with two
+//! implementations: [`MockEmbedder`] (tests, no I/O) and
+//! [`OllamaEmbedder`] (the local embedding endpoint at
+//! `http://localhost:11434`, no key). [`EmbedderConfig`] sources its
+//! configuration from the same `secrets.toml` file.
 
 #![deny(unsafe_code)]
 

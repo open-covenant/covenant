@@ -579,6 +579,62 @@ export default function AuditPage() {
         peer-event audience).
       </p>
 
+      <h3>
+        <code>A2AAutoRetrySchedulerScan</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":              "a2_a_auto_retry_scheduler_scan",
+  "enabled":           true,
+  "considered":        10,
+  "requeued":          2,
+  "skipped":           8,
+  "skipped_by_reason": { "max_attempts": 5, "lease_age": 3 },
+  "min_lease_age_ms":  30000,
+  "max_attempts":      3,
+  "max_requeues":      100,
+  "scan_limit":        200,
+  "error":             null
+}`}</code>
+      </pre>
+      <p>
+        Emitted by the disabled-by-default A2A retry scheduler after
+        each scan run. Requeued tasks still surface as individual{" "}
+        <code>A2ARepairApplied</code> rows with{" "}
+        <code>action: &quot;auto_requeue&quot;</code>; this summary row
+        makes skipped and rejected scans visible without duplicating
+        per-task payloads. The issuer is the{" "}
+        <em>daemon&apos;s</em> identity (the recording path uses{" "}
+        <code>record_daemon_event</code>, not{" "}
+        <code>record_peer_event</code>), so the audience model mirrors{" "}
+        <code>AuthenticationFailed</code> rather than{" "}
+        <code>A2ARepairApplied</code> — even though both A2A rows share
+        the <code>a2_a_</code> slug stem, joins that key on the
+        peer-event audience will miss every scan row. The policy
+        snapshot fields (<code>enabled</code>,{" "}
+        <code>min_lease_age_ms</code>, <code>max_attempts</code>,{" "}
+        <code>max_requeues</code>, <code>scan_limit</code>) record the
+        configuration the scan ran under, so an operator can correlate a
+        sudden requeued-count change with a policy edit without rereading
+        the daemon log. <code>skipped_by_reason</code> is a JSON object
+        keyed by skip-reason with per-reason counts — it makes the
+        operator-misconfig-vs-policy-gate breakdown legible without
+        landing the full task payloads on the audit stream. The wire
+        slug is <code>&quot;a2_a_auto_retry_scheduler_scan&quot;</code>,{" "}
+        <em>not</em> <code>a2a_auto_retry_scheduler_scan</code> — the
+        same serde <code>rename_all = &quot;snake_case&quot;</code>{" "}
+        digit/upper split that <code>A2ARepairApplied</code> carries,
+        pinned in <code>covenant-audit</code>. <code>error</code> is{" "}
+        <code>Option&lt;String&gt;</code> without{" "}
+        <code>#[serde(skip_serializing_if)]</code>, so the key surfaces
+        as JSON <code>null</code> on success scans and the eleven-key
+        wire shape stays stable across success and failure rows.
+        Distinct from <code>A2ARepairApplied</code> (one summary row per
+        scan vs one row per repaired lease — joining the two surfaces by{" "}
+        <code>task_id</code> reconstructs which leases the scan
+        touched).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

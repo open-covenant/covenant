@@ -635,6 +635,51 @@ export default function AuditPage() {
         touched).
       </p>
 
+      <h3>
+        <code>A2ARecipientRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":              "a2_a_recipient_rejected",
+  "sender_display":    "attacker@local",
+  "recipient_display": "victim@local",
+  "action":            "a2a.recv.attacker@local"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>SendA2ATask</code> is rejected because the
+        recipient peer has not granted{" "}
+        <code>a2a.recv.{`<sender>`}</code> to themselves. The gate
+        closes the recipient-inbox spam vector that would otherwise be
+        exploitable when a peer with a granted send-cap pushes tasks at
+        a recipient that has not granted matching recv-caps: without
+        it, a malicious peer could route arbitrary{" "}
+        <code>intent_text</code> into the recipient&apos;s{" "}
+        <code>RecentA2ATasks</code> view via the bidirectional filter.
+        The issuer is the <em>sender</em> peer (their failed attempt)
+        — but the missing cap belongs to a <em>different subject</em>,
+        the recipient, which is the entire reason the variant exists as
+        its own kind rather than as a <code>CapabilityCheck</code> row.
+        Both <code>sender_display</code> and{" "}
+        <code>recipient_display</code> are load-bearing for the
+        two-party diagnostic; <code>action</code> is the formatted
+        scope name (<code>a2a.recv.{`<sender_display>`}</code>) that the
+        recipient never granted, which lets an operator triaging the
+        row pivot directly to the recipient&apos;s grant decisions
+        without recomputing the missing-cap string. The wire-form{" "}
+        <code>type</code> slug is{" "}
+        <code>&quot;a2_a_recipient_rejected&quot;</code>, <em>not</em>{" "}
+        <code>a2a_recipient_rejected</code> — the same serde{" "}
+        <code>rename_all = &quot;snake_case&quot;</code> A2A
+        digit/upper split pinned in <code>covenant-audit</code>.
+        Distinct from <code>CapabilityCheck</code> with{" "}
+        <code>passed: false</code> (which would misattribute the
+        missing cap to the issuer&apos;s capability set rather than
+        the recipient&apos;s) and from <code>A2ASenderMismatch</code>{" "}
+        (sender-identity mismatch on the sender&apos;s own caps, not a
+        recipient-side cap gap).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

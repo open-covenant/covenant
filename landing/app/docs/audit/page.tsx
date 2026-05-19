@@ -808,6 +808,47 @@ export default function AuditPage() {
         <code>error</code>; pair them by run_id + tool + intent_id).
       </p>
 
+      <h3>
+        <code>HermesToolCompleted</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":        "hermes_tool_completed",
+  "intent_id":   "uuid",
+  "run_id":      "run_abc",
+  "tool":        "terminal",
+  "duration_ms": 1234,
+  "error":       false
+}`}</code>
+      </pre>
+      <p>
+        Emitted when a tool invocation in a Hermes run finishes. The
+        end-of-tool counterpart to <code>HermesToolInvoked</code> — pair
+        them by <code>intent_id + run_id + tool</code> to reconstruct
+        tool-call latency. <code>duration_ms</code> is the latency the
+        audit row carries verbatim from the runtime trace; operators
+        key Hermes latency dashboards on this field, so a refactor that
+        coerced to a different width or unit would silently shift every
+        dashboard built against milliseconds. <code>error</code> is{" "}
+        <code>true</code> iff the tool itself raised — a{" "}
+        <code>false</code> here followed by a failed overall run status
+        means Hermes failed elsewhere in the loop (model error, policy
+        denial, transport issue), so this flag is the only reliable
+        per-tool failure signal on the audit feed. A default-to-false
+        regression would mask every tool failure as success; the
+        invariant is pinned in <code>covenant-audit</code>.{" "}
+        <code>intent_id</code> stamps the parent intent just like{" "}
+        <code>HermesToolInvoked</code>, so tool durations remain
+        attributable to the originating <code>IntentDispatched</code>{" "}
+        even after the run terminates. Distinct from{" "}
+        <code>HermesToolInvoked</code> (start-of-tool with{" "}
+        <code>preview_hash_hex</code> vs end-of-tool with{" "}
+        <code>duration_ms</code> and <code>error</code>) and from{" "}
+        <code>HermesApprovalRequested</code> (a run pausing for
+        operator approval is not a tool completion — approval rows do
+        not carry <code>tool</code> or <code>duration_ms</code>).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

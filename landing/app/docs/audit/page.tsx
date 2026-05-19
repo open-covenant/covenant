@@ -343,6 +343,43 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>OperatorPeerRevokeRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "operator_peer_revoke_rejected",
+  "peer_display":    "guest@local",
+  "peer_pubkey_b58": "9hYz…Lk6w"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>RevokePeer</code> is rejected because the
+        authenticated peer&apos;s pubkey does not match the operator
+        identity. Daemon-as-issuer audience model matching{" "}
+        <code>OperatorTokenRotationRejected</code> and{" "}
+        <code>OperatorPeersListRejected</code> — recording the
+        rejection under the rejected peer would (a) hide the probe
+        from the operator&apos;s <code>/audit</code> feed under the
+        cross-peer audit-feed isolation filter and (b) turn the
+        rejected peer&apos;s own feed into a probe-was-logged oracle.{" "}
+        <code>peer_pubkey_b58</code> is the unforgeable identifier —
+        <code>peer_display</code> is wire-supplied and a future
+        attacker could register <code>user@local</code> against any
+        pubkey, so the base58 form (matching{" "}
+        <code>bs58::encode(peer.pubkey)</code>) is the durable probe
+        attribution. Distinct from <code>PeerRevoked</code>{" "}
+        (operator-issuer success row that carries{" "}
+        <code>token_prefix</code> for the revoked entry) and from{" "}
+        <code>PeerSelfRevokeBlocked</code> (operator-issuer
+        fat-finger guard where the operator is both issuer and
+        audience). Distinct from <code>CapabilityCheck</code> (no
+        capability is checked — the gate is identity-pubkey equality)
+        and from <code>AuthenticationFailed</code> (the peer
+        authenticated successfully — they failed an authorization
+        check, not authentication).
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

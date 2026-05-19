@@ -849,6 +849,45 @@ export default function AuditPage() {
         not carry <code>tool</code> or <code>duration_ms</code>).
       </p>
 
+      <h3>
+        <code>HermesApprovalRequested</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":      "hermes_approval_requested",
+  "intent_id": "uuid",
+  "run_id":    "run_abc",
+  "choices":   ["allow", "deny"]
+}`}</code>
+      </pre>
+      <p>
+        Emitted when a Hermes run pauses pending operator approval —
+        recorded so a run stalled at the approval prompt stays
+        auditable even when the operator console is closed.{" "}
+        <code>intent_id</code> stamps the parent intent so the audit
+        feed surfaces a stuck approval against the originating{" "}
+        <code>IntentDispatched</code>. <code>run_id</code> is the same
+        Hermes-side run identifier the tool rows carry and pairs this
+        request half with the matching{" "}
+        <code>HermesApprovalResolved</code> row that records the
+        operator&apos;s answer. <code>choices</code> is the ordered
+        list Hermes presents to the operator; the runtime-trace fold
+        passes the vector through verbatim in order because operator
+        approval UIs render the list in audit-supplied order, so a
+        sort or dedup pass at this layer would silently reorder every
+        operator&apos;s approval prompt across deployments (the
+        invariant is pinned in <code>covenant-audit</code>). Distinct
+        from <code>HermesToolInvoked</code> and{" "}
+        <code>HermesToolCompleted</code> (the approval pause is not a
+        tool — there is no <code>tool</code> or{" "}
+        <code>preview_hash_hex</code> or <code>duration_ms</code>) and
+        from <code>HermesApprovalResolved</code> (start-of-pause vs
+        end-of-pause; the pair shares{" "}
+        <code>intent_id + run_id</code>, but the resolved row adds the
+        chosen <code>choice</code> and the <code>resolved</code> count
+        Hermes reports as cleared by the response).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

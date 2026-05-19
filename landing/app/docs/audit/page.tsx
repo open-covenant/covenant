@@ -306,6 +306,43 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>OperatorPeersListRejected</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":            "operator_peers_list_rejected",
+  "peer_display":    "guest@local",
+  "peer_pubkey_b58": "9hYz…Lk6w"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>ListPeers</code> is rejected because the
+        authenticated peer&apos;s pubkey does not match the operator
+        identity (the gate is{" "}
+        <code>peer.pubkey != self.identity.pubkey</code>). The issuer
+        is the daemon identity (not the rejected peer), mirroring{" "}
+        <code>OperatorTokenRotationRejected</code>&apos;s
+        daemon-as-issuer audience model: the row surfaces on the
+        operator&apos;s own <code>/audit</code> feed for probe
+        triage, and recording it against the rejected peer would
+        (a) hide the probe from the operator under the cross-peer
+        audit-feed isolation filter and (b) turn the rejected
+        peer&apos;s own feed into a probe-was-logged oracle.{" "}
+        <code>peer_pubkey_b58</code> is the unforgeable identity —
+        <code>peer_display</code> is wire-supplied and a future
+        attacker could register <code>user@local</code> against any
+        pubkey, so the base58 form (matching{" "}
+        <code>bs58::encode(peer.pubkey)</code>) is the durable probe
+        attribution that survives operator grep through the audit
+        log unmodified. Distinct from{" "}
+        <code>CapabilityCheck</code> (no capability is checked — the
+        gate is identity-pubkey equality) and from{" "}
+        <code>AuthenticationFailed</code> (the peer authenticated
+        successfully — they failed an authorization check, not
+        authentication).
+      </p>
+
+      <h3>
         <code>BudgetExhausted</code>
       </h3>
       <pre>

@@ -680,6 +680,47 @@ export default function AuditPage() {
         recipient-side cap gap).
       </p>
 
+      <h3>
+        <code>A2ASenderMismatch</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":                   "a2_a_sender_mismatch",
+  "peer_display":           "attacker@local",
+  "claimed_sender_display": "victim@local"
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>SendA2ATask</code> is rejected because the
+        supplied <code>task.sender</code> does not match the
+        authenticated peer on the connection. The gate closes the
+        sender-spoof attack class — a malicious local process claiming
+        to be a different agent on the wire than the one bound to its
+        peer token. The check fires as a precondition before any cap
+        check runs, so a spoof attempt never even reaches{" "}
+        <code>A2ARecipientRejected</code> or the{" "}
+        <code>CapabilityCheck</code> path on the same{" "}
+        <code>SendA2ATask</code>. The issuer is the actual{" "}
+        <em>authenticated</em> peer (the recording path uses{" "}
+        <code>peer.clone()</code> against{" "}
+        <code>record_peer_event_required</code>) — not the spoofed
+        identity, so an attacker can&apos;t hide the attempt behind the
+        impersonated peer&apos;s audit feed. <code>peer_display</code>{" "}
+        and <code>claimed_sender_display</code> are both load-bearing
+        for the two-identity diagnostic; a{" "}
+        <code>#[serde(default)]</code> on either would collapse the
+        spoof event into a one-sided diagnostic and lose the
+        attribution. The wire-form <code>type</code> slug is{" "}
+        <code>&quot;a2_a_sender_mismatch&quot;</code>, <em>not</em>{" "}
+        <code>a2a_sender_mismatch</code> — the same serde{" "}
+        <code>rename_all = &quot;snake_case&quot;</code> A2A
+        digit/upper split. Distinct from{" "}
+        <code>A2ARecipientRejected</code> (post-spoof-gate path — a
+        recipient-side cap gap on an honestly-attributed sender) and
+        from <code>AuthenticationFailed</code> (no peer authenticated;
+        no <code>task.sender</code> claim to compare against).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

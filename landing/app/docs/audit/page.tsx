@@ -888,6 +888,50 @@ export default function AuditPage() {
         Hermes reports as cleared by the response).
       </p>
 
+      <h3>
+        <code>HermesApprovalResolved</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":      "hermes_approval_resolved",
+  "intent_id": "uuid",
+  "run_id":    "run_abc",
+  "choice":    "allow",
+  "resolved":  1
+}`}</code>
+      </pre>
+      <p>
+        Emitted when an operator (or auto-policy) answers a pending
+        Hermes approval — the end-of-pause counterpart to{" "}
+        <code>HermesApprovalRequested</code>, paired by{" "}
+        <code>intent_id + run_id</code> so operators reconstruct
+        approval latency by joining the two rows.{" "}
+        <code>intent_id</code> stamps the parent intent so the
+        resolution stays attributable to the originating{" "}
+        <code>IntentDispatched</code> even after the run terminates.{" "}
+        <code>run_id</code> is the same Hermes-side run identifier the
+        request row carries. <code>choice</code> is the selected
+        string from the originally presented{" "}
+        <code>choices</code> vector — the invariant is that the value
+        matches one of the entries the request row recorded, so a
+        free-form unrelated string here would silently break
+        approval-lifecycle reconstruction across deployments.{" "}
+        <code>resolved</code> is the count of pending requests Hermes
+        reports as cleared by this response, recorded as the
+        per-response cleared count (not a running total). An
+        accumulator regression that summed across rows would make
+        every operator&apos;s approval dashboard count duplicates,
+        which is why the wire form pins the per-response semantic
+        rather than any running-sum alternative. Distinct from{" "}
+        <code>HermesApprovalRequested</code> (start-of-pause carrying
+        the <code>choices</code> vector vs end-of-pause carrying the
+        single selected <code>choice</code> and the{" "}
+        <code>resolved</code> count) and from{" "}
+        <code>HermesToolCompleted</code> (an approval response is not
+        a tool completion — there is no <code>tool</code>,{" "}
+        <code>duration_ms</code>, or <code>error</code> field).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

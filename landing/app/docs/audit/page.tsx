@@ -517,6 +517,68 @@ export default function AuditPage() {
         instead, one row per run rather than per record).
       </p>
 
+      <h3>
+        <code>A2ARepairApplied</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":           "a2_a_repair_applied",
+  "task_id":        "uuid",
+  "action":         "requeue" | "force_error" | "auto_requeue",
+  "reason":         "operator-cleared stuck lease",
+  "lease_id":       "uuid",
+  "duplicate_risk": "idempotent" | "low" | "high" | null,
+  "attempt":        1
+}`}</code>
+      </pre>
+      <p>
+        Emitted when <code>covenantd::Server</code> repairs an in-flight
+        A2A mailbox lease — either via an operator{" "}
+        <code>RepairA2A</code> request after the{" "}
+        <code>a2a.repair</code> scope check passes, or by the
+        disabled-by-default A2A auto-retry scheduler running as the
+        operator peer. Full task payloads stay in the mailbox log; the
+        audit row records who acted, why, and which lease they intended
+        to mutate. The issuer is the requesting peer
+        (operator-as-issuer audience). <code>action</code> is{" "}
+        <code>&quot;requeue&quot;</code> or{" "}
+        <code>&quot;force_error&quot;</code> for operator-issued repairs
+        and <code>&quot;auto_requeue&quot;</code> for scheduler-issued
+        ones — the slug is the only triage signal that separates a
+        scheduler-driven retry from an operator-driven one on the
+        operator&apos;s <code>/audit</code> feed.{" "}
+        <code>attempt</code> is the lease&apos;s retry-count after the
+        repair lands, which distinguishes a first repair (<code>1</code>)
+        from a re-repair on the same lease.
+      </p>
+      <p>
+        The wire-form <code>type</code> discriminator is{" "}
+        <code>&quot;a2_a_repair_applied&quot;</code>, <em>not</em>{" "}
+        <code>a2a_repair_applied</code> — serde&apos;s{" "}
+        <code>rename_all = &quot;snake_case&quot;</code> splits the{" "}
+        <code>A2A</code> prefix on each digit/uppercase boundary so the
+        durable on-disk slug carries the extra underscore. A refactor
+        that &quot;fixed&quot; the slug to{" "}
+        <code>a2a_repair_applied</code> would silently strand every
+        prior A2A-lease-repair audit row at decode time, which is why
+        the wire shape is pinned in <code>covenant-audit</code>.{" "}
+        <code>lease_id</code> and <code>duplicate_risk</code> are{" "}
+        <code>Option</code> fields but carry no{" "}
+        <code>#[serde(skip_serializing_if)]</code>, so both keys always
+        surface on the wire — <code>null</code> when the daemon did not
+        bind them. The wire shape stays at exactly seven keys across
+        every repair row regardless of whether the daemon classified the
+        lease&apos;s duplicate-risk; a doc example that elided either
+        key for the None case would let a future{" "}
+        <code>skip_serializing_if</code> regression masquerade as the
+        documented contract. Distinct from{" "}
+        <code>MemoryRepairApplied</code> (different subject: an A2A
+        mailbox lease, not a memory record — the audit-feed audience
+        and scope vocabularies are operator-only on both, but
+        cross-feed joins should key on this slug, not on the
+        peer-event audience).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

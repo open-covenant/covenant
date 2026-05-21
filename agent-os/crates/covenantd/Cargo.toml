@@ -26,11 +26,17 @@ covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
 covenant-settlement = { path = "../covenant-settlement" }
+# Default features only — the solana signer + its dep tree stay out of
+# the daemon build until the funding-key path lands behind its own
+# feature in a separate change.
+covenant-x402 = { path = "../covenant-x402" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }

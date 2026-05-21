@@ -395,6 +395,21 @@ pub enum AuditKind {
         peer_pubkey_b58: String,
         token_prefix: String,
     },
+    /// An agent paid an external x402 endpoint. Recorded after the
+    /// 402-then-pay loop returns success, alongside the paired budget
+    /// debit and settlement receipt. `amount` is the atomic on-chain
+    /// amount the provider charged (authoritative, from the live 402
+    /// challenge); `network` and `asset` identify the settlement rail;
+    /// `receipt_id` joins this row to the settlement receipt and the
+    /// budget debit. `endpoint` is the called URL for operator triage.
+    ExternalPaymentSettled {
+        provider: String,
+        endpoint: String,
+        network: String,
+        asset: String,
+        amount: String,
+        receipt_id: Uuid,
+    },
 }
 
 #[async_trait]

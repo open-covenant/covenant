@@ -9,6 +9,7 @@ pub mod http;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
+pub mod x402;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;

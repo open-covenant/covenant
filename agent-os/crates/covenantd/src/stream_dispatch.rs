@@ -279,11 +279,7 @@ where
         .await?;
     }
 
-    write_frame(
-        writer,
-        &StreamEnvelope::StreamEnd { stream_id, summary },
-    )
-    .await?;
+    write_frame(writer, &StreamEnvelope::StreamEnd { stream_id, summary }).await?;
 
     Ok(())
 }
@@ -313,11 +309,8 @@ mod tests {
         let mut out = Vec::new();
         // Loop until the cursor hits EOF; read_frame returns
         // UnexpectedEof on a drained reader.
-        loop {
-            match read_frame::<_, StreamEnvelope>(&mut cursor).await {
-                Ok(env) => out.push(env),
-                Err(_) => break,
-            }
+        while let Ok(env) = read_frame::<_, StreamEnvelope>(&mut cursor).await {
+            out.push(env);
         }
         out
     }
@@ -641,7 +634,9 @@ mod tests {
         // indistinguishable from a dead daemon.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None)
+            .await
+            .unwrap();
         let envelopes = drain_envelopes(&buf).await;
         assert_eq!(
             envelopes.len(),
@@ -671,8 +666,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emit_intent_stream_three_results_emits_begin_three_chunks_end_with_monotonic_sequence(
-    ) {
+    async fn emit_intent_stream_three_results_emits_begin_three_chunks_end_with_monotonic_sequence()
+    {
         // Symmetric to the memory/audit monotonic-sequence pins. ADR
         // 0010 requires sequence to count from 0 by 1; asserting
         // exact 0/1/2 catches a refactor that derived sequence from
@@ -759,7 +754,9 @@ mod tests {
         // break every v2-aware intent consumer at the routing layer.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None)
+            .await
+            .unwrap();
         let envelopes = drain_envelopes(&buf).await;
         match &envelopes[0] {
             StreamEnvelope::StreamBegin { response_kind, .. } => {

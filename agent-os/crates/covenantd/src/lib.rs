@@ -10925,8 +10925,8 @@ required = {caps:?}
     }
 
     #[tokio::test]
-    async fn stream_submit_intent_happy_path_emits_begin_chunk_end_with_summary_and_purges_tracker(
-    ) {
+    async fn stream_submit_intent_happy_path_emits_begin_chunk_end_with_summary_and_purges_tracker()
+    {
         // Agent card matches "find" + "papers", required caps granted.
         // dispatch_intent returns Response::IntentResult with a non-nil
         // intent_id, status="ok", and a paired settlement receipt. The
@@ -11185,7 +11185,9 @@ required = {caps:?}
             .expect_err("missing capability must produce Err(Response)");
         match err {
             Response::IntentResult { .. } => {
-                panic!("Err arm must NOT carry Response::IntentResult — that's the streamable variant")
+                panic!(
+                    "Err arm must NOT carry Response::IntentResult — that's the streamable variant"
+                )
             }
             other => {
                 let _ = other;
@@ -16722,7 +16724,10 @@ budget_credits_per_hour = {credits}
             }
         }
         let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
-        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+        assert!(matches!(
+            end,
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
 
         drop(client);
         let _ = server_task.await;
@@ -16875,7 +16880,10 @@ budget_credits_per_hour = {credits}
             }
         }
         let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
-        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+        assert!(matches!(
+            end,
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
 
         drop(client);
         let _ = server_task.await;

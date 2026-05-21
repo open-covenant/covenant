@@ -31,6 +31,7 @@ covenant-settlement = { path = "../covenant-settlement" }
 # feature in a separate change.
 covenant-x402 = { path = "../covenant-x402" }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
 reqwest = { workspace = true }

@@ -39,13 +39,17 @@
 //! URL with a minimal `getLatestBlockhash` JSON-RPC call (no
 //! `solana-client` dep — just `reqwest`).
 
+use std::path::Path;
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use solana_sdk::{
     hash::Hash,
     pubkey::Pubkey,
-    signer::{keypair::Keypair, Signer as SolanaKeypairSigner},
+    signer::{
+        keypair::{read_keypair_file, Keypair},
+        Signer as SolanaKeypairSigner,
+    },
     transaction::Transaction,
 };
 use spl_associated_token_account::{
@@ -86,6 +90,21 @@ impl SolanaSigner {
             rpc_url: rpc_url.into(),
             http,
         }
+    }
+
+    /// Loads the funding keypair from a Solana CLI keypair file (the
+    /// JSON byte-array format `solana-keygen` writes) and builds a
+    /// signer. The error message deliberately omits the key bytes —
+    /// only the path and the underlying reason are surfaced.
+    pub fn from_keypair_file(
+        path: impl AsRef<Path>,
+        rpc_url: impl Into<String>,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        let keypair = read_keypair_file(path).map_err(|e| {
+            X402Error::Sign(format!("read funding keypair {}: {e}", path.display()))
+        })?;
+        Ok(Self::new(keypair, rpc_url))
     }
 
     /// The signer's pubkey, useful for funding the account or
@@ -309,6 +328,30 @@ mod tests {
             pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
             scheme: "exact".into(),
         }
+    }
+
+    #[test]
+    fn from_keypair_file_round_trips_pubkey() {
+        use solana_sdk::signer::keypair::write_keypair_file;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("funding.json");
+        let kp = Keypair::new();
+        let expected = kp.pubkey();
+        write_keypair_file(&kp, path.to_str().unwrap()).expect("write keypair");
+
+        let signer =
+            SolanaSigner::from_keypair_file(&path, "https://rpc.example/").expect("load");
+        assert_eq!(signer.pubkey(), expected);
+    }
+
+    #[test]
+    fn from_keypair_file_errors_on_missing_path() {
+        let err = SolanaSigner::from_keypair_file(
+            "/nonexistent/path/funding.json",
+            "https://rpc.example/",
+        )
+        .expect_err("missing file");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("read funding keypair")));
     }
 
     #[test]

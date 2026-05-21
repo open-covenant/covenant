@@ -1172,6 +1172,7 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -1184,6 +1185,7 @@ name = "covenantd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bs58",
  "covenant-a2a",

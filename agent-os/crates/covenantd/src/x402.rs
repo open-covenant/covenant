@@ -21,10 +21,14 @@
 //! live dispatch endpoint land in a separate, separately-reviewed
 //! change — anything that moves real USDC is kept out of this slice.
 
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use reqwest::{Method, Response};
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -32,7 +36,7 @@ use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
 use covenant_settlement::Settlement;
 use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
-use covenant_x402::{Capability, Client, Signer, X402Error};
+use covenant_x402::{Capability, Client, PaymentRequirements, Signer, X402Error};
 
 /// Opt-in switch for the daemon's outbound x402 surface. `enabled`
 /// defaults to `false` so a daemon with no operator opt-in never
@@ -40,6 +44,95 @@ use covenant_x402::{Capability, Client, Signer, X402Error};
 #[derive(Debug, Clone, Default)]
 pub struct X402Config {
     pub enabled: bool,
+}
+
+/// A [`Signer`] that delegates to the standalone `covenant-x402-signer`
+/// sidecar over a subprocess.
+///
+/// The daemon never links the Solana dep tree and never holds the
+/// funding key: it spawns the sidecar, pipes the chosen
+/// [`PaymentRequirements`] as JSON to its stdin, and reads the
+/// `x-payment` header from its stdout. The funding key lives only in
+/// the sidecar's address space, configured via the sidecar's own env
+/// (e.g. `COVENANT_X402_FUNDING_KEYPAIR`).
+pub struct SubprocessSigner {
+    program: PathBuf,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+impl SubprocessSigner {
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: Vec::new(),
+        }
+    }
+
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// Set an env var for the spawned sidecar (e.g. the funding
+    /// keypair path or RPC URL). The daemon's own environment is not
+    /// inherited beyond what the OS passes through.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl Signer for SubprocessSigner {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+        let payload = serde_json::to_vec(requirements)
+            .map_err(|e| X402Error::Sign(format!("encode requirement: {e}")))?;
+
+        let mut child = Command::new(&self.program)
+            .args(&self.args)
+            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| X402Error::Sign(format!("spawn signer {:?}: {e}", self.program)))?;
+
+        {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| X402Error::Sign("signer stdin unavailable".into()))?;
+            stdin
+                .write_all(&payload)
+                .await
+                .map_err(|e| X402Error::Sign(format!("write to signer: {e}")))?;
+            // Drop closes stdin so the one-shot sidecar sees EOF.
+        }
+
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| X402Error::Sign(format!("await signer: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(X402Error::Sign(format!(
+                "signer exited {}: {}",
+                output.status,
+                stderr.trim()
+            )));
+        }
+
+        let header = String::from_utf8(output.stdout)
+            .map_err(|e| X402Error::Sign(format!("signer stdout not utf-8: {e}")))?;
+        let header = header.trim().to_string();
+        if header.is_empty() {
+            return Err(X402Error::Sign("signer returned an empty header".into()));
+        }
+        Ok(header)
+    }
 }
 
 /// Subsystem handles the accounting needs, borrowed for the duration
@@ -335,5 +428,41 @@ mod tests {
         .await
         .expect_err("disabled");
         assert!(matches!(err, X402DaemonError::Disabled));
+    }
+
+    fn requirement() -> PaymentRequirements {
+        PaymentRequirements {
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            amount: "80000".into(),
+            amount_usdc: 0.08,
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
+            scheme: "exact".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn subprocess_signer_returns_stdout_header() {
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; printf 'mock-x-payment-header'");
+        let header = signer.build_payment(&requirement()).await.expect("header");
+        assert_eq!(header, "mock-x-payment-header");
+    }
+
+    #[tokio::test]
+    async fn subprocess_signer_surfaces_nonzero_exit() {
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; echo 'no funding key' >&2; exit 3");
+        let err = signer.build_payment(&requirement()).await.expect_err("fail");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no funding key")));
+    }
+
+    #[tokio::test]
+    async fn subprocess_signer_rejects_empty_header() {
+        let signer = SubprocessSigner::new("sh").arg("-c").arg("cat >/dev/null");
+        let err = signer.build_payment(&requirement()).await.expect_err("empty");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("empty header")));
     }
 }

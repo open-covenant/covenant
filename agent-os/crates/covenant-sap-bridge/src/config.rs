@@ -82,6 +82,19 @@ pub struct Config {
     pub program_id: String,
     pub rpc_url: String,
     pub explorer_url: String,
+    /// Command (program followed by args) used to spawn the TypeScript
+    /// bridge worker. Defaults to the installed `covenant-sap-worker`
+    /// bin; override via `COVENANT_SAP_WORKER_CMD`.
+    pub worker_command: Vec<String>,
+}
+
+/// Default command used to invoke the TypeScript bridge worker. The
+/// `@covenant/sap-bridge` package installs it as `covenant-sap-worker`;
+/// operators with a non-standard layout override it via
+/// `COVENANT_SAP_WORKER_CMD` (whitespace-separated, e.g.
+/// `node /opt/covenant/sap-worker.js`).
+fn default_worker_command() -> Vec<String> {
+    vec!["covenant-sap-worker".to_owned()]
 }
 
 impl Config {
@@ -93,6 +106,7 @@ impl Config {
             program_id: String::new(),
             rpc_url: String::new(),
             explorer_url: String::new(),
+            worker_command: default_worker_command(),
         }
     }
 
@@ -137,12 +151,18 @@ impl Config {
             .map(str::to_owned)
             .unwrap_or_else(|| DEFAULT_EXPLORER_URL.to_owned());
 
+        let worker_command = get("COVENANT_SAP_WORKER_CMD")
+            .map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+            .filter(|parts| !parts.is_empty())
+            .unwrap_or_else(default_worker_command);
+
         Self {
             enabled,
             cluster,
             program_id,
             rpc_url,
             explorer_url,
+            worker_command,
         }
     }
 }

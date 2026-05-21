@@ -18,10 +18,17 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "covenant-sap-worker": "./dist/worker.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "default": "./dist/worker.js"
     }
   },
   "files": [
@@ -49,6 +56,9 @@
     "@solana/web3.js": { "optional": true }
   },
   "devDependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@oobe-protocol-labs/synapse-sap-sdk": "^0.17.0",
+    "@solana/web3.js": "^1.98.4",
     "typescript": "6.0.3",
     "vitest": "^4.1.5"
   }

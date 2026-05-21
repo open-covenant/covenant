@@ -18,6 +18,10 @@ export interface SynapseStatus {
   programId: string;
   rpcUrl: string;
   explorerUrl: string;
+  // This daemon's published SAP agent account, if it has registered
+  // one. Set by the operator (or daemon) via COVENANT_SAP_AGENT_PDA
+  // once `covenant-sap-worker publish-agent` returns an agentPda.
+  agentPda: string | null;
 }
 
 const DEFAULT_RPC_URLS: Record<SynapseCluster, string> = {
@@ -66,6 +70,11 @@ export function resolveSynapseStatus(
     env.COVENANT_SAP_RPC_URL ??
     DEFAULT_RPC_URLS[cluster];
   const explorerUrl = env.COVENANT_SAP_EXPLORER_URL ?? DEFAULT_EXPLORER_URL;
+  const agentPda =
+    env[`COVENANT_SAP_${upper}_AGENT_PDA`] ??
+    env.COVENANT_SAP_AGENT_PDA ??
+    env.NEXT_PUBLIC_COVENANT_SAP_AGENT_PDA ??
+    null;
   return {
     enabled,
     cluster,
@@ -73,6 +82,7 @@ export function resolveSynapseStatus(
     programId,
     rpcUrl,
     explorerUrl,
+    agentPda,
   };
 }
 

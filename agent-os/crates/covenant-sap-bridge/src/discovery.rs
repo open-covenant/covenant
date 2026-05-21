@@ -1,15 +1,16 @@
 //! Peer lookup via SAP's discovery registry.
 //!
-//! Skeleton. The follow-up commit decodes SAP discovery accounts and
-//! exposes them as `PeerRecord`s that slot into Covenant's peer
-//! registry alongside locally-known peers.
+//! Resolves peers through the worker, which decodes SAP agent and
+//! protocol-index accounts. Results slot into Covenant's peer registry
+//! alongside locally-known peers.
 
 use serde::{Deserialize, Serialize};
 
 use crate::client::SapBridge;
-use crate::Result;
+use crate::{worker, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerRecord {
     pub agent_pda: String,
     pub display: String,
@@ -17,14 +18,24 @@ pub struct PeerRecord {
     pub reputation_score: Option<u32>,
 }
 
+#[derive(Serialize)]
+struct ProtocolQuery<'a> {
+    protocol: &'a str,
+}
+
+#[derive(Serialize)]
+struct PdaQuery<'a> {
+    pda: &'a str,
+}
+
 impl SapBridge {
-    pub async fn find_agents_by_protocol(&self, _protocol: &str) -> Result<Vec<PeerRecord>> {
+    pub async fn find_agents_by_protocol(&self, protocol: &str) -> Result<Vec<PeerRecord>> {
         self.require_enabled()?;
-        todo!("decode DiscoveryRegistry by protocol index")
+        worker::invoke(self.config(), "find-by-protocol", &ProtocolQuery { protocol }).await
     }
 
-    pub async fn find_agent_by_pda(&self, _pda: &str) -> Result<Option<PeerRecord>> {
+    pub async fn find_agent_by_pda(&self, pda: &str) -> Result<Option<PeerRecord>> {
         self.require_enabled()?;
-        todo!("fetch + decode AgentAccount")
+        worker::invoke(self.config(), "find-agent", &PdaQuery { pda }).await
     }
 }

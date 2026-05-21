@@ -9,8 +9,9 @@
 //!   lamports is enough)
 //! - Keypair funded with mainnet USDC for the call cost (the demo
 //!   prints the exact pricing before signing)
-//! - The recipient's USDC ATA must already exist. Xona's payTo
-//!   accounts will, since they receive USDC continuously.
+//!
+//! The recipient's USDC ATA is created idempotently if missing (the
+//! payer covers the small rent), so no out-of-band setup is needed.
 //!
 //! Run:
 //! ```bash

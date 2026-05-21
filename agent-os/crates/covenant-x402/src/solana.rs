@@ -48,7 +48,10 @@ use solana_sdk::{
     signer::{keypair::Keypair, Signer as SolanaKeypairSigner},
     transaction::Transaction,
 };
-use spl_associated_token_account::get_associated_token_address;
+use spl_associated_token_account::{
+    get_associated_token_address,
+    instruction::create_associated_token_account_idempotent,
+};
 use tracing::debug;
 
 use crate::{PaymentRequirements, Result, Signer, X402Error};
@@ -240,14 +243,20 @@ pub fn decimals_for_mint(mint: &Pubkey) -> Option<u8> {
     }
 }
 
-/// Builds a signed `TransferChecked` transaction from the payer's
-/// USDC ATA to the recipient's USDC ATA.
+/// Builds a signed transaction that pays `recipient` in `mint`.
 ///
-/// Assumes both ATAs already exist. If the recipient has no ATA
-/// for `mint`, the transaction lands but the SPL program rejects
-/// it — the caller should pre-create the ATA out of band, or this
-/// helper should be extended to prepend a CreateAssociatedTokenAccount
-/// instruction (out of scope for v1).
+/// Emits two instructions:
+/// 1. An idempotent `CreateAssociatedTokenAccount` for the
+///    recipient's ATA. It is a no-op when the ATA already exists
+///    (the common case for established payTo addresses) and creates
+///    it otherwise — the payer funds the rent. This removes the
+///    "recipient has no ATA → SPL rejects the transfer" failure mode
+///    without an extra pre-flight RPC.
+/// 2. The `TransferChecked` from the payer's ATA to the recipient's.
+///
+/// The payer's own ATA is assumed to exist — if it does not, the
+/// payer holds no balance of `mint` to spend and the call could not
+/// succeed regardless.
 pub fn build_transfer_transaction(
     payer: &Keypair,
     mint: Pubkey,
@@ -260,7 +269,14 @@ pub fn build_transfer_transaction(
     let source_ata = get_associated_token_address(&payer_pubkey, &mint);
     let dest_ata = get_associated_token_address(&recipient, &mint);
 
-    let ix = spl_token::instruction::transfer_checked(
+    let create_dest_ata = create_associated_token_account_idempotent(
+        &payer_pubkey,
+        &recipient,
+        &mint,
+        &spl_token::ID,
+    );
+
+    let transfer = spl_token::instruction::transfer_checked(
         &spl_token::ID,
         &source_ata,
         &mint,
@@ -272,7 +288,8 @@ pub fn build_transfer_transaction(
     )
     .map_err(|e| X402Error::Sign(format!("build transfer_checked: {e}")))?;
 
-    let mut tx = Transaction::new_with_payer(&[ix], Some(&payer_pubkey));
+    let mut tx =
+        Transaction::new_with_payer(&[create_dest_ata, transfer], Some(&payer_pubkey));
     tx.try_sign(&[payer], recent_blockhash)
         .map_err(|e| X402Error::Sign(format!("sign tx: {e}")))?;
     Ok(tx)
@@ -315,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn build_transaction_has_single_signature_and_instruction() {
+    fn build_transaction_has_single_signature_and_two_instructions() {
         let payer = Keypair::new();
         let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
         let recipient = Pubkey::from_str(
@@ -330,8 +347,8 @@ mod tests {
         assert_eq!(tx.signatures.len(), 1, "payer is the only signer");
         assert_eq!(
             tx.message.instructions.len(),
-            1,
-            "v1 emits exactly one TransferChecked instruction",
+            2,
+            "idempotent ATA-create followed by TransferChecked",
         );
         assert_eq!(
             tx.message.recent_blockhash, blockhash,

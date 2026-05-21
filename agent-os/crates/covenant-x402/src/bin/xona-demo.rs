@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use covenant_x402::solana::USDC_MAINNET_MINT;
-use covenant_x402::{Capability, Catalog, Client, OrbitClient, SolanaSigner};
+use covenant_x402::{Catalog, Client, OrbitClient, PaidRequest, SolanaSigner};
 use solana_sdk::signer::keypair::read_keypair_file;
 use solana_sdk::signer::Signer as _;
 
@@ -91,47 +91,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!();
 
-    let pricing = entry
+    // Preview the matching price before paying.
+    if let Some(pricing) = entry
         .pricing
         .iter()
         .find(|p| p.network == cfg.network && p.asset == cfg.asset)
-        .ok_or_else(|| {
-            format!(
-                "no pricing option matches network {:?} + asset {:?} — \
-                 either change XONA_NETWORK/XONA_ASSET, or pick a slug \
-                 whose pricing covers this chain",
-                cfg.network, cfg.asset
-            )
-        })?;
-
-    let amount_u: u128 = pricing.amount.parse()?;
-    if amount_u > cfg.per_call_cap {
-        return Err(format!(
-            "pricing {} atomic exceeds cap {} — raise XONA_PER_CALL_CAP_USDC_ATOMIC if intentional",
-            pricing.amount, cfg.per_call_cap
-        )
-        .into());
+    {
+        eprintln!(
+            "About to pay {} atomic units (≈ {} USDC) and call {}\n",
+            pricing.amount, pricing.amount_usdc, entry.endpoint
+        );
     }
 
-    eprintln!(
-        "About to pay {} atomic units (≈ {} USDC) and call {}\n",
-        pricing.amount, pricing.amount_usdc, entry.endpoint
-    );
-
-    let capability = Capability {
-        provider: "xona".into(),
-        network: pricing.network.clone(),
-        asset: pricing.asset.clone(),
-        per_call_cap: cfg.per_call_cap,
-    };
     let signer = SolanaSigner::new(keypair, cfg.rpc_url);
     let client = Client::new(reqwest::Client::new());
-
-    let method: reqwest::Method = entry.method.parse().unwrap_or(reqwest::Method::POST);
     let body = serde_json::json!({ "prompt": cfg.prompt });
 
-    let resp = client
-        .request_paid(method, &entry.endpoint, Some(&body), &capability, &signer)
+    // One call resolves the endpoint, enforces the cap, and runs the
+    // 402-then-pay loop — the same path the daemon uses.
+    let resp = catalog
+        .discover_and_pay(
+            &client,
+            &signer,
+            &PaidRequest {
+                slug: &cfg.slug,
+                server_title: None,
+                network: &cfg.network,
+                asset: &cfg.asset,
+                per_call_cap: cfg.per_call_cap,
+                provider: "xona",
+                body: Some(&body),
+            },
+        )
         .await?;
 
     let status = resp.status();

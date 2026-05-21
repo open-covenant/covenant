@@ -186,6 +186,13 @@ impl Catalog {
         self.entries.is_empty()
     }
 
+    /// Iterate every entry. Lets sibling modules (e.g. the
+    /// discover-and-pay flow) resolve entries without exposing the
+    /// backing storage.
+    pub fn iter(&self) -> impl Iterator<Item = &RegistryEntry> {
+        self.entries.iter()
+    }
+
     /// Every entry whose server title matches exactly. Useful for
     /// "list every endpoint Xona exposes".
     pub fn by_server<'a>(

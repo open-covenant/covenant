@@ -24,6 +24,7 @@
 #![deny(unsafe_code)]
 
 pub mod client;
+pub mod flow;
 pub mod orbit;
 pub mod signer;
 pub mod types;
@@ -32,6 +33,7 @@ pub mod types;
 pub mod solana;
 
 pub use client::Client;
+pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};
 pub use types::{Capability, PaymentRequirements};

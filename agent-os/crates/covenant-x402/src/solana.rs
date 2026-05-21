@@ -26,11 +26,12 @@
 //!
 //! ## Decimals
 //!
-//! `TransferChecked` requires the mint's decimal count. v1
-//! hardcodes USDC mainnet + devnet (both 6). Other mints return
-//! [`crate::X402Error::Sign`] with a message asking to extend
-//! [`decimals_for_mint`]. A future PR can add an on-chain decimals
-//! lookup via the mint account.
+//! `TransferChecked` requires the mint's decimal count. USDC
+//! mainnet + devnet (both 6) resolve through a hardcoded fast path
+//! with no RPC. Any other mint is resolved on-chain via
+//! `getAccountInfo` (`jsonParsed`) — see [`SolanaSigner::resolve_decimals`].
+//! A mint that does not exist or is not an SPL mint surfaces
+//! [`crate::X402Error::Sign`].
 //!
 //! ## RPC dependency
 //!
@@ -90,6 +91,57 @@ impl SolanaSigner {
         self.keypair.pubkey()
     }
 
+    /// Resolves the decimal count for an SPL mint.
+    ///
+    /// Tries the hardcoded fast path ([`decimals_for_mint`]) first so
+    /// USDC payments never incur an extra RPC round-trip. For any
+    /// other mint it falls back to `getAccountInfo` with `jsonParsed`
+    /// encoding and reads `value.data.parsed.info.decimals`. This is
+    /// what lets the signer pay providers in the orbit registry that
+    /// price in mints other than USDC.
+    pub async fn resolve_decimals(&self, mint: &Pubkey) -> Result<u8> {
+        if let Some(d) = decimals_for_mint(mint) {
+            return Ok(d);
+        }
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [
+                mint.to_string(),
+                {"encoding": "jsonParsed", "commitment": "confirmed"}
+            ]
+        });
+        let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(X402Error::Sign(format!(
+                "rpc getAccountInfo status {}: {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            )));
+        }
+        let parsed: serde_json::Value = resp.json().await?;
+        // A missing account surfaces as `result.value == null`.
+        if parsed.pointer("/result/value").map(|v| v.is_null()) == Some(true) {
+            return Err(X402Error::Sign(format!(
+                "mint {mint} not found on-chain"
+            )));
+        }
+        let decimals = parsed
+            .pointer("/result/value/data/parsed/info/decimals")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                X402Error::Sign(format!(
+                    "mint {mint}: no parsed decimals in getAccountInfo response \
+                     (not an SPL mint, or node lacks jsonParsed support)"
+                ))
+            })?;
+        u8::try_from(decimals).map_err(|_| {
+            X402Error::Sign(format!("mint {mint}: implausible decimals {decimals}"))
+        })
+    }
+
     async fn latest_blockhash(&self) -> Result<Hash> {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -142,12 +194,7 @@ impl Signer for SolanaSigner {
             .amount
             .parse()
             .map_err(|e| X402Error::Sign(format!("parse amount {:?}: {e}", requirements.amount)))?;
-        let decimals = decimals_for_mint(&mint).ok_or_else(|| {
-            X402Error::Sign(format!(
-                "unknown mint decimals for {} — extend decimals_for_mint or add on-chain lookup",
-                requirements.asset
-            ))
-        })?;
+        let decimals = self.resolve_decimals(&mint).await?;
 
         let blockhash = self.latest_blockhash().await?;
         debug!(
@@ -375,15 +422,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_payment_rejects_unknown_mint() {
-        let server = MockServer::start().await; // never hit
+    async fn build_payment_rejects_missing_mint_account() {
+        // Unknown mint → on-chain lookup. The RPC reports the account
+        // does not exist (`value: null`); build_payment must surface
+        // that as a Sign error rather than charging against a
+        // nonexistent mint.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "context": {"slot": 1}, "value": null }
+            })))
+            .mount(&server)
+            .await;
         let signer = SolanaSigner::new(Keypair::new(), server.uri());
         let req = xona_requirements(
             "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
             "11111111111111111111111111111111",
             "80000",
         );
-        let err = signer.build_payment(&req).await.expect_err("unknown mint");
-        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("unknown mint decimals")));
+        let err = signer.build_payment(&req).await.expect_err("missing mint");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("not found on-chain")));
+    }
+
+    #[tokio::test]
+    async fn resolve_decimals_uses_hardcoded_path_without_rpc() {
+        // No mock mounted: if resolve_decimals hit the RPC for USDC
+        // it would 404 and error. It must short-circuit instead.
+        let server = MockServer::start().await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        assert_eq!(signer.resolve_decimals(&mint).await.expect("hardcoded"), 6);
+    }
+
+    #[tokio::test]
+    async fn resolve_decimals_reads_on_chain_for_unknown_mint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "data": {
+                            "parsed": {
+                                "info": { "decimals": 9 },
+                                "type": "mint"
+                            },
+                            "program": "spl-token",
+                            "space": 82
+                        },
+                        "executable": false,
+                        "lamports": 1000000,
+                        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        // A valid base58 pubkey that isn't a hardcoded USDC mint.
+        let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
+        assert_eq!(signer.resolve_decimals(&mint).await.expect("on-chain"), 9);
+    }
+
+    #[tokio::test]
+    async fn resolve_decimals_errors_when_not_a_mint() {
+        // Account exists but has no parsed mint decimals (e.g. a
+        // plain system account). Must surface a Sign error.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "data": ["", "base64"],
+                        "executable": false,
+                        "lamports": 1000000,
+                        "owner": "11111111111111111111111111111111"
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
+        let err = signer.resolve_decimals(&mint).await.expect_err("not a mint");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no parsed decimals")));
     }
 }

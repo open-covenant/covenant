@@ -162,6 +162,24 @@ Rules:
 - `cluster` and `batch_id` narrow already-batched receipt rows. Unbatched local receipts do not satisfy a concrete `cluster` or `batch_id` selector.
 - `mint` is checked against the configured settlement mint for `chain.flush`; a concrete mint selector does not match if the daemon has no configured mint.
 
+### `settlement.*`
+
+Use for local settlement-receipt maintenance.
+
+```json
+{
+  "version": 1,
+  "apply": true,
+  "before_ms": null
+}
+```
+
+Rules:
+
+- `settlement.backfill.apply` and `settlement.backfill.dry_run` are distinct grants; the backfill mode is part of the action. A scope may pin `apply` to bind a grant to a single mode.
+- `before_ms` bounds the backfill to receipts at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded.
+- This namespace is validated signed metadata and compatibility preparation: the daemon validates the scope shape before signing a grant, but no dispatch path enforces it yet. Least-privilege enforcement lands with the settlement-receipt backfill mutator.
+
 ## Enforcement Path
 
 1. Keep accepting `{}` for existing broad grants.

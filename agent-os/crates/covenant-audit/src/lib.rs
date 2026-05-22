@@ -258,7 +258,7 @@ pub enum AuditKind {
         refill_eta_ms: u64,
     },
     /// Logged when the budget-hard-preempt path successfully terminated
-    /// an over-budget subprocess. Distinct from [`BudgetExhausted`] (a
+    /// an over-budget subprocess. Distinct from [`AuditKind::BudgetExhausted`] (a
     /// post-completion rejection) because preempt actively kills a
     /// still-running process. `signal_sent` is the name of the signal
     /// the daemon dispatched (`"SIGTERM"`, `"SIGKILL"`, or `"none"`

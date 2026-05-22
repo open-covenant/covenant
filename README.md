@@ -106,7 +106,7 @@ Covenant includes:
 - Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
 - Source-built local installer for the daemon and CLI with a relative-path install manifest.
-- CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
+- CI coverage for Rust, documentation, workflow linting, provenance verification, dependency audits, and CodeQL. Public live-test inventory comes from source; private workflow checkouts may add stricter matrix validation.
 
 ## Validation
 
@@ -148,7 +148,7 @@ cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
-Inspect the live coverage inventory:
+Inspect the public live coverage inventory:
 
 ```bash
 bash agent-os/scripts/test-stats.sh
@@ -170,11 +170,11 @@ Covenant advances open infrastructure for:
 
 If you use Covenant in academic work or reference the design in a paper, please cite the whitepaper:
 
-> Wasque, A. (2026). *Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents*. Zenodo. https://doi.org/10.5281/zenodo.20134416
+> Covenant contributors. (2026). *Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents*. Zenodo. https://doi.org/10.5281/zenodo.20134416
 
 ```bibtex
-@misc{wasque2026covenant,
-  author    = {Wasque, Achille},
+@misc{covenant2026,
+  author    = {Covenant contributors},
   title     = {Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents},
   year      = {2026},
   publisher = {Zenodo},

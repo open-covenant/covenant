@@ -12,7 +12,7 @@ Implemented:
 - `GvisorRunner` prepares a restrictive OCI bundle and invokes `runsc`.
 - The initial `GvisorRunner` supports `filesystem = "read-only-package"` and `network = "off"` only.
 - `covenantd` can select `trusted-local` or `linux-gvisor` at startup through explicit runtime backend configuration.
-- The live coverage matrix includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
+- The public live-test inventory includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
 - A repeatable Linux runner guide documents the host, `runsc`, rootfs, and CI adoption requirements for that live path.
 - Sandbox stderr redacts configured host-local paths before surfacing failure text.
 

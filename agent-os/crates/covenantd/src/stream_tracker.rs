@@ -7,13 +7,12 @@
 //! "what is in flight" and so connection close can deterministically
 //! purge entries the daemon-side dispatch left behind.
 //!
-//! This module ships the primitive only. No streaming verb writes to
-//! this tracker yet, and `Server::handle` does not yet generate a
-//! connection_id or invoke `purge_connection` on connection close — both
-//! are explicit follow-up slices (`ipc-v2-connection-id-and-stream-purge`
-//! and per-verb streaming dispatch slices). The split mirrors slice A
-//! of the budget-hard-preempt family: add the type with tests, integrate
-//! later.
+//! `Server::serve` allocates a `connection_id` per accepted connection
+//! and `Server::handle`'s `PurgeOnDrop` guard calls `purge_connection`
+//! on connection close. The three streaming dispatch forks (ADR 0010
+//! slices 3.d–5.d) register an entry when they open a stream and
+//! unregister it on stream end or error, so a client that disconnects
+//! mid-stream is cleaned up by the guard rather than leaking an entry.
 //!
 //! Keys are intentionally tuples `(connection_id, stream_id)`. ADR 0010
 //! is explicit that stream_id is connection-scoped, not globally unique;
@@ -72,8 +71,7 @@ impl StreamTracker {
     /// Insert an entry. If `(connection_id, stream_id)` is already
     /// present the existing entry is overwritten — this should not
     /// happen under correct dispatch flow and likely indicates a race
-    /// in the future per-verb integration that this slice intentionally
-    /// does not yet wire.
+    /// in the per-verb dispatch integration.
     pub fn register(&self, connection_id: Uuid, stream_id: Uuid, entry: StreamEntry) {
         let mut guard = self
             .entries
@@ -97,8 +95,8 @@ impl StreamTracker {
 
     /// Drops every entry whose key has `connection_id` and returns the
     /// number of entries removed. Called from the connection handler's
-    /// drop path in a future slice so a client disconnect cleans up
-    /// every stream that connection opened.
+    /// `PurgeOnDrop` guard so a client disconnect cleans up every stream
+    /// that connection opened.
     pub fn purge_connection(&self, connection_id: Uuid) -> usize {
         let mut guard = self
             .entries

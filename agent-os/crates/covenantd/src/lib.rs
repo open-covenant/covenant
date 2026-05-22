@@ -726,9 +726,9 @@ pub struct Server {
     /// `Uuid::new_v4()` connection_id per accepted connection in
     /// `serve()` and the handler's `PurgeOnDrop` guard calls
     /// `purge_connection` on every exit path so a client disconnect
-    /// cleans up its in-flight streams. No production code path
-    /// currently writes to this tracker — per-verb streaming dispatch
-    /// slices will fill it in.
+    /// cleans up its in-flight streams. The per-verb streaming dispatch
+    /// forks (ADR 0010 slices 3.d–5.d) register an entry per opened
+    /// stream and unregister it on stream end or error.
     stream_tracker: Arc<stream_tracker::StreamTracker>,
     /// Daemon-shared in-flight subprocess tracker. `SubprocessRunner`
     /// and `GvisorRunner` register `intent_id → TrackedSubprocess`
@@ -789,8 +789,9 @@ impl Server {
 
     /// Returns a clone of the shared in-flight stream tracker. Tests
     /// hold this Arc to pre-register synthetic entries and assert the
-    /// connection handler's purge-on-close behavior; production callers
-    /// will use it once per-verb streaming dispatch lands.
+    /// connection handler's purge-on-close behavior. Production dispatch
+    /// writes through the `stream_tracker` field directly; this accessor
+    /// is reserved for a future operator-facing in-flight-streams snapshot.
     pub fn stream_tracker(&self) -> Arc<stream_tracker::StreamTracker> {
         self.stream_tracker.clone()
     }
@@ -1022,10 +1023,10 @@ impl Server {
     async fn handle(&self, connection_id: Uuid, mut stream: UnixStream) -> Result<()> {
         // Drop guard: regardless of how this fn exits (success, error,
         // panic-unwinding), purge every StreamTracker entry the
-        // connection registered. No production code path writes to
-        // the tracker yet, so this is a no-op in v0; once per-verb
-        // streaming dispatch slices land it closes the
-        // disconnect-leaks-entries failure mode automatically.
+        // connection registered. The per-verb streaming dispatch forks
+        // register an entry while a stream is open, so this guard closes
+        // the disconnect-leaks-entries failure mode when a client drops
+        // mid-stream.
         struct PurgeOnDrop<'a> {
             tracker: &'a stream_tracker::StreamTracker,
             connection_id: Uuid,

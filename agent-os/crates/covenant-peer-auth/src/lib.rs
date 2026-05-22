@@ -145,7 +145,7 @@ pub struct PeerSummary {
 }
 
 /// Filter applied to [`PeerRegistry::list_summaries`]. `None` (the
-/// wire default for [`Request::ListPeers.status_filter`]) means "no
+/// wire default for `Request::ListPeers.status_filter`) means "no
 /// filter" — both live and revoked rows surface; this preserves the
 /// pre-filter behaviour for stale clients that omit the field. The
 /// two explicit variants narrow the result to a single status so an
@@ -170,9 +170,9 @@ pub enum PeerStatusFilter {
 /// specific.
 ///
 /// Carries [`PeerSummary`] (not [`PeerEntry`]) on the wire so token
-/// bytes never leak — same invariant as [`Response::PeerList`].
+/// bytes never leak — same invariant as `Response::PeerList`.
 ///
-/// [`SelfRevokeForbidden`] is the daemon-side guard against revoking
+/// [`RevokeOutcome::SelfRevokeForbidden`] is the daemon-side guard against revoking
 /// the operator's own bootstrap token. The variant is produced by
 /// `Server::revoke_peer` (not the registry trait) so the storage
 /// layer stays peer-agnostic; the daemon peeks via
@@ -237,7 +237,7 @@ pub trait PeerRegistry: Send + Sync {
     /// this pubkey already revoked?" from a single read; `revoked_at`
     /// distinguishes them. `pubkey_prefix` filters server-side on
     /// `bs58::encode(agent_id.pubkey)` — the same string that
-    /// [`AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`]
+    /// `AuditKind::OperatorTokenRotationRejected.peer_pubkey_b58`
     /// records, so an operator can paste the audit row's b58 directly.
     /// Empty/`None` prefix means "no prefix filter".
     ///

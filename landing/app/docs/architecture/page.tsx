@@ -427,9 +427,10 @@ export default function ArchitecturePage() {
               JSONL and in-memory backends, per-event hash-chain
               integrity verification surfaced via{" "}
               <code>verify_integrity</code>, and recorded event kinds
-              spanning intent dispatch, capability checks, capability
-              grants, capability revoke rejections, and budget
-              enforcement events.
+              spanning intent dispatch, capability checks/grants/rejections,
+              budget enforcement, agent-to-agent messaging, tool approval
+              and invocation, memory maintenance, peer and operator
+              administration, and authentication failures.
             </td>
           </tr>
           <tr>

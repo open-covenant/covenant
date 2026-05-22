@@ -1006,6 +1006,72 @@ export default function AuditPage() {
         <code>duration_ms</code>, or <code>error</code> field).
       </p>
 
+      <h3>
+        <code>SettlementReceiptBackfillApplied</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":          "settlement_receipt_backfill_applied",
+  "row_count":     3,
+  "rollback_path": "/home/op/receipts/working.jsonl.bak",
+  "dry_run":       false
+}`}</code>
+      </pre>
+      <p>
+        Emitted when{" "}
+        <code>covenantd::Server::backfill_settlement_receipts</code>{" "}
+        completes the authorized settlement receipt backfill mutation.
+        The issuer is the requesting peer (operator-as-issuer audience),
+        recorded only after the dispatch-time{" "}
+        <code>settlement.backfill.{`<mode>`}</code> capability check, a
+        follow-up operator-identity equality check, and the{" "}
+        <code>settlement-backfill</code> capability scope check all
+        pass; capability-scope failures emit{" "}
+        <code>CapabilityScopeRejected</code> instead, so a{" "}
+        <code>SettlementReceiptBackfillApplied</code> row never coexists
+        with a rejection row for the same request. The row is emitted
+        only after <code>backfill_receipts</code> returned{" "}
+        <code>Ok</code> — i.e. after the rollback checkpoint, the
+        rewritten store contents, and the renamed store file are
+        fsynced — so the audit log cannot claim a mutation whose data
+        did not durably land. <code>row_count</code> is the count of
+        legacy rows the backfill plan would change on a dry run and the
+        count it actually rewrote on an apply; an apply that found
+        nothing to change reports <code>row_count: 0</code> and the
+        mutator short-circuits without writing a rollback file.{" "}
+        <code>dry_run</code> is the plan-vs-mutation triage signal: a
+        dry-run row always carries <code>dry_run: true</code> and{" "}
+        <code>rollback_path: null</code>, and a refactor that{" "}
+        <code>#[serde(default)]</code>-ed either field would let an
+        applied rewrite masquerade as a dry run or mask the
+        applied-vs-planned distinction. <code>rollback_path</code> is
+        the absolute path of the pre-rewrite checkpoint the mutator
+        wrote alongside the receipts store on an apply,{" "}
+        <code>null</code> on a dry run or a no-op apply that changed
+        nothing; the field carries no{" "}
+        <code>#[serde(skip_serializing_if)]</code> so the wire form is
+        always four keys (the key stays present as <code>null</code>{" "}
+        when None) — a consumer that filters on the applied-vs-dry
+        split reads <code>dry_run</code> while one that wants the
+        rollback checkpoint reads <code>rollback_path</code>, so both
+        must stay on the wire across the Some and None cases. The row
+        is best-effort like every other completed-mutation kind — the
+        rewrite is already durable and the rollback file is on disk,
+        so audit-write success is not a precondition for the response
+        (the variant is intentionally absent from{" "}
+        <code>audit_kind_requires_persistence</code>, which is reserved
+        for suppressible rejection probes whose suppression would hide
+        an attacker probe). Distinct from{" "}
+        <code>MemoryRepairApplied</code> and{" "}
+        <code>MemoryCompactionApplied</code> (different subject: the
+        settlement receipt store rewrite vs a memory-record mutation —
+        the rollback evidence here is an on-disk checkpoint sibling of
+        the store rather than a SQLite savepoint or per-record
+        before/after payload, and the action vocabulary collapses to
+        the single backfill operation rather than the three repair
+        actions or the three id-array categories compaction reports).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

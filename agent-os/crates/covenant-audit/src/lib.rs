@@ -1,11 +1,12 @@
 //! Append-only audit log with hash-chain integrity verification.
 //!
-//! Every intent dispatch, capability check, capability grant, capability
-//! revoke rejection, and budget enforcement event produces one
-//! [`AuditEvent`] (successful revocations write tombstones to the
-//! capability and peer registries instead; only rejected revocations
-//! land here). Wire format is
-//! JSONL — one event per line, easy to tail or grep — and the
+//! Every intent dispatch, capability check/grant/rejection, budget
+//! enforcement, agent-to-agent messaging, tool approval and
+//! invocation, memory maintenance, peer and operator administration,
+//! and authentication-failure event produces one [`AuditEvent`]
+//! (successful revocations write tombstones to the capability and peer
+//! registries instead; only rejected revocations land here). Wire
+//! format is JSONL — one event per line, easy to tail or grep — and the
 //! [`AuditLog`] trait abstracts over a JSONL-backed implementation
 //! suitable for production and an in-memory implementation suitable
 //! for tests. [`AuditLog::verify_integrity`] returns an

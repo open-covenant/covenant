@@ -112,3 +112,7 @@ Dry-run calls require `memory.compact.dry_run`; apply calls require `memory.comp
 ## Receipt Correlation
 
 Memory settlement receipts now carry an optional `memory_record_id` field that points at the originating `MemoryRecord.id` when daemon memory writes produce the receipt. `covenant verify` joins on that id first, then falls back to owner/resource counts only for older receipt rows that predate the field. Exact drift surfaces as `memory_without_receipt`, `receipt_without_memory_record`, `memory_receipt_duplicate`, or `memory_receipt_owner_mismatch`; aggregate count drift still surfaces as `memory_receipt_mismatch` when exact pairing is impossible.
+
+The settlement crate now exposes a rollback-backed receipt backfill primitive for this migration boundary. `backfill_receipts_with_correlations` rewrites a receipt JSONL only after writing and fsyncing a sibling rollback checkpoint, then applies explicit `receipt_id -> memory_record_id` correlations and canonicalizes serde-decodable legacy rows. The convenience `backfill_receipts(path, dry_run)` wrapper performs only safe canonical row repair because the settlement crate cannot infer memory ids by itself.
+
+This is not yet an operator command. Daemon authorization, IPC/HTTP/CLI surfaces, and audit rows remain follow-up work; until those land, use the existing verifier and memory repair commands for operator-facing workflows.

@@ -14,8 +14,10 @@
 use async_trait::async_trait;
 use covenant_types::{ResourceKind, SettlementReceipt};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -58,6 +60,19 @@ pub struct ReceiptBatch {
     pub merkle_root: String,
     pub receipt_ids: Vec<uuid::Uuid>,
     pub receipt_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptBackfillCorrelation {
+    pub receipt_id: uuid::Uuid,
+    pub memory_record_id: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillOutcome {
+    pub row_count: u64,
+    pub rollback_path: Option<PathBuf>,
+    pub dry_run: bool,
 }
 
 pub fn build_receipt_batch(
@@ -165,6 +180,129 @@ pub fn receipt_migration_plan_json(receipts: &[SettlementReceipt]) -> serde_json
             "reason": "settlement receipt migration is read-only; mutation requires a separate authorized command with rollback and audit evidence"
         }
     })
+}
+
+pub async fn backfill_receipts(
+    store_path: impl AsRef<Path>,
+    dry_run: bool,
+) -> Result<BackfillOutcome, SettlementError> {
+    backfill_receipts_with_correlations(store_path, dry_run, &[]).await
+}
+
+pub async fn backfill_receipts_with_correlations(
+    store_path: impl AsRef<Path>,
+    dry_run: bool,
+    correlations: &[ReceiptBackfillCorrelation],
+) -> Result<BackfillOutcome, SettlementError> {
+    let store_path = store_path.as_ref();
+    let original = match fs::read_to_string(store_path).await {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BackfillOutcome {
+                row_count: 0,
+                rollback_path: None,
+                dry_run,
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let correlation_map = correlations
+        .iter()
+        .map(|correlation| (correlation.receipt_id, correlation.memory_record_id))
+        .collect::<HashMap<_, _>>();
+    let mut original_values = Vec::new();
+    let mut original_receipts = Vec::new();
+
+    for line in original.lines().filter(|line| !line.trim().is_empty()) {
+        let value = serde_json::from_str::<serde_json::Value>(line)?;
+        let receipt = serde_json::from_value::<SettlementReceipt>(value.clone())?;
+        original_values.push(value);
+        original_receipts.push(receipt);
+    }
+
+    let migration_plan = receipt_migration_plan_json(&original_receipts);
+    let legacy_receipt_ids = legacy_uncorrelated_receipt_ids(&migration_plan);
+    let mut planned = Vec::new();
+    let mut row_count = 0;
+
+    for (original_value, mut receipt) in original_values.into_iter().zip(original_receipts) {
+        if legacy_receipt_ids.contains(&receipt.id) {
+            if let Some(memory_record_id) = correlation_map.get(&receipt.id) {
+                receipt.memory_record_id = Some(*memory_record_id);
+            }
+        }
+
+        let next_value = serde_json::to_value(&receipt)?;
+        if next_value != original_value {
+            row_count += 1;
+        }
+        planned.push(receipt);
+    }
+
+    if dry_run || row_count == 0 {
+        return Ok(BackfillOutcome {
+            row_count,
+            rollback_path: None,
+            dry_run,
+        });
+    }
+
+    if let Some(parent) = store_path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    let rollback_path = rollback_checkpoint_path(store_path);
+    let mut rollback = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&rollback_path)
+        .await?;
+    rollback.write_all(original.as_bytes()).await?;
+    rollback.sync_all().await?;
+    drop(rollback);
+
+    let tmp = store_path.with_extension("jsonl.backfill.tmp");
+    let mut out = fs::File::create(&tmp).await?;
+    for receipt in planned {
+        out.write_all(serde_json::to_string(&receipt)?.as_bytes())
+            .await?;
+        out.write_all(b"\n").await?;
+    }
+    out.sync_all().await?;
+    drop(out);
+    fs::rename(&tmp, store_path).await?;
+    let store = OpenOptions::new().read(true).open(store_path).await?;
+    store.sync_all().await?;
+
+    Ok(BackfillOutcome {
+        row_count,
+        rollback_path: Some(rollback_path),
+        dry_run,
+    })
+}
+
+fn rollback_checkpoint_path(store_path: &Path) -> PathBuf {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let file_name = store_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("receipts.jsonl");
+    store_path.with_file_name(format!("{file_name}.backfill-rollback-{unix_ms}.jsonl"))
+}
+
+fn legacy_uncorrelated_receipt_ids(plan: &serde_json::Value) -> HashSet<uuid::Uuid> {
+    plan.get("legacy_uncorrelated_receipts")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("receipt_id"))
+        .filter_map(|value| value.as_str())
+        .filter_map(|raw| uuid::Uuid::parse_str(raw).ok())
+        .collect()
 }
 
 fn receipt_hash(receipt: &SettlementReceipt) -> [u8; 32] {
@@ -434,6 +572,46 @@ mod tests {
         }
     }
 
+    fn read_receipt_file(path: &Path) -> Vec<SettlementReceipt> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn legacy_receipt_wire_without_defaults(receipt: &SettlementReceipt) -> String {
+        let mut value = serde_json::to_value(receipt).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        for key in [
+            "chain",
+            "cluster",
+            "batch_id",
+            "merkle_root",
+            "tx_sig",
+            "slot",
+            "confirmed_at",
+            "onchain_sig",
+        ] {
+            obj.remove(key);
+        }
+        serde_json::to_string(&value).unwrap()
+    }
+
+    fn rollback_files(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".backfill-rollback-")
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn in_memory_record_and_recent() {
         let s = InMemorySettlement::new();
@@ -477,6 +655,131 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let r = s.recent(10).await.unwrap();
         assert!(r.is_empty());
+    }
+
+    #[tokio::test]
+    async fn backfill_receipts_applies_correlations_and_writes_rollback_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let mut legacy = receipt(10);
+        legacy.id = Uuid::from_u128(0x10);
+        let mut already_correlated = receipt(20);
+        already_correlated.id = Uuid::from_u128(0x20);
+        already_correlated.memory_record_id = Some(Uuid::from_u128(0x200));
+        let mut compute = receipt(30);
+        compute.id = Uuid::from_u128(0x30);
+        compute.resource = ResourceKind::Compute;
+        let original = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&legacy).unwrap(),
+            serde_json::to_string(&already_correlated).unwrap(),
+            serde_json::to_string(&compute).unwrap()
+        );
+        std::fs::write(&path, &original).unwrap();
+
+        let memory_record_id = Uuid::from_u128(0x100);
+        let outcome = backfill_receipts_with_correlations(
+            &path,
+            false,
+            &[
+                ReceiptBackfillCorrelation {
+                    receipt_id: legacy.id,
+                    memory_record_id,
+                },
+                ReceiptBackfillCorrelation {
+                    receipt_id: compute.id,
+                    memory_record_id: Uuid::from_u128(0x300),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.row_count, 1);
+        assert!(!outcome.dry_run);
+        let rollback_path = outcome.rollback_path.expect("apply writes rollback");
+        assert_eq!(std::fs::read_to_string(&rollback_path).unwrap(), original);
+        assert!(rollback_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("receipts.jsonl.backfill-rollback-"));
+
+        let rows = read_receipt_file(&path);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].memory_record_id, Some(memory_record_id));
+        assert_eq!(
+            rows[1].memory_record_id,
+            already_correlated.memory_record_id
+        );
+        assert_eq!(rows[2].memory_record_id, None);
+    }
+
+    #[tokio::test]
+    async fn backfill_receipts_dry_run_reports_without_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let mut legacy = receipt(11);
+        legacy.id = Uuid::from_u128(0x11);
+        let original = legacy_receipt_wire_without_defaults(&legacy);
+        std::fs::write(&path, format!("{original}\n")).unwrap();
+
+        let outcome = backfill_receipts_with_correlations(
+            &path,
+            true,
+            &[ReceiptBackfillCorrelation {
+                receipt_id: legacy.id,
+                memory_record_id: Uuid::from_u128(0x111),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.row_count, 1);
+        assert!(outcome.dry_run);
+        assert_eq!(outcome.rollback_path, None);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{original}\n")
+        );
+        assert!(rollback_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn backfill_receipts_repairs_serde_decodable_legacy_wire_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let mut legacy = receipt(12);
+        legacy.id = Uuid::from_u128(0x12);
+        let original = legacy_receipt_wire_without_defaults(&legacy);
+        std::fs::write(&path, format!("{original}\n")).unwrap();
+
+        let outcome = backfill_receipts(&path, false).await.unwrap();
+
+        assert_eq!(outcome.row_count, 1);
+        assert!(outcome.rollback_path.is_some());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_ne!(raw, format!("{original}\n"));
+        let value: serde_json::Value = serde_json::from_str(raw.lines().next().unwrap()).unwrap();
+        assert_eq!(value["chain"], serde_json::Value::Null);
+        assert_eq!(value["onchain_sig"], serde_json::Value::Null);
+        assert!(!value.as_object().unwrap().contains_key("memory_record_id"));
+    }
+
+    #[tokio::test]
+    async fn backfill_receipts_noops_when_no_row_changes_are_planned() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let row = receipt(13);
+        let original = format!("{}\n", serde_json::to_string(&row).unwrap());
+        std::fs::write(&path, &original).unwrap();
+
+        let outcome = backfill_receipts(&path, false).await.unwrap();
+
+        assert_eq!(outcome.row_count, 0);
+        assert_eq!(outcome.rollback_path, None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert!(rollback_files(dir.path()).is_empty());
     }
 
     #[test]

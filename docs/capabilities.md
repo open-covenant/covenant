@@ -178,7 +178,7 @@ Rules:
 
 - `settlement.backfill.apply` and `settlement.backfill.dry_run` are distinct grants; the backfill mode is part of the action. A scope may pin `apply` to bind a grant to a single mode.
 - `before_ms` bounds the backfill to receipts at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded.
-- This namespace is validated signed metadata and compatibility preparation: the daemon validates the scope shape before signing a grant, but no dispatch path enforces it yet. Least-privilege enforcement lands with the settlement-receipt backfill mutator.
+- The settlement crate has a rollback-backed receipt backfill primitive for canonical row repair and explicit receipt-to-memory correlations. Daemon, IPC, HTTP, CLI, and audit wiring are not exposed yet, so this namespace remains grant-time preparation until the dispatch slice lands.
 
 ## Enforcement Path
 

@@ -20,8 +20,8 @@
 //! `memory_*_scope_allows` family ([`memory_purge_scope_allows`],
 //! [`memory_read_scope_allows`], [`memory_read_record_scope_allows`],
 //! [`memory_write_scope_allows`], [`memory_repair_scope_allows`],
-//! [`memory_compaction_scope_allows`]), and
-//! [`settlement_backfill_scope_allows`] on every privileged action.
+//! [`memory_compaction_scope_allows`], [`memory_backfill_scope_allows`]),
+//! and [`settlement_backfill_scope_allows`] on every privileged action.
 
 #![deny(unsafe_code)]
 
@@ -505,6 +505,35 @@ pub fn settlement_backfill_scope_allows(
         "settlement.backfill.apply"
     } else {
         "settlement.backfill.dry_run"
+    };
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
+}
+
+/// Dispatch-time gate for the memory-record receipt-backfill mutator. The
+/// action carries the mode (`memory.backfill.apply` vs
+/// `memory.backfill.dry_run`), so a dry-run-only grant cannot satisfy the
+/// apply action. An empty or `apply`-omitted scope authorizes both modes;
+/// `before_ms` bounds the backfill to records at or before a cutoff.
+pub fn memory_backfill_scope_allows(
+    action: &str,
+    scope: &Value,
+    apply: bool,
+    before_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    let expected_action = if apply {
+        "memory.backfill.apply"
+    } else {
+        "memory.backfill.dry_run"
     };
     if action != expected_action {
         return Ok(false);
@@ -3113,6 +3142,97 @@ mod tests {
             0
         )
         .unwrap());
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_apply_and_before_ms() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "apply": true,
+            "before_ms": 1_000
+        });
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &scope, true, 999).unwrap());
+        // Past the recency bound -> denied.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &scope, true, 1_001).unwrap()
+        );
+        // A scope pinned apply:true cannot satisfy the dry_run dispatch.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.dry_run", &scope, false, 999).unwrap()
+        );
+        // The apply arg derives the expected action; passing apply:false against
+        // the apply action string mismatches and is denied.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &scope, false, 999).unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_action_mismatch_dry_run_only_grant_and_unscoped_grants() {
+        // Unrouted action string: validate_scope no-ops, the action-mismatch
+        // check returns Ok(false) before the scope shape matters.
+        assert!(!memory_backfill_scope_allows("memory", &serde_json::json!([]), true, 0).unwrap());
+
+        // The core least-privilege property: a dry-run-only grant (apply:false)
+        // cannot satisfy the apply action but does satisfy dry_run.
+        let dry_run_only = serde_json::json!({ "version": 1, "apply": false });
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &dry_run_only, true, 0).unwrap()
+        );
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &dry_run_only, false, 0)
+                .unwrap()
+        );
+
+        // Empty scope authorizes both modes at any cutoff.
+        let empty = serde_json::json!({});
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &empty, true, 0).unwrap());
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &empty, false, u64::MAX)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_validate_scope_version_error_propagation() {
+        let err = memory_backfill_scope_allows(
+            "memory.backfill.apply",
+            &serde_json::json!({ "version": 0 }),
+            true,
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_before_ms_equal_boundary_and_null_unbounded() {
+        let bound = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        // before_ms uses <= (inclusive), unlike memory.repair's strict <.
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.apply", &bound, true, 1_000).unwrap()
+        );
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &bound, true, 1_001).unwrap()
+        );
+
+        let null_bound = serde_json::json!({ "version": 1, "before_ms": null });
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.apply", &null_bound, true, u64::MAX)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_apply_omitted_authorizes_both_modes() {
+        // scope_allows_apply returns true when the apply key is absent, so a
+        // version-1 scope with no apply key authorizes both modes. A future
+        // tightening that flipped this default would fail loud here.
+        let no_apply = serde_json::json!({ "version": 1 });
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &no_apply, true, 0).unwrap());
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &no_apply, false, 0).unwrap()
+        );
     }
 
     #[test]

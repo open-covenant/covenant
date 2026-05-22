@@ -67,7 +67,7 @@ pub enum Runtime {
     Node,
     #[serde(rename = "rust-bin")]
     RustBin,
-    /// Agent runs inside Hermes (https://github.com/NousResearch/hermes-agent)
+    /// Agent runs inside Hermes (<https://github.com/NousResearch/hermes-agent>)
     /// over its HTTP API. The daemon dispatches the intent to a configured
     /// Hermes endpoint; `entry` is ignored and may be left at its placeholder.
     Hermes,

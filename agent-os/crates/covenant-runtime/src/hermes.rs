@@ -1,6 +1,6 @@
 //! Hermes runtime backend.
 //!
-//! Drives a remote Hermes-agent gateway (https://github.com/NousResearch/hermes-agent)
+//! Drives a remote Hermes-agent gateway (<https://github.com/NousResearch/hermes-agent>)
 //! over its native `/v1/runs/*` HTTP surface. The covenant daemon dispatches
 //! the intent, Hermes does the agent stepping, and we poll the run to
 //! terminal state. Wall-clock budget comes from the agent manifest's

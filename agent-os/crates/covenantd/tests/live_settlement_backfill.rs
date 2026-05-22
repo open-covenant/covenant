@@ -8,7 +8,10 @@
 //!   legacy rows; the rollback checkpoint sibling of the store carries
 //!   the original content, the store is rewritten, and the
 //!   `SettlementReceiptBackfillApplied` audit row surfaces on the
-//!   operator feed with the matching row_count and rollback_path.
+//!   operator feed with the matching row_count and rollback_path. The
+//!   issuer==peer audience filter is exercised, but the v0 collapse of
+//!   operator and daemon identities means this does not separately
+//!   prove the audience would survive a multi-peer deployment.
 //! - unauthorized_scope: operator holds `settlement.backfill.dry_run`
 //!   but requests an apply; the daemon rejects with a permission error
 //!   that names the missing `settlement.backfill.apply` specifically,
@@ -389,8 +392,17 @@ async fn live_settlement_backfill_tamper_rollback() {
         !report.valid,
         "tampered audit row must fail integrity check; report: {report:?}",
     );
+    // Pin the SPECIFIC failure shape, not just any failure — a regression
+    // that swapped the digest-mismatch path for a parse error or a
+    // chain-length-mismatch would still produce !valid + non-empty
+    // failures while losing the per-row tamper-detection contract the
+    // backfill audit row depends on.
     assert!(
-        !report.failures.is_empty(),
-        "report must surface at least one failure; report: {report:?}",
+        report
+            .failures
+            .iter()
+            .any(|f| f.contains("mismatch") && !f.contains("missing")),
+        "report must surface a chain-entry digest mismatch; got failures: {:?}",
+        report.failures,
     );
 }

@@ -11,7 +11,7 @@
 //!
 //! Splitting the helper from the dispatch wiring keeps the diff
 //! reviewable: this slice ships only the primitive, with unit tests
-//! that drive the helper through a Vec<u8>-backed writer and decode
+//! that drive the helper through a `Vec<u8>`-backed writer and decode
 //! every frame back via [`covenant_ipc::read_frame`]. The wiring
 //! slice (ipc-v2-stream-recent-memory-dispatch-wiring or similar)
 //! integrates this helper into the `Server::handle` loop and

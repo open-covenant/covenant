@@ -176,7 +176,7 @@ pub fn runtime_runner_from_config(
 }
 
 /// Gateway connection for the Hermes runtime backend
-/// (https://github.com/NousResearch/hermes-agent). Wraps the API base URL
+/// (<https://github.com/NousResearch/hermes-agent>). Wraps the API base URL
 /// and an optional bearer token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesGatewayConfig {
@@ -820,7 +820,7 @@ impl Server {
         self
     }
 
-    /// Bind a `$COVENANT_HOME` path so [`Server::rotate_operator_token`]
+    /// Bind a `$COVENANT_HOME` path so `Server::rotate_operator_token`
     /// knows where to read the current token and where to rewrite it.
     /// Daemon `main` calls this once after [`Server::new`]. Without it,
     /// `RotateOperatorToken` returns `Response::Error`.
@@ -3947,7 +3947,7 @@ impl Server {
     }
 
     /// ADR 0010 streaming orchestrator for `Request::RecentMemory`
-    /// with `prefer_stream: Some(true)`. Wraps [`Self::recent_memory`]
+    /// with `prefer_stream: Some(true)`. Wraps `Self::recent_memory`
     /// so capability and scope checks stay defined in one place: on
     /// `Response::Memories { records }`, allocates a fresh
     /// `stream_id`, registers a [`stream_tracker::StreamEntry`] with
@@ -3974,7 +3974,7 @@ impl Server {
     /// is captured into a local so an `?`-propagated error from
     /// `write_frame` does not skip the unregister.
     ///
-    /// This method is not yet wired into [`Self::handle`]; the
+    /// This method is not yet wired into `Self::handle`; the
     /// per-verb dispatch fork lives in a follow-up slice. Keeping
     /// the orchestrator method-level keeps it reachable from unit
     /// tests without requiring an IPC handshake.
@@ -4091,7 +4091,7 @@ impl Server {
 
     /// ADR 0010 streaming orchestrator for `Request::RecentAudit`
     /// with `prefer_stream: Some(true)`. Symmetric with
-    /// [`Self::stream_recent_memory`]: wraps [`Self::recent_audit`]
+    /// [`Self::stream_recent_memory`]: wraps `Self::recent_audit`
     /// so the peer-scoped filter and `since_ms` truncation stay
     /// defined in one place, then forks on the response variant.
     ///
@@ -4111,7 +4111,7 @@ impl Server {
     /// begin+end pair. There is no audit equivalent of the memory
     /// capability-failure path.
     ///
-    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
+    /// Not yet wired into `Self::handle`; the per-verb dispatch
     /// fork lives in the follow-up wiring slice.
     #[allow(dead_code)]
     pub async fn stream_recent_audit<W>(
@@ -4155,7 +4155,7 @@ impl Server {
     ///
     /// Unlike memory, `recent_audit` has no capability gate — it
     /// filters by `peer.pubkey == event.issuer.pubkey` inside
-    /// [`Self::recent_audit`] — so the `Err(Response::Error)` arm is
+    /// `Self::recent_audit` — so the `Err(Response::Error)` arm is
     /// unreachable in practice on this verb. The Result shape stays
     /// for symmetry so the upcoming HTTP route handler can use one
     /// common pattern across memory and audit. An empty page (no
@@ -4221,7 +4221,7 @@ impl Server {
     /// with `prefer_stream: Some(true)`. Symmetric with
     /// [`Self::stream_recent_memory`] and [`Self::stream_recent_audit`]
     /// in structure: dispatches the intent via
-    /// [`Self::dispatch_intent`] (which owns capability checks,
+    /// `Self::dispatch_intent` (which owns capability checks,
     /// ignore-rule enforcement, runner invocation, audit recording,
     /// memory writes, and budget metering), then forks on the
     /// response variant.
@@ -4245,7 +4245,7 @@ impl Server {
     /// ADR 0010 explicitly allows daemon-decides-not-to-stream by
     /// falling back to v1 shape.
     ///
-    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
+    /// Not yet wired into `Self::handle`; the per-verb dispatch
     /// fork lives in slice 5.d.
     #[allow(dead_code)]
     pub async fn stream_submit_intent<W>(
@@ -5818,8 +5818,8 @@ fn read_operator_token_b58(path: &std::path::Path) -> std::io::Result<PeerToken>
 }
 
 /// Atomically write `token_b58` to `path` with mode 0600. Reused by
-/// daemon boot ([`crate::main`]'s `bootstrap_operator_token`) and
-/// [`Server::rotate_operator_token`].
+/// daemon boot (`crate::main`'s `bootstrap_operator_token`) and
+/// `Server::rotate_operator_token`.
 ///
 /// `OpenOptionsExt::mode` is honoured only on file creation. If the
 /// file already exists with a permissive mode, `O_CREAT|O_TRUNC` reuses

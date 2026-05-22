@@ -4034,7 +4034,6 @@ impl Server {
     /// unification slice can re-express the writer-based form as a
     /// wrapper around this method; for now the two methods coexist so
     /// integrated code is untouched.
-    #[allow(dead_code)]
     pub async fn recent_memory_envelopes(
         &self,
         tier: Option<MemoryTier>,
@@ -4161,7 +4160,6 @@ impl Server {
     /// events visible to the peer) is a happy-path `Ok` with the
     /// begin+end pair (no chunks); a stream that never opens is never
     /// indistinguishable from a dead daemon at the protocol layer.
-    #[allow(dead_code)]
     pub async fn recent_audit_envelopes(
         &self,
         limit: usize,
@@ -4319,7 +4317,6 @@ impl Server {
     /// chunk + end). A future streaming runtime extension that emits
     /// multiple partial `AgentResult` chunks is its own slice and
     /// updates this allocation accordingly.
-    #[allow(dead_code)]
     pub async fn submit_intent_envelopes(
         &self,
         text: String,

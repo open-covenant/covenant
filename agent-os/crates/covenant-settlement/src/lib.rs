@@ -275,6 +275,42 @@ pub async fn backfill_receipts_with_correlations(
     let store = OpenOptions::new().read(true).open(store_path).await?;
     store.sync_all().await?;
 
+    // Best-effort directory fsync: the file-level sync_all calls above
+    // flush the rollback file's contents, the rewritten store's contents,
+    // and the renamed store file's inode, but POSIX does not guarantee
+    // the rename's directory-entry update is durably on disk until the
+    // containing directory is fsynced. Without this step, a crash
+    // between the rename and the OS metadata flush could revert the
+    // store to the pre-rename inode while the SettlementReceiptBackfillApplied
+    // audit row already claims the backfill landed. The single fsync
+    // here covers every directory-entry change the apply path made:
+    // rollback file create, tmp file create, tmp removal, and store_path
+    // retarget. Failures are logged rather than propagated: the rewrite
+    // has already succeeded, and surfacing a returned error for a
+    // mutation that landed would mislead the operator into thinking the
+    // backfill failed. On platforms or filesystems where directory
+    // fsync is unsupported the next file syscall typically flushes the
+    // directory entry anyway, so the operational guarantee degrades
+    // gracefully.
+    if let Some(parent) = store_path.parent() {
+        match fs::File::open(parent).await {
+            Ok(dir) => {
+                if let Err(e) = dir.sync_all().await {
+                    tracing::warn!(
+                        parent = %parent.display(),
+                        error = %e,
+                        "settlement backfill: parent directory fsync failed; rename may not be crash-durable",
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                parent = %parent.display(),
+                error = %e,
+                "settlement backfill: could not open parent directory for fsync; rename may not be crash-durable",
+            ),
+        }
+    }
+
     Ok(BackfillOutcome {
         row_count,
         rollback_path: Some(rollback_path),

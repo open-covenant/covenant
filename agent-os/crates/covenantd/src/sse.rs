@@ -131,11 +131,11 @@ pub fn sse_response_headers() -> [(HeaderName, HeaderValue); 3] {
 /// Concatenate per-envelope SSE event blocks into a single response
 /// body.
 ///
-/// The upcoming route-wiring slice (ADR 0010 slice 6.h+) calls this on
-/// the `Vec<StreamEnvelope>` returned by
+/// The HTTP SSE handlers call this on the `Vec<StreamEnvelope>`
+/// returned by
 /// [`crate::Server::recent_memory_envelopes`] /
 /// [`crate::Server::recent_audit_envelopes`] /
-/// [`crate::Server::submit_intent_envelopes`], then sends the
+/// [`crate::Server::submit_intent_envelopes`], then send the
 /// resulting string as the axum response body. The single-envelope
 /// encoder already terminates each event with `\n\n` (the SSE
 /// blank-line delimiter), so concatenation requires no separator —

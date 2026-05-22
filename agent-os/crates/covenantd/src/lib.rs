@@ -4021,9 +4021,9 @@ impl Server {
     /// returned. This method performs the same capability check,
     /// tracker register/unregister bracketing, and chunk construction
     /// but returns the `StreamBegin` / `StreamChunk*` / `StreamEnd`
-    /// sequence as a `Vec<StreamEnvelope>`. The upcoming HTTP SSE
-    /// route handler encodes each entry with
-    /// [`crate::sse::encode_stream_envelope_as_sse`] and concatenates
+    /// sequence as a `Vec<StreamEnvelope>`. The HTTP SSE route
+    /// handlers encode each entry with
+    /// [`crate::sse::encode_stream_envelope_as_sse`] and concatenate
     /// the bytes into the response body.
     ///
     /// The error arm is the daemon's "streaming refused, render this
@@ -4155,7 +4155,7 @@ impl Server {
     /// filters by `peer.pubkey == event.issuer.pubkey` inside
     /// `Self::recent_audit` — so the `Err(Response::Error)` arm is
     /// unreachable in practice on this verb. The Result shape stays
-    /// for symmetry so the upcoming HTTP route handler can use one
+    /// for symmetry so the HTTP route handlers use one
     /// common pattern across memory and audit. An empty page (no
     /// events visible to the peer) is a happy-path `Ok` with the
     /// begin+end pair (no chunks); a stream that never opens is never

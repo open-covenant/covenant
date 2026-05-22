@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 /// Per-chunk schema string ADR 0010 names for streamed memory
 /// records. Pinned here as a const so the emit helper, the tracker
-/// register call (in the future dispatch-wiring slice), and any
+/// register call in the streaming orchestrators, and any
 /// fixture validator stay in sync. A rename here is a v2 break —
 /// every v2-aware client that reads `stream_begin.schema` to route
 /// the subsequent chunks would mis-dispatch.

@@ -10597,6 +10597,148 @@ required = {caps:?}
         );
     }
 
+    /// Writer that rejects every write with a broken-pipe error, used to
+    /// drive the streaming orchestrators' emit path to failure — it models
+    /// a client that disconnects the moment the daemon starts streaming.
+    struct FailingWriter;
+    impl tokio::io::AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected write failure",
+            )))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_recent_memory_write_failure_unregisters_tracker() {
+        // Capability granted and a record present, so the orchestrator
+        // takes the streaming path and registers a tracker entry. The
+        // writer then rejects the frame: emit returns Err, but the
+        // unregister must still run so the entry does not leak for the
+        // connection's lifetime. result.is_err() distinguishes this from
+        // the v1 capability-fallback path, which returns Ok.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::from_bytes([1; 16]),
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "memory 0".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({}),
+                created_at: 100,
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_recent_memory(&mut writer, connection_id, None, 10, &me)
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the tracker entry must be unregistered even when emit fails; the error path must not leak entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_audit_write_failure_unregisters_tracker() {
+        // Audit has no capability gate; one recorded event puts the
+        // orchestrator on the streaming path. The writer rejects the
+        // frame, so emit fails — the tracker entry must still be cleared.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.record_peer_event(
+            &me,
+            AuditEvent {
+                id: Uuid::from_bytes([10; 16]),
+                timestamp_ms: 1_700_000_000_000,
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::from_bytes([20; 16]),
+                    intent_text: "intent 0".into(),
+                    matched_agent: Some("test-agent".into()),
+                    result_hash_hex: format!("{:064x}", 0u64),
+                    status: "ok".into(),
+                },
+            },
+        )
+        .await;
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_recent_audit(&mut writer, connection_id, 10, None, &me)
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the audit streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the audit tracker entry must be unregistered even when emit fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_submit_intent_write_failure_unregisters_tracker() {
+        // Card matches and the required caps are granted, so dispatch_intent
+        // returns an IntentResult and the orchestrator registers a tracker
+        // entry before emitting. The writer rejects the frame: emit fails,
+        // and the unregister must still clear the entry.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_submit_intent(
+                &mut writer,
+                connection_id,
+                "find recent papers on agent memory".into(),
+                &me,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the intent streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the intent tracker entry must be unregistered even when emit fails"
+        );
+    }
+
     #[tokio::test]
     async fn stream_recent_memory_two_calls_use_distinct_stream_ids() {
         // Two back-to-back calls on the same connection must emit

@@ -5588,11 +5588,36 @@ impl Server {
         let receipts_path = home.join("receipts").join("working.jsonl");
 
         match covenant_settlement::backfill_receipts(&receipts_path, dry_run).await {
-            Ok(outcome) => Response::SettlementReceiptsBackfilled {
-                row_count: outcome.row_count,
-                rollback_path: outcome.rollback_path.map(|path| path.display().to_string()),
-                dry_run: outcome.dry_run,
-            },
+            Ok(outcome) => {
+                let rollback_path = outcome.rollback_path.map(|path| path.display().to_string());
+                // Emitted only here, after backfill_receipts returned Ok —
+                // i.e. after the rollback checkpoint, the rewritten store
+                // contents, and the renamed store file are fsynced — so
+                // the audit log never claims a mutation whose data did
+                // not durably land.
+                // Issuer is the acting operator (peer), matching the
+                // MemoryRepairApplied audience: the row surfaces on the
+                // operator's own /audit feed under the issuer==peer filter.
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::SettlementReceiptBackfillApplied {
+                            row_count: outcome.row_count,
+                            rollback_path: rollback_path.clone(),
+                            dry_run: outcome.dry_run,
+                        },
+                    },
+                )
+                .await;
+                Response::SettlementReceiptsBackfilled {
+                    row_count: outcome.row_count,
+                    rollback_path,
+                    dry_run: outcome.dry_run,
+                }
+            }
             Err(e) => Response::Error {
                 message: format!("settlement: {e}"),
             },
@@ -7277,6 +7302,117 @@ required = {caps:?}
             "dry run must not touch the store"
         );
         assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_apply_emits_audit_row_on_operator_feed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        seed_legacy_receipt_row(dir.path());
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        let response_rollback = match resp {
+            Response::SettlementReceiptsBackfilled { rollback_path, .. } => {
+                rollback_path.expect("apply returns a rollback path")
+            }
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        // Read through the operator feed (issuer == peer filter), not the
+        // raw log, so the test pins the audience too: the row must be
+        // visible to the operator who ran the backfill.
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. }))
+            .expect("backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::SettlementReceiptBackfillApplied {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(
+                    rollback_path.as_deref(),
+                    Some(response_rollback.as_str()),
+                    "audit row must reference the same rollback checkpoint the operator received",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_dry_run_emits_audit_row_without_rollback_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        seed_legacy_receipt_row(dir.path());
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        s.op_respond(Request::BackfillSettlementReceipts {
+            dry_run: true,
+            scope_pubkey: None,
+        })
+        .await;
+
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. }))
+            .expect("dry-run backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::SettlementReceiptBackfillApplied {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(dry_run);
+                assert_eq!(
+                    *rollback_path, None,
+                    "dry run records no rollback checkpoint"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[tokio::test]

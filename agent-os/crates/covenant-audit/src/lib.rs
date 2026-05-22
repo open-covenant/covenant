@@ -2,8 +2,9 @@
 //!
 //! Every intent dispatch, capability check/grant/rejection, budget
 //! enforcement, agent-to-agent messaging, tool approval and
-//! invocation, memory maintenance, peer and operator administration,
-//! and authentication-failure event produces one [`AuditEvent`]
+//! invocation, memory maintenance, settlement receipt backfill, peer
+//! and operator administration, and authentication-failure event
+//! produces one [`AuditEvent`]
 //! (successful revocations write tombstones to the capability and peer
 //! registries instead; only rejected revocations land here). Wire
 //! format is JSONL — one event per line, easy to tail or grep — and the
@@ -401,6 +402,31 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
         token_prefix: String,
+    },
+    /// Logged when the operator runs the settlement receipt backfill. A
+    /// dry run records `row_count` from the plan with `dry_run = true`
+    /// and no `rollback_path`; an apply records the rewritten
+    /// `row_count` and the `rollback_path` checkpoint the mutator wrote
+    /// before the atomic rewrite (absent on a no-op apply that changed
+    /// nothing). The daemon emits this only after `backfill_receipts`
+    /// returns — i.e. after the rollback checkpoint, the rewritten store
+    /// contents, and the renamed store file are fsynced — so the audit
+    /// log never claims a mutation whose data did not durably land.
+    ///
+    /// Issuer is the acting peer (the operator), matching the
+    /// [`AuditKind::MemoryRepairApplied`] audience model: the row
+    /// surfaces on the operator's `/audit/recent` feed under the
+    /// issuer-equals-peer filter rather than being mis-attributed to the
+    /// daemon identity, which would hide a guest operator's backfill from
+    /// their own feed at multi-peer. Best-effort like every other
+    /// completed-mutation kind — the rewrite is already durable and the
+    /// rollback file is on disk, so audit-write success is not a
+    /// precondition for the response (unlike the suppressible rejection
+    /// probes in `audit_kind_requires_persistence`).
+    SettlementReceiptBackfillApplied {
+        row_count: u64,
+        rollback_path: Option<String>,
+        dry_run: bool,
     },
 }
 
@@ -3013,6 +3039,85 @@ mod tests {
             7,
             "AuditKind::A2ARepairApplied with lease_id=None and duplicate_risk=None must still surface seven keys on the wire; a skip_serializing_if regression would silently shrink the wire form for the None case",
         );
+    }
+
+    #[test]
+    fn audit_kind_settlement_receipt_backfill_applied_serde_pins_three_field_variant() {
+        // AuditKind::SettlementReceiptBackfillApplied is the audit row
+        // covenantd emits after the settlement receipt backfill mutator
+        // returns. Three fields: row_count (u64), rollback_path
+        // (Option<String>), dry_run (bool). Integrity reports and replay
+        // join on the durable slug; a rename would silently strand every
+        // prior backfill row at decode time. rollback_path carries no
+        // #[serde(skip_serializing_if)] so the key surfaces as null on a
+        // dry run or a no-op apply — a consumer that filters on the
+        // applied-vs-dry split reads dry_run, and one that wants the
+        // rollback checkpoint reads rollback_path, so both must stay on
+        // the wire across the Some and None cases.
+        let kind = AuditKind::SettlementReceiptBackfillApplied {
+            row_count: 3,
+            rollback_path: Some("/home/op/receipts/working.jsonl.bak".into()),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "rollback_path", "row_count", "type"],
+            "AuditKind::SettlementReceiptBackfillApplied wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("settlement_receipt_backfill_applied")),
+            "AuditKind discriminator slug must be snake_case 'settlement_receipt_backfill_applied'; a rename would strand every prior backfill audit row at decode time and break integrity replay",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::SettlementReceiptBackfillApplied must round-trip through serde_json verbatim",
+        );
+
+        // row_count and dry_run are strictly required; rollback_path is
+        // Option and serde decodes a missing key as None, so it is
+        // intentionally absent from the omission walk. The null-on-wire
+        // round-trip below pins the skip_serializing_if regression for
+        // rollback_path; a #[serde(default)] on row_count would let a
+        // backfill row decode claiming zero changed rows, and a default
+        // on dry_run would let an applied rewrite masquerade as a dry run.
+        for required in ["row_count", "dry_run"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::SettlementReceiptBackfillApplied wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        let dry_run_kind = AuditKind::SettlementReceiptBackfillApplied {
+            row_count: 2,
+            rollback_path: None,
+            dry_run: true,
+        };
+        let dry_wire = serde_json::to_value(&dry_run_kind).unwrap();
+        let dry_obj = dry_wire.as_object().unwrap();
+        assert_eq!(
+            dry_obj.get("rollback_path"),
+            Some(&serde_json::Value::Null),
+            "rollback_path: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across dry-run/no-op and applied rows",
+        );
+        assert_eq!(
+            dry_obj.len(),
+            4,
+            "AuditKind::SettlementReceiptBackfillApplied with rollback_path=None must still surface four keys on the wire",
+        );
+        let back: AuditKind = serde_json::from_value(dry_wire).unwrap();
+        assert_eq!(back, dry_run_kind);
     }
 
     #[test]

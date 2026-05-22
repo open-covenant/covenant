@@ -128,9 +128,9 @@ pub fn accept_protocol_version(client_version: u32) -> Option<u32> {
 
 /// IPC v2 streaming envelope. Distinct from [`Response`] because each
 /// envelope is one frame on the wire and a single logical streaming response
-/// emits many frames (one [`StreamEnvelope::Begin`], zero or more
-/// [`StreamEnvelope::Chunk`], terminated by exactly one
-/// [`StreamEnvelope::End`] or [`StreamEnvelope::Error`]). All variants carry
+/// emits many frames (one [`StreamEnvelope::StreamBegin`], zero or more
+/// [`StreamEnvelope::StreamChunk`], terminated by exactly one
+/// [`StreamEnvelope::StreamEnd`] or [`StreamEnvelope::StreamError`]). All variants carry
 /// `stream_id: Uuid` so the consumer can demultiplex interleaved streams on
 /// a shared connection and the daemon-side tracker (separate slice) can
 /// enforce uniqueness via UUID semantics. `chunk` and `summary` are typed as

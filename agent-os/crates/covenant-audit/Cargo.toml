@@ -1,7 +1,7 @@
 [package]
 name = "covenant-audit"
 version = "0.1.0"
-description = "Append-only audit log for Covenant. `AuditLog` trait with JSONL and in-memory backends, per-event hash-chain integrity verification surfaced via `verify_integrity`, and recorded event kinds spanning intent dispatch, capability checks, capability grants, capability revoke rejections, and budget enforcement events."
+description = "Append-only audit log for Covenant. `AuditLog` trait with JSONL and in-memory backends, per-event hash-chain integrity verification surfaced via `verify_integrity`, and recorded event kinds spanning intent dispatch, capability checks/grants/rejections, budget enforcement, agent-to-agent messaging, tool approval and invocation, memory maintenance, peer and operator administration, and authentication failures."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

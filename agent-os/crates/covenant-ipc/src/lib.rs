@@ -426,6 +426,20 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Operator-driven repair of legacy settlement-receipt rows in the
+    /// JSONL store. `dry_run` reports the would-change row count without
+    /// writing; an apply rewrites the store atomically after a rollback
+    /// checkpoint. `scope_pubkey` is reserved for a future delegated mode
+    /// that would evaluate another subject's `settlement.backfill.*` grant;
+    /// it is not yet supported, so the daemon rejects any request that sets
+    /// it. Today the operation always evaluates the authenticated operator's
+    /// own grants. Gated to the operator identity, mirroring `CompactMemory`.
+    BackfillSettlementReceipts {
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        scope_pubkey: Option<String>,
+    },
     SearchMemory {
         query: String,
         #[serde(default)]
@@ -729,6 +743,18 @@ pub enum Response {
     },
     ReceiptBatches {
         batches: Vec<ReceiptBatchSummary>,
+    },
+    /// Successful response to [`Request::BackfillSettlementReceipts`].
+    /// `row_count` is the number of legacy rows the backfill changed (or
+    /// would change on a dry run); `rollback_path` is the checkpoint
+    /// sibling written before an apply rewrite, absent on a dry run or a
+    /// no-op. Carries the `covenant_settlement::BackfillOutcome` fields
+    /// inline so this crate keeps no dependency on the settlement crate.
+    SettlementReceiptsBackfilled {
+        row_count: u64,
+        #[serde(default)]
+        rollback_path: Option<String>,
+        dry_run: bool,
     },
     VerifyReport {
         window: usize,
@@ -2393,6 +2419,85 @@ mod tests {
              field; the operator's receipt-flush behaviour \
              diverges from the documented contract without a \
              single error surface",
+        );
+    }
+
+    #[test]
+    fn request_backfill_settlement_receipts_serde_pins_additive_two_field_variant() {
+        // Request::BackfillSettlementReceipts is the operator-driven
+        // settlement-receipt backfill the CLI and HTTP gateway send to
+        // repair legacy receipt rows. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] the wire object is exactly three
+        // top-level keys: kind='backfill_settlement_receipts', dry_run,
+        // and scope_pubkey. Both fields are #[serde(default)] so a stale
+        // CLI omitting them decodes as a dry_run=false, unscoped apply —
+        // the additive-only contract that keeps v1 fixture replay
+        // byte-for-byte. It pairs with
+        // Response::SettlementReceiptsBackfilled.
+        let event = Request::BackfillSettlementReceipts {
+            dry_run: true,
+            scope_pubkey: Some("subjectpubkeyb58".into()),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "scope_pubkey"],
+            "Request::BackfillSettlementReceipts wire form must be \
+             exactly three top-level keys: 'kind' plus 'dry_run' and \
+             'scope_pubkey'. A refactor that nested the mode/subject \
+             under a typed options struct would shift them one level \
+             deeper and every CLI/HTTP backfill trigger would fail to \
+             decode on the daemon side — the operator could not repair \
+             legacy receipt rows through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("backfill_settlement_receipts")),
+            "Request discriminator slug must be the durable \
+             'backfill_settlement_receipts'; a slug regression silently \
+             routes incoming backfill frames to the daemon's catch-all \
+             error branch",
+        );
+        assert_eq!(
+            obj.get("dry_run"),
+            Some(&serde_json::json!(true)),
+            "dry_run must surface as the literal boolean mode selector — \
+             the daemon binds apply = !dry_run, so a rename or retype \
+             would silently flip a reporting probe into a destructive \
+             rewrite",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::BackfillSettlementReceipts must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             every CLI/HTTP backfill consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "backfill_settlement_receipts"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::BackfillSettlementReceipts must decode from a \
+             payload missing both optional fields — the #[serde(default)] \
+             attributes are the additive-only compatibility hinge that \
+             keeps v1 fixture replay byte-for-byte",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            },
+            "Request::BackfillSettlementReceipts with both fields missing \
+             must default to a dry_run=false, unscoped apply — dropping \
+             the #[serde(default)] would break stale CLIs and the \
+             v1-additive contract",
         );
     }
 

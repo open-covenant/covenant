@@ -41,10 +41,11 @@ use covenant_permissions::{
     memory_read_scope_allows as permission_memory_read_scope_allows,
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
     memory_write_scope_allows as permission_memory_write_scope_allows,
-    peer_scope_allows as permission_peer_scope_allows, sign as sign_capability,
-    tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope,
-    verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore, ChainScopeRequest,
-    MemoryCompactionScopeRequest, PeerScopeRequest,
+    peer_scope_allows as permission_peer_scope_allows,
+    settlement_backfill_scope_allows as permission_settlement_backfill_scope_allows,
+    sign as sign_capability, tool_call_scope_allows as permission_tool_call_scope_allows,
+    validate_scope, verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore,
+    ChainScopeRequest, MemoryCompactionScopeRequest, PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
@@ -1446,6 +1447,13 @@ impl Server {
             Request::ChainStatus => self.chain_status(),
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
+            Request::BackfillSettlementReceipts {
+                dry_run,
+                scope_pubkey,
+            } => {
+                self.backfill_settlement_receipts(dry_run, scope_pubkey, peer)
+                    .await
+            }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
             Request::GrantCapability {
                 action,
@@ -5501,6 +5509,109 @@ impl Server {
         }
     }
 
+    async fn backfill_settlement_receipts(
+        &self,
+        dry_run: bool,
+        scope_pubkey: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        if scope_pubkey.is_some() {
+            return Response::Error {
+                message: "settlement backfill --scope-pubkey is not yet supported; the operation evaluates the authenticated operator's own capability grants".into(),
+            };
+        }
+
+        let apply = !dry_run;
+        let mode = if apply { "apply" } else { "dry_run" };
+        let required = format!("settlement.backfill.{mode}");
+        let check = self
+            .check_capabilities("settlement-backfill".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "settlement backfill {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "settlement backfill requires the operator identity".into(),
+            };
+        }
+
+        // `backfill_receipts` repairs every legacy row with no recency
+        // filter, so probe the scope with `before_ms = u64::MAX`: only an
+        // unbounded grant (or one omitting `before_ms`) authorizes a full
+        // repair, while a recency-bounded grant correctly denies it.
+        match self
+            .settlement_backfill_scope_allows(&required, apply, u64::MAX, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "mode or before_ms bound does not match capability scope".to_string();
+                self.record_capability_scope_rejected(
+                    peer,
+                    "settlement-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("settlement backfill rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "settlement-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "settlement backfill rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "settlement backfill unavailable: server has no home directory configured"
+                    .into(),
+            };
+        };
+        let receipts_path = home.join("receipts").join("working.jsonl");
+
+        match covenant_settlement::backfill_receipts(&receipts_path, dry_run).await {
+            Ok(outcome) => Response::SettlementReceiptsBackfilled {
+                row_count: outcome.row_count,
+                rollback_path: outcome.rollback_path.map(|path| path.display().to_string()),
+                dry_run: outcome.dry_run,
+            },
+            Err(e) => Response::Error {
+                message: format!("settlement: {e}"),
+            },
+        }
+    }
+
+    async fn settlement_backfill_scope_allows(
+        &self,
+        action: &str,
+        apply: bool,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_settlement_backfill_scope_allows(action, scope, apply, before_ms)
+        })
+        .await
+    }
+
     async fn memory_repair_scope_allows(
         &self,
         action: &str,
@@ -7026,6 +7137,225 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    /// Seed `<home>/receipts/working.jsonl` with a single legacy-wire
+    /// receipt row that omits the default-bearing chain fields. A backfill
+    /// re-serializes those fields back as `null`, so the row counts as one
+    /// changed row — letting the daemon-level tests assert the apply and
+    /// dry-run outcomes without reaching into the settlement crate's
+    /// internals.
+    fn seed_legacy_receipt_row(home: &Path) -> String {
+        let receipt = SettlementReceipt {
+            id: Uuid::from_u128(0x5e7),
+            payer: AgentId::new("user@local", [0u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 7,
+            settled_at: 7,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let mut value = serde_json::to_value(&receipt).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        for key in [
+            "chain",
+            "cluster",
+            "batch_id",
+            "merkle_root",
+            "tx_sig",
+            "slot",
+            "confirmed_at",
+            "onchain_sig",
+        ] {
+            obj.remove(key);
+        }
+        let line = format!("{}\n", serde_json::to_string(&value).unwrap());
+        let receipts_dir = home.join("receipts");
+        std::fs::create_dir_all(&receipts_dir).unwrap();
+        std::fs::write(receipts_dir.join("working.jsonl"), &line).unwrap();
+        line
+    }
+
+    fn rollback_checkpoint_files(home: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(home.join("receipts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".backfill-rollback-")
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_apply_repairs_rows_with_capability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::SettlementReceiptsBackfilled {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(!dry_run);
+                assert!(
+                    rollback_path.is_some(),
+                    "apply must write a rollback checkpoint"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_ne!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "apply must rewrite the store"
+        );
+        assert_eq!(rollback_checkpoint_files(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_dry_run_reports_without_writes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::SettlementReceiptsBackfilled {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(dry_run);
+                assert_eq!(rollback_path, None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "dry run must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_rejects_without_capability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "chain.flush".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillSettlementReceipts {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("settlement.backfill.apply"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "a denied backfill must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_rejects_scope_pubkey_before_auth() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: Some("othersubjectpubkeyb58".into()),
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("--scope-pubkey is not yet supported"),
+                    "scope_pubkey must be rejected on its own guard, not auth: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "a scope_pubkey-rejected backfill must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
     }
 
     #[tokio::test]

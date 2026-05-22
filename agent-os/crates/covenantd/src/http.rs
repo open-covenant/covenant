@@ -154,6 +154,10 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
         .route("/chain/receipt-batches", get(chain_receipt_batches))
+        .route(
+            "/settlement/receipts/backfill",
+            post(settlement_backfill_receipts),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -967,6 +971,32 @@ async fn chain_flush_receipts(
             .respond(
                 Request::FlushReceipts {
                     limit: q.limit.unwrap_or(10),
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Deserialize, Default)]
+struct SettlementBackfillBody {
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    scope_pubkey: Option<String>,
+}
+
+async fn settlement_backfill_receipts(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<SettlementBackfillBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::BackfillSettlementReceipts {
+                    dry_run: b.dry_run,
+                    scope_pubkey: b.scope_pubkey,
                 },
                 &peer,
             )

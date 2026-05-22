@@ -20,6 +20,7 @@
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
+//!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
@@ -134,6 +135,9 @@ fn print_usage() {
         "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
+    eprintln!(
+        "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
+    );
     eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
     eprintln!("  covenant ignore check [--json] <text>   test text against .covenantignore rules");
     eprintln!("  covenant tools list [--json]            list registered tools");
@@ -2632,6 +2636,74 @@ async fn main() -> Result<()> {
                 other => bail!("unexpected response: {other:?}"),
             }
         }
+        "settlement" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "backfill-receipts" => {
+                    let mut dry_run = false;
+                    let mut as_json = false;
+                    let mut scope_pubkey = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--dry-run" => dry_run = true,
+                            "--json" => as_json = true,
+                            "--scope-pubkey" => {
+                                i += 1;
+                                scope_pubkey = Some(
+                                    args.get(i).context("--scope-pubkey needs a value")?.clone(),
+                                );
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::BackfillSettlementReceipts {
+                            dry_run,
+                            scope_pubkey,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SettlementReceiptsBackfilled {
+                            row_count,
+                            rollback_path,
+                            dry_run,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&settlement_backfill_json(
+                                        row_count,
+                                        rollback_path.as_deref(),
+                                        dry_run
+                                    ))?
+                                );
+                            } else {
+                                println!("row_count: {row_count}");
+                                println!("dry_run: {dry_run}");
+                                println!(
+                                    "rollback_path: {}",
+                                    rollback_path.as_deref().unwrap_or("(none)")
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant settlement: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
         other => {
             eprintln!("covenant: unknown command '{other}'");
             print_usage();
@@ -3174,6 +3246,19 @@ fn flush_receipts_json(
         "limit": limit,
         "receipts_updated": receipts_updated,
         "batch": batch,
+    })
+}
+
+fn settlement_backfill_json(
+    row_count: u64,
+    rollback_path: Option<&str>,
+    dry_run: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "covenant.settlement.backfill.v1",
+        "row_count": row_count,
+        "rollback_path": rollback_path,
+        "dry_run": dry_run,
     })
 }
 

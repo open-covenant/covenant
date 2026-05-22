@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, and chain predicates for receipt reads, receipt batch reads, and receipt flushing at dispatch.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
 
 ## Scope Envelope
 
@@ -178,7 +178,7 @@ Rules:
 
 - `settlement.backfill.apply` and `settlement.backfill.dry_run` are distinct grants; the backfill mode is part of the action. A scope may pin `apply` to bind a grant to a single mode.
 - `before_ms` bounds the backfill to receipts at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded.
-- The settlement crate has a rollback-backed receipt backfill primitive for canonical row repair and explicit receipt-to-memory correlations. Daemon, IPC, HTTP, CLI, and audit wiring are not exposed yet, so this namespace remains grant-time preparation until the dispatch slice lands.
+- The `settlement backfill-receipts` command (IPC `BackfillSettlementReceipts`, HTTP `POST /settlement/receipts/backfill`) now enforces this scope at dispatch: an apply requires `settlement.backfill.apply`, a dry run requires `settlement.backfill.dry_run`, and the operator identity is required. The backfill repairs every legacy row with no recency filter, so the dispatch probes the scope with an unbounded cutoff — a recency-bounded grant (`before_ms` set) does not authorize a full repair.
 
 ## Enforcement Path
 
@@ -188,7 +188,7 @@ Rules:
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
-7. Interpret stable peer-registry list/revoke/purge predicates and chain receipt-read, batch-read, and flush predicates at dispatch.
+7. Interpret stable peer-registry list/revoke/purge predicates, chain receipt-read, batch-read, and flush predicates, and the settlement receipt-backfill predicate at dispatch.
 8. Fail closed for malformed versioned scopes after a migration window.
 9. Keep action-only checks as the fallback only for unscoped operator grants.
 

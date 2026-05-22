@@ -3974,11 +3974,10 @@ impl Server {
     /// is captured into a local so an `?`-propagated error from
     /// `write_frame` does not skip the unregister.
     ///
-    /// This method is not yet wired into `Self::handle`; the
-    /// per-verb dispatch fork lives in a follow-up slice. Keeping
-    /// the orchestrator method-level keeps it reachable from unit
+    /// Wired into `Self::handle` by the ADR 0010 slice 3.d dispatch
+    /// fork, which routes `RecentMemory { prefer_stream: Some(true) }`
+    /// here. Staying method-level also keeps it reachable from unit
     /// tests without requiring an IPC handshake.
-    #[allow(dead_code)]
     pub async fn stream_recent_memory<W>(
         &self,
         writer: &mut W,
@@ -4111,9 +4110,8 @@ impl Server {
     /// begin+end pair. There is no audit equivalent of the memory
     /// capability-failure path.
     ///
-    /// Not yet wired into `Self::handle`; the per-verb dispatch
-    /// fork lives in the follow-up wiring slice.
-    #[allow(dead_code)]
+    /// Wired into `Self::handle` by the ADR 0010 slice 4.d dispatch
+    /// fork, which routes `RecentAudit { prefer_stream: Some(true) }` here.
     pub async fn stream_recent_audit<W>(
         &self,
         writer: &mut W,
@@ -4245,9 +4243,8 @@ impl Server {
     /// ADR 0010 explicitly allows daemon-decides-not-to-stream by
     /// falling back to v1 shape.
     ///
-    /// Not yet wired into `Self::handle`; the per-verb dispatch
-    /// fork lives in slice 5.d.
-    #[allow(dead_code)]
+    /// Wired into `Self::handle` by the ADR 0010 slice 5.d dispatch
+    /// fork, which routes `SubmitIntent { prefer_stream: Some(true) }` here.
     pub async fn stream_submit_intent<W>(
         &self,
         writer: &mut W,

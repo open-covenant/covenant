@@ -52,6 +52,7 @@ if [ "$mode" != "scripts" ]; then
 fi
 
 run node ./scripts/provenance.mjs verify-all
+run node ./scripts/validate-chain-tx-envelope-docs.mjs
 
 case "$mode" in
   scripts)

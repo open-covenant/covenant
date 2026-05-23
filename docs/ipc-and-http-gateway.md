@@ -547,7 +547,7 @@ The inner `MemoryCompactionOutcome` shape:
 - `mode` (string) — `MemoryRepairMode` slug, exactly `"dry_run"` or `"apply"` (snake_case, per `MemoryRepairMode`'s `#[serde(rename_all = "snake_case")]` at `covenant-types/src/lib.rs:196-201`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
 - `would_change` (bool) — the policy identified at least one mutation that would land. Reliable in both modes — `true` whenever the policy matched records.
 - `changed` (bool) — the store was actually mutated by this call. In `mode: "dry_run"` this is **always `false`** even when `would_change` is `true`; only `mode: "apply"` can set it. JSON consumers branching on `changed` alone will silently treat dry-run planning runs as no-ops; route on the `(mode, would_change, changed)` triple instead.
-- `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode).
+- `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode). The empty-case is pinned by the stable-shape test at `main.rs:6571-6574` (asserts `value["outcome"]["deleted"].as_array().map(Vec::len) == Some(0)`).
 - `stale_marked` (array of strings) — UUIDs of long-term records the policy marked stale (or would mark, in dry-run mode).
 - `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied).
 

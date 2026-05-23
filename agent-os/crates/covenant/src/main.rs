@@ -193,6 +193,23 @@ fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
 
+// Seeds mirror agent-os/programs/settlement/src/lib.rs:547 exactly:
+//   [b"stake", agent.agent_key.as_ref(), owner.key().as_ref()]
+// A one-byte typo in either tag literal or a wrong slice (e.g. the
+// agent PDA bytes instead of agent_key) derives a deterministic-but-
+// wrong PDA. The on-chain dispatcher then rejects the transaction
+// with ConstraintSeeds at submission time, which surfaces as an
+// opaque RPC error rather than a local-test failure — so the helper
+// is unit-pinned against the literal seed bytes.
+#[allow(dead_code)] // wired in by sub-slice stake
+fn settlement_stake_position_pda(
+    program_id: &Pubkey,
+    agent_key: &Pubkey,
+    owner: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"stake", agent_key.as_ref(), owner.as_ref()], program_id)
+}
+
 // Field order MUST mirror agent-os/programs/settlement/src/lib.rs:877-882
 // (agent_key, metadata_hash, capability_hash). Borsh serializes in
 // struct declaration order; following the alphabetical data_keys order
@@ -210,6 +227,23 @@ struct RegisterAgentArgs {
 
 fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
+}
+
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:137
+// (amount, lock_until). Borsh serializes in struct-declaration order;
+// a swap would silently make the on-chain program lock for amount
+// epochs and stake lock_until lamports — both numerically valid u64s,
+// so neither side errors at the wire layer.
+#[allow(dead_code)] // wired in by sub-slice stake
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct StakeArgs {
+    amount: u64,
+    lock_until: u64,
+}
+
+#[allow(dead_code)] // wired in by sub-slice stake
+fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of two u64 fields is infallible")
 }
 
 // Account ordering and signer/writable flags mirror the on-chain
@@ -7197,7 +7231,10 @@ mod tests {
     }
 
     mod settlement_pda {
-        use super::super::{settlement_agent_pda, settlement_config_pda, settlement_credits_pda};
+        use super::super::{
+            settlement_agent_pda, settlement_config_pda, settlement_credits_pda,
+            settlement_stake_position_pda,
+        };
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
@@ -7271,6 +7308,124 @@ mod tests {
             let owner = fixed_owner();
             let expected = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &p);
             assert_eq!(settlement_credits_pda(&p, &owner), expected);
+        }
+
+        #[test]
+        fn stake_position_pda_depends_on_agent_key() {
+            let p = fixed_program();
+            let owner = fixed_owner();
+            let a = settlement_stake_position_pda(&p, &fixed_agent_key(), &owner).0;
+            let b =
+                settlement_stake_position_pda(&p, &Pubkey::new_from_array([22u8; 32]), &owner).0;
+            assert_ne!(a, b, "stake-position PDA must vary with agent_key");
+        }
+
+        #[test]
+        fn stake_position_pda_depends_on_owner() {
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let a = settlement_stake_position_pda(&p, &agent_key, &fixed_owner()).0;
+            let b =
+                settlement_stake_position_pda(&p, &agent_key, &Pubkey::new_from_array([33u8; 32]))
+                    .0;
+            assert_ne!(a, b, "stake-position PDA must vary with owner");
+        }
+
+        #[test]
+        fn stake_position_pda_matches_literal_seed_bytes() {
+            // The literal seed list is spelled out again here so a
+            // drift between the helper's seeds and the on-chain
+            // program's seeds = [b"stake", agent.agent_key.as_ref(),
+            // owner.key().as_ref()] surfaces locally instead of as a
+            // ConstraintSeeds error from the cluster.
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let owner = fixed_owner();
+            let expected =
+                Pubkey::find_program_address(&[b"stake", agent_key.as_ref(), owner.as_ref()], &p);
+            assert_eq!(
+                settlement_stake_position_pda(&p, &agent_key, &owner),
+                expected
+            );
+        }
+
+        #[test]
+        fn stake_position_pda_seeds_are_ordered() {
+            // Swapping agent_key with owner in the seeds would
+            // produce a different PDA even though both are 32-byte
+            // pubkeys. Pin the ordering so a future refactor that
+            // accidentally swaps the two arguments fails loudly.
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let owner = fixed_owner();
+            let canonical = settlement_stake_position_pda(&p, &agent_key, &owner).0;
+            let swapped = settlement_stake_position_pda(&p, &owner, &agent_key).0;
+            assert_ne!(
+                canonical, swapped,
+                "stake-position PDA must be order-sensitive in its (agent_key, owner) seeds"
+            );
+        }
+    }
+
+    mod stake_args {
+        use super::super::{serialize_stake_args, StakeArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> StakeArgs {
+            StakeArgs {
+                amount: 0x1122_3344_5566_7788,
+                lock_until: 0xaabb_ccdd_eeff_0011,
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_struct_declaration_order() {
+            // The on-chain Stake instruction declares (amount,
+            // lock_until). Borsh serializes in struct-declaration
+            // order, little-endian. A swap of the two fields would
+            // produce the same total length and pass borsh
+            // round-trip, so we pin the exact byte layout inline.
+            let mut expected = Vec::with_capacity(16);
+            expected.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+            expected.extend_from_slice(&0xaabb_ccdd_eeff_0011u64.to_le_bytes());
+            assert_eq!(serialize_stake_args(&fixture()), expected);
+        }
+
+        #[test]
+        fn encoded_length_is_two_u64s() {
+            // Exactly 16 bytes (2 * 8). A regression that emitted
+            // u32 instead of u64 (8 bytes total) or padded to
+            // alignment (>16) would change this.
+            assert_eq!(serialize_stake_args(&fixture()).len(), 16);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            // The on-chain Anchor dispatcher decodes the args via
+            // the same borsh wire format we emit here. A round-trip
+            // with BorshDeserialize confirms our bytes parse back
+            // identically — if a field were skipped or coerced to
+            // the wrong width, the round-trip would fail or differ.
+            let original = fixture();
+            let bytes = serialize_stake_args(&original);
+            let decoded = StakeArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn each_field_contributes_to_the_encoded_output() {
+            // Mutating each field must change the encoded output;
+            // otherwise borsh is silently dropping the field or
+            // collapsing it with a sibling.
+            let base = serialize_stake_args(&fixture());
+
+            let mut a = fixture();
+            a.amount = a.amount.wrapping_add(1);
+            assert_ne!(serialize_stake_args(&a), base);
+
+            let mut l = fixture();
+            l.lock_until = l.lock_until.wrapping_add(1);
+            assert_ne!(serialize_stake_args(&l), base);
         }
     }
 

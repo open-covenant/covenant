@@ -389,7 +389,7 @@ The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-aud
 - `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.
 - `valid` (bool) — `true` when the hash chain is intact end-to-end; `false` when one or more failures were recorded.
 - `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:6447-6453`.
-- `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`.
+- `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`. The empty case is pinned by the stable-shape test at `main.rs:6454-6457` (asserts `as_array().map(Vec::len) == Some(0)`).
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6461` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
 

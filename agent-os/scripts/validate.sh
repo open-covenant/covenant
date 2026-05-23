@@ -176,6 +176,7 @@ run node ./scripts/validate-memory-compaction-plan-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-outcome-type-level-pin-line-refs.mjs
 run node ./scripts/validate-ping-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-verify-root-hash-hex-length-pin-line-refs.mjs
+run node ./scripts/validate-audit-verify-report-failures-empty-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

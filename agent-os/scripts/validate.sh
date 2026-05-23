@@ -90,6 +90,7 @@ run node ./scripts/validate-intents-resume-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-struct-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-struct-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
+run node ./scripts/validate-covenant-audit-struct-line-refs.mjs
 
 case "$mode" in
   scripts)

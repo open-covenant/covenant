@@ -167,7 +167,7 @@ The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/cov
 
 - `kind`: literal string `"receipt_batch_flushed"`.
 - `limit` (u64): the batch-size cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:7294-7297` — never a string.
-- `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch.
+- `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch. Pinned as u64 by `main.rs:7298-7301` — never a string-of-integer.
 - `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7277` (`flush_receipts_json_pins_top_level_schema`).

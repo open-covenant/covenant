@@ -166,7 +166,7 @@ The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/cov
 `covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
 
 - `kind`: literal string `"receipt_batch_flushed"`.
-- `limit` (u64): the batch-size cap echoed back from the `--limit` argument.
+- `limit` (u64): the batch-size cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:7294-7297` — never a string.
 - `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch.
 - `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below.
 

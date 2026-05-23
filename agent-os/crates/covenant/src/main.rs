@@ -349,6 +349,49 @@ fn build_stake_instruction(
     }
 }
 
+// Account ordering and signer/writable flags mirror the on-chain
+// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:483-503:
+//   config        — PDA, read-only (has_one = treasury)
+//   credits       — PDA, writable, !signer (has_one = owner)
+//   owner         — signer, writable (fee payer + transfer authority)
+//   owner_covnt   — writable, !signer (source of the COVNT transfer)
+//   treasury      — writable, !signer (destination of the COVNT transfer;
+//                   the operator must supply config.treasury verbatim or
+//                   the has_one check fails)
+//   token_program — read-only, legacy SPL Token
+// No system_program is referenced because BuyCredits does not init
+// any new account (credits PDA is initialized by initialize_credits).
+#[allow(dead_code)] // wired in by sub-slice buy-credits verb
+fn build_buy_credits_instruction(
+    program_id: &Pubkey,
+    operator: &Pubkey,
+    owner_covnt: &Pubkey,
+    treasury: &Pubkey,
+    args: &BuyCreditsArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (credits_pda, _) = settlement_credits_pda(program_id, operator);
+
+    let mut data = Vec::with_capacity(8 + 8);
+    data.extend_from_slice(&compute_anchor_global_discriminator("buy_credits"));
+    data.extend_from_slice(&serialize_buy_credits_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(credits_pda, false),
+            AccountMeta::new(*operator, true),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new(*treasury, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data,
+    }
+}
+
 // First 8 bytes of sha256("global:<method>") — Anchor's instruction
 // discriminator scheme. The "global:" namespace is the only one Anchor's
 // macro-generated dispatcher accepts for #[program] mod methods; dropping
@@ -7649,6 +7692,154 @@ mod tests {
                 &fixed_agent_key(),
                 &fixed_owner_covnt(),
                 &fixed_stake_vault(),
+                &fixture_args(),
+            );
+            assert_eq!(ix.program_id, program);
+        }
+    }
+
+    mod build_buy_credits_instruction {
+        use super::super::{
+            build_buy_credits_instruction, compute_anchor_global_discriminator,
+            serialize_buy_credits_args, settlement_config_pda, settlement_credits_pda,
+            BuyCreditsArgs, SPL_TOKEN_PROGRAM_ID,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixed_owner_covnt() -> Pubkey {
+            Pubkey::new_from_array([19u8; 32])
+        }
+
+        fn fixed_treasury() -> Pubkey {
+            Pubkey::new_from_array([23u8; 32])
+        }
+
+        fn fixture_args() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 7_777_777,
+            }
+        }
+
+        fn build_fixture_ix() -> solana_sdk::instruction::Instruction {
+            build_buy_credits_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixed_owner_covnt(),
+                &fixed_treasury(),
+                &fixture_args(),
+            )
+        }
+
+        #[test]
+        fn data_prefix_equals_buy_credits_discriminator_literal() {
+            // The literal buy_credits discriminator is also
+            // pinned by the existing anchor_discriminator mod.
+            // Repeating it here makes a regression in either
+            // source surface as a duplicate failure rather than
+            // a silent pass through one path.
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[..8],
+                &[14, 173, 58, 38, 248, 235, 115, 102],
+                "data prefix must be the buy_credits discriminator"
+            );
+            assert_eq!(
+                &ix.data[..8],
+                &compute_anchor_global_discriminator("buy_credits")
+            );
+        }
+
+        #[test]
+        fn data_tail_equals_serialized_buy_credits_args() {
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[8..],
+                &serialize_buy_credits_args(&fixture_args()),
+                "data tail must be the borsh-encoded BuyCreditsArgs"
+            );
+        }
+
+        #[test]
+        fn data_length_is_discriminator_plus_one_u64() {
+            // 8 (discriminator) + 8 (BuyCreditsArgs) = 16. A
+            // regression that pads to alignment or drops the
+            // discriminator would change this.
+            assert_eq!(build_fixture_ix().data.len(), 8 + 8);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order_positionally() {
+            // agent-os/programs/settlement/src/lib.rs:483-503 declares
+            // BuyCredits { config, credits, owner, owner_covnt,
+            // treasury, token_program }.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let ix = build_fixture_ix();
+
+            assert_eq!(ix.accounts.len(), 6);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_credits_pda(&program, &operator).0
+            );
+            assert_eq!(ix.accounts[2].pubkey, operator);
+            assert_eq!(ix.accounts[3].pubkey, fixed_owner_covnt());
+            assert_eq!(ix.accounts[4].pubkey, fixed_treasury());
+            assert_eq!(ix.accounts[5].pubkey, SPL_TOKEN_PROGRAM_ID);
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config:        ro
+            // credits:       w, !signer (#[account(mut)])
+            // owner:         signer, w (fee payer + transfer authority)
+            // owner_covnt:   w, !signer
+            // treasury:      w, !signer
+            // token_program: ro
+            let ix = build_fixture_ix();
+            let expected = [
+                (false, false), // config
+                (false, true),  // credits
+                (true, true),   // owner
+                (false, true),  // owner_covnt
+                (false, true),  // treasury
+                (false, false), // token_program
+            ];
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(
+                    (ix.accounts[i].is_signer, ix.accounts[i].is_writable),
+                    *exp,
+                    "account[{i}] flag mismatch (expected (signer, writable) = {exp:?})"
+                );
+            }
+        }
+
+        #[test]
+        fn token_program_id_is_legacy_spl_token_constant() {
+            assert_eq!(
+                SPL_TOKEN_PROGRAM_ID.to_string(),
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_buy_credits_instruction(
+                &program,
+                &fixed_operator(),
+                &fixed_owner_covnt(),
+                &fixed_treasury(),
                 &fixture_args(),
             );
             assert_eq!(ix.program_id, program);

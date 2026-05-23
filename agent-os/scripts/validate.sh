@@ -173,6 +173,7 @@ run node ./scripts/validate-a2a-compact-type-level-pin-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-backfill-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-type-level-pin-line-refs.mjs
+run node ./scripts/validate-memory-compaction-plan-outcome-type-level-pin-line-refs.mjs
 run node ./scripts/validate-ping-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-verify-root-hash-hex-length-pin-line-refs.mjs
 

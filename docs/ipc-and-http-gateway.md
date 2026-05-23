@@ -185,6 +185,34 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4522`. Two unit tests at `main.rs:6834` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:6852` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
 
+`covenant receipts recent [-n|--limit <N>] [--since-ms <M>] --json` emits a window of local settlement receipts. Envelope shape:
+
+- `kind`: literal string `"receipt_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `receipt_list` (singular `receipt_`, not `receipts_`); consumers routing on `kind` must match the literal exactly rather than reusing the verb token or pluralising.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:2837`). Pinned at the type level by the schema test (`main.rs:5484-5486`) — never a string.
+- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:5487-5490`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
+- `receipts` (array of `SettlementReceipt`): the matched receipts in the order returned by the daemon. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `(no receipts)` for that case at `main.rs:2867`.
+
+The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:339`:
+
+- `id` (string) — receipt UUID, serialized as the canonical hyphenated string form.
+- `payer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:124`.
+- `resource` (string) — `ResourceKind` slug, exactly one of `"compute"`, `"memory"`, `"tool"`, `"message"`, `"registration"` (lowercase per `#[serde(rename_all = "lowercase")]` at `covenant-types/src/lib.rs:35`). Consumers must route on the lowercase wire form, **not** the Rust enum names (`"Compute"`, `"Memory"`, etc.) — those never appear on the wire.
+- `memory_record_id` (string, omitted when null) — record identifier when the receipt settled a memory write. Serialized via `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-types/src/lib.rs:343-344` — so **absent rather than null** when unbound. This is the single asymmetry among the Option fields: every other optional field below carries `#[serde(default)]` without `skip_serializing_if`, so those keys are **always emitted** (as `null` when absent). JSON consumers must check `memory_record_id` with key-existence, not null-vs-value.
+- `credits_consumed` (u64) — USD-pegged credits destroyed at this event.
+- `settled_at` (u64) — Unix-epoch milliseconds when the receipt was issued locally.
+- `chain` (string or null) — chain family identifier (e.g. `"solana"`) once the receipt has been batched and confirmed on-chain; `null` until then. Always present on the wire.
+- `cluster` (string or null) — named cluster (e.g. `"devnet"`); `null` until on-chain confirmation. Always present on the wire.
+- `batch_id` (string or null) — opaque receipt-batch identifier once the receipt is included in a batch; `null` until then. Always present on the wire.
+- `merkle_root` (string or null) — 64-hex Merkle root of the batch the receipt was included in; `null` until then. Always present on the wire.
+- `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; `null` until then. Always present on the wire.
+- `slot` (u64 or null) — confirmation slot once available; `null` until then. Always present on the wire.
+- `confirmed_at` (u64 or null) — Unix-epoch milliseconds when the on-chain transaction confirmed; `null` until then. Always present on the wire.
+- `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:335-337`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:2871-2874` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:5466` (`receipt_list_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, populated without `since_ms`, and empty without `since_ms`.
+
+The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/covenant/src/main.rs:4314`. Two unit tests at `main.rs:5425` (`receipt_list_json_renders_stable_shape`) and `main.rs:5466` cover the shape. The CLI verb is wired at `main.rs:2832-2885`; without `--json`, each receipt is printed as `[<settled_at>] <resource>: <credits> credits — <onchain>` at `main.rs:2875-2879`, with `<onchain>` resolving to the `tx_sig`/`onchain_sig` value or the literal `(local-only)` when both are null.
+
 `covenant ping --json` emits a daemon-liveness probe. Envelope shape:
 
 - `kind`: literal string `"daemon_ping"`.

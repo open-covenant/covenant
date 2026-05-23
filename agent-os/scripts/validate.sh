@@ -160,6 +160,7 @@ run node ./scripts/validate-capability-revoke-type-level-pin-line-refs.mjs
 run node ./scripts/validate-verify-report-type-level-pin-line-refs.mjs
 run node ./scripts/validate-tool-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-receipt-batch-flushed-type-level-pin-line-refs.mjs
+run node ./scripts/validate-receipt-batch-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-type-level-pin-line-refs.mjs
 run node ./scripts/validate-a2a-retry-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-type-level-pin-line-refs.mjs

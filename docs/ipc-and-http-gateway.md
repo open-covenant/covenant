@@ -647,7 +647,7 @@ The envelope source-of-truth lives at `settlement_backfill_json` in `agent-os/cr
 Envelope shape:
 
 - `schema`: literal string `"covenant.memory.backfill.v1"`. Same versioning semantics as `covenant.settlement.backfill.v1` — route on the full literal, not the prefix.
-- `row_count` (u64): count of memory records the correlation pass operated on (mutation path) or *would* operate on (dry-run path). May legitimately be `0` when no legacy rows match.
+- `row_count` (u64): count of memory records the correlation pass operated on (mutation path) or *would* operate on (dry-run path). May legitimately be `0` when no legacy rows match. Pinned as u64 by `main.rs:5637-5640` — never a string-of-integer.
 - `savepoint_name` (string): SQLite SAVEPOINT identifier the daemon emitted for this pass. **Always a non-null string** — the field type at `memory_backfill_json` (`main.rs:4571`) is `&str`, not `Option<&str>`, so even a dry-run call returns a real savepoint name (the daemon allocates one so consumers can correlate planning runs against later mutation runs). JSON consumers must not write null-vs-value branching for this field; treat absence as a protocol violation. This is the only field-shape difference from `settlement.backfill.v1`, whose sibling `rollback_path` is string-or-null.
 - `dry_run` (bool): echoes the `--dry-run` CLI flag. Same semantics as `settlement.backfill.v1`'s `dry_run` — `true` is a planning preview, `false` is a real mutation pass.
 

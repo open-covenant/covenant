@@ -148,9 +148,9 @@ The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:
 
 `ToolSpec` carries `#[serde(rename_all = "camelCase")]` (`covenant-mcp/src/lib.rs:26`) so the Rust field `input_schema` serializes on the wire as `inputSchema`. The naming matches the MCP wire format; JSON consumers must deserialize using `inputSchema`, not `input_schema`.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6733` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6955` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
 
-The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4502`. Two unit tests at `main.rs:6709` (`tool_list_json_renders_stable_shape`) and `main.rs:6733` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3126`.
+The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4495`. Two unit tests at `main.rs:6931` (`tool_list_json_renders_stable_shape`) and `main.rs:6955` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3126`.
 
 `covenant tools call <name> [--args <json>] --json` emits the tool invocation result. Envelope shape:
 
@@ -159,9 +159,9 @@ The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/coven
 - `content` (array of `Content`): the tool's output blocks. Each element is a tagged-enum object whose `type` discriminator selects the variant — `{type: "text", text: <string>}` for textual output or `{type: "json", value: <JSON>}` for structured output. The variants are defined at `agent-os/crates/covenant-mcp/src/lib.rs:38` with `#[serde(tag = "type", rename_all = "camelCase")]`; v0 ships text and json variants only. The array is empty when the tool produced no output blocks; the unsuffixed CLI prints each block sequentially at `main.rs:3174-3180`.
 - `is_error` (boolean): `true` when the tool itself raised; pinned as a JSON boolean by the schema test (`main.rs:6815-6818`) — never `0`/`1` or a string. JSON consumers must branch on this boolean, not on the presence/absence of content. `is_error=true` paired with non-empty `content` describes a partial-success outcome with an error indicator.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6793` (`tool_result_json_pins_top_level_schema`), exercised against both a non-empty content + is_error=true case and an empty content + is_error=false case.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7015` (`tool_result_json_pins_top_level_schema`), exercised against both a non-empty content + is_error=true case and an empty content + is_error=false case.
 
-The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/covenant/src/main.rs:4509`. Two unit tests at `main.rs:6772` (`tool_result_json_renders_stable_shape`) and `main.rs:6793` cover the shape. The CLI verb is wired at `main.rs:3134-3180`; without `--json`, each `Content::Text` block prints its `text` directly and each `Content::Json` block prints its `value` as pretty-printed JSON.
+The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/covenant/src/main.rs:4502`. Two unit tests at `main.rs:6994` (`tool_result_json_renders_stable_shape`) and `main.rs:7015` cover the shape. The CLI verb is wired at `main.rs:3134-3180`; without `--json`, each `Content::Text` block prints its `text` directly and each `Content::Json` block prints its `value` as pretty-printed JSON.
 
 `covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
 
@@ -170,7 +170,7 @@ The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/cov
 - `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch.
 - `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7055` (`flush_receipts_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7277` (`flush_receipts_json_pins_top_level_schema`).
 
 `ReceiptBatchSummary` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:53`:
 
@@ -180,7 +180,7 @@ Top-level keys are pinned to exactly these four by the test at `agent-os/crates/
 - `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; null before submission completes.
 - `slot` (u64 or null) — confirmation slot once available; null until then.
 
-The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:4552`. Two unit tests at `main.rs:7036` (`flush_receipts_json_renders_stable_shape`) and `main.rs:7055` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
+The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:4545`. Two unit tests at `main.rs:7258` (`flush_receipts_json_renders_stable_shape`) and `main.rs:7277` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
 
 `covenant chain receipt-batches --json` emits the list of recent receipt batches recorded on-chain. Envelope shape:
 
@@ -188,9 +188,9 @@ The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/
 - `limit` (u64): the result cap echoed back from the `--limit` argument.
 - `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6853` (`receipt_batch_list_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7075` (`receipt_batch_list_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4522`. Two unit tests at `main.rs:6835` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:6853` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
+The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4515`. Two unit tests at `main.rs:7057` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:7075` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
 
 `covenant receipts recent [-n|--limit <N>] [--since-ms <M>] --json` emits a window of local settlement receipts. Envelope shape:
 
@@ -216,9 +216,9 @@ The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/
 - `confirmed_at` (u64 or null) — Unix-epoch milliseconds when the on-chain transaction confirmed; `null` until then. Always present on the wire.
 - `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:335-337`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:2871-2874` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:5466` (`receipt_list_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, populated without `since_ms`, and empty without `since_ms`.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:5473` (`receipt_list_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, populated without `since_ms`, and empty without `since_ms`.
 
-The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/covenant/src/main.rs:4314`. Two unit tests at `main.rs:5425` (`receipt_list_json_renders_stable_shape`) and `main.rs:5466` cover the shape. The CLI verb is wired at `main.rs:2832-2885`; without `--json`, each receipt is printed as `[<settled_at>] <resource>: <credits> credits — <onchain>` at `main.rs:2875-2879`, with `<onchain>` resolving to the `tx_sig`/`onchain_sig` value or the literal `(local-only)` when both are null.
+The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/covenant/src/main.rs:4307`. Two unit tests at `main.rs:5432` (`receipt_list_json_renders_stable_shape`) and `main.rs:5473` cover the shape. The CLI verb is wired at `main.rs:2832-2885`; without `--json`, each receipt is printed as `[<settled_at>] <resource>: <credits> credits — <onchain>` at `main.rs:2875-2879`, with `<onchain>` resolving to the `tx_sig`/`onchain_sig` value or the literal `(local-only)` when both are null.
 
 `covenant ping --json` emits a daemon-liveness probe. Envelope shape:
 

@@ -608,7 +608,7 @@ Both branches share these fields:
 
 **Success branch (`ok=true`)** carries these eight top-level keys per the test EXPECTED_KEYS at `main.rs:5346-5355`:
 
-- `intent_id` (string) — the resumed intent's UUID in canonical hyphenated form. Pinned as a string by `main.rs:5377-5379` — never a byte array.
+- `intent_id` (string) — the resumed intent's UUID in canonical hyphenated form. Pinned as a string by `main.rs:5376-5379` — never a byte array.
 - `status` (string) — the daemon-returned outcome status (typically `"ok"`). The string shape is pinned at `main.rs:5380-5383`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string) — the result text the daemon returned for the resumed intent. The unsuffixed CLI prints this value directly at `main.rs:3938`.
 - `sources` (array of strings) — source labels that contributed to the result. Empty when no sources are attached; the unsuffixed CLI prints a `sources:` block followed by `  - <label>` lines at `main.rs:3941-3944` only when the array is non-empty.

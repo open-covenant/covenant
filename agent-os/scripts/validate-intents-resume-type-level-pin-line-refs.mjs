@@ -135,7 +135,6 @@ const targets = [
     field: "intent_id_in_ok_branch",
     testFnName: "intents_resume_ok_json_pins_top_level_schema",
     selector: 'value["intent_id"].is_string(),',
-    convention: "selector",
     docsRegex:
       /- `intent_id` \(string\) — the resumed intent's UUID in canonical hyphenated form\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a byte array\./,
     docsLabel: "intents_resume_ok.intent_id type-level pin citation",

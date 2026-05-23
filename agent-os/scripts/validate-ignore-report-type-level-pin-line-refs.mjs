@@ -54,6 +54,15 @@ const targets = [
     docsTemplate:
       "Pinned as string-or-null by the schema test (`main.rs:N-M`) — never an empty string for the unmatched case.",
   },
+  {
+    field: "rules_loaded",
+    selector: 'value["rules_loaded"].is_u64(),',
+    docsRegex:
+      /- `rules_loaded` \(u64\): count of ignore rules the daemon evaluated\. May legitimately be `0` when no rules are configured, in which case `ignored` is always `false` and `matched_pattern` is always `null`\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+    docsLabel: "ignore_report.rules_loaded type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
 ];
 
 const errors = [];

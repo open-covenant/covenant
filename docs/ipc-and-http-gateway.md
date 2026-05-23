@@ -465,6 +465,60 @@ Top-level keys are pinned to exactly these seven by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:4587`. Three unit tests at `main.rs:7106` (`a2a_status_json_renders_stable_shape`), `main.rs:7148` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:7157` cover the shape. The CLI verb is wired at `main.rs:3356-3441`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3424-3435`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
 
+`covenant a2a retry-stale [--enable] [--min-lease-age-ms <N>] [--max-attempts <N>] [--max-requeues <N>] [--scan-limit <N>] --json` emits a per-call report describing what the auto-retry scan considered, requeued, and skipped. Envelope shape:
+
+- `kind`: literal string `"a2a_auto_retry"`.
+- `report` (object): a structured `A2AAutoRetryReport` (defined at `agent-os/crates/covenant-a2a/src/lib.rs:288`), never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6059-6062` to be a JSON object.
+
+**Dry-run by default**: `A2AAutoRetryPolicy.enabled` defaults to `false` (per `Default for A2AAutoRetryPolicy` at `covenant-a2a/src/lib.rs:228-238`), and the CLI's `--enable` flag is the only path that flips it (`main.rs:3537`). On a `--json` call without `--enable`, every queue entry will appear under `skipped[]` with `reason: "disabled"` and the registry will not be mutated — a `requeued=0` result there is **not** a "nothing to retry" signal. Consumers analysing the report must read `report.policy.enabled` before drawing conclusions about whether `considered` minus `requeued.len()` indicates real skip pressure or a dry-run preview.
+
+The inner `A2AAutoRetryReport` shape:
+
+- `policy` (object) — the `A2AAutoRetryPolicy` echoed from the request (see below).
+- `considered` (u64) — number of in-flight queue entries the scan evaluated. Bounded by `policy.scan_limit`.
+- `requeued` (array of `A2AAutoRetryRequeued`) — entries the scan successfully requeued under the policy. Empty when the policy is disabled or when no candidate met the requeue criteria. Carries `#[serde(default)]` on the deserialization side (`covenant-a2a/src/lib.rs:291-292`); the serializer always writes the array.
+- `skipped` (array of `A2AAutoRetrySkipped`) — entries the scan considered but did not requeue, each with a typed skip reason. Same `#[serde(default)]` contract.
+
+The inner `A2AAutoRetryPolicy` shape, defined at `covenant-a2a/src/lib.rs:215`:
+
+- `enabled` (bool) — see the dry-run note above.
+- `min_lease_age_ms` (u64) — minimum lease age before an in-flight entry is eligible for auto-requeue.
+- `max_attempts` (u32) — per-entry attempt ceiling.
+- `max_requeues` (u64) — per-call requeue ceiling (`usize` on the Rust side; serialized as a JSON integer).
+- `scan_limit` (u64) — per-call scan size cap (`usize` on the Rust side).
+
+The inner `A2AAutoRetryRequeued` shape, defined at `covenant-a2a/src/lib.rs:280`:
+
+- `task_id` (string) — task UUID.
+- `lease_id` (string) — the lease UUID that was preempted by the requeue.
+- `attempt` (u32) — the attempt counter before the requeue (the requeued entry will resurface with `attempt+1`).
+- `idempotency_key` (string) — the idempotency key that bound this task's delivery — present because `unsafe_duplicate_safety` is one of the documented skip reasons, so only safely-bound tasks reach `requeued[]`.
+
+The inner `A2AAutoRetrySkipped` shape, defined at `covenant-a2a/src/lib.rs:271`:
+
+- `task_id` (string) — task UUID.
+- `reason` (string) — `A2AAutoRetrySkipReason` slug (see enumeration below).
+- `attempt` (u32) — the entry's current attempt counter.
+- `lease_age_ms` (u64, omitted when null) — observed lease age in milliseconds. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:275-276`, so the key is **absent** when the skip happened before any lease age was meaningful (e.g. `reason: "disabled"` or `reason: "not_in_flight"`). JSON consumers must read it with key-existence, not null-vs-value.
+
+`A2AAutoRetrySkipReason` enumerates exactly these nine snake_case slugs (per `covenant-a2a/src/lib.rs:240-252`):
+
+- `"disabled"` — `policy.enabled = false`; emitted for every considered entry on a dry-run call.
+- `"not_in_flight"` — entry is queued rather than leased.
+- `"missing_lease"` — entry state is `in_flight` but the lease record is absent.
+- `"lease_too_young"` — lease age is below `policy.min_lease_age_ms`.
+- `"missing_idempotency"` — task carries no `A2AIdempotency` binding.
+- `"unsafe_duplicate_safety"` — task's idempotency binding declares `duplicate_safety: "unsafe"`.
+- `"max_attempts_reached"` — entry has hit `policy.max_attempts`.
+- `"limit_reached"` — this call has already requeued `policy.max_requeues` entries.
+- `"capability_scope_mismatch"` — the caller's signed capability scope does not authorise requeue on this task.
+
+Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Disabled"`, `"NotInFlight"`, etc.) — those never appear on the wire.
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6042` (`a2a_retry_json_pins_top_level_schema`), exercised against both a populated (requeued + skipped) case and an empty (fresh policy) case.
+
+The envelope source-of-truth lives at `a2a_retry_json` in `agent-os/crates/covenant/src/main.rs:4606`. Two unit tests at `main.rs:6005` (`a2a_retry_json_renders_stable_shape`) and `main.rs:6042` cover the shape. The CLI verb is wired at `main.rs:3531-3587`; without `--json`, the same response prints `considered <N> task(s), requeued <M>, skipped <K>` followed by `automatic retry disabled; pass --enable to mutate` whenever `report.policy.enabled` is `false` (per `main.rs:3573-3581`).
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

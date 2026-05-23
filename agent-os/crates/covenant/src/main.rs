@@ -63,7 +63,8 @@ use covenant_types::{
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
     SettlementReceipt,
 };
-use std::path::PathBuf;
+use solana_sdk::signer::keypair::Keypair;
+use std::path::{Path, PathBuf};
 use tokio::net::UnixStream;
 
 fn covenant_home() -> Result<PathBuf> {
@@ -72,6 +73,81 @@ fn covenant_home() -> Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant"))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum KeypairLoadError {
+    #[error("cannot resolve default operator keypair path: HOME is not set (pass --keypair PATH or export HOME)")]
+    HomeUnresolved,
+    #[error("operator keypair file not found at {path}")]
+    MissingFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} cannot be read: permission denied")]
+    PermissionDenied {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} cannot be read")]
+    NotReadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} is not a JSON array of bytes")]
+    MalformedJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("operator keypair file at {path} has {actual} bytes, expected exactly 64 (Solana keypair convention)")]
+    WrongByteCount { path: PathBuf, actual: usize },
+    #[error("operator keypair file at {path} is not a valid Solana ed25519 keypair: {reason}")]
+    InvalidKeyMaterial { path: PathBuf, reason: String },
+}
+
+fn compute_default_keypair_path(home: impl AsRef<Path>) -> PathBuf {
+    home.as_ref().join(".config").join("solana").join("id.json")
+}
+
+fn resolve_operator_keypair_path(provided: Option<PathBuf>) -> Result<PathBuf, KeypairLoadError> {
+    if let Some(p) = provided {
+        return Ok(p);
+    }
+    let home = std::env::var("HOME").map_err(|_| KeypairLoadError::HomeUnresolved)?;
+    Ok(compute_default_keypair_path(home))
+}
+
+fn classify_keypair_read_error(path: PathBuf, source: std::io::Error) -> KeypairLoadError {
+    match source.kind() {
+        std::io::ErrorKind::NotFound => KeypairLoadError::MissingFile { path, source },
+        std::io::ErrorKind::PermissionDenied => KeypairLoadError::PermissionDenied { path, source },
+        _ => KeypairLoadError::NotReadable { path, source },
+    }
+}
+
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLoadError> {
+    let path = resolve_operator_keypair_path(provided)?;
+    let raw = std::fs::read(&path).map_err(|e| classify_keypair_read_error(path.clone(), e))?;
+    let bytes: Vec<u8> =
+        serde_json::from_slice(&raw).map_err(|source| KeypairLoadError::MalformedJson {
+            path: path.clone(),
+            source,
+        })?;
+    if bytes.len() != 64 {
+        return Err(KeypairLoadError::WrongByteCount {
+            path,
+            actual: bytes.len(),
+        });
+    }
+    Keypair::try_from(bytes.as_slice()).map_err(|e| KeypairLoadError::InvalidKeyMaterial {
+        path,
+        reason: e.to_string(),
+    })
 }
 
 async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result<()> {
@@ -6152,5 +6228,125 @@ mod tests {
             err.to_string().contains("mutually exclusive"),
             "error mentions mutual exclusion: {err}"
         );
+    }
+
+    mod keypair_loader {
+        use super::super::{
+            classify_keypair_read_error, compute_default_keypair_path, load_operator_keypair,
+            resolve_operator_keypair_path, KeypairLoadError,
+        };
+        use solana_sdk::signer::{keypair::Keypair, Signer};
+        use std::io::Write;
+        use std::path::PathBuf;
+        use tempfile::tempdir;
+
+        fn write_bytes(dir: &std::path::Path, name: &str, bytes: &[u8]) -> PathBuf {
+            let path = dir.join(name);
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(bytes).expect("write fixture");
+            path
+        }
+
+        #[test]
+        fn happy_path_returns_keypair_matching_fixture() {
+            // Generate a real Solana keypair, persist its 64 bytes in the
+            // canonical JSON array form, and confirm the loader produces a
+            // Keypair with the matching public key.
+            let dir = tempdir().expect("tempdir");
+            let kp = Keypair::new();
+            let json = serde_json::to_vec(&kp.to_bytes().to_vec()).expect("serialize bytes");
+            let path = write_bytes(dir.path(), "id.json", &json);
+            let loaded = load_operator_keypair(Some(path)).expect("happy path");
+            assert_eq!(loaded.pubkey(), kp.pubkey());
+        }
+
+        #[test]
+        fn missing_file_returns_missing_variant() {
+            // An explicit path to a never-created file must surface
+            // MissingFile, never the generic NotReadable bucket, so the
+            // operator sees "the file is absent" instead of an opaque IO
+            // error.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("absent.json");
+            let err = load_operator_keypair(Some(path.clone())).expect_err("must error");
+            match err {
+                KeypairLoadError::MissingFile { path: p, .. } => assert_eq!(p, path),
+                other => panic!("expected MissingFile, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn malformed_json_returns_malformed_variant() {
+            // The file exists but its content is not a JSON byte array;
+            // serde_json::from_slice rejects it and we must classify the
+            // failure as MalformedJson, not WrongByteCount, so the
+            // operator knows the file is corrupt rather than truncated.
+            let dir = tempdir().expect("tempdir");
+            let path = write_bytes(dir.path(), "id.json", b"not json at all");
+            let err = load_operator_keypair(Some(path)).expect_err("must error");
+            assert!(
+                matches!(err, KeypairLoadError::MalformedJson { .. }),
+                "expected MalformedJson, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn wrong_byte_count_returns_explicit_count() {
+            // A short JSON array (3 bytes) is the silent-wrong-pubkey
+            // failure mode: solana_sdk::Keypair::from_bytes accepting a
+            // truncated slice would derive a wrong identity. The loader
+            // must reject any count != 64 with the actual count surfaced.
+            let dir = tempdir().expect("tempdir");
+            let path = write_bytes(dir.path(), "id.json", b"[1,2,3]");
+            let err = load_operator_keypair(Some(path)).expect_err("must error");
+            match err {
+                KeypairLoadError::WrongByteCount { actual, .. } => assert_eq!(actual, 3),
+                other => panic!("expected WrongByteCount, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn classify_read_error_distinguishes_missing_from_permission_denied() {
+            // The two error classes must be distinct so an operator can
+            // tell "the file is absent" from "the daemon process lacks
+            // read permission on the file". Both map from std::io::Error
+            // kinds, so we exercise the classifier directly without
+            // depending on the host filesystem's permission model.
+            let p = PathBuf::from("/cov-test/keypair.json");
+            let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+            assert!(matches!(
+                classify_keypair_read_error(p.clone(), not_found),
+                KeypairLoadError::MissingFile { .. }
+            ));
+            let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+            assert!(matches!(
+                classify_keypair_read_error(p.clone(), denied),
+                KeypairLoadError::PermissionDenied { .. }
+            ));
+            let other = std::io::Error::from(std::io::ErrorKind::Interrupted);
+            assert!(matches!(
+                classify_keypair_read_error(p, other),
+                KeypairLoadError::NotReadable { .. }
+            ));
+        }
+
+        #[test]
+        fn resolve_path_prefers_explicit_value_over_default() {
+            let explicit = PathBuf::from("/tmp/cov-test/explicit.json");
+            let resolved =
+                resolve_operator_keypair_path(Some(explicit.clone())).expect("explicit wins");
+            assert_eq!(resolved, explicit);
+        }
+
+        #[test]
+        fn default_path_follows_solana_cli_convention() {
+            // The canonical Solana CLI keypair lives at
+            // $HOME/.config/solana/id.json. We test the pure helper so
+            // the test does not race against other tests mutating HOME.
+            assert_eq!(
+                compute_default_keypair_path("/u/op"),
+                PathBuf::from("/u/op/.config/solana/id.json")
+            );
+        }
     }
 }

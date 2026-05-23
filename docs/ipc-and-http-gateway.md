@@ -223,7 +223,7 @@ The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/co
 `covenant ping --json` emits a daemon-liveness probe. Envelope shape:
 
 - `kind`: literal string `"daemon_ping"`.
-- `status`: literal string `"ok"` — the daemon only returns this envelope when it has accepted the request and produced a `Response::Pong`; failures surface as a non-zero CLI exit rather than a non-`"ok"` payload, so consumers can branch on transport success alone.
+- `status`: literal string `"ok"` — the daemon only returns this envelope when it has accepted the request and produced a `Response::Pong`; failures surface as a non-zero CLI exit rather than a non-`"ok"` payload, so consumers can branch on transport success alone. Pinned as a string by `main.rs:5854-5857` — never an integer or boolean.
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5839` (`ping_json_pins_top_level_schema`).
 

@@ -23,6 +23,7 @@
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant chain register-agent --program-id <BASE58> --agent-key <BASE58> --metadata-hash <HEX64> --capability-hash <HEX64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant chain stake --program-id <BASE58> --agent-key <BASE58> --owner-covnt <BASE58> --stake-vault <BASE58> --amount <U64> --lock-until <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain buy-credits --program-id <BASE58> --owner-covnt <BASE58> --treasury <BASE58> --amount-covnt <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
@@ -189,7 +190,6 @@ fn settlement_agent_pda(program_id: &Pubkey, agent_key: &Pubkey) -> (Pubkey, u8)
     Pubkey::find_program_address(&[b"agent", agent_key.as_ref()], program_id)
 }
 
-#[allow(dead_code)] // wired in by sub-slice buy-credits
 fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
@@ -248,13 +248,11 @@ fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
 // `buy_credits(ctx, amount_covnt: u64)`. The on-chain handler
 // reads a single u64 argument; a struct grow without an on-chain
 // mirror would silently truncate at deserialize-time on chain.
-#[allow(dead_code)] // wired in by sub-slice buy-credits
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 struct BuyCreditsArgs {
     amount_covnt: u64,
 }
 
-#[allow(dead_code)] // wired in by sub-slice buy-credits
 fn serialize_buy_credits_args(args: &BuyCreditsArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of one u64 field is infallible")
 }
@@ -361,7 +359,6 @@ fn build_stake_instruction(
 //   token_program — read-only, legacy SPL Token
 // No system_program is referenced because BuyCredits does not init
 // any new account (credits PDA is initialized by initialize_credits).
-#[allow(dead_code)] // wired in by sub-slice buy-credits verb
 fn build_buy_credits_instruction(
     program_id: &Pubkey,
     operator: &Pubkey,
@@ -1014,6 +1011,281 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct BuyCreditsCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    owner_covnt: Pubkey,
+    treasury: Pubkey,
+    amount_covnt: u64,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut owner_covnt: Option<Pubkey> = None;
+    let mut treasury: Option<Pubkey> = None;
+    let mut amount_covnt: Option<u64> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--owner-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--owner-covnt needs a value")?;
+                owner_covnt = Some(parse_pubkey_arg("owner-covnt", v)?);
+            }
+            "--treasury" => {
+                i += 1;
+                let v = args.get(i).context("--treasury needs a value")?;
+                treasury = Some(parse_pubkey_arg("treasury", v)?);
+            }
+            "--amount-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--amount-covnt needs a value")?;
+                let parsed = parse_u64_arg("amount-covnt", v)?;
+                if parsed == 0 {
+                    // A zero-amount buy_credits costs a tx fee
+                    // for a no-op token transfer — almost
+                    // certainly a typo rather than intent.
+                    bail!("--amount-covnt must be greater than zero");
+                }
+                amount_covnt = Some(parsed);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed = parse_u64_arg("confirm-timeout-ms", v)?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
+    let treasury = treasury.context("--treasury is required")?;
+    let amount_covnt = amount_covnt.context("--amount-covnt is required")?;
+    Ok(BuyCreditsCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        owner_covnt,
+        treasury,
+        amount_covnt,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+fn sign_buy_credits_tx(
+    operator: &Keypair,
+    program_id: &Pubkey,
+    owner_covnt: &Pubkey,
+    treasury: &Pubkey,
+    args: &BuyCreditsArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix =
+        build_buy_credits_instruction(program_id, &operator.pubkey(), owner_covnt, treasury, args);
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn buy_credits_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    owner_b58: &str,
+    amount_covnt: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "buy-credits",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "owner": owner_b58,
+        "amount_covnt": amount_covnt,
+        "status": "confirmed",
+    })
+}
+
+fn buy_credits_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    owner_b58: &str,
+    amount_covnt: u64,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "buy-credits",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "owner": owner_b58,
+        "amount_covnt": amount_covnt,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
+    let parsed = parse_buy_credits_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = BuyCreditsArgs {
+        amount_covnt: parsed.amount_covnt,
+    };
+    let program_id = parsed.program_id;
+    let owner_covnt = parsed.owner_covnt;
+    let treasury = parsed.treasury;
+    let owner_b58 = kp.pubkey().to_string();
+
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &program_id,
+                &owner_covnt,
+                &treasury,
+                &prep_args,
+                blockhash,
+            );
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    RpcSendTransactionConfig::default(),
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            let envelope = buy_credits_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &owner_b58,
+                parsed.amount_covnt,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("owner: {owner_b58}");
+                println!("amount_covnt: {}", parsed.amount_covnt);
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!(
+                "send_and_confirm_transaction failed: {client_err} \
+                 (if HasOneConstraintViolation: fetch config.treasury via `chain status` \
+                 and pass it verbatim to --treasury)"
+            )
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = buy_credits_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &owner_b58,
+                parsed.amount_covnt,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("owner: {owner_b58}");
+                println!("amount_covnt: {}", parsed.amount_covnt);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn run_chain_register_agent(args: &[String]) -> Result<()> {
     let parsed = parse_register_agent_cli_args(args)?;
 
@@ -1200,6 +1472,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant chain stake --program-id BASE58 --agent-key BASE58 --owner-covnt BASE58 --stake-vault BASE58 --amount U64 --lock-until U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement stake transaction with the operator keypair"
+    );
+    eprintln!(
+        "  covenant chain buy-credits --program-id BASE58 --owner-covnt BASE58 --treasury BASE58 --amount-covnt U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement buy_credits transaction with the operator keypair; --treasury MUST equal config.treasury (fetch via `chain status` if unknown)"
     );
     eprintln!(
         "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
@@ -2760,10 +3035,7 @@ async fn main() -> Result<()> {
                     run_chain_stake(&args[2..]).await?;
                 }
                 "buy-credits" => {
-                    bail!(
-                        "chain {} is prepared by the Solana SDK; daemon signing is not wired yet",
-                        args[1]
-                    );
+                    run_chain_buy_credits(&args[2..]).await?;
                 }
                 other => bail!("unknown chain subcommand '{other}'"),
             }
@@ -8897,6 +9169,239 @@ mod tests {
             assert_eq!(v["amount"], 12_345);
             assert_eq!(v["lock_until"], 1_700_000_000);
             assert_eq!(v["timeout_ms"], 45_000);
+        }
+    }
+
+    mod buy_credits_arg_parsing {
+        use super::super::parse_buy_credits_cli_args;
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn minimal_argv() -> Vec<String> {
+            let pk = valid_pubkey_b58();
+            vec![
+                "--program-id".into(),
+                pk.clone(),
+                "--owner-covnt".into(),
+                pk.clone(),
+                "--treasury".into(),
+                pk,
+                "--amount-covnt".into(),
+                "5000".into(),
+            ]
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let parsed = parse_buy_credits_cli_args(&minimal_argv()).expect("parses");
+            assert_eq!(parsed.cluster, "devnet");
+            assert_eq!(parsed.confirm_timeout_ms, 60_000);
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.amount_covnt, 5000);
+        }
+
+        #[test]
+        fn rejects_zero_amount_covnt_with_named_reason() {
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "5000" {
+                    argv[i] = "0".into();
+                    break;
+                }
+            }
+            let err = parse_buy_credits_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "names the reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_non_integer_amount_with_named_flag() {
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "5000" {
+                    argv[i] = "5_000".into();
+                    break;
+                }
+            }
+            let err = parse_buy_credits_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("--amount-covnt"),
+                "names flag: {err}"
+            );
+        }
+
+        #[test]
+        fn missing_each_required_flag_errors_with_its_name() {
+            let required = [
+                "--program-id",
+                "--owner-covnt",
+                "--treasury",
+                "--amount-covnt",
+            ];
+            for flag in required {
+                let base = minimal_argv();
+                let mut filtered: Vec<String> = Vec::new();
+                let mut i = 0;
+                while i < base.len() {
+                    if base[i] == flag {
+                        i += 2;
+                        continue;
+                    }
+                    filtered.push(base[i].clone());
+                    i += 1;
+                }
+                let err = parse_buy_credits_cli_args(&filtered)
+                    .err()
+                    .unwrap_or_else(|| panic!("expected error when {flag} is missing"));
+                assert!(
+                    err.to_string().contains(flag),
+                    "error must name the missing flag {flag}: {err}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_unknown_flag() {
+            let err = parse_buy_credits_cli_args(&["--unknown".into()]).expect_err("must error");
+            assert!(
+                err.to_string().contains("--unknown"),
+                "names the unknown flag: {err}"
+            );
+        }
+    }
+
+    mod buy_credits_tx_shape {
+        use super::super::{build_buy_credits_instruction, sign_buy_credits_tx, BuyCreditsArgs};
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 999_999,
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            let kp = Keypair::new();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &fixed_program(),
+                &owner_covnt,
+                &treasury,
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            let kp = Keypair::new();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &fixed_program(),
+                &owner_covnt,
+                &treasury,
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.signatures.len(), 1);
+            assert_eq!(tx.message.header.num_required_signatures, 1);
+        }
+
+        #[test]
+        fn instruction_matches_build_buy_credits_instruction_output() {
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let args = fixed_args();
+            let expected_ix = build_buy_credits_instruction(
+                &program,
+                &kp.pubkey(),
+                &owner_covnt,
+                &treasury,
+                &args,
+            );
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &program,
+                &owner_covnt,
+                &treasury,
+                &args,
+                Hash::default(),
+            );
+            assert_eq!(tx.message.instructions.len(), 1);
+            assert_eq!(tx.message.instructions[0].data, expected_ix.data);
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod buy_credits_json_envelopes {
+        use super::super::{buy_credits_confirmed_json, buy_credits_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            let v = buy_credits_confirmed_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "buy-credits");
+            assert_eq!(v["status"], "confirmed");
+            assert_eq!(v["amount_covnt"], 42_000);
+            assert_eq!(v["owner"], "ownerB58");
+            assert_eq!(v["cluster"], "localnet");
+        }
+
+        #[test]
+        fn timeout_envelope_includes_amount_covnt_and_timeout_ms() {
+            let v = buy_credits_timeout_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+                15_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["verb"], "buy-credits");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["amount_covnt"], 42_000);
+            assert_eq!(v["timeout_ms"], 15_000);
         }
     }
 }

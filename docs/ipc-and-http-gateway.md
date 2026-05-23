@@ -196,7 +196,7 @@ The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/cra
 
 - `kind`: literal string `"receipt_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `receipt_list` (singular `receipt_`, not `receipts_`); consumers routing on `kind` must match the literal exactly rather than reusing the verb token or pluralising.
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:2830`). Pinned at the type level by the schema test (`main.rs:5491-5493`) — never a string.
-- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:5494-5497`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
+- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:5495-5497`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
 - `receipts` (array of `SettlementReceipt`): the matched receipts in the order returned by the daemon. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `(no receipts)` for that case at `main.rs:2860`.
 
 The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:339`:

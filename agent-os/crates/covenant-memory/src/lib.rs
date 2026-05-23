@@ -18,8 +18,8 @@ pub use covenant_types::{
     MemoryCompactionOutcome, MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRepairAction,
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairOutcome, MemoryRepairRequest,
 };
-use covenant_types::{MemoryRecord, MemoryTier};
-use std::collections::BTreeSet;
+use covenant_types::{MemoryRecord, MemoryTier, ResourceKind, SettlementReceipt};
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::task;
@@ -342,6 +342,162 @@ fn plan_compaction(
         },
         updates,
     )
+}
+
+/// One pairing produced by the legacy-receipt → memory-record matcher.
+/// Borrowed so the JSON and correlation surfaces can render their own
+/// projections without re-running the algorithm.
+struct ReceiptMemoryMatch<'a> {
+    pairs: Vec<(&'a SettlementReceipt, &'a MemoryRecord)>,
+    unmatched_legacy_receipts: Vec<&'a SettlementReceipt>,
+    unmatched_memory_records: Vec<&'a MemoryRecord>,
+}
+
+/// Pair uncorrelated legacy memory-resource receipts (those whose
+/// `memory_record_id` is None) with uncorrelated memory records sharing
+/// the same payer/owner pubkey. The first eligible memory record (in
+/// slice order) wins for each receipt; correlated rows on either side
+/// are excluded so a repeat run does not double-bind.
+fn match_legacy_receipts_to_memory_records<'a>(
+    memories: &'a [MemoryRecord],
+    receipts: &'a [SettlementReceipt],
+) -> ReceiptMemoryMatch<'a> {
+    let memory_receipts: Vec<&SettlementReceipt> = receipts
+        .iter()
+        .filter(|receipt| receipt.resource == ResourceKind::Memory)
+        .collect();
+    let correlated: HashSet<Uuid> = memory_receipts
+        .iter()
+        .filter_map(|receipt| receipt.memory_record_id)
+        .collect();
+    let legacy: Vec<&SettlementReceipt> = memory_receipts
+        .iter()
+        .copied()
+        .filter(|receipt| receipt.memory_record_id.is_none())
+        .collect();
+
+    let mut used_memory: HashSet<Uuid> = HashSet::new();
+    let mut pairs: Vec<(&SettlementReceipt, &MemoryRecord)> = Vec::new();
+    let mut unmatched_legacy: Vec<&SettlementReceipt> = Vec::new();
+    for receipt in &legacy {
+        let candidate = memories.iter().find(|memory| {
+            memory.owner.pubkey == receipt.payer.pubkey
+                && !correlated.contains(&memory.id)
+                && !used_memory.contains(&memory.id)
+        });
+        if let Some(memory) = candidate {
+            used_memory.insert(memory.id);
+            pairs.push((*receipt, memory));
+        } else {
+            unmatched_legacy.push(*receipt);
+        }
+    }
+    let unmatched_memory: Vec<&MemoryRecord> = memories
+        .iter()
+        .filter(|memory| !correlated.contains(&memory.id) && !used_memory.contains(&memory.id))
+        .collect();
+
+    ReceiptMemoryMatch {
+        pairs,
+        unmatched_legacy_receipts: unmatched_legacy,
+        unmatched_memory_records: unmatched_memory,
+    }
+}
+
+fn memory_tier_slug(tier: MemoryTier) -> &'static str {
+    match tier {
+        MemoryTier::Working => "working",
+        MemoryTier::Episodic => "episodic",
+        MemoryTier::LongTerm => "longterm",
+    }
+}
+
+/// Read-only planner envelope for `covenant memory plan-receipt-backfill`.
+/// Returns the stable `memory_receipt_backfill_plan` JSON shape: candidate
+/// pairings, unmatched legacy receipts, unmatched memory records, and a
+/// refusal note carried over from the pre-mutator contract. Pure function
+/// over the supplied snapshots; performs no I/O.
+pub fn memory_receipt_backfill_plan_json(
+    limit: usize,
+    memories: &[MemoryRecord],
+    receipts: &[SettlementReceipt],
+) -> serde_json::Value {
+    let matched = match_legacy_receipts_to_memory_records(memories, receipts);
+    let records: Vec<serde_json::Value> = matched
+        .pairs
+        .iter()
+        .map(|(receipt, memory)| {
+            serde_json::json!({
+                "receipt_id": receipt.id,
+                "memory_record_id": memory.id,
+                "payer_display": receipt.payer.display,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "memory_owner_display": memory.owner.display,
+                "memory_owner_pubkey": memory.owner.pubkey_base58(),
+                "credits_consumed": receipt.credits_consumed,
+                "status": "candidate",
+                "reason": "legacy memory receipt has no memory_record_id and the same owner has an uncorrelated memory record"
+            })
+        })
+        .collect();
+    let unmatched_legacy_receipts: Vec<serde_json::Value> = matched
+        .unmatched_legacy_receipts
+        .iter()
+        .map(|receipt| {
+            serde_json::json!({
+                "receipt_id": receipt.id,
+                "payer_display": receipt.payer.display,
+                "payer_pubkey": receipt.payer.pubkey_base58(),
+                "credits_consumed": receipt.credits_consumed,
+                "reason": "no uncorrelated memory record for receipt payer in the requested window"
+            })
+        })
+        .collect();
+    let unmatched_memory_records: Vec<serde_json::Value> = matched
+        .unmatched_memory_records
+        .iter()
+        .map(|memory| {
+            serde_json::json!({
+                "memory_record_id": memory.id,
+                "owner_display": memory.owner.display,
+                "owner_pubkey": memory.owner.pubkey_base58(),
+                "tier": memory_tier_slug(memory.tier),
+                "reason": "no legacy receipt candidate for memory owner in the requested window"
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "kind": "memory_receipt_backfill_plan",
+        "mode": "dry_run",
+        "limit": limit,
+        "mutation_supported": false,
+        "records": records,
+        "unmatched_legacy_receipts": unmatched_legacy_receipts,
+        "unmatched_memory_records": unmatched_memory_records,
+        "refusal": {
+            "apply_supported": false,
+            "reason": "receipt backfill mutation is not implemented; review this plan before adding an explicit mutation path with audit evidence"
+        }
+    })
+}
+
+/// Typed correlation list consumed by
+/// [`SqliteStore::backfill_receipt_correlation`]. Pairs match
+/// [`memory_receipt_backfill_plan_json`] one-for-one so the planner's
+/// dry-run preview and an apply over the same snapshots cannot diverge.
+pub fn memory_receipt_backfill_correlations(
+    memories: &[MemoryRecord],
+    receipts: &[SettlementReceipt],
+) -> Vec<MemoryReceiptBackfillCorrelation> {
+    match_legacy_receipts_to_memory_records(memories, receipts)
+        .pairs
+        .into_iter()
+        .map(|(receipt, memory)| MemoryReceiptBackfillCorrelation {
+            memory_record_id: memory.id,
+            receipt_id: receipt.id,
+        })
+        .collect()
 }
 
 /// Cosine similarity over two equal-length vectors. Returns 0.0 for any
@@ -3039,6 +3195,723 @@ mod tests {
              an object by convention' would silently destroy legacy memory \
              records on the first backfill apply against a pre-convention \
              store"
+        );
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pairs_legacy_receipts_by_owner() {
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let memory_id = uuid::Uuid::from_u128(10);
+        let memory = MemoryRecord {
+            id: memory_id,
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt_id = uuid::Uuid::from_u128(20);
+        let receipt = SettlementReceipt {
+            id: receipt_id,
+            payer: owner.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let value = memory_receipt_backfill_plan_json(100, &[memory], &[receipt]);
+        assert_eq!(value["kind"], "memory_receipt_backfill_plan");
+        assert_eq!(value["mode"], "dry_run");
+        assert_eq!(value["mutation_supported"], false);
+        assert_eq!(value["records"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["records"][0]["receipt_id"], receipt_id.to_string());
+        assert_eq!(
+            value["records"][0]["memory_record_id"],
+            memory_id.to_string()
+        );
+        assert_eq!(value["records"][0]["status"], "candidate");
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(value["refusal"]["apply_supported"], false);
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_lists_unmatched_rows() {
+        let memory_owner = AgentId::new("memory@local", [5u8; 32]);
+        let payer = AgentId::new("payer@local", [6u8; 32]);
+        let memory = MemoryRecord {
+            id: uuid::Uuid::from_u128(30),
+            tier: MemoryTier::LongTerm,
+            owner: memory_owner,
+            text: "unmatched memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(40),
+            payer,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let value = memory_receipt_backfill_plan_json(10, &[memory], &[receipt]);
+        assert_eq!(value["records"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "kind",
+            "limit",
+            "mode",
+            "mutation_supported",
+            "records",
+            "refusal",
+            "unmatched_legacy_receipts",
+            "unmatched_memory_records",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("memory_receipt_backfill_plan_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_receipt_backfill_plan_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("memory_receipt_backfill_plan"));
+            assert!(value["mode"].is_string(), "mode must be a string: {value}");
+            assert!(
+                value["limit"].is_u64(),
+                "limit must be a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["mutation_supported"].is_boolean(),
+                "mutation_supported must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert!(
+                value["records"].is_array(),
+                "records must be an array, not a string blob: {value}",
+            );
+            assert!(
+                value["unmatched_legacy_receipts"].is_array(),
+                "unmatched_legacy_receipts must be an array, not a string blob: {value}",
+            );
+            assert!(
+                value["unmatched_memory_records"].is_array(),
+                "unmatched_memory_records must be an array, not a string blob: {value}",
+            );
+            assert!(
+                value["refusal"].is_object(),
+                "refusal must be a structured object, not a string blob: {value}",
+            );
+        }
+
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let memory = MemoryRecord {
+            id: uuid::Uuid::from_u128(10),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(20),
+            payer: owner,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory],
+            &[receipt],
+        ));
+        assert_shape(&memory_receipt_backfill_plan_json(0, &[], &[]));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pins_refusal_object_schema() {
+        const EXPECTED_KEYS: &[&str] = &["apply_supported", "reason"];
+
+        fn assert_refusal_shape(value: &serde_json::Value) {
+            let refusal = value["refusal"]
+                .as_object()
+                .expect("memory_receipt_backfill_plan_json refusal field must be an object");
+            let mut keys: Vec<String> = refusal.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_receipt_backfill_plan_json refusal object keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["refusal"]["apply_supported"].is_boolean(),
+                "refusal.apply_supported must be a JSON bool, not 0/1 or a string: {value}",
+            );
+            assert_eq!(
+                value["refusal"]["apply_supported"].as_bool(),
+                Some(false),
+                "refusal.apply_supported must be false until receipt backfill mutation lands: {value}",
+            );
+            assert!(
+                value["refusal"]["reason"].is_string(),
+                "refusal.reason must be a string, not a structured object: {value}",
+            );
+        }
+
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let memory = MemoryRecord {
+            id: uuid::Uuid::from_u128(10),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(20),
+            payer: owner,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_refusal_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory],
+            &[receipt],
+        ));
+        assert_refusal_shape(&memory_receipt_backfill_plan_json(0, &[], &[]));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pins_records_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "credits_consumed",
+            "memory_owner_display",
+            "memory_owner_pubkey",
+            "memory_record_id",
+            "payer_display",
+            "payer_pubkey",
+            "reason",
+            "receipt_id",
+            "status",
+        ];
+
+        fn assert_records_element_shape(value: &serde_json::Value) {
+            let records = value["records"]
+                .as_array()
+                .expect("memory_receipt_backfill_plan_json records field must be an array");
+            assert!(
+                records.len() >= 2,
+                "fixture must produce at least two records to pin the per-element schema across distinct payers: {value}",
+            );
+            for record in records {
+                let object = record
+                    .as_object()
+                    .expect("each records[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(
+                    record["receipt_id"].is_string(),
+                    "records[].receipt_id must be a string uuid: {record}"
+                );
+                assert!(
+                    record["memory_record_id"].is_string(),
+                    "records[].memory_record_id must be a string uuid: {record}"
+                );
+                assert!(
+                    record["payer_display"].is_string(),
+                    "records[].payer_display must be a string: {record}"
+                );
+                assert!(
+                    record["payer_pubkey"].is_string(),
+                    "records[].payer_pubkey must be a base58 string: {record}"
+                );
+                assert!(
+                    record["memory_owner_display"].is_string(),
+                    "records[].memory_owner_display must be a string: {record}"
+                );
+                assert!(
+                    record["memory_owner_pubkey"].is_string(),
+                    "records[].memory_owner_pubkey must be a base58 string: {record}"
+                );
+                assert!(
+                    record["credits_consumed"].is_u64(),
+                    "records[].credits_consumed must be a non-negative integer, not a stringified number: {record}",
+                );
+                assert!(
+                    record["status"].is_string(),
+                    "records[].status must be a string slug: {record}"
+                );
+                assert!(
+                    record["reason"].is_string(),
+                    "records[].reason must be a string, not a structured object: {record}"
+                );
+            }
+        }
+
+        let owner_a = AgentId::new("owner-a@local", [10u8; 32]);
+        let owner_b = AgentId::new("owner-b@local", [11u8; 32]);
+        let memory_a = MemoryRecord {
+            id: uuid::Uuid::from_u128(101),
+            tier: MemoryTier::Working,
+            owner: owner_a.clone(),
+            text: "memory a".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let memory_b = MemoryRecord {
+            id: uuid::Uuid::from_u128(102),
+            tier: MemoryTier::LongTerm,
+            owner: owner_b.clone(),
+            text: "memory b".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt_a = SettlementReceipt {
+            id: uuid::Uuid::from_u128(201),
+            payer: owner_a,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 5,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let receipt_b = SettlementReceipt {
+            id: uuid::Uuid::from_u128(202),
+            payer: owner_b,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 7,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_records_element_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory_a, memory_b],
+            &[receipt_a, receipt_b],
+        ));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pins_unmatched_legacy_receipts_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "credits_consumed",
+            "payer_display",
+            "payer_pubkey",
+            "reason",
+            "receipt_id",
+        ];
+
+        fn assert_unmatched_legacy_receipt_shape(value: &serde_json::Value) {
+            let entries = value["unmatched_legacy_receipts"]
+                .as_array()
+                .expect("memory_receipt_backfill_plan_json unmatched_legacy_receipts field must be an array");
+            assert!(
+                entries.len() >= 2,
+                "fixture must produce at least two unmatched_legacy_receipts to pin the per-element schema across distinct payers: {value}",
+            );
+            for entry in entries {
+                let object = entry
+                    .as_object()
+                    .expect("each unmatched_legacy_receipts[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json unmatched_legacy_receipts[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(
+                    entry["receipt_id"].is_string(),
+                    "unmatched_legacy_receipts[].receipt_id must be a string uuid: {entry}"
+                );
+                assert!(
+                    entry["payer_display"].is_string(),
+                    "unmatched_legacy_receipts[].payer_display must be a string: {entry}"
+                );
+                assert!(
+                    entry["payer_pubkey"].is_string(),
+                    "unmatched_legacy_receipts[].payer_pubkey must be a base58 string: {entry}"
+                );
+                assert!(
+                    entry["credits_consumed"].is_u64(),
+                    "unmatched_legacy_receipts[].credits_consumed must be a non-negative integer, not a stringified number: {entry}",
+                );
+                assert!(entry["reason"].is_string(), "unmatched_legacy_receipts[].reason must be a string, not a structured object: {entry}");
+            }
+        }
+
+        let payer_a = AgentId::new("payer-a@local", [20u8; 32]);
+        let payer_b = AgentId::new("payer-b@local", [21u8; 32]);
+        let receipt_a = SettlementReceipt {
+            id: uuid::Uuid::from_u128(301),
+            payer: payer_a,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 11,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let receipt_b = SettlementReceipt {
+            id: uuid::Uuid::from_u128(302),
+            payer: payer_b,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 13,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        assert_unmatched_legacy_receipt_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[],
+            &[receipt_a, receipt_b],
+        ));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_pins_unmatched_memory_records_element_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "memory_record_id",
+            "owner_display",
+            "owner_pubkey",
+            "reason",
+            "tier",
+        ];
+
+        fn assert_unmatched_memory_record_shape(value: &serde_json::Value) {
+            let entries = value["unmatched_memory_records"].as_array().expect(
+                "memory_receipt_backfill_plan_json unmatched_memory_records field must be an array",
+            );
+            assert!(
+                entries.len() >= 2,
+                "fixture must produce at least two unmatched_memory_records to pin the per-element schema across distinct owners: {value}",
+            );
+            for entry in entries {
+                let object = entry
+                    .as_object()
+                    .expect("each unmatched_memory_records[] element must be an object");
+                let mut keys: Vec<String> = object.keys().cloned().collect();
+                keys.sort();
+                let expected: Vec<String> =
+                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+                assert_eq!(
+                    keys, expected,
+                    "memory_receipt_backfill_plan_json unmatched_memory_records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+                );
+
+                assert!(
+                    entry["memory_record_id"].is_string(),
+                    "unmatched_memory_records[].memory_record_id must be a string uuid: {entry}"
+                );
+                assert!(
+                    entry["owner_display"].is_string(),
+                    "unmatched_memory_records[].owner_display must be a string: {entry}"
+                );
+                assert!(
+                    entry["owner_pubkey"].is_string(),
+                    "unmatched_memory_records[].owner_pubkey must be a base58 string: {entry}"
+                );
+                assert!(
+                    entry["tier"].is_string(),
+                    "unmatched_memory_records[].tier must be a documented tier slug string, not a structured object: {entry}",
+                );
+                assert!(entry["reason"].is_string(), "unmatched_memory_records[].reason must be a string, not a structured object: {entry}");
+            }
+        }
+
+        let owner_a = AgentId::new("owner-a@local", [30u8; 32]);
+        let owner_b = AgentId::new("owner-b@local", [31u8; 32]);
+        let memory_a = MemoryRecord {
+            id: uuid::Uuid::from_u128(401),
+            tier: MemoryTier::Working,
+            owner: owner_a,
+            text: "memory a".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let memory_b = MemoryRecord {
+            id: uuid::Uuid::from_u128(402),
+            tier: MemoryTier::LongTerm,
+            owner: owner_b,
+            text: "memory b".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+
+        assert_unmatched_memory_record_shape(&memory_receipt_backfill_plan_json(
+            100,
+            &[memory_a, memory_b],
+            &[],
+        ));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_correlations_mirrors_planner_pairings() {
+        // Pin parity between the JSON planner envelope and the typed
+        // correlator: every record in records[] must produce one
+        // MemoryReceiptBackfillCorrelation with the same id pair, and
+        // unmatched rows must NOT show up as correlations. A regression
+        // that filtered legacy receipts differently in one path than the
+        // other would let a dry-run preview claim N changes while an
+        // apply changed M ≠ N rows.
+        let owner_a = AgentId::new("owner-a@local", [40u8; 32]);
+        let owner_b = AgentId::new("owner-b@local", [41u8; 32]);
+        let memory_a = MemoryRecord {
+            id: uuid::Uuid::from_u128(501),
+            tier: MemoryTier::Working,
+            owner: owner_a.clone(),
+            text: "memory a".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let memory_b_unmatched = MemoryRecord {
+            id: uuid::Uuid::from_u128(502),
+            tier: MemoryTier::LongTerm,
+            owner: owner_b.clone(),
+            text: "memory b (no receipt)".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let receipt_a = SettlementReceipt {
+            id: uuid::Uuid::from_u128(601),
+            payer: owner_a,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let unmatched_receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(602),
+            payer: AgentId::new("payer-c@local", [42u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let plan = memory_receipt_backfill_plan_json(
+            100,
+            &[memory_a.clone(), memory_b_unmatched.clone()],
+            &[receipt_a.clone(), unmatched_receipt.clone()],
+        );
+        let correlations = memory_receipt_backfill_correlations(
+            &[memory_a.clone(), memory_b_unmatched],
+            &[receipt_a.clone(), unmatched_receipt],
+        );
+
+        let plan_pairs: Vec<(String, String)> = plan["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["receipt_id"].as_str().unwrap().to_string(),
+                    r["memory_record_id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let correlation_pairs: Vec<(String, String)> = correlations
+            .iter()
+            .map(|c| (c.receipt_id.to_string(), c.memory_record_id.to_string()))
+            .collect();
+        assert_eq!(
+            plan_pairs, correlation_pairs,
+            "memory_receipt_backfill_correlations must yield exactly the (receipt_id, memory_record_id) pairs the JSON planner records[] list — any divergence means the planner's preview and the apply path will report different counts and rewrite different rows",
+        );
+        assert_eq!(correlations.len(), 1);
+        assert_eq!(correlations[0].receipt_id, uuid::Uuid::from_u128(601));
+        assert_eq!(correlations[0].memory_record_id, uuid::Uuid::from_u128(501));
+    }
+
+    #[test]
+    fn memory_receipt_backfill_correlations_skips_already_correlated_rows() {
+        let owner = AgentId::new("owner@local", [50u8; 32]);
+        let memory_id = uuid::Uuid::from_u128(701);
+        let memory = MemoryRecord {
+            id: memory_id,
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "already correlated".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let prior_receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(801),
+            payer: owner.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: Some(memory_id),
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let legacy_receipt = SettlementReceipt {
+            id: uuid::Uuid::from_u128(802),
+            payer: owner,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 3,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        let correlations =
+            memory_receipt_backfill_correlations(&[memory], &[prior_receipt, legacy_receipt]);
+        assert!(
+            correlations.is_empty(),
+            "a memory record already bound by a prior correlated receipt must not be re-paired by the legacy backfill — the second receipt has no other candidate so the apply path must leave both unchanged: got {correlations:?}",
         );
     }
 }

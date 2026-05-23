@@ -867,6 +867,7 @@ dependencies = [
  "covenant-ipc",
  "covenant-manifest",
  "covenant-mcp",
+ "covenant-memory",
  "covenant-peer-auth",
  "covenant-permissions",
  "covenant-types",

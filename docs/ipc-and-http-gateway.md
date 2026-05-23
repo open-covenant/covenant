@@ -128,6 +128,23 @@ Top-level keys are pinned to exactly these five by the test at `agent-os/crates/
 
 The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:4537`. The shape-pinning test at `main.rs:6987-7033` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
 
+`covenant tools list --json` emits the registered MCP-style tool catalog. Envelope shape:
+
+- `kind`: literal string `"tool_list"` (singular `tool_list`, not `tools_list`; consumers routing on `kind` must match the literal exactly).
+- `tools` (array of `ToolSpec`): the registered tools the daemon advertises via `tools/list`. The array is empty when no tools are registered; the unsuffixed CLI prints `(no tools registered)` for that case at `main.rs:3123`.
+
+The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:27`:
+
+- `name` (string) — tool identifier.
+- `description` (string) — human-readable tool summary.
+- `inputSchema` (object) — JSON Schema for the tool's `arguments` object; an empty object means the tool takes no arguments.
+
+`ToolSpec` carries `#[serde(rename_all = "camelCase")]` (`covenant-mcp/src/lib.rs:26`) so the Rust field `input_schema` serializes on the wire as `inputSchema`. The naming matches the MCP wire format; JSON consumers must deserialize using `inputSchema`, not `input_schema`.
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6733` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
+
+The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4502`. Two unit tests at `main.rs:6709` (`tool_list_json_renders_stable_shape`) and `main.rs:6733` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3126`.
+
 `covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
 
 - `kind`: literal string `"receipt_batch_flushed"`.

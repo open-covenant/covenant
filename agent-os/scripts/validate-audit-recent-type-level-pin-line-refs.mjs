@@ -4,13 +4,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // audit_recent envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges
+// docs/ipc-and-http-gateway.md cites three inner assertion ranges
 // inside audit_recent_json_pins_top_level_schema:
 //
 //   - line 354 cites `limit` (u64) type pin.
 //   - line 355 cites `since_ms` (u64 or null) type pin.
+//   - line 356 cites `events` (array of AuditEvent) type pin.
 //
-// Both cites are currently correct under the assert!-opener-to-closer
+// All three cites are currently correct under the assert!-opener-to-closer
 // 4-line convention. This validator lands proactively — sibling
 // envelope pins-tests (a2a_status, tool_result, intent_result,
 // intents_resume) saw ~222-line drift events before their type-level
@@ -54,6 +55,15 @@ const targets = [
     docsLabel: "audit_recent.since_ms type-level pin citation",
     docsTemplate:
       "Pinned as u64-or-null at the schema test (`main.rs:N-M`) — never a string-of-integer.",
+  },
+  {
+    field: "events",
+    selector: 'value["events"].is_array(),',
+    docsRegex:
+      /- `events` \(array of `AuditEvent`\): the matched events\. The array is empty when no events fall in the window\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "audit_recent.events type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
 ];
 

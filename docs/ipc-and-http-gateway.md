@@ -350,7 +350,7 @@ The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/cov
 
 `covenant audit recent [-n|--limit <N>] [--since-ms <M>] [--stream] --json` emits a window of audit events. Envelope shape:
 
-- `kind`: literal string `"audit_recent"`.
+- `kind`: literal string `"audit_recent"`. Pinned at the value level by `main.rs:6399` (asserts `value["kind"].as_str() == Some("audit_recent")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `50`, per `main.rs:3198`). Pinned as u64 at the schema test (`main.rs:6400-6403`) — never a string.
 - `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:6404-6407`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
 - `events` (array of `AuditEvent`): the matched events. The array is empty when no events fall in the window. Pinned as an array by `main.rs:6408-6411` — never null or a string.

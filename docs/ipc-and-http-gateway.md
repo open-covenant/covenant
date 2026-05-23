@@ -197,6 +197,18 @@ Side effects before the envelope returns (per the CLI comment at `main.rs:3684-3
 
 The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4400`. The shape-pinning tests at `main.rs:5935` (`peers_rotate_json_renders_stable_shape`) and `main.rs:5942` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3671-3706`; without `--json`, the same response prints a two-line message terminating in the raw token value.
 
+`covenant audit purge --json` emits a summary of time-bounded audit-log garbage collection. Envelope shape:
+
+- `kind`: literal string `"audit_purged"`.
+- `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above.
+- `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3334` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched.
+
+Unlike the capability- and peer-purge verbs, this removes hash-chain entries; the cutoff enforcement is bound to the `audit.purge` capability scope at dispatch time so a delegated caller cannot purge beyond its scope's `before_ms` (see `docs/capabilities.md`).
+
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6102` (`audit_purge_json_pins_top_level_schema`).
+
+The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/covenant/src/main.rs:4414`. Two unit tests at `main.rs:6094` (`audit_purge_json_renders_stable_shape`) and `main.rs:6102` cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:3298-3340`.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

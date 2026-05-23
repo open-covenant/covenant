@@ -153,6 +153,7 @@ run node ./scripts/validate-a2a-status-type-level-pin-line-refs.mjs
 run node ./scripts/validate-tool-result-type-level-pin-line-refs.mjs
 run node ./scripts/validate-ignore-report-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-recent-type-level-pin-line-refs.mjs
+run node ./scripts/validate-peer-revoke-type-level-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

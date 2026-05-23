@@ -236,7 +236,7 @@ The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/s
 - `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:5567-5570`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2069` (a single-line `println!("{text}")`), so `covenant intent --json` and `covenant intent` share the result payload but only `--json` wraps it in the envelope.
 - `sources` (array of strings): source labels that contributed to the result (e.g., `["research"]`). Empty when no sources are attached.
-- `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:5576-5579` — never an integer or array.
+- `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:5799-5801` — never an integer or array.
 
 Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5761` (`intent_result_json_pins_top_level_schema`), exercised against both a populated `Some(SettlementReceipt)` case and an empty unsettled case.
 

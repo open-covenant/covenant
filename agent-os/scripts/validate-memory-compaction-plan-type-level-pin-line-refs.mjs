@@ -4,13 +4,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_compaction_plan envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three inner ranges inside
+// docs/ipc-and-http-gateway.md cites four inner ranges inside
 // memory_compaction_plan_json_pins_expected_receipt_changes_schema:
 //
 //   - line 568 cites `mode` (string == "none") at the assert_eq!
 //     range that pins the literal value.
 //   - line 569 cites `records` (Vec::len() == 0) at the assert_eq!
-//     range that pins the empty length.
+//     range that pins the empty length, plus `records.is_array()` at
+//     the assert! range that pins the type — two cites on the same
+//     bullet, distinguished by docsRegex anchors.
 //   - line 570 cites `reason` (is_string()) at the assert! range
 //     that pins the type — the reason field has no value pin because
 //     the docs explicitly call out that consumers must not branch on
@@ -67,6 +69,16 @@ const targets = [
       /- `records` \(array\): empty today \(length pinned to `0` at `main\.rs:(\d+)-(\d+)`\)\. Will gain a real shape once receipt-aware compaction lands\./,
     docsLabel: "memory_compaction_plan.records length pin citation",
     docsTemplate: "length pinned to `0` at `main.rs:N-M`",
+  },
+  {
+    field: "records_type",
+    selector: 'value["expected_receipt_changes"]["records"].is_array(),',
+    opener: "assert!",
+    docsRegex:
+      /Will gain a real shape once receipt-aware compaction lands\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "memory_compaction_plan.records type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
   {
     field: "reason",

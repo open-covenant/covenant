@@ -4,13 +4,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // a2a_status envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four inner assertion ranges
+// docs/ipc-and-http-gateway.md cites five inner assertion ranges
 // inside a2a_status_json_pins_top_level_schema:
 //
 //   - line 437 cites `limit` (u64) type pin.
 //   - line 438 cites `min_lease_age_ms` (u64 or null) type pin.
 //   - line 439 cites `deadline_within_ms` (u64 or null) type pin.
 //   - line 440 cites `state_filter` (string or null) type pin.
+//   - line 442 cites `results` (array) type pin at :7421-7424.
 //
 // The existing validate-a2a-status-line-refs.mjs covers the helper fn,
 // renders test, and pins test declaration lines, but not the inner
@@ -76,6 +77,15 @@ const targets = [
     docsLabel: "a2a_status.state_filter type-level pin citation",
     docsTemplate:
       "Pinned as string-or-null by the schema test (`main.rs:N-M`) — never an integer or array.",
+  },
+  {
+    field: "results",
+    selector: 'value["results"].is_array(),',
+    docsRegex:
+      /- `results` \(array of `A2ATaskResult`\): pending results not yet acknowledged\. The array may be empty; the unsuffixed CLI prints `\(a2a queue empty\)` at `main\.rs:\d+` when both `tasks` and `results` are empty\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "a2a_status.results type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
 ];
 

@@ -320,7 +320,7 @@ The envelope source-of-truth lives at `peers_purge_json` in `agent-os/crates/cov
 
 `covenant peers rotate --json` emits the new operator token after rotation. Envelope shape:
 
-- `kind`: literal string `"peer_token_rotated"`.
+- `kind`: literal string `"peer_token_rotated"`. Pinned at the value level by `main.rs:6180` (asserts `value["kind"].as_str() == Some("peer_token_rotated")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `token_b58` (string): the full base58 operator token. The value is the new authentication credential, not a fingerprint — the envelope is **secret-bearing** and JSON output must be treated as sensitive (no logging, no shell history capture, no transport over unsecured channels). Pinned as a string by `main.rs:6181-6184` — never bytes or a structured object.
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6164` (`peers_rotate_json_pins_top_level_schema`).

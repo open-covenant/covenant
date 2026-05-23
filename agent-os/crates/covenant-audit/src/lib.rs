@@ -428,6 +428,33 @@ pub enum AuditKind {
         rollback_path: Option<String>,
         dry_run: bool,
     },
+    /// Logged when the operator runs the memory-record receipt-correlation
+    /// backfill. A dry run records the planner-derived `row_count` with
+    /// `dry_run = true` and no `savepoint_name`; an apply records the
+    /// committed `row_count` and the `savepoint_name` the mutator wrapped
+    /// the batch in (absent on a no-op apply that changed nothing, so the
+    /// audit row never claims a SAVEPOINT was reserved for an empty
+    /// batch). The daemon emits this only after
+    /// [`SqliteStore::backfill_receipt_correlation`] returns Ok — i.e.
+    /// after BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE
+    /// SAVEPOINT + COMMIT all succeed — so the audit log never claims a
+    /// mutation whose data did not durably land.
+    ///
+    /// Issuer is the acting peer (the operator), matching the
+    /// [`AuditKind::MemoryRepairApplied`] and
+    /// [`AuditKind::SettlementReceiptBackfillApplied`] audience model:
+    /// the row surfaces on the operator's `/audit/recent` feed under the
+    /// issuer-equals-peer filter rather than being mis-attributed to the
+    /// daemon identity, which would hide a guest operator's backfill
+    /// from their own feed at multi-peer. Best-effort like every other
+    /// completed-mutation kind — the SAVEPOINT-wrapped batch already
+    /// COMMITted, so audit-write success is not a precondition for the
+    /// response.
+    MemoryRecordBackfillApplied {
+        row_count: u64,
+        savepoint_name: Option<String>,
+        dry_run: bool,
+    },
 }
 
 #[async_trait]
@@ -3115,6 +3142,88 @@ mod tests {
             dry_obj.len(),
             4,
             "AuditKind::SettlementReceiptBackfillApplied with rollback_path=None must still surface four keys on the wire",
+        );
+        let back: AuditKind = serde_json::from_value(dry_wire).unwrap();
+        assert_eq!(back, dry_run_kind);
+    }
+
+    #[test]
+    fn audit_kind_memory_record_backfill_applied_serde_pins_three_field_variant() {
+        // AuditKind::MemoryRecordBackfillApplied is the audit row covenantd
+        // will emit after the memory-record receipt-correlation backfill
+        // mutator returns. Three fields: row_count (u64), savepoint_name
+        // (Option<String>), dry_run (bool). The shape mirrors
+        // SettlementReceiptBackfillApplied so the operator's audit
+        // dashboards can JOIN both backfill families under a stable column
+        // set. Integrity reports and replay join on the durable slug; a
+        // rename would silently strand every prior memory backfill row at
+        // decode time. savepoint_name carries no
+        // #[serde(skip_serializing_if)] so the key surfaces as null on a
+        // dry run or no-op apply — a consumer that filters on
+        // applied-vs-dry reads dry_run, and one that wants the SAVEPOINT
+        // identifier reads savepoint_name, so both must stay on the wire
+        // across Some and None cases.
+        let kind = AuditKind::MemoryRecordBackfillApplied {
+            row_count: 3,
+            savepoint_name: Some("backfill_receipt_correlation".into()),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "row_count", "savepoint_name", "type"],
+            "AuditKind::MemoryRecordBackfillApplied wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("memory_record_backfill_applied")),
+            "AuditKind discriminator slug must be snake_case 'memory_record_backfill_applied'; a rename (e.g., shortened to 'memory_backfill_applied') would strand every prior backfill audit row at decode time and break integrity replay",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::MemoryRecordBackfillApplied must round-trip through serde_json verbatim",
+        );
+
+        // row_count and dry_run are strictly required; savepoint_name is
+        // Option and serde decodes a missing key as None, so it is
+        // intentionally absent from the omission walk. The null-on-wire
+        // round-trip below pins the skip_serializing_if regression for
+        // savepoint_name; a #[serde(default)] on row_count would let a
+        // backfill row decode claiming zero changed rows, and a default
+        // on dry_run would let an applied rewrite masquerade as a dry run.
+        for required in ["row_count", "dry_run"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::MemoryRecordBackfillApplied wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        let dry_run_kind = AuditKind::MemoryRecordBackfillApplied {
+            row_count: 2,
+            savepoint_name: None,
+            dry_run: true,
+        };
+        let dry_wire = serde_json::to_value(&dry_run_kind).unwrap();
+        let dry_obj = dry_wire.as_object().unwrap();
+        assert_eq!(
+            dry_obj.get("savepoint_name"),
+            Some(&serde_json::Value::Null),
+            "savepoint_name: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across dry-run/no-op and applied rows",
+        );
+        assert_eq!(
+            dry_obj.len(),
+            4,
+            "AuditKind::MemoryRecordBackfillApplied with savepoint_name=None must still surface four keys on the wire",
         );
         let back: AuditKind = serde_json::from_value(dry_wire).unwrap();
         assert_eq!(back, dry_run_kind);

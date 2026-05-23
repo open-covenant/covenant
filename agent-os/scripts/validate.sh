@@ -91,6 +91,7 @@ run node ./scripts/validate-covenant-ipc-struct-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-struct-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-variant-range-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-enum-annotation-line-refs.mjs
+run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-truncated-attribute-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-struct-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-field-attribute-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-enum-block-range-line-refs.mjs

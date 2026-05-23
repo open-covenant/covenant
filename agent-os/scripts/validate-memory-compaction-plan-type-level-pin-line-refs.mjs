@@ -4,11 +4,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_compaction_plan envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four inner ranges inside
+// docs/ipc-and-http-gateway.md cites five inner ranges inside
 // memory_compaction_plan_json_pins_expected_receipt_changes_schema:
 //
 //   - line 568 cites `mode` (string == "none") at the assert_eq!
-//     range that pins the literal value.
+//     range that pins the literal value, plus `mode.is_string()` at
+//     the assert! range that pins the type — two cites on the same
+//     bullet, distinguished by docsRegex anchors.
 //   - line 569 cites `records` (Vec::len() == 0) at the assert_eq!
 //     range that pins the empty length, plus `records.is_array()` at
 //     the assert! range that pins the type — two cites on the same
@@ -69,6 +71,16 @@ const targets = [
       /- `records` \(array\): empty today \(length pinned to `0` at `main\.rs:(\d+)-(\d+)`\)\. Will gain a real shape once receipt-aware compaction lands\./,
     docsLabel: "memory_compaction_plan.records length pin citation",
     docsTemplate: "length pinned to `0` at `main.rs:N-M`",
+  },
+  {
+    field: "mode_type",
+    selector: 'value["expected_receipt_changes"]["mode"].is_string(),',
+    opener: "assert!",
+    docsRegex:
+      /receipt-aware compaction has shipped and the docs are stale\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a structured object\./,
+    docsLabel: "memory_compaction_plan.mode type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never a structured object.",
   },
   {
     field: "records_type",

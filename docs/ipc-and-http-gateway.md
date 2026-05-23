@@ -106,7 +106,7 @@ The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.
 - `ready` (bool) — true when every required config field is present.
 - `missing` (array of strings) — names of the absent config fields when `ready` is false; an empty array when `ready` is true.
 
-The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4530`. Two unit tests at `main.rs:6892` (`chain_status_json_renders_stable_shape`) and `main.rs:6914` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
+The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4530`. Two unit tests at `main.rs:6893` (`chain_status_json_renders_stable_shape`) and `main.rs:6915` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
 
 `covenant verify --json` emits a cross-check report comparing the audit log against memory and receipt rows. Envelope shape:
 
@@ -178,7 +178,7 @@ Top-level keys are pinned to exactly these four by the test at `agent-os/crates/
 - `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; null before submission completes.
 - `slot` (u64 or null) — confirmation slot once available; null until then.
 
-The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:4552`. Two unit tests at `main.rs:7036` (`flush_receipts_json_renders_stable_shape`) and `main.rs:7054` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
+The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:4552`. Two unit tests at `main.rs:7036` (`flush_receipts_json_renders_stable_shape`) and `main.rs:7055` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
 
 `covenant chain receipt-batches --json` emits the list of recent receipt batches recorded on-chain. Envelope shape:
 
@@ -186,9 +186,9 @@ The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/
 - `limit` (u64): the result cap echoed back from the `--limit` argument.
 - `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6852` (`receipt_batch_list_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6853` (`receipt_batch_list_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4522`. Two unit tests at `main.rs:6834` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:6852` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
+The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4522`. Two unit tests at `main.rs:6835` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:6853` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
 
 `covenant receipts recent [-n|--limit <N>] [--since-ms <M>] --json` emits a window of local settlement receipts. Envelope shape:
 

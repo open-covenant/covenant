@@ -120,6 +120,7 @@ run node ./scripts/validate-covenant-audit-event-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-audit-integrity-report-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-types-struct-line-refs.mjs
 run node ./scripts/validate-covenant-types-capability-field-list-line-refs.mjs
+run node ./scripts/validate-covenant-types-memory-record-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-types-agent-id-serialize-impl-line-refs.mjs
 run node ./scripts/validate-covenant-types-enum-serde-rename-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-types-field-attribute-range-line-refs.mjs

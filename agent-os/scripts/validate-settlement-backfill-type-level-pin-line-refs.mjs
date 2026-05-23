@@ -4,35 +4,41 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // settlement_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// docs/ipc-and-http-gateway.md cites four inner assertion ranges
 // inside settlement_backfill_json_pins_top_level_schema:
 //
 //   - line 634 cites `schema` (string) at main.rs:5565-5568.
 //   - line 635 cites `row_count` (u64) at main.rs:5574-5577.
 //   - line 636 cites `rollback_path` (string or null) at
 //     main.rs:5578-5581.
+//   - line 637 cites `dry_run` (bool) at main.rs:5582-5585.
 //
 // The row_count cite landed first as a single-target validator; the
-// rollback_path cite was added later when the validator was converted
-// to the multi-target shape (mirroring just-landed memory_backfill
-// conversion).
+// rollback_path cite was added next when the validator was converted
+// to the multi-target shape (mirroring memory_backfill conversion);
+// the schema cite was added after; the dry_run cite was added last,
+// replacing an inaccurate "Pinned at the type level only by the inline
+// `serde_json::json!` macro" prose with the accurate test-level
+// citation. The schema test has always asserted
+// `value["dry_run"].is_boolean()` at main.rs:5582-5585; the docs prose
+// just understated the pin surface.
 //
 // Sibling collision risk (mirrors validate-memory-backfill): the
 // memory_backfill envelope's pins test at main.rs:5613 carries the
-// same `value["row_count"].is_u64(),` selector at main.rs:5638 and
-// the same `value["schema"].is_string(),` selector at main.rs:5629,
-// plus a near-identical row_count docs bullet at line 650 and a
-// schema docs bullet at line 649 that references the
-// settlement.backfill.v1 literal by name ("Same versioning semantics
-// as `covenant.settlement.backfill.v1`"). The rollback_path selector
+// same `value["row_count"].is_u64(),` selector at main.rs:5638, the
+// same `value["schema"].is_string(),` selector at main.rs:5629, and
+// the same `value["dry_run"].is_boolean(),` selector at main.rs:5650,
+// plus near-identical row_count/schema docs bullets at lines 650/649
+// and a dry_run docs bullet at line 652. The rollback_path selector
 // and bullet are currently unique to settlement_backfill (memory uses
-// savepoint_name with a non-nullable shape instead). All three risks
+// savepoint_name with a non-nullable shape instead). All four risks
 // are addressed:
 //
 //   - Selector lookups scope to the brace-balanced
 //     `settlement_backfill_json_pins_top_level_schema` fn body, so the
-//     memory_backfill row_count occurrence at main.rs:5638 and the
-//     memory_backfill schema occurrence at main.rs:5629 cannot
+//     memory_backfill row_count occurrence at main.rs:5638, the
+//     memory_backfill schema occurrence at main.rs:5629, and the
+//     memory_backfill dry_run occurrence at main.rs:5650 cannot
 //     contaminate the result.
 //   - The row_count docsRegex anchors on the settlement-specific
 //     phrase "legacy settlement-receipt rows the backfill operated on"
@@ -46,6 +52,15 @@ import { fileURLToPath } from "node:url";
 //     "literal string `\"covenant.memory.backfill.v1\"`. Same
 //     versioning semantics as ..." — different leading literal, so
 //     first-match capture cannot drift.
+//   - The dry_run docsRegex anchors on the settlement-specific phrase
+//     "does not mutate the receipt table; `false` is a real mutation
+//     pass that may write rollback evidence". The memory_backfill
+//     dry_run bullet at line 652 instead reads "Same semantics as
+//     `settlement.backfill.v1`'s `dry_run` — `true` is a planning
+//     preview, `false` is a real mutation pass" — neither phrase
+//     "does not mutate the receipt table" nor "rollback evidence"
+//     appears, so first-match capture cannot drift if memory_backfill
+//     later gains its own dry_run citation.
 //
 // Each range is derived as assert!-opener-to-closer (4-line convention)
 // — the cite spans the `assert!(` opener directly above the selector
@@ -91,6 +106,15 @@ const targets = [
     docsLabel: "settlement_backfill.rollback_path type-level pin citation",
     docsTemplate:
       "Pinned as string-or-null by `main.rs:N-M` — never the literal `\"(none)\"`.",
+  },
+  {
+    field: "dry_run",
+    selector: 'value["dry_run"].is_boolean(),',
+    docsRegex:
+      /- `dry_run` \(bool\): echoes the `--dry-run` CLI flag\. `true` is a safe planning preview that does not mutate the receipt table; `false` is a real mutation pass that may write rollback evidence\. Pinned as a JSON boolean by `main\.rs:(\d+)-(\d+)` — never `0`\/`1` or a string\./,
+    docsLabel: "settlement_backfill.dry_run type-level pin citation",
+    docsTemplate:
+      "Pinned as a JSON boolean by `main.rs:N-M` — never `0`/`1` or a string.",
   },
 ];
 

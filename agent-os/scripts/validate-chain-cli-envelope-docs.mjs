@@ -14,15 +14,48 @@ const docsPath = "docs/ipc-and-http-gateway.md";
 const emittersPath = "agent-os/crates/covenant/src/main.rs";
 
 const headings = ["## Chain Transaction Envelopes", "## CLI Read Envelopes"];
+
+// Every CLI-emitted envelope discriminator (top-level `kind` for the unversioned
+// subfamily, top-level `schema` for the versioned `covenant.<area>.<verb>.v<n>`
+// subfamily) must appear in both the emitter (main.rs) and the docs section. If
+// the validator fails for a new entry, either add the literal to the docs
+// section or remove it from this array if the emitter renamed or dropped it.
+// Scope is intentionally broader than the script's filename suggests; renaming
+// to validate-cli-envelope-docs.mjs is a separate follow-up.
 const kinds = [
   "covenant.chain.tx.v1",
   "covenant.chain.tx.timeout.v1",
-  "chain_status",
-  "verify_report",
-  "receipt_batch_flushed",
-  "receipt_batch_list",
   "covenant.settlement.backfill.v1",
   "covenant.memory.backfill.v1",
+  "a2a_auto_retry",
+  "a2a_status",
+  "audit_integrity",
+  "audit_purged",
+  "audit_recent",
+  "bootstrap_result",
+  "capabilities_purged",
+  "capability_granted",
+  "capability_list",
+  "capability_revoked",
+  "chain_status",
+  "daemon_ping",
+  "ignore_report",
+  "intent_result",
+  "intents_resume",
+  "memory_compacted",
+  "memory_compaction_plan",
+  "memory_purged",
+  "memory_read",
+  "peer_list",
+  "peer_revoke",
+  "peer_token_rotated",
+  "peers_purged",
+  "receipt_batch_flushed",
+  "receipt_batch_list",
+  "receipt_list",
+  "tool_list",
+  "tool_result",
+  "verify_report",
 ];
 
 const errors = [];

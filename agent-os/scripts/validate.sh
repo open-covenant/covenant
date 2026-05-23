@@ -116,6 +116,7 @@ run node ./scripts/validate-covenant-types-field-attribute-range-line-refs.mjs
 run node ./scripts/validate-covenant-types-enum-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-types-resource-kind-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-types-memory-tier-variant-list-line-refs.mjs
+run node ./scripts/validate-covenant-types-memory-repair-mode-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-types-tx-sig-doc-comment-range-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-struct-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-sig-b58-module-range-line-refs.mjs

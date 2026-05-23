@@ -228,6 +228,27 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/crates/covenant/src/main.rs:4384`. Two unit tests at `main.rs:5855` (`capabilities_purge_json_renders_stable_shape`) and `main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`) cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:2776-2824`; without `--json`, the same response prints `purged <n> revoked capability(ies)`.
 
+`covenant peers list [--limit <N>] [--prefix <P>] [--live-only|--revoked-only] --json` emits the registered peer roster filtered by the supplied flags. Envelope shape:
+
+- `kind`: literal string `"peer_list"`.
+- `limit` (u64): the request limit echoed back from `--limit` (default `20`, per `main.rs:3708`).
+- `filter_pubkey_prefix` (string or null): the prefix echoed from `--prefix`, or `null` when the flag was omitted. Pinned at the type level by the schema test (`main.rs:5046-5049`) — never an integer or array.
+- `matched_count` (u64): row count of the `peers` array; equals the exhaustive match count when `truncated` is `false`. Pinned as u64 by `main.rs:5051-5053` — never a string.
+- `peers` (array of `PeerSummary`): the matched roster slice, see below.
+- `operator_pubkey_b58` (string): the requesting operator's own pubkey in base58. The unsuffixed CLI line formatter at `peer_list_lines` (`main.rs:4238`) compares each peer's `pubkey_base58()` against this value to append a ` (self)` marker on the operator's own row; JSON consumers must apply the same comparison to render the self-tag, not assume the operator's row is reliably first.
+- `truncated` (boolean): `true` when the registry held more matching entries than `limit`, `false` otherwise. Pinned as a JSON boolean by the schema test at `main.rs:5059-5062` — never `0`/`1`. **This is the only signal of incomplete results**; `matched_count == limit` with `truncated == false` means the page is the exhaustive match set, not a hint to paginate.
+
+The inner `PeerSummary` shape, defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:140`:
+
+- `agent_id` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:124`.
+- `token_prefix` (string) — 6-character redacted token prefix, the same value `peers revoke <token-prefix>` accepts. The full token bytes are never on the wire — same invariant as `Response::PeerList`.
+- `registered_at` (u64) — Unix-epoch milliseconds when the peer registered.
+- `revoked_at` (u64 or null) — Unix-epoch milliseconds when the peer was tombstoned; `null` for live entries. Composes with the `--live-only`/`--revoked-only` flags (and the equivalent `status_filter` query parameter described above) for filtering — the filter runs before the registry's truncation peek.
+
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:5016` (`peer_list_json_pins_top_level_schema`), exercised against a populated two-peer (one live, one revoked) case and an empty case.
+
+The envelope source-of-truth lives at `peer_list_json` in `agent-os/crates/covenant/src/main.rs:4220`. Schema and behavioral tests live at `main.rs:5016` (key set + per-key typing), `main.rs:4983` (`peer_list_json_echoes_prefix_and_match_count`), `main.rs:4997` (`peer_list_json_omits_prefix_when_inactive`), and `main.rs:5008` (`peer_list_json_reports_zero_match_count_for_empty_response`). The CLI verb is wired at `main.rs:3707-3760`; without `--json`, the same response is rendered line-by-line by `peer_list_lines` (`main.rs:4238`) with a `(truncated; <n> shown — narrow with --prefix or raise --limit)` hint appended when `truncated` is `true` (`main.rs:4269`). See also the **Query Parameters** section above for the same filter composition rules over the HTTP gateway.
+
 `covenant peers purge --json` emits a summary of revoked-peer garbage collection. Envelope shape:
 
 - `kind`: literal string `"peers_purged"` — the only structural disambiguator from `capabilities_purged`; both envelopes share the same three-key layout, so consumers that route on `kind` must check the full literal rather than treating any `*_purged` envelope as interchangeable.

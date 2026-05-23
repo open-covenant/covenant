@@ -81,6 +81,28 @@ Per-verb fields layer on top, asymmetrically:
 
 The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:664` and `:681`, `stake_confirmed_json` and `stake_timeout_json` at `:849` and `:870`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1131` and `:1150`. Six unit tests at `main.rs:8855`, `:8876`, `:9146`, `:9166`, `:9382`, `:9400` pin the kind strings, so a drift in either the docs or the emitters surfaces in review.
 
+## CLI Read Envelopes
+
+A separate family of `--json` envelopes covers read-side chain queries. These envelopes use unversioned `kind` strings (no `.v1` suffix) and predate the `covenant.<area>.<verb>.v<n>` schema convention; they are kept stable by unit-test shape invariants rather than the suffix.
+
+`covenant chain status --json` emits:
+
+- `kind`: literal string `"chain_status"`.
+- `status`: a structured `covenant_ipc::ChainStatus` object with the following fields. The top-level object has exactly two keys (`kind` and `status`); the inner `status` is never a string blob.
+
+The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:42`:
+
+- `chain` (string) — chain family identifier, currently `"solana"`.
+- `cluster` (string) — named cluster (`devnet`, `testnet`, `mainnet-beta`, `localnet`, or a custom alias).
+- `rpc_url` (string | null) — resolved RPC endpoint, null when not configured.
+- `ws_url` (string | null) — resolved websocket endpoint, null when not configured.
+- `program_id` (string | null) — base58 settlement program ID, null when not configured.
+- `covnt_mint` (string | null) — base58 COVNT mint pubkey, null when not configured.
+- `ready` (bool) — true when every required config field is present.
+- `missing` (array of strings) — names of the absent config fields when `ready` is false; an empty array when `ready` is true.
+
+The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4530`. Two unit tests at `main.rs:6892` (`chain_status_json_renders_stable_shape`) and `main.rs:6914` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

@@ -3,6 +3,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// CLI envelope docs/emitter symmetry guard. The CLI at agent-os/crates/covenant/src/main.rs
+// emits JSON envelopes whose top-level discriminators (`kind` for the unversioned subfamily,
+// `schema` for the versioned covenant.<area>.<verb>.v<n> subfamily) are documented in
+// docs/ipc-and-http-gateway.md under the CLI Read Envelopes section. This validator fails
+// when any literal in the kinds array is missing from either the docs or the emitter,
+// catching renames, deletions, or unsynchronized adds before they ship.
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 

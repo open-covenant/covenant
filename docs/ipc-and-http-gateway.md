@@ -90,6 +90,8 @@ A separate family of `--json` envelopes covers read-side chain queries and most 
 
 The two subfamilies are **mutually exclusive** at the top level: a `kind`-subfamily envelope never carries `schema`, and a `schema`-subfamily envelope never carries `kind`. Consumers must inspect which discriminator key is present before routing — a defensive parser that reads only one will misclassify envelopes from the other subfamily. The blocks below note which discriminator each envelope uses in the per-envelope shape table.
 
+In addition to the per-envelope `*_pins_top_level_schema` unit tests, the docs/emitter symmetry across every envelope literal in this section is enforced by `agent-os/scripts/validate-cli-envelope-docs.mjs`. The validator fails if any listed envelope kind or schema literal appears in only one of the two surfaces (this document vs. the CLI emitter at `agent-os/crates/covenant/src/main.rs`); the kinds-array comment in the validator documents the maintenance contract.
+
 `covenant chain status --json` emits:
 
 - `kind`: literal string `"chain_status"`.

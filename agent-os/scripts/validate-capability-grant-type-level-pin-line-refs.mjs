@@ -4,9 +4,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // capability_grant envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four main.rs ranges inside
+// docs/ipc-and-http-gateway.md cites five main.rs ranges inside
 // capability_grant_json_pins_top_level_schema:
 //
+//   - line 260 cites the `subject_display` (string) type pin at
+//     :5992-5995.
 //   - line 261 cites the `action` (string) type pin at :5996-5999.
 //   - line 262 cites the `signature_b58` (string) type pin at
 //     :6000-6003.
@@ -40,6 +42,15 @@ const sourcePath = "agent-os/crates/covenant/src/main.rs";
 const testFnName = "capability_grant_json_pins_top_level_schema";
 
 const targets = [
+  {
+    field: "subject_display",
+    selector: 'value["subject_display"].is_string(),',
+    docsRegex:
+      /- `subject_display` \(string\): the daemon-synthesized human-readable subject \(e\.g\., `operator@local`\)\. The daemon owns this field — consumers must not reconstruct it from the request\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an object or array\./,
+    docsLabel: "capability_grant.subject_display type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an object or array.",
+  },
   {
     field: "action",
     selector: 'value["action"].is_string(),',

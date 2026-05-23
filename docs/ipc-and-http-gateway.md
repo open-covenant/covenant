@@ -209,6 +209,17 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/covenant/src/main.rs:4414`. Two unit tests at `main.rs:6094` (`audit_purge_json_renders_stable_shape`) and `main.rs:6102` cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:3298-3340`.
 
+`covenant memory purge --json` emits a summary of time-bounded memory-store garbage collection. Envelope shape:
+
+- `kind`: literal string `"memory_purged"`.
+- `tier` (string or null): the memory tier slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `memory_tier_slug` at `main.rs:1719-1724`). Null when `--tier` was omitted, meaning the purge applied to all tiers. Note an input-form asymmetry: the CLI parser at `main.rs:1729-1731` accepts `longterm`, `long-term`, and `long_term` for the `--tier` argument, but only the `longterm` slug is ever emitted in the envelope.
+- `before_ms` (u64): resolved Unix-epoch millisecond cutoff. Same `--before-ms` / `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above.
+- `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2171`, confirming the unit is a memory record. May legitimately be `0` when no rows matched.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6294` (`memory_purge_json_pins_top_level_schema`), which also exercises the null-tier case.
+
+The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/covenant/src/main.rs:4442`. Two unit tests at `main.rs:6282` (`memory_purge_json_renders_stable_shape`, both a Working-tier populated case and a no-tier null case) and `main.rs:6294` cover the populated and empty (`purged=0`, no-tier) cases. The CLI verb is wired at `main.rs:2127-2177`.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

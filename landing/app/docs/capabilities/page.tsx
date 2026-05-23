@@ -96,11 +96,13 @@ export default function CapabilitiesPage() {
         also enforces stable memory predicates for{" "}
         <code>memory.read</code>, <code>memory.read.&lt;tier&gt;</code>,{" "}
         <code>memory.write</code>, <code>memory.purge</code>,{" "}
-        <code>memory.repair.*</code>, and <code>memory.compact.*</code>,
+        <code>memory.repair.*</code>, <code>memory.compact.*</code>, and{" "}
+        <code>memory.backfill.*</code>,
         plus stable A2A predicates for send, receive-admission, respond,
         and repair flows, plus peer predicates for delegated list/revoke
         flows and purge retention, plus chain predicates for receipt
-        reads, receipt batch reads, and receipt flushing.
+        reads, receipt batch reads, and receipt flushing, plus the{" "}
+        <code>settlement.backfill.*</code> predicate for receipt backfill.
       </p>
 
       <p>
@@ -118,7 +120,8 @@ a2a.*       { "version": 1, "peer_pubkey_b58": "...", "task_id": null, "lease_id
 audit.*     { "version": 1, "window": 100, "before_ms": null, "include_integrity": true }
 peers.*     { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": null, "force": null, "before_ms": null }
 identity.*  { "version": 1, "peer_pubkey_b58": null, "token_prefix": null, "self": null, "force": null, "before_ms": null }
-chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null, "payer_pubkey_b58": null, "resource": null, "batch_id": null }`}</code>
+chain.*     { "version": 1, "limit": 100, "mint": null, "cluster": null, "payer_pubkey_b58": null, "resource": null, "batch_id": null }
+settlement.* { "version": 1, "apply": true, "before_ms": null }`}</code>
       </pre>
 
       <p>

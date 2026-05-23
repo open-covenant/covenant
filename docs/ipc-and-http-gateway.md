@@ -566,6 +566,19 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `memory_compaction_plan_json` in `agent-os/crates/covenant/src/main.rs:4458`. Three unit tests at `main.rs:6407` (`memory_compaction_plan_json_renders_stable_shape`), `main.rs:6431` (`memory_compaction_plan_json_pins_top_level_schema`), and `main.rs:6480` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`) cover both the outer envelope and the placeholder block. The CLI verb is wired at `main.rs:2178-2286` (shared parser with `covenant memory compact`, branched into the plan-only path at `main.rs:2179`); the `plan-compaction` arm sets `as_json` to `true` by default (`main.rs:2183`) so the unsuffixed CLI also emits the JSON envelope — there is no human-readable plan rendering.
 
+`covenant ignore check <text> --json` emits the result of evaluating the configured ignore rules against operator-supplied text. Envelope shape:
+
+- `kind`: literal string `"ignore_report"`.
+- `ignored` (boolean): `true` when at least one loaded rule matched the supplied text; `false` otherwise. Pinned as a JSON boolean by the schema test (`main.rs:6690-6693`) — never `0`/`1` or a string-truthy value.
+- `matched_pattern` (string or null): the matched rule pattern when `ignored` is `true`; **always `null`** when `ignored` is `false`. Pinned as string-or-null by the schema test (`main.rs:6694-6697`) — never an empty string for the unmatched case. JSON consumers must use `null` (not `""`) as the unmatched discriminator.
+- `rules_loaded` (u64): count of ignore rules the daemon evaluated. May legitimately be `0` when no rules are configured, in which case `ignored` is always `false` and `matched_pattern` is always `null`.
+
+**Exit-code coupling**: when `ignored` is `true`, the CLI exits `1` even in the `--json` path (per `main.rs:4027-4029`); the envelope is written to stdout *before* the exit. JSON consumers running this verb to gate downstream processing must read the envelope rather than relying solely on transport success — a `--json` invocation that exits `1` is the **expected** signal for a matched ignore rule, not an error.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6673` (`ignore_report_json_pins_top_level_schema`), exercised against both an `ignored=true` case with a non-null `matched_pattern` and an `ignored=false` case with a null `matched_pattern` and zero `rules_loaded`.
+
+The envelope source-of-truth lives at `ignore_report_json` in `agent-os/crates/covenant/src/main.rs:4489`. Two unit tests at `main.rs:6660` (`ignore_report_json_renders_stable_shape`) and `main.rs:6673` cover the shape. The CLI verb is wired at `main.rs:3986-4034`; without `--json`, the matched case prints `ignored — matched rule: <pattern>` at `main.rs:4023` and the unmatched case prints `not ignored (<n> rule(s) loaded)` at `main.rs:4025`. Both paths share the exit-1-when-ignored convention.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

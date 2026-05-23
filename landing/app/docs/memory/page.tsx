@@ -263,6 +263,10 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
         row carrying <code>row_count</code>, <code>savepoint_name</code>,
         and <code>dry_run</code>.
       </p>
+      <pre>
+        <code>{`$ covenant memory backfill-receipt-correlation --dry-run --json
+{"schema":"covenant.memory.backfill.v1","row_count":7,"savepoint_name":"memory_backfill_sp_001","dry_run":true}`}</code>
+      </pre>
 
       <h2>The .covenantignore allow/deny list</h2>
       <p>

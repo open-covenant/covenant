@@ -169,6 +169,10 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
         audit row carrying <code>row_count</code>,{" "}
         <code>rollback_path</code>, and <code>dry_run</code>.
       </p>
+      <pre>
+        <code>{`$ covenant settlement backfill-receipts --dry-run --json
+{"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
+      </pre>
 
       <h2>Release</h2>
       <p>

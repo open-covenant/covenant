@@ -4,25 +4,23 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // capability_list envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md line 248 cites a single main.rs line for
-// the capability_list.limit type-level pin:
+// docs/ipc-and-http-gateway.md line 248 cites a main.rs range for the
+// capability_list.limit type-level pin.
 //
-//   - `limit` (u64): ... Pinned at the type level by the schema test
-//     (`main.rs:NNNN`) — JSON consumers must never receive a string here.
-//
-// The existing validate-capability-list-line-refs.mjs covers the helper
-// fn, renders test, and pins test declaration lines, but not the inner
-// type-level selector line. The capability_list cite already drifted
-// ~222 lines from its prior documented value before this validator
-// landed (the line was 5698 in docs while the real selector was at
-// 5920), so forward protection is the explicit goal.
+// The cite previously used a single-line shape (just the selector
+// line); this validator now uses the 4-line assert!-opener-to-closer
+// range convention that sibling envelopes already use (audit_verify
+// at line 384 :6478-6481, receipt_list at lines 198/199, peer_list at
+// line 298, etc.). The range convention catches a wider set of drift
+// modes: a single-line cite stays correct when the assert!( opener
+// silently moves up/down, while the 4-line range cite fails loudly.
 //
 // The validator scopes its lookup to the brace-balanced
 // `capability_list_json_pins_top_level_schema` fn body so a same-named
 // selector inside a different envelope's pins test (receipt_list,
-// peer_list, etc.) cannot contaminate the result. The cite is a
-// single-line convention (the line containing the
-// `value["limit"].is_u64(),` selector), not a range.
+// peer_list, intent_result, a2a_status, audit_recent, memory_read for
+// the same `value["limit"].is_u64()` selector) cannot contaminate the
+// result.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -38,10 +36,10 @@ const testFnName = "capability_list_json_pins_top_level_schema";
 const selector = 'value["limit"].is_u64(),';
 
 const docsRegex =
-  /- `limit` \(u64\): the request limit echoed back from `-n`\/`--limit` \(default `10`, see `main\.rs:\d+`\)\. Pinned at the type level by the schema test \(`main\.rs:(\d+)`\) — JSON consumers must never receive a string here\./;
+  /- `limit` \(u64\): the request limit echoed back from `-n`\/`--limit` \(default `10`, see `main\.rs:\d+`\)\. Pinned at the type level by the schema test \(`main\.rs:(\d+)-(\d+)`\) — JSON consumers must never receive a string here\./;
 const docsLabel = "capability_list.limit type-level pin citation";
 const docsTemplate =
-  "Pinned at the type level by the schema test (`main.rs:N`) — JSON consumers must never receive a string here.";
+  "Pinned at the type level by the schema test (`main.rs:N-M`) — JSON consumers must never receive a string here.";
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -78,7 +76,8 @@ function scanBraceBalance(lines, openerLine) {
   return null;
 }
 
-let selectorLine = null;
+let startLine = null;
+let endLine = null;
 if (source) {
   const lines = source.split("\n");
   const testOpenerRegex = new RegExp(`^\\s+fn\\s+${testFnName}\\s*\\(`);
@@ -111,7 +110,29 @@ if (source) {
           `${sourcePath}: expected exactly 1 occurrence of \`${selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the limit type-level assertion is present exactly once in this test`,
         );
       } else {
-        selectorLine = selectorMatches[0];
+        const selectorLine = selectorMatches[0];
+        const assertOpenerLine = selectorLine - 1;
+        if (
+          assertOpenerLine < 1 ||
+          lines[assertOpenerLine - 1].trim() !== "assert!("
+        ) {
+          fail(
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-to-closing convention requires the assert!( opener on the line directly above the selector`,
+          );
+        } else {
+          startLine = assertOpenerLine;
+          for (let index = selectorLine; index < testEnd; index += 1) {
+            if (lines[index].trim() === ");") {
+              endLine = index + 1;
+              break;
+            }
+          }
+          if (endLine === null) {
+            fail(
+              `${sourcePath}: could not find the closing \`);\` after the limit selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
+            );
+          }
+        }
       }
     }
   }
@@ -121,13 +142,14 @@ if (docs) {
   const match = docs.match(docsRegex);
   if (!match) {
     fail(
-      `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the capability_list.limit type-level pin line ref`,
+      `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the capability_list.limit type-level pin line range as the modern :N-M form (not the single-line :N form)`,
     );
-  } else if (selectorLine !== null) {
-    const cited = parseInt(match[1], 10);
-    if (cited !== selectorLine) {
+  } else if (startLine !== null && endLine !== null) {
+    const citedStart = parseInt(match[1], 10);
+    const citedEnd = parseInt(match[2], 10);
+    if (citedStart !== startLine || citedEnd !== endLine) {
       fail(
-        `${docsPath}: the ${docsLabel} cites main.rs:${cited} but the capability_list.limit selector is at line ${selectorLine}; remediation: update the citation to :${selectorLine}`,
+        `${docsPath}: the ${docsLabel} cites main.rs:${citedStart}-${citedEnd} but the limit type-level assertion spans :${startLine}-${endLine}; remediation: update the citation to :${startLine}-${endLine}`,
       );
     }
   }
@@ -142,5 +164,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-capability-list-type-level-pin-line-refs: ok (capability_list.limit selector main.rs:${selectorLine})`,
+  `validate-capability-list-type-level-pin-line-refs: ok (capability_list.limit main.rs:${startLine}-${endLine})`,
 );

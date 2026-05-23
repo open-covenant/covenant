@@ -83,6 +83,7 @@ run node ./scripts/validate-a2a-retry-line-refs.mjs
 run node ./scripts/validate-ignore-report-line-refs.mjs
 run node ./scripts/validate-bootstrap-result-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-line-refs.mjs
+run node ./scripts/validate-a2a-status-line-refs.mjs
 
 case "$mode" in
   scripts)

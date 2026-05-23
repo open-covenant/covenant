@@ -281,7 +281,7 @@ The envelope source-of-truth lives at `capability_revoke_json` in `agent-os/crat
 
 - `kind`: literal string `"capabilities_purged"`.
 - `before_ms` (u64): the resolved Unix-epoch millisecond cutoff. The CLI accepts either `--before-ms <M>` (echoed verbatim) or `--older-than-ms <D>` (resolved against the system clock as `now - D` per `main.rs:2795-2799`); the envelope always reports the single resolved value, so consumers cannot distinguish which input form the operator typed. Pinned as u64 by `main.rs:6102-6105` — never a string-of-integer.
-- `purged` (u64): the count of revoked-capability rows removed. May legitimately be `0` when no rows matched the cutoff — the verb does not error on an empty purge.
+- `purged` (u64): the count of revoked-capability rows removed. May legitimately be `0` when no rows matched the cutoff — the verb does not error on an empty purge. Pinned as u64 by `main.rs:6106-6109` — never a string-of-integer.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6085` (`capabilities_purge_json_pins_top_level_schema`).
 

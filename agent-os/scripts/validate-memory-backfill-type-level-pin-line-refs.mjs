@@ -4,34 +4,47 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
-// memory_backfill_json_pins_top_level_schema:
+// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// inside memory_backfill_json_pins_top_level_schema:
 //
+//   - line 649 cites `schema` (string) at main.rs:5628-5631.
 //   - line 650 cites `row_count` (u64) at main.rs:5637-5640.
 //   - line 651 cites `savepoint_name` (string) at main.rs:5641-5644.
 //
 // The row_count cite landed first as a single-target validator; the
-// savepoint_name cite was added later when the validator was converted
+// savepoint_name cite was added next when the validator was converted
 // to the multi-target shape (mirroring validate-bootstrap-result and
-// validate-tool-result conversions).
+// validate-tool-result conversions); the schema cite was added last,
+// mirroring the just-landed settlement_backfill schema conversion.
 //
-// Sibling collision risk (mirrors validate-settlement-backfill):
-// the settlement_backfill envelope's pins test at main.rs:5550 carries
-// the same `value["row_count"].is_u64(),` selector at main.rs:5575
-// and a near-identical row_count docs bullet at line 635. The
-// savepoint_name selector and bullet are currently unique to
-// memory_backfill (settlement uses rollback_path with a string-or-null
-// shape instead). Both risks are addressed:
+// Sibling collision risk (mirrors validate-settlement-backfill): the
+// settlement_backfill envelope's pins test at main.rs:5550 carries the
+// same `value["schema"].is_string(),` selector at main.rs:5566 and the
+// same `value["row_count"].is_u64(),` selector at main.rs:5575, plus a
+// near-identical schema docs bullet at line 634 and row_count docs
+// bullet at line 635. The savepoint_name selector and bullet are
+// currently unique to memory_backfill (settlement uses rollback_path
+// with a string-or-null shape instead). All three risks are addressed:
 //
 //   - Selector lookups scope to the brace-balanced
 //     `memory_backfill_json_pins_top_level_schema` fn body, so the
+//     settlement_backfill schema occurrence at main.rs:5566 and the
 //     settlement_backfill row_count occurrence at main.rs:5575 cannot
 //     contaminate the result.
 //   - The row_count docsRegex anchors on the memory-specific phrase
 //     "memory records the correlation pass operated on", and the
 //     savepoint_name docsRegex anchors on "SQLite SAVEPOINT identifier
 //     the daemon emitted for this pass". Neither phrase appears in the
-//     settlement_backfill bullets, so first-match capture cannot drift.
+//     settlement_backfill bullets.
+//   - The schema docsRegex anchors on the memory-specific phrase "Same
+//     versioning semantics as `covenant.settlement.backfill.v1` — route
+//     on the full literal, not the prefix" in leading position
+//     (preceding the citation). The settlement_backfill schema bullet
+//     at line 634 instead opens with "The `.v1` suffix is the version
+//     slot; a future `.v2` would be a separate envelope, not a field
+//     rename inside this one. Consumers must route on the full literal
+//     — matching on the prefix" — different leading prose, so
+//     first-match capture cannot drift.
 //
 // Each range is derived as assert!-opener-to-closer (4-line convention)
 // — the cite spans the `assert!(` opener directly above the selector
@@ -50,6 +63,15 @@ const sourcePath = "agent-os/crates/covenant/src/main.rs";
 const testFnName = "memory_backfill_json_pins_top_level_schema";
 
 const targets = [
+  {
+    field: "schema",
+    selector: 'value["schema"].is_string(),',
+    docsRegex:
+      /- `schema`: literal string `"covenant\.memory\.backfill\.v1"`\. Same versioning semantics as `covenant\.settlement\.backfill\.v1` — route on the full literal, not the prefix\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an integer or object\./,
+    docsLabel: "memory_backfill.schema type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an integer or object.",
+  },
   {
     field: "row_count",
     selector: 'value["row_count"].is_u64(),',

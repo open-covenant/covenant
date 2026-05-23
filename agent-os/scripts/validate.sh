@@ -89,6 +89,7 @@ run node ./scripts/validate-verify-report-line-refs.mjs
 run node ./scripts/validate-intents-resume-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-struct-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-struct-line-refs.mjs
+run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-variant-range-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-tool-spec-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-audit-struct-line-refs.mjs

@@ -79,7 +79,7 @@ Per-verb fields layer on top, asymmetrically:
 - `verb: "stake"` — adds `agent_key` (base58), `amount` (u64), `lock_until` (u64). Both values are echoed verbatim from the CLI arguments and serialize to the on-chain `stake` instruction.
 - `verb: "buy-credits"` — adds `owner` (base58 COVNT owner pubkey), `amount_covnt` (u64). The value is echoed verbatim from `--amount-covnt` and serializes to the on-chain `buy_credits` instruction.
 
-The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:664` and `:681`, `stake_confirmed_json` and `stake_timeout_json` at `:849` and `:870`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1131` and `:1150`. Six unit tests at `main.rs:8855`, `:8876`, `:9146`, `:9166`, `:9382`, `:9400` pin the kind strings, so a drift in either the docs or the emitters surfaces in review.
+The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:664` and `:681`, `stake_confirmed_json` and `stake_timeout_json` at `:849` and `:870`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1131` and `:1150`. Six unit tests at `main.rs:9066`, `:9087`, `:9359`, `:9378`, `:9596`, `:9613` pin the kind strings, so a drift in either the docs or the emitters surfaces in review.
 
 ## CLI Read Envelopes
 

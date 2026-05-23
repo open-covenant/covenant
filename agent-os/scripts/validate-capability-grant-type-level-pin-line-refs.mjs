@@ -4,10 +4,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // capability_grant envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three main.rs ranges inside
+// docs/ipc-and-http-gateway.md cites four main.rs ranges inside
 // capability_grant_json_pins_top_level_schema:
 //
 //   - line 261 cites the `action` (string) type pin at :5996-5999.
+//   - line 262 cites the `signature_b58` (string) type pin at
+//     :6000-6003.
 //   - line 263 cites the `scope` (object or null) type pin at
 //     :6004-6007.
 //   - line 264 cites the `expires_at` (u64 or null) type pin at
@@ -44,6 +46,15 @@ const targets = [
     docsRegex:
       /- `action` \(string\): the action the capability was granted for\. \*\*Not always the verbatim CLI argument\*\*: when the CLI receives an a2a peer-prefix shorthand it expands the prefix to the full peer-bound action before signing \(see `expand_a2a_action` invoked at `main\.rs:\d+-\d+`\); the envelope reports the post-expansion full form, and the unsuffixed CLI prints an `expanding <prefix> → <full>` line to stderr at `main\.rs:\d+`\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an object or array\./,
     docsLabel: "capability_grant.action type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an object or array.",
+  },
+  {
+    field: "signature_b58",
+    selector: 'value["signature_b58"].is_string(),',
+    docsRegex:
+      /- `signature_b58` \(string\): the base58 signature over the signed-capability bytes\. This is the same value consumers pass back to `covenant capabilities revoke <signature-b58>` to tombstone the capability\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an object or array\./,
+    docsLabel: "capability_grant.signature_b58 type-level pin citation",
     docsTemplate:
       "Pinned as a string by `main.rs:N-M` — never an object or array.",
   },

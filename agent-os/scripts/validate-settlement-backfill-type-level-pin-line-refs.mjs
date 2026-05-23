@@ -4,40 +4,41 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // settlement_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md line 635 cites a single main.rs range
-// for the settlement_backfill.row_count (u64) type pin inside the
-// settlement_backfill_json_pins_top_level_schema fn body.
+// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
+// settlement_backfill_json_pins_top_level_schema:
 //
-// Before this validator landed, the docs prose described `row_count`
-// as "(u64): count of legacy settlement-receipt rows the backfill
-// operated on (mutation path) or *would* operate on (dry-run path)"
-// with no main.rs cite. The assertion at main.rs:5574-5577
-// (assert!(value["row_count"].is_u64(), ...);) was only enforced at
-// test runtime. The validator binds the docs prose to the source-of-
-// truth so a regression that turned the field into a string-of-integer
-// surfaces at the docs-validator level (not just at test runtime).
+//   - line 635 cites `row_count` (u64) at main.rs:5574-5577.
+//   - line 636 cites `rollback_path` (string or null) at
+//     main.rs:5578-5581.
 //
-// Sibling collision risk: the memory_backfill envelope's pins test at
-// main.rs:5613 carries the same `value["row_count"].is_u64(),` selector
-// at main.rs:5638, and the memory_backfill row_count docs bullet at
-// line 650 carries near-identical prose. Both risks are addressed:
+// The row_count cite landed first as a single-target validator; the
+// rollback_path cite was added later when the validator was converted
+// to the multi-target shape (mirroring just-landed memory_backfill
+// conversion).
 //
-//   - The validator scopes the selector lookup to the brace-balanced
+// Sibling collision risk (mirrors validate-memory-backfill): the
+// memory_backfill envelope's pins test at main.rs:5613 carries the
+// same `value["row_count"].is_u64(),` selector at main.rs:5638 and
+// a near-identical row_count docs bullet at line 650. The rollback_path
+// selector and bullet are currently unique to settlement_backfill
+// (memory uses savepoint_name with a non-nullable shape instead). Both
+// risks are addressed:
+//
+//   - Selector lookups scope to the brace-balanced
 //     `settlement_backfill_json_pins_top_level_schema` fn body, so the
-//     memory_backfill occurrence at main.rs:5638 cannot contaminate
-//     the result.
-//   - The docsRegex anchors on the settlement-specific phrase
-//     "legacy settlement-receipt rows the backfill operated on" and
-//     the settlement-specific closer "the verb does not error on an
-//     empty backfill". The memory_backfill bullet at line 650 uses
-//     "memory records the correlation pass operated on" instead and
-//     omits the empty-backfill closer, so the regex will not match it
-//     even on a first-match scan.
+//     memory_backfill row_count occurrence at main.rs:5638 cannot
+//     contaminate the result.
+//   - The row_count docsRegex anchors on the settlement-specific
+//     phrase "legacy settlement-receipt rows the backfill operated on"
+//     plus the closer "the verb does not error on an empty backfill",
+//     and the rollback_path docsRegex anchors on "filesystem path to
+//     the rollback-evidence file written by a mutation pass". Neither
+//     phrase appears in the memory_backfill bullets, so first-match
+//     capture cannot drift.
 //
-// The range is derived as assert!-opener-to-closer (4-line convention)
+// Each range is derived as assert!-opener-to-closer (4-line convention)
 // — the cite spans the `assert!(` opener directly above the selector
-// through the closing `);` on its own line, mirroring
-// validate-a2a-compact-type-level-pin-line-refs.mjs.
+// through the closing `);` on its own line.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -50,13 +51,28 @@ const docsPath = "docs/ipc-and-http-gateway.md";
 const sourcePath = "agent-os/crates/covenant/src/main.rs";
 
 const testFnName = "settlement_backfill_json_pins_top_level_schema";
-const selector = 'value["row_count"].is_u64(),';
 
-const docsRegex =
-  /- `row_count` \(u64\): count of legacy settlement-receipt rows the backfill operated on \(mutation path\) or \*would\* operate on \(dry-run path\)\. May legitimately be `0` when no legacy rows match — the verb does not error on an empty backfill\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./;
-const docsLabel = "settlement_backfill.row_count type-level pin citation";
-const docsTemplate =
-  "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.";
+const targets = [
+  {
+    field: "row_count",
+    selector: 'value["row_count"].is_u64(),',
+    docsRegex:
+      /- `row_count` \(u64\): count of legacy settlement-receipt rows the backfill operated on \(mutation path\) or \*would\* operate on \(dry-run path\)\. May legitimately be `0` when no legacy rows match — the verb does not error on an empty backfill\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+    docsLabel: "settlement_backfill.row_count type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
+  {
+    field: "rollback_path",
+    selector:
+      'value["rollback_path"].is_string() || value["rollback_path"].is_null(),',
+    docsRegex:
+      /- `rollback_path` \(string or null\): filesystem path to the rollback-evidence file written by a mutation pass; `null` in dry-run mode\. The CLI's inline emission at `main\.rs:\d+` passes `rollback_path\.as_deref\(\)` through `Option<&str>`, and the unsuffixed CLI at `main\.rs:\d+-\d+` maps `None` to the literal `\(none\)` — JSON consumers must use `null` \(not `""` or `"\(none\)"`\) as the unset discriminator\. When non-null, the path is meaningful only on the daemon's local filesystem; remote consumers must not assume the file is reachable\. Pinned as string-or-null by `main\.rs:(\d+)-(\d+)` — never the literal `"\(none\)"`\./,
+    docsLabel: "settlement_backfill.rollback_path type-level pin citation",
+    docsTemplate:
+      "Pinned as string-or-null by `main.rs:N-M` — never the literal `\"(none)\"`.",
+  },
+];
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -93,8 +109,6 @@ function scanBraceBalance(lines, openerLine) {
   return null;
 }
 
-let startLine = null;
-let endLine = null;
 if (source) {
   const lines = source.split("\n");
   const testOpenerRegex = new RegExp(`^\\s+fn\\s+${testFnName}\\s*\\(`);
@@ -116,17 +130,19 @@ if (source) {
         `${sourcePath}: could not find the matching closing brace for "fn ${testFnName}" starting at line ${testStart}; remediation: confirm the test fn body is brace-balanced`,
       );
     } else {
-      const selectorMatches = [];
-      for (let index = testStart; index < testEnd; index += 1) {
-        if (lines[index].trim() === selector) {
-          selectorMatches.push(index + 1);
+      for (const target of targets) {
+        const selectorMatches = [];
+        for (let index = testStart; index < testEnd; index += 1) {
+          if (lines[index].trim() === target.selector) {
+            selectorMatches.push(index + 1);
+          }
         }
-      }
-      if (selectorMatches.length !== 1) {
-        fail(
-          `${sourcePath}: expected exactly 1 occurrence of \`${selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the row_count type-level assertion is present exactly once in this test`,
-        );
-      } else {
+        if (selectorMatches.length !== 1) {
+          fail(
+            `${sourcePath}: expected exactly 1 occurrence of \`${target.selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the ${target.field} type-level assertion is present exactly once in this test`,
+          );
+          continue;
+        }
         const selectorLine = selectorMatches[0];
         const assertOpenerLine = selectorLine - 1;
         if (
@@ -134,40 +150,48 @@ if (source) {
           lines[assertOpenerLine - 1].trim() !== "assert!("
         ) {
           fail(
-            `${sourcePath}:${assertOpenerLine}: expected line above \`${selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector`,
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector`,
           );
-        } else {
-          startLine = assertOpenerLine;
-          for (let index = selectorLine; index < testEnd; index += 1) {
-            if (lines[index].trim() === ");") {
-              endLine = index + 1;
-              break;
-            }
-          }
-          if (endLine === null) {
-            fail(
-              `${sourcePath}: could not find the closing \`);\` after the row_count selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
-            );
+          continue;
+        }
+        const startLine = assertOpenerLine;
+        let endLine = null;
+        for (let index = selectorLine; index < testEnd; index += 1) {
+          if (lines[index].trim() === ");") {
+            endLine = index + 1;
+            break;
           }
         }
+        if (endLine === null) {
+          fail(
+            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
+          );
+          continue;
+        }
+        target.startLine = startLine;
+        target.endLine = endLine;
       }
     }
   }
 }
 
 if (docs) {
-  const match = docs.match(docsRegex);
-  if (!match) {
-    fail(
-      `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the row_count type-level pin line range`,
-    );
-  } else if (startLine !== null && endLine !== null) {
-    const citedStart = parseInt(match[1], 10);
-    const citedEnd = parseInt(match[2], 10);
-    if (citedStart !== startLine || citedEnd !== endLine) {
+  for (const target of targets) {
+    const match = docs.match(target.docsRegex);
+    if (!match) {
       fail(
-        `${docsPath}: the ${docsLabel} cites main.rs:${citedStart}-${citedEnd} but the row_count type-level assertion spans :${startLine}-${endLine}; remediation: update the citation to :${startLine}-${endLine}`,
+        `${docsPath}: missing the ${target.docsLabel} ("${target.docsTemplate}"); remediation: restore the citation that records the ${target.field} type-level pin line range`,
       );
+      continue;
+    }
+    if (target.startLine !== undefined && target.endLine !== undefined) {
+      const citedStart = parseInt(match[1], 10);
+      const citedEnd = parseInt(match[2], 10);
+      if (citedStart !== target.startLine || citedEnd !== target.endLine) {
+        fail(
+          `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} type-level assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,
+        );
+      }
     }
   }
 }
@@ -181,5 +205,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-settlement-backfill-type-level-pin-line-refs: ok (settlement_backfill.row_count main.rs:${startLine}-${endLine})`,
+  `validate-settlement-backfill-type-level-pin-line-refs: ok (${targets.map((t) => `${t.field} main.rs:${t.startLine}-${t.endLine}`).join(", ")})`,
 );

@@ -399,6 +399,31 @@ Top-level keys are pinned to exactly these four by the test at `agent-os/crates/
 
 The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/covenant/src/main.rs:4442`. Two unit tests at `main.rs:6282` (`memory_purge_json_renders_stable_shape`, both a Working-tier populated case and a no-tier null case) and `main.rs:6294` cover the populated and empty (`purged=0`, no-tier) cases. The CLI verb is wired at `main.rs:2127-2177`.
 
+`covenant memory recent [--tier <T>] [-n|--limit <N>] [--stream] --json` and `covenant memory search <query> [--tier <T>] [-n|--limit <N>] [--min-relevance <R>] --json` both emit the same memory-read envelope, distinguished only by the `mode` discriminator. Envelope shape:
+
+- `kind`: literal string `"memory_read"`.
+- `mode` (string): exactly one of `"recent"` or `"search"` (lowercase, matching the CLI verb name — no other values are emitted). Consumers must route on `mode` to know which null pattern to expect across `query` and `min_relevance`.
+- `tier` (string or null): the requested `MemoryTier` as its lowercase wire slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `MemoryTier`'s `#[serde(rename_all = "lowercase")]` at `covenant-types/src/lib.rs:23` and the slug map at `memory_tier_slug` in `main.rs:1719-1724`). The CLI parser accepts `longterm`, `long-term`, and `long_term` as input forms for `--tier`, but only the `longterm` slug is ever emitted. `null` when `--tier` was omitted (meaning the request applied to all tiers). Pinned as string-or-null by the schema test (`main.rs:6616-6619`) — never a structured object.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10` for both verbs, per `main.rs:2084` and `main.rs:2494`). Pinned as u64 at the schema test (`main.rs:6612-6615`).
+- `query` (string or null): for `mode="search"`, the request query (whitespace-joined when the operator passed multiple positional tokens, per `main.rs:2529`). For `mode="recent"`, always `null` (the recent verb does not accept a query). Pinned as string-or-null by the schema test (`main.rs:6620-6623`).
+- `min_relevance` (number or null): for `mode="search"`, the float echoed from `--min-relevance` (validated to a finite `f32` in `[0.0, 1.0]` at `main.rs:2517-2521`), or `null` when the flag was omitted. For `mode="recent"`, always `null`. Pinned as f64-or-null by the schema test (`main.rs:6624-6627`) — never a string.
+- `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1625`.
+
+The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:183`:
+
+- `id` (string) — record UUID, serialized as the canonical hyphenated string form.
+- `tier` (string) — lowercase `MemoryTier` slug (same enumeration as the top-level `tier` above; always present, never null).
+- `owner` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:124`.
+- `text` (string) — the stored memory text.
+- `embedding` (array of numbers) — the record's embedding vector as a JSON array of f32 values. The array is always present (empty when no embedding was attached); consumers must not assume the field is omitted.
+- `metadata` (JSON value) — an arbitrary `serde_json::Value` (object, array, primitive, or null). The daemon emits whatever metadata the writer attached; consumers must not assume an object shape.
+- `created_at` (u64) — Unix-epoch milliseconds when the record was written.
+- `parent` (string or null) — parent record UUID for derived memories. Carries `#[serde(default)]` at `covenant-types/src/lib.rs:192-193` **without** `skip_serializing_if`, so the field is **always emitted** (as `null` when the record has no parent), not omitted. JSON consumers must read it with null-vs-value, not key-existence.
+
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:6586` (`memory_read_json_pins_top_level_schema`), exercised against both a `mode="search"` case (populated `query`, `min_relevance`, non-empty `records`) and a `mode="recent"` case (null `query`, null `min_relevance`, empty `records`).
+
+The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/covenant/src/main.rs:4470`. Two unit tests at `main.rs:6543` (`memory_read_json_renders_stable_shape`) and `main.rs:6586` cover both modes. The CLI verbs are wired at `main.rs:2082-2126` (`covenant memory recent`) and `main.rs:2488-2554` (`covenant memory search`); without `--json`, each record prints as `[<created_at>] <tier>: <text>` at `main.rs:1629`. The optional `--stream` flag is accepted only by `covenant memory recent` (per `main.rs:2101`) and sets `Request::RecentMemory.prefer_stream = Some(true)` to enable the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal envelope shape is unchanged when the streaming path is not selected. `covenant memory search` has no `--stream` flag.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

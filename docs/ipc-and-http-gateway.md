@@ -166,6 +166,18 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
 
+`covenant capabilities recent [-n|--limit <N>] --json` emits a peer-scoped view of recent signed capabilities. Envelope shape:
+
+- `kind`: literal string `"capability_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `capability_list`. Consumers routing on `kind` must match the latter literal exactly rather than reusing the verb token.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:2569`). Pinned at the type level by the schema test (`main.rs:5698`) — JSON consumers must never receive a string here.
+- `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:171` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-83`), never the raw byte array.
+
+The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:5834-5849`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
+
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5680` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
+
+The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates/covenant/src/main.rs:4351`. Two unit tests at `main.rs:5640` (`capability_list_json_renders_stable_shape`) and `main.rs:5680` cover both cases. The CLI verb is wired at `main.rs:2568-2624`; without `--json`, the same response prints one line per capability in the form `<subject_display> → <action_label> (<granted_by_display>) [<expiry>]` at `main.rs:2612-2618`, or `(no capabilities granted)` when the filtered list is empty.
+
 `covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] --json` emits the freshly-signed capability after the daemon accepts the grant. Envelope shape:
 
 - `kind`: literal string `"capability_granted"` — past-tense outcome name, distinct from the verb name `grant`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token.

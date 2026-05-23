@@ -549,7 +549,7 @@ The inner `MemoryCompactionOutcome` shape:
 - `changed` (bool) — the store was actually mutated by this call. In `mode: "dry_run"` this is **always `false`** even when `would_change` is `true`; only `mode: "apply"` can set it. JSON consumers branching on `changed` alone will silently treat dry-run planning runs as no-ops; route on the `(mode, would_change, changed)` triple instead.
 - `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode). The empty-case is pinned by the stable-shape test at `main.rs:6571-6574` (asserts `value["outcome"]["deleted"].as_array().map(Vec::len) == Some(0)`).
 - `stale_marked` (array of strings) — UUIDs of long-term records the policy marked stale (or would mark, in dry-run mode).
-- `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied).
+- `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied). The empty-case is pinned by the stable-shape test at `main.rs:6575-6580` (asserts `value["outcome"]["parents_detached"].as_array().map(Vec::len) == Some(0)`).
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6584` (`memory_compaction_json_pins_top_level_schema`), exercised against both a populated `apply` case and an empty `dry_run` case.
 

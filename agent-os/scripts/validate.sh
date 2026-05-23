@@ -179,6 +179,7 @@ run node ./scripts/validate-audit-verify-root-hash-hex-length-pin-line-refs.mjs
 run node ./scripts/validate-audit-verify-report-failures-empty-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-records-empty-renders-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-outcome-deleted-empty-renders-pin-line-refs.mjs
+run node ./scripts/validate-memory-compaction-outcome-parents-detached-empty-renders-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

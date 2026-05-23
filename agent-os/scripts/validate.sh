@@ -141,6 +141,7 @@ run node ./scripts/validate-covenant-types-tx-sig-doc-comment-range-line-refs.mj
 run node ./scripts/validate-covenant-permissions-struct-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-sig-b58-module-range-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-signed-capability-field-list-line-refs.mjs
+run node ./scripts/validate-covenantd-recent-capabilities-fn-block-range-line-refs.mjs
 
 case "$mode" in
   scripts)

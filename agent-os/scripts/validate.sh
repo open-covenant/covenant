@@ -65,6 +65,7 @@ run node ./scripts/validate-capabilities-purge-line-refs.mjs
 run node ./scripts/validate-peers-rotate-line-refs.mjs
 run node ./scripts/validate-ping-line-refs.mjs
 run node ./scripts/validate-tool-list-line-refs.mjs
+run node ./scripts/validate-tool-result-line-refs.mjs
 
 case "$mode" in
   scripts)

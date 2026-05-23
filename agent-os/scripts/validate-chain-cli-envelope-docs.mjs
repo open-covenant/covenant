@@ -19,6 +19,7 @@ const kinds = [
   "covenant.chain.tx.timeout.v1",
   "chain_status",
   "verify_report",
+  "receipt_batch_flushed",
 ];
 
 const errors = [];

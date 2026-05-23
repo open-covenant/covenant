@@ -145,6 +145,17 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4502`. Two unit tests at `main.rs:6709` (`tool_list_json_renders_stable_shape`) and `main.rs:6733` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3126`.
 
+`covenant tools call <name> [--args <json>] --json` emits the tool invocation result. Envelope shape:
+
+- `kind`: literal string `"tool_result"` (singular, not `tools_result`; consumers routing on `kind` must match the literal exactly).
+- `name` (string): the tool name echoed back from the CLI argument.
+- `content` (array of `Content`): the tool's output blocks. Each element is a tagged-enum object whose `type` discriminator selects the variant — `{type: "text", text: <string>}` for textual output or `{type: "json", value: <JSON>}` for structured output. The variants are defined at `agent-os/crates/covenant-mcp/src/lib.rs:38` with `#[serde(tag = "type", rename_all = "camelCase")]`; v0 ships text and json variants only. The array is empty when the tool produced no output blocks; the unsuffixed CLI prints each block sequentially at `main.rs:3174-3180`.
+- `is_error` (boolean): `true` when the tool itself raised; pinned as a JSON boolean by the schema test (`main.rs:6815-6818`) — never `0`/`1` or a string. JSON consumers must branch on this boolean, not on the presence/absence of content. `is_error=true` paired with non-empty `content` describes a partial-success outcome with an error indicator.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6793` (`tool_result_json_pins_top_level_schema`), exercised against both a non-empty content + is_error=true case and an empty content + is_error=false case.
+
+The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/covenant/src/main.rs:4509`. Two unit tests at `main.rs:6772` (`tool_result_json_renders_stable_shape`) and `main.rs:6793` cover the shape. The CLI verb is wired at `main.rs:3134-3180`; without `--json`, each `Content::Text` block prints its `text` directly and each `Content::Json` block prints its `value` as pretty-printed JSON.
+
 `covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
 
 - `kind`: literal string `"receipt_batch_flushed"`.

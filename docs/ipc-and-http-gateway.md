@@ -368,7 +368,7 @@ The envelope source-of-truth lives at `audit_recent_json` in `agent-os/crates/co
 
 `covenant audit purge --json` emits a summary of time-bounded audit-log garbage collection. Envelope shape:
 
-- `kind`: literal string `"audit_purged"`.
+- `kind`: literal string `"audit_purged"`. Pinned at the value level by `main.rs:6340` (asserts `value["kind"].as_str() == Some("audit_purged")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:6341-6344` — never a string-of-integer.
 - `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3327` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:6345-6348` — never a string-of-integer.
 

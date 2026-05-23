@@ -238,6 +238,29 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
         for the repair round trip.
       </p>
 
+      <h2>Backfill</h2>
+      <p>
+        When <code>covenant memory plan-receipt-backfill</code> reports
+        legacy memory records without a <code>metadata.receipt_id</code>{" "}
+        correlation, the operator can repair them with the dry-run-default{" "}
+        <code>covenant memory backfill-receipt-correlation --json</code>{" "}
+        CLI verb (HTTP equivalent:{" "}
+        <code>POST /memory/records/backfill</code>). The planner remains
+        read-only; the backfill mutator runs only when explicitly invoked.
+        Dry-run requires the <code>memory.backfill.dry_run</code>{" "}
+        capability; apply requires <code>memory.backfill.apply</code> —
+        see <Link href="/docs/capabilities">capabilities</Link> for the
+        scope contract. The daemon recomputes correlations server-side
+        from the operator&apos;s own memory and receipt rows; clients
+        cannot supply correlations directly. Apply wraps the row updates
+        in a SQLite SAVEPOINT named{" "}
+        <code>backfill_receipt_correlation</code> so a per-row failure
+        rolls the entire batch back to zero rows changed, then emits an
+        operator-issued <code>MemoryRecordBackfillApplied</code> audit
+        row carrying <code>row_count</code>, <code>savepoint_name</code>,
+        and <code>dry_run</code>.
+      </p>
+
       <h2>The .covenantignore allow/deny list</h2>
       <p>
         Covenant supports a <code>.covenantignore</code> file at{" "}

@@ -28,6 +28,7 @@ const kinds = [
   "covenant.settlement.backfill.v1",
   "covenant.memory.backfill.v1",
   "a2a_auto_retry",
+  "a2a_compacted",
   "a2a_status",
   "audit_integrity",
   "audit_purged",

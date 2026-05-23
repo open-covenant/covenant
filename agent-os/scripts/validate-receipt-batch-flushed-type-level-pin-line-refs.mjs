@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 //
 //   - line 169 cites `limit` (u64) type pin.
 //   - line 170 cites `receipts_updated` (u64) type pin.
+//   - line 171 cites `batch` (object) type pin.
 //
 // The existing validate-flush-receipts-line-refs (if present) only
 // pins helper/test fn declarations, not the inner type-level selector
@@ -54,6 +55,15 @@ const targets = [
     docsLabel: "receipt_batch_flushed.receipts_updated type-level pin citation",
     docsTemplate:
       "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
+  {
+    field: "batch",
+    selectorFirstLine: 'value["batch"].is_object(),',
+    docsRegex:
+      /- `batch` \(`ReceiptBatchSummary` object\): the batch's wire shape, see below\. Pinned as a structured object by `main\.rs:(\d+)-(\d+)` — never a string blob\./,
+    docsLabel: "receipt_batch_flushed.batch type-level pin citation",
+    docsTemplate:
+      "Pinned as a structured object by `main.rs:N-M` — never a string blob.",
   },
 ];
 

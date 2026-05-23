@@ -566,7 +566,7 @@ The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crat
 The inner `expected_receipt_changes` shape:
 
 - `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:6721-6725` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale. Pinned as a string by `main.rs:6717-6720` — never a structured object.
-- `records` (array): empty today (length pinned to `0` at `main.rs:6730-6736`). Will gain a real shape once receipt-aware compaction lands. Pinned as an array by `main.rs:6726-6729` — never null or a string.
+- `records` (array): empty today (length pinned to `0` at `main.rs:6730-6736`). Will gain a real shape once receipt-aware compaction lands. Pinned as an array by `main.rs:6726-6729` — never null or a string. The renders-test sibling at `main.rs:6644-6649` independently pins the same empty-case `expected_receipt_changes.records` assertion (`as_array().map(Vec::len) == Some(0)`).
 - `reason` (string): a human-readable explanation of why the block is empty. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main.rs:4458`; consumers must not branch on the exact text — only on the field's existence and type. Pinned as a string by `main.rs:6737-6740` — never a structured object.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6653` (`memory_compaction_plan_json_pins_top_level_schema`), exercised against both a populated dry-run case and an empty dry-run case.

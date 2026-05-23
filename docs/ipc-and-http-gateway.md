@@ -166,6 +166,19 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
 
+`covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] --json` emits the freshly-signed capability after the daemon accepts the grant. Envelope shape:
+
+- `kind`: literal string `"capability_granted"` — past-tense outcome name, distinct from the verb name `grant`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token.
+- `subject_display` (string): the daemon-synthesized human-readable subject (e.g., `operator@local`). The daemon owns this field — consumers must not reconstruct it from the request.
+- `action` (string): the action the capability was granted for. **Not always the verbatim CLI argument**: when the CLI receives an a2a peer-prefix shorthand it expands the prefix to the full peer-bound action before signing (see `expand_a2a_action` invoked at `main.rs:2657-2690`); the envelope reports the post-expansion full form, and the unsuffixed CLI prints an `expanding <prefix> → <full>` line to stderr at `main.rs:2680`.
+- `signature_b58` (string): the base58 signature over the signed-capability bytes. This is the same value consumers pass back to `covenant capabilities revoke <signature-b58>` to tombstone the capability.
+- `scope` (object or null): the structured scope object echoed from the request, or `null` when `--scope` was omitted. Pinned at the type level by the schema test (`main.rs:5783`) — JSON consumers must never receive a string blob here, so a scope value of `"{\"version\":1}"` would be a contract break.
+- `expires_at` (u64 or null): the Unix-epoch millisecond expiry echoed from `--expires-at`, or `null` when the flag was omitted. Pinned at the type level by the schema test (`main.rs:5787`) — JSON consumers must never receive a string here, so a value of `"1700000000000"` would be a contract break.
+
+Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5746` (`capability_grant_json_pins_top_level_schema`), which also asserts the `scope` object-or-null and `expires_at` u64-or-null typing.
+
+The envelope source-of-truth lives at `capability_grant_json` in `agent-os/crates/covenant/src/main.rs:4359`. Two unit tests at `main.rs:5723` (`capability_grant_json_renders_stable_shape`, covers both a scoped+timed grant and an unscoped+untimed grant) and `main.rs:5746` cover both populated cases. The CLI verb is wired at `main.rs:2626-2718`; without `--json`, the same response prints `granted: <subject> → <action>` followed by the signature on a second line.
+
 `covenant capabilities revoke <signature-b58> --json` emits the outcome of revoking a single signed capability by its signature. Envelope shape:
 
 - `kind`: literal string `"capability_revoked"` — past-tense outcome name, distinct from the verb name `revoke`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token.

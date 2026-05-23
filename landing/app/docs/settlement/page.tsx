@@ -149,6 +149,25 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
         settlement-side fault.
       </p>
 
+      <h2>Backfill</h2>
+      <p>
+        When <code>covenant verify</code> reports legacy receipts without a{" "}
+        <code>memory_record_id</code> correlation, the operator can repair
+        them with the dry-run-default{" "}
+        <code>covenant settlement backfill-receipts --json</code> CLI verb
+        (HTTP equivalent: <code>POST /settlement/receipts/backfill</code>).
+        Verify remains read-only; the backfill mutator runs only when
+        explicitly invoked. Dry-run requires the{" "}
+        <code>settlement.backfill.dry_run</code> capability; apply requires{" "}
+        <code>settlement.backfill.apply</code> — see{" "}
+        <Link href="/docs/capabilities">capabilities</Link> for the scope
+        contract. An apply path writes a rollback checkpoint sibling file
+        before mutation, fsyncs both the rewrite and the rename, then emits
+        an operator-issued <code>SettlementReceiptBackfillApplied</code>{" "}
+        audit row carrying <code>row_count</code>,{" "}
+        <code>rollback_path</code>, and <code>dry_run</code>.
+      </p>
+
       <h2>Release</h2>
       <p>
         Local receipts and recent-receipt reads are implemented. On-chain

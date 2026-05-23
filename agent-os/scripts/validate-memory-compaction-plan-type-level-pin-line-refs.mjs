@@ -4,26 +4,38 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_compaction_plan envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two assert_eq! ranges inside
+// docs/ipc-and-http-gateway.md cites three inner ranges inside
 // memory_compaction_plan_json_pins_expected_receipt_changes_schema:
 //
-//   - line 568 cites `mode` (string == "none") at main.rs:6721-6725.
-//   - line 569 cites `records` (Vec::len() == 0) at main.rs:6730-6736.
+//   - line 568 cites `mode` (string == "none") at the assert_eq!
+//     range that pins the literal value.
+//   - line 569 cites `records` (Vec::len() == 0) at the assert_eq!
+//     range that pins the empty length.
+//   - line 570 cites `reason` (is_string()) at the assert! range
+//     that pins the type — the reason field has no value pin because
+//     the docs explicitly call out that consumers must not branch on
+//     the exact text.
 //
-// Both cites use the assert_eq!-opener-to-closer range convention
-// (5-line shape for the mode block, 7-line shape for the records block
-// because the latter's selector spans 3 lines before the expected
-// value). This convention is the assert_eq! analogue of the assert!-
-// opener-to-closer convention used by the sibling type-pin validators.
+// Mixed opener conventions: mode/records use assert_eq!( (value pins)
+// and reason uses assert!( (type pin). Per-target `opener` field
+// selects between them; default is "assert_eq!" so the prior targets
+// keep their existing behavior.
 //
-// The mode selector value["expected_receipt_changes"]["mode"].as_str()
-// is unique to the assert_eq! body in the entire file. The records
-// selector value["expected_receipt_changes"]["records"] (with no
-// suffix) appears twice inside this test fn — line 6727 has it with
+// All three cites use the opener-to-closer range convention: the cite
+// spans from the line containing the opener through the closing `);`
+// on its own line. The closing-`);`-on-own-line invariant lets the
+// validator find the range end without parsing macro argument lists.
+//
+// Selector collision notes: mode's selector is unique to the
+// assert_eq! body in the entire file. The records selector
+// value["expected_receipt_changes"]["records"] (with no suffix)
+// appears twice inside this test fn — line 6727 has it with
 // `.is_array(),` appended on the same line (different is_array
 // assertion), and line 6731 has it alone (this assert_eq!'s first
 // body line). Exact-trim-match plus brace-balanced fn body scoping
-// isolates the assert_eq!-body occurrence cleanly.
+// isolates the assert_eq!-body occurrence cleanly. The reason
+// selector value["expected_receipt_changes"]["reason"].is_string()
+// is currently unique to this test fn.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -55,6 +67,16 @@ const targets = [
       /- `records` \(array\): empty today \(length pinned to `0` at `main\.rs:(\d+)-(\d+)`\)\. Will gain a real shape once receipt-aware compaction lands\./,
     docsLabel: "memory_compaction_plan.records length pin citation",
     docsTemplate: "length pinned to `0` at `main.rs:N-M`",
+  },
+  {
+    field: "reason",
+    selector: 'value["expected_receipt_changes"]["reason"].is_string(),',
+    opener: "assert!",
+    docsRegex:
+      /- `reason` \(string\): a human-readable explanation of why the block is empty\. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main\.rs:\d+`; consumers must not branch on the exact text — only on the field's existence and type\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a structured object\./,
+    docsLabel: "memory_compaction_plan.reason type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never a structured object.",
   },
 ];
 
@@ -123,18 +145,19 @@ if (source) {
         }
         if (selectorMatches.length !== 1) {
           fail(
-            `${sourcePath}: expected exactly 1 occurrence of \`${target.selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the ${target.field} value-pin assertion is present exactly once in this test`,
+            `${sourcePath}: expected exactly 1 occurrence of \`${target.selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the ${target.field} pin assertion is present exactly once in this test`,
           );
           continue;
         }
         const selectorLine = selectorMatches[0];
         const assertOpenerLine = selectorLine - 1;
+        const expectedOpener = `${target.opener ?? "assert_eq!"}(`;
         if (
           assertOpenerLine < 1 ||
-          lines[assertOpenerLine - 1].trim() !== "assert_eq!("
+          lines[assertOpenerLine - 1].trim() !== expectedOpener
         ) {
           fail(
-            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`assert_eq!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert_eq!-to-closing convention requires the assert_eq!( opener on the line directly above the selector`,
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`${expectedOpener}\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the ${expectedOpener.replace("(", "")}-to-closing convention requires the ${expectedOpener} opener on the line directly above the selector`,
           );
           continue;
         }
@@ -148,7 +171,7 @@ if (source) {
         }
         if (endLine === null) {
           fail(
-            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding assert_eq! macro is closed on its own line`,
+            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding ${expectedOpener.replace("(", "")} macro is closed on its own line`,
           );
           continue;
         }
@@ -163,7 +186,7 @@ if (docs) {
     const match = docs.match(target.docsRegex);
     if (!match) {
       fail(
-        `${docsPath}: missing the ${target.docsLabel} ("${target.docsTemplate}"); remediation: restore the citation that records the ${target.field} value-pin line range`,
+        `${docsPath}: missing the ${target.docsLabel} ("${target.docsTemplate}"); remediation: restore the citation that records the ${target.field} pin line range`,
       );
       continue;
     }
@@ -172,7 +195,7 @@ if (docs) {
       const citedEnd = parseInt(match[2], 10);
       if (citedStart !== target.startLine || citedEnd !== target.endLine) {
         fail(
-          `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} value-pin assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,
+          `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} pin assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,
         );
       }
     }

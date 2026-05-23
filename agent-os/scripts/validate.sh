@@ -105,6 +105,7 @@ run node ./scripts/validate-covenant-mcp-content-enum-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-audit-struct-line-refs.mjs
 run node ./scripts/validate-covenant-audit-kind-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-types-struct-line-refs.mjs
+run node ./scripts/validate-covenant-types-capability-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-types-agent-id-serialize-impl-line-refs.mjs
 run node ./scripts/validate-covenant-types-enum-serde-rename-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-types-field-attribute-range-line-refs.mjs

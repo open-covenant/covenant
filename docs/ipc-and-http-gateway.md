@@ -157,6 +157,15 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:4522`. Two unit tests at `main.rs:6834` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:6852` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
 
+`covenant ping --json` emits a daemon-liveness probe. Envelope shape:
+
+- `kind`: literal string `"daemon_ping"`.
+- `status`: literal string `"ok"` — the daemon only returns this envelope when it has accepted the request and produced a `Response::Pong`; failures surface as a non-zero CLI exit rather than a non-`"ok"` payload, so consumers can branch on transport success alone.
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5617` (`ping_json_pins_top_level_schema`).
+
+The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

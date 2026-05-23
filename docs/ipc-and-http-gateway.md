@@ -225,9 +225,9 @@ The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/co
 - `kind`: literal string `"daemon_ping"`.
 - `status`: literal string `"ok"` — the daemon only returns this envelope when it has accepted the request and produced a `Response::Pong`; failures surface as a non-zero CLI exit rather than a non-`"ok"` payload, so consumers can branch on transport success alone.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5617` (`ping_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5839` (`ping_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
+The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4337`. The shape-pinning tests at `main.rs:5832` (`ping_json_renders_stable_shape`) and `main.rs:5839` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
 
 `covenant intent [--json] [--stream] <text>` emits the dispatched intent's outcome with optional settlement evidence. Envelope shape:
 
@@ -238,9 +238,9 @@ The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/s
 - `sources` (array of strings): source labels that contributed to the result (e.g., `["research"]`). Empty when no sources are attached.
 - `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:5576-5579` — never an integer or array.
 
-Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5539` (`intent_result_json_pins_top_level_schema`), exercised against both a populated `Some(SettlementReceipt)` case and an empty unsettled case.
+Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5761` (`intent_result_json_pins_top_level_schema`), exercised against both a populated `Some(SettlementReceipt)` case and an empty unsettled case.
 
-The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/covenant/src/main.rs:4327`. Two unit tests at `main.rs:5521` (`intent_result_json_renders_stable_shape`) and `main.rs:5539` cover the shape. The CLI verb is wired at `main.rs:2000-2074`; the `--json`/`--stream` flags are recognized only in leading position (`main.rs:2013-2022`) so an interior `--json` token is preserved as part of the intent text. The optional `--stream` flag sets `Request::SubmitIntent.prefer_stream = Some(true)` (`main.rs:2033`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal `IntentResult` envelope shape is unchanged when the streaming path is not selected.
+The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/covenant/src/main.rs:4320`. Two unit tests at `main.rs:5743` (`intent_result_json_renders_stable_shape`) and `main.rs:5761` cover the shape. The CLI verb is wired at `main.rs:2000-2074`; the `--json`/`--stream` flags are recognized only in leading position (`main.rs:2013-2022`) so an interior `--json` token is preserved as part of the intent text. The optional `--stream` flag sets `Request::SubmitIntent.prefer_stream = Some(true)` (`main.rs:2033`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal `IntentResult` envelope shape is unchanged when the streaming path is not selected.
 
 `covenant capabilities recent [-n|--limit <N>] --json` emits a peer-scoped view of recent signed capabilities. Envelope shape:
 
@@ -250,9 +250,9 @@ The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/c
 
 The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:5834-5849`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5680` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5902` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
-The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates/covenant/src/main.rs:4351`. Two unit tests at `main.rs:5640` (`capability_list_json_renders_stable_shape`) and `main.rs:5680` cover both cases. The CLI verb is wired at `main.rs:2568-2624`; without `--json`, the same response prints one line per capability in the form `<subject_display> → <action_label> (<granted_by_display>) [<expiry>]` at `main.rs:2612-2618`, or `(no capabilities granted)` when the filtered list is empty.
+The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates/covenant/src/main.rs:4344`. Two unit tests at `main.rs:5862` (`capability_list_json_renders_stable_shape`) and `main.rs:5902` cover both cases. The CLI verb is wired at `main.rs:2568-2624`; without `--json`, the same response prints one line per capability in the form `<subject_display> → <action_label> (<granted_by_display>) [<expiry>]` at `main.rs:2612-2618`, or `(no capabilities granted)` when the filtered list is empty.
 
 `covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] --json` emits the freshly-signed capability after the daemon accepts the grant. Envelope shape:
 
@@ -263,9 +263,9 @@ The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates
 - `scope` (object or null): the structured scope object echoed from the request, or `null` when `--scope` was omitted. Pinned at the type level by the schema test (`main.rs:5783`) — JSON consumers must never receive a string blob here, so a scope value of `"{\"version\":1}"` would be a contract break.
 - `expires_at` (u64 or null): the Unix-epoch millisecond expiry echoed from `--expires-at`, or `null` when the flag was omitted. Pinned at the type level by the schema test (`main.rs:5787`) — JSON consumers must never receive a string here, so a value of `"1700000000000"` would be a contract break.
 
-Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5746` (`capability_grant_json_pins_top_level_schema`), which also asserts the `scope` object-or-null and `expires_at` u64-or-null typing.
+Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5968` (`capability_grant_json_pins_top_level_schema`), which also asserts the `scope` object-or-null and `expires_at` u64-or-null typing.
 
-The envelope source-of-truth lives at `capability_grant_json` in `agent-os/crates/covenant/src/main.rs:4359`. Two unit tests at `main.rs:5723` (`capability_grant_json_renders_stable_shape`, covers both a scoped+timed grant and an unscoped+untimed grant) and `main.rs:5746` cover both populated cases. The CLI verb is wired at `main.rs:2626-2718`; without `--json`, the same response prints `granted: <subject> → <action>` followed by the signature on a second line.
+The envelope source-of-truth lives at `capability_grant_json` in `agent-os/crates/covenant/src/main.rs:4352`. Two unit tests at `main.rs:5945` (`capability_grant_json_renders_stable_shape`, covers both a scoped+timed grant and an unscoped+untimed grant) and `main.rs:5968` cover both populated cases. The CLI verb is wired at `main.rs:2626-2718`; without `--json`, the same response prints `granted: <subject> → <action>` followed by the signature on a second line.
 
 `covenant capabilities revoke <signature-b58> --json` emits the outcome of revoking a single signed capability by its signature. Envelope shape:
 
@@ -273,9 +273,9 @@ The envelope source-of-truth lives at `capability_grant_json` in `agent-os/crate
 - `signature_b58` (string): the base58 signature echoed back from the request, so consumers can correlate the response to the revoke call without tracking it out of band.
 - `removed` (boolean): `true` if a live capability matched and was tombstoned, `false` if no live row matched that signature. `false` is a benign no-op outcome, not an error — the daemon still returns `Response::CapabilityRevoked` and the unsuffixed CLI prints `(no live capability with that signature)` for that case at `main.rs:2769`. JSON consumers must not treat `removed=false` as a failure.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5823` (`capability_revoke_json_pins_top_level_schema`), which also asserts `removed` is a JSON boolean (never `0`/`1` or a string).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6045` (`capability_revoke_json_pins_top_level_schema`), which also asserts `removed` is a JSON boolean (never `0`/`1` or a string).
 
-The envelope source-of-truth lives at `capability_revoke_json` in `agent-os/crates/covenant/src/main.rs:4376`. Two unit tests at `main.rs:5810` (`capability_revoke_json_renders_stable_shape`) and `main.rs:5823` cover both the `removed=true` and `removed=false` cases. The CLI verb is wired at `main.rs:2731-2774`.
+The envelope source-of-truth lives at `capability_revoke_json` in `agent-os/crates/covenant/src/main.rs:4369`. Two unit tests at `main.rs:6032` (`capability_revoke_json_renders_stable_shape`) and `main.rs:6045` cover both the `removed=true` and `removed=false` cases. The CLI verb is wired at `main.rs:2731-2774`.
 
 `covenant capabilities purge --json` emits a summary of revoked-capability garbage collection. Envelope shape:
 
@@ -283,9 +283,9 @@ The envelope source-of-truth lives at `capability_revoke_json` in `agent-os/crat
 - `before_ms` (u64): the resolved Unix-epoch millisecond cutoff. The CLI accepts either `--before-ms <M>` (echoed verbatim) or `--older-than-ms <D>` (resolved against the system clock as `now - D` per `main.rs:2795-2799`); the envelope always reports the single resolved value, so consumers cannot distinguish which input form the operator typed.
 - `purged` (u64): the count of revoked-capability rows removed. May legitimately be `0` when no rows matched the cutoff — the verb does not error on an empty purge.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6085` (`capabilities_purge_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/crates/covenant/src/main.rs:4384`. Two unit tests at `main.rs:5855` (`capabilities_purge_json_renders_stable_shape`) and `main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`) cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:2776-2824`; without `--json`, the same response prints `purged <n> revoked capability(ies)`.
+The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/crates/covenant/src/main.rs:4377`. Two unit tests at `main.rs:6077` (`capabilities_purge_json_renders_stable_shape`) and `main.rs:6085` (`capabilities_purge_json_pins_top_level_schema`) cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:2776-2824`; without `--json`, the same response prints `purged <n> revoked capability(ies)`.
 
 `covenant peers list [--limit <N>] [--prefix <P>] [--live-only|--revoked-only] --json` emits the registered peer roster filtered by the supplied flags. Envelope shape:
 
@@ -304,9 +304,9 @@ The inner `PeerSummary` shape, defined at `agent-os/crates/covenant-peer-auth/sr
 - `registered_at` (u64) — Unix-epoch milliseconds when the peer registered.
 - `revoked_at` (u64 or null) — Unix-epoch milliseconds when the peer was tombstoned; `null` for live entries. Composes with the `--live-only`/`--revoked-only` flags (and the equivalent `status_filter` query parameter described above) for filtering — the filter runs before the registry's truncation peek.
 
-Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:5016` (`peer_list_json_pins_top_level_schema`), exercised against a populated two-peer (one live, one revoked) case and an empty case.
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:5023` (`peer_list_json_pins_top_level_schema`), exercised against a populated two-peer (one live, one revoked) case and an empty case.
 
-The envelope source-of-truth lives at `peer_list_json` in `agent-os/crates/covenant/src/main.rs:4220`. Schema and behavioral tests live at `main.rs:5016` (key set + per-key typing), `main.rs:4983` (`peer_list_json_echoes_prefix_and_match_count`), `main.rs:4997` (`peer_list_json_omits_prefix_when_inactive`), and `main.rs:5008` (`peer_list_json_reports_zero_match_count_for_empty_response`). The CLI verb is wired at `main.rs:3707-3760`; without `--json`, the same response is rendered line-by-line by `peer_list_lines` (`main.rs:4238`) with a `(truncated; <n> shown — narrow with --prefix or raise --limit)` hint appended when `truncated` is `true` (`main.rs:4269`). See also the **Query Parameters** section above for the same filter composition rules over the HTTP gateway.
+The envelope source-of-truth lives at `peer_list_json` in `agent-os/crates/covenant/src/main.rs:4213`. Schema and behavioral tests live at `main.rs:5023` (key set + per-key typing), `main.rs:4990` (`peer_list_json_echoes_prefix_and_match_count`), `main.rs:5004` (`peer_list_json_omits_prefix_when_inactive`), and `main.rs:5015` (`peer_list_json_reports_zero_match_count_for_empty_response`). The CLI verb is wired at `main.rs:3707-3760`; without `--json`, the same response is rendered line-by-line by `peer_list_lines` (`main.rs:4238`) with a `(truncated; <n> shown — narrow with --prefix or raise --limit)` hint appended when `truncated` is `true` (`main.rs:4269`). See also the **Query Parameters** section above for the same filter composition rules over the HTTP gateway.
 
 `covenant peers purge --json` emits a summary of revoked-peer garbage collection. Envelope shape:
 

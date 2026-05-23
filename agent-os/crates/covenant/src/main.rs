@@ -5518,6 +5518,76 @@ mod tests {
     }
 
     #[test]
+    fn settlement_backfill_json_renders_stable_shape() {
+        let dry_run = settlement_backfill_json(12, None, true);
+        assert_eq!(dry_run["schema"], "covenant.settlement.backfill.v1");
+        assert_eq!(dry_run["row_count"], 12);
+        assert!(dry_run["rollback_path"].is_null());
+        assert_eq!(dry_run["dry_run"], true);
+
+        let mutation = settlement_backfill_json(
+            12,
+            Some("/tmp/settlement.backfill-rollback-001.jsonl"),
+            false,
+        );
+        assert_eq!(mutation["schema"], "covenant.settlement.backfill.v1");
+        assert_eq!(mutation["row_count"], 12);
+        assert_eq!(
+            mutation["rollback_path"],
+            "/tmp/settlement.backfill-rollback-001.jsonl"
+        );
+        assert_eq!(mutation["dry_run"], false);
+    }
+
+    #[test]
+    fn settlement_backfill_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["dry_run", "rollback_path", "row_count", "schema"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("settlement_backfill_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "settlement_backfill_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["schema"].is_string(),
+                "schema must be a string: {value}"
+            );
+            assert_eq!(
+                value["schema"].as_str(),
+                Some("covenant.settlement.backfill.v1"),
+                "schema literal must match the documented version slot exactly; renaming to a future v2 is a separate envelope, not a field rename",
+            );
+            assert!(
+                value["row_count"].is_u64(),
+                "row_count must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["rollback_path"].is_string() || value["rollback_path"].is_null(),
+                "rollback_path must be string-or-null (never the literal \"(none)\"); JSON consumers branch on null to detect dry-run: {value}",
+            );
+            assert!(
+                value["dry_run"].is_boolean(),
+                "dry_run must serialize as a JSON boolean, never 0/1 or a string: {value}",
+            );
+        }
+
+        assert_shape(&settlement_backfill_json(12, None, true));
+        assert_shape(&settlement_backfill_json(
+            12,
+            Some("/tmp/settlement.backfill-rollback-001.jsonl"),
+            false,
+        ));
+        assert_shape(&settlement_backfill_json(0, None, true));
+    }
+
+    #[test]
     fn intent_result_json_renders_stable_shape() {
         let value = intent_result_json(
             uuid::Uuid::nil(),

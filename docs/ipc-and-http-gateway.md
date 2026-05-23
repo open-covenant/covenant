@@ -565,8 +565,8 @@ The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crat
 
 The inner `expected_receipt_changes` shape:
 
-- `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:6720-6724` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale.
-- `records` (array): empty today (length pinned to `0` at `main.rs:6730-6735`). Will gain a real shape once receipt-aware compaction lands.
+- `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:6721-6725` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale.
+- `records` (array): empty today (length pinned to `0` at `main.rs:6730-6736`). Will gain a real shape once receipt-aware compaction lands.
 - `reason` (string): a human-readable explanation of why the block is empty. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main.rs:4458`; consumers must not branch on the exact text — only on the field's existence and type.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6653` (`memory_compaction_plan_json_pins_top_level_schema`), exercised against both a populated dry-run case and an empty dry-run case.

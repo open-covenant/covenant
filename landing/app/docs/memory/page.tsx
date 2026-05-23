@@ -242,11 +242,14 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
       <p>
         When <code>covenant memory plan-receipt-backfill</code> reports
         legacy memory records without a <code>metadata.receipt_id</code>{" "}
-        correlation, the operator can repair them with the dry-run-default{" "}
+        correlation, the operator can repair them with the{" "}
         <code>covenant memory backfill-receipt-correlation --json</code>{" "}
         CLI verb (HTTP equivalent:{" "}
         <code>POST /memory/records/backfill</code>). The planner remains
         read-only; the backfill mutator runs only when explicitly invoked.
+        The verb applies by default; pass <code>--dry-run</code> to
+        report the <code>row_count</code> an apply would change without
+        writing.
         Dry-run requires the <code>memory.backfill.dry_run</code>{" "}
         capability; apply requires <code>memory.backfill.apply</code> —
         see <Link href="/docs/capabilities">capabilities</Link> for the

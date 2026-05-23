@@ -153,11 +153,13 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
       <p>
         When <code>covenant verify</code> reports legacy receipts without a{" "}
         <code>memory_record_id</code> correlation, the operator can repair
-        them with the dry-run-default{" "}
+        them with the{" "}
         <code>covenant settlement backfill-receipts --json</code> CLI verb
         (HTTP equivalent: <code>POST /settlement/receipts/backfill</code>).
         Verify remains read-only; the backfill mutator runs only when
-        explicitly invoked. Dry-run requires the{" "}
+        explicitly invoked. The verb applies by default; pass{" "}
+        <code>--dry-run</code> to report the <code>row_count</code> an
+        apply would change without writing. Dry-run requires the{" "}
         <code>settlement.backfill.dry_run</code> capability; apply requires{" "}
         <code>settlement.backfill.apply</code> — see{" "}
         <Link href="/docs/capabilities">capabilities</Link> for the scope

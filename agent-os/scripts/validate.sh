@@ -149,6 +149,7 @@ run node ./scripts/validate-peer-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-intent-result-type-level-pin-line-refs.mjs
 run node ./scripts/validate-intents-resume-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-read-type-level-pin-line-refs.mjs
+run node ./scripts/validate-a2a-status-type-level-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

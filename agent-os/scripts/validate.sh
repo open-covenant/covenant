@@ -98,6 +98,7 @@ run node ./scripts/validate-covenant-a2a-default-impl-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-error-fn-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-tool-spec-annotation-line-refs.mjs
+run node ./scripts/validate-covenant-mcp-content-enum-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-audit-struct-line-refs.mjs
 run node ./scripts/validate-covenant-types-struct-line-refs.mjs
 run node ./scripts/validate-covenant-types-agent-id-serialize-impl-line-refs.mjs

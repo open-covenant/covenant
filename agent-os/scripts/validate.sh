@@ -97,6 +97,7 @@ run node ./scripts/validate-covenant-types-agent-id-serialize-impl-line-refs.mjs
 run node ./scripts/validate-covenant-types-enum-serde-rename-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-types-field-attribute-range-line-refs.mjs
 run node ./scripts/validate-covenant-types-enum-block-range-line-refs.mjs
+run node ./scripts/validate-covenant-types-tx-sig-doc-comment-range-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-struct-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-sig-b58-module-range-line-refs.mjs
 

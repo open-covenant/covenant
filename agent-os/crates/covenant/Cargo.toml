@@ -23,6 +23,7 @@ covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 solana-client = { workspace = true }
 solana-sdk = { workspace = true }
 thiserror = { workspace = true }

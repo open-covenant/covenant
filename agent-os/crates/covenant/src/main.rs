@@ -129,6 +129,22 @@ fn classify_keypair_read_error(path: PathBuf, source: std::io::Error) -> Keypair
     }
 }
 
+// First 8 bytes of sha256("global:<method>") — Anchor's instruction
+// discriminator scheme. The "global:" namespace is the only one Anchor's
+// macro-generated dispatcher accepts for #[program] mod methods; dropping
+// it would silently produce bytes that never route on chain.
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn compute_anchor_global_discriminator(method: &str) -> [u8; 8] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"global:");
+    hasher.update(method.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest[..8]);
+    out
+}
+
 #[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLoadError> {
     let path = resolve_operator_keypair_path(provided)?;
@@ -6346,6 +6362,87 @@ mod tests {
             assert_eq!(
                 compute_default_keypair_path("/u/op"),
                 PathBuf::from("/u/op/.config/solana/id.json")
+            );
+        }
+    }
+
+    mod anchor_discriminator {
+        use super::super::compute_anchor_global_discriminator;
+
+        // These three byte arrays are the canonical Anchor instruction
+        // discriminators the on-chain settlement program (declared in
+        // agent-os/programs/settlement/src/lib.rs) accepts for the three
+        // operator-signed verbs. Independently reproducible with:
+        //   python3 -c 'import hashlib;\
+        //     print(list(hashlib.sha256(b"global:register_agent").digest()[:8]))'
+        // A regression in compute_anchor_global_discriminator that drops
+        // the "global:" prefix, hashes the wrong slice of the digest, or
+        // accepts a non-snake-case method name would silently produce
+        // bytes the dispatcher routes to InstructionFallbackNotFound; the
+        // tests below pin the byte stream so that regression is loud.
+
+        #[test]
+        fn register_agent_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("register_agent"),
+                [135, 157, 66, 195, 2, 113, 175, 30]
+            );
+        }
+
+        #[test]
+        fn stake_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("stake"),
+                [206, 176, 202, 18, 200, 209, 179, 108]
+            );
+        }
+
+        #[test]
+        fn buy_credits_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("buy_credits"),
+                [14, 173, 58, 38, 248, 235, 115, 102]
+            );
+        }
+
+        #[test]
+        fn global_prefix_is_part_of_the_hash() {
+            // A drop of the "global:" namespace would silently produce
+            // a different byte stream. This test pins the difference so
+            // a refactor that mistakenly hashes the bare method name
+            // fails loudly instead of producing valid-looking but
+            // unroutable bytes.
+            use sha2::{Digest, Sha256};
+            let bare = {
+                let mut h = Sha256::new();
+                h.update(b"register_agent");
+                let d = h.finalize();
+                let mut out = [0u8; 8];
+                out.copy_from_slice(&d[..8]);
+                out
+            };
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                bare,
+                "discriminator must include the 'global:' namespace prefix"
+            );
+        }
+
+        #[test]
+        fn snake_case_and_camel_case_produce_different_discriminators() {
+            // Anchor's macro-generated dispatcher uses the snake_case
+            // method identifier from the #[program] mod. A caller that
+            // passes a wrong-case name will compute a digest the on-chain
+            // dispatcher does not accept; this test pins the difference
+            // so the failure is visible as a discriminator mismatch
+            // rather than a silent on-chain rejection.
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                compute_anchor_global_discriminator("registerAgent")
+            );
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                compute_anchor_global_discriminator("RegisterAgent")
             );
         }
     }

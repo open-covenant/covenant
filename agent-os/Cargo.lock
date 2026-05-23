@@ -1245,6 +1245,7 @@ dependencies = [
  "covenant-permissions",
  "covenant-types",
  "serde_json",
+ "sha2 0.10.9",
  "solana-client",
  "solana-sdk",
  "tempfile",

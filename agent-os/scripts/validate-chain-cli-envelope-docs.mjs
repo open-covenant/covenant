@@ -13,8 +13,12 @@ function read(path) {
 const docsPath = "docs/ipc-and-http-gateway.md";
 const emittersPath = "agent-os/crates/covenant/src/main.rs";
 
-const heading = "## Chain Transaction Envelopes";
-const kinds = ["covenant.chain.tx.v1", "covenant.chain.tx.timeout.v1"];
+const headings = ["## Chain Transaction Envelopes", "## CLI Read Envelopes"];
+const kinds = [
+  "covenant.chain.tx.v1",
+  "covenant.chain.tx.timeout.v1",
+  "chain_status",
+];
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -33,10 +37,14 @@ try {
   fail(`cannot read ${emittersPath}: ${error.message}`);
 }
 
-if (docs && !docs.includes(heading)) {
-  fail(
-    `${docsPath} is missing the "${heading}" section; remediation: restore the Chain Transaction Envelopes section that pins both chain.tx kinds`,
-  );
+if (docs) {
+  for (const heading of headings) {
+    if (!docs.includes(heading)) {
+      fail(
+        `${docsPath} is missing the "${heading}" section; remediation: restore the section that pins the chain CLI envelopes`,
+      );
+    }
+  }
 }
 
 if (docs) {
@@ -60,7 +68,7 @@ if (emitters) {
 }
 
 if (errors.length > 0) {
-  console.error("validate-chain-tx-envelope-docs: failed");
+  console.error("validate-chain-cli-envelope-docs: failed");
   for (const error of errors) {
     console.error(`- ${error}`);
   }
@@ -68,5 +76,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-chain-tx-envelope-docs: ok (${kinds.length} kinds pinned across docs and emitters)`,
+  `validate-chain-cli-envelope-docs: ok (${kinds.length} kinds pinned across docs and emitters)`,
 );

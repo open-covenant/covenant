@@ -83,7 +83,12 @@ The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_js
 
 ## CLI Read Envelopes
 
-A separate family of `--json` envelopes covers read-side chain queries. These envelopes use unversioned `kind` strings (no `.v1` suffix) and predate the `covenant.<area>.<verb>.v<n>` schema convention; they are kept stable by unit-test shape invariants rather than the suffix.
+A separate family of `--json` envelopes covers read-side chain queries and most other CLI surfaces. The section is **structurally mixed**: two discriminator subfamilies coexist.
+
+- **Unversioned `kind` subfamily.** The older shape — every envelope below carries a top-level `kind` string (e.g., `"chain_status"`, `"peer_list"`) with no `.v1` suffix. This subfamily predates the schema-suffix convention and is kept stable by unit-test shape invariants — every entry has a `*_pins_top_level_schema` test plus a `*_renders_stable_shape` test that forces docs/emitter drift to surface in review. The one exception is `bootstrap_result`, which lives in this subfamily but has **no forcing-function test** (the envelope is built inline at the emission site); its block below calls out that gap explicitly.
+- **Versioned `covenant.<area>.<verb>.v<n>` schema subfamily.** The newer shape — these envelopes carry a top-level `schema` string (e.g., `"covenant.settlement.backfill.v1"`, `"covenant.memory.backfill.v1"`) with a `.v<n>` version slot, and they do **not** carry a `kind` field. A future `.v2` envelope is a separate shape, not a field rename inside the existing `.v1` envelope. Today's schema-subfamily envelopes are anchored only by this documentation and the inline `serde_json::json!` macros at their emission sites; consumers should treat them as docs-only contracts until forcing-function tests land.
+
+The two subfamilies are **mutually exclusive** at the top level: a `kind`-subfamily envelope never carries `schema`, and a `schema`-subfamily envelope never carries `kind`. Consumers must inspect which discriminator key is present before routing — a defensive parser that reads only one will misclassify envelopes from the other subfamily. The blocks below note which discriminator each envelope uses in the per-envelope shape table.
 
 `covenant chain status --json` emits:
 

@@ -4,18 +4,23 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Chain tx test line-ref drift guard. docs/ipc-and-http-gateway.md, in the
-// Chain Transaction Envelopes section, cites six unit-test line numbers that
-// pin the chain tx envelope kind strings. The line numbers shift whenever
-// main.rs grows above the cited tests, and the docs do not auto-update.
+// Chain Transaction Envelopes section, cites twelve unit-test line numbers
+// across two halves of the same anchor sentence: six kind-pinning tests
+// (the original "Six unit tests at ... pin the kind strings" phrase) and
+// six sibling *_pins_top_level_schema tests that assert the full
+// documented top-level key set. The line numbers shift whenever main.rs
+// grows above the cited tests, and the docs do not auto-update.
 //
 // This validator derives the line numbers from main.rs at run time by
-// matching the six expected test fn names — three copies of
-// `confirmed_envelope_pins_documented_shape` (one in each of the chain
-// register_agent / stake / buy_credits test modules) and one each of the
-// three uniquely-named timeout-envelope tests — and asserts every derived
-// line number appears in the docs' kind-pinning sentence. Line numbers are
-// never hardcoded; the validator self-corrects to wherever the tests
-// currently live.
+// matching twelve expected test fn names — three copies each of
+// `confirmed_envelope_pins_documented_shape`,
+// `confirmed_envelope_pins_top_level_schema`, and
+// `timeout_envelope_pins_top_level_schema` (one in each of the chain
+// register_agent / stake / buy_credits test modules) plus one each of the
+// three uniquely-named timeout-envelope kind-pinning tests — and asserts
+// every derived line number appears inside the captured anchor sentence
+// that spans both halves. Line numbers are never hardcoded; the validator
+// self-corrects to wherever the tests currently live.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -32,10 +37,14 @@ const expectedTestFnNames = new Set([
   "timeout_envelope_uses_distinct_kind_and_status",
   "timeout_envelope_includes_amount_lock_until_and_timeout_ms",
   "timeout_envelope_includes_amount_covnt_and_timeout_ms",
+  "confirmed_envelope_pins_top_level_schema",
+  "timeout_envelope_pins_top_level_schema",
 ]);
 
-const expectedTotal = 6;
-const expectedConfirmedCount = 3;
+const expectedTotal = 12;
+const expectedConfirmedDocumentedCount = 3;
+const expectedConfirmedTopLevelSchemaCount = 3;
+const expectedTimeoutTopLevelSchemaCount = 3;
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -66,16 +75,23 @@ if (emitters) {
 
 if (emitters && found.length !== expectedTotal) {
   fail(
-    `${emittersPath}: expected ${expectedTotal} chain tx test fn declarations matching the four expected names but found ${found.length}; remediation: confirm the test fn names in the chain register_agent/stake/buy_credits test modules still match the expectedTestFnNames set`,
+    `${emittersPath}: expected ${expectedTotal} chain tx test fn declarations matching the six expected names but found ${found.length}; remediation: confirm the test fn names in the chain register_agent/stake/buy_credits test modules still match the expectedTestFnNames set`,
   );
 }
 
 if (emitters) {
-  const confirmedCount = found.filter((entry) => entry.name === "confirmed_envelope_pins_documented_shape").length;
-  if (confirmedCount !== expectedConfirmedCount) {
-    fail(
-      `${emittersPath}: expected ${expectedConfirmedCount} copies of "confirmed_envelope_pins_documented_shape" (one per chain verb module) but found ${confirmedCount}; remediation: confirm each chain verb module (register_agent, stake, buy_credits) still has its confirmed-envelope shape test`,
-    );
+  const repeatedCounts = [
+    ["confirmed_envelope_pins_documented_shape", expectedConfirmedDocumentedCount],
+    ["confirmed_envelope_pins_top_level_schema", expectedConfirmedTopLevelSchemaCount],
+    ["timeout_envelope_pins_top_level_schema", expectedTimeoutTopLevelSchemaCount],
+  ];
+  for (const [fnName, expected] of repeatedCounts) {
+    const count = found.filter((entry) => entry.name === fnName).length;
+    if (count !== expected) {
+      fail(
+        `${emittersPath}: expected ${expected} copies of "${fnName}" (one per chain verb module) but found ${count}; remediation: confirm each chain verb module (register_agent, stake, buy_credits) still has its ${fnName} test`,
+      );
+    }
   }
   for (const uniqueName of [
     "timeout_envelope_uses_distinct_kind_and_status",
@@ -93,10 +109,12 @@ if (emitters) {
 
 let sentence = null;
 if (docs) {
-  const match = docs.match(/Six unit tests at[\s\S]{0,500}?pin the kind strings/);
+  const match = docs.match(
+    /Six unit tests at[\s\S]{0,500}?pin the kind strings[\s\S]{0,400}?pins_top_level_schema[\s\S]{0,400}?assert the full documented top-level key set/,
+  );
   if (!match) {
     fail(
-      `${docsPath}: missing the "Six unit tests at main.rs:NNNN, ... pin the kind strings" sentence in the Chain Transaction Envelopes section; remediation: restore the sentence that records the chain tx kind-pinning test line refs`,
+      `${docsPath}: missing the two-part anchor sentence ("Six unit tests at ... pin the kind strings, and six sibling *_pins_top_level_schema tests at ... assert the full documented top-level key set") in the Chain Transaction Envelopes section; remediation: restore both halves of the sentence so every chain tx test line ref is cited`,
     );
   } else {
     sentence = match[0];
@@ -107,7 +125,7 @@ if (sentence) {
   for (const entry of found) {
     if (!sentence.includes(`:${entry.line}`)) {
       fail(
-        `${docsPath}: the "Six unit tests at main.rs:..." sentence does not cite main.rs:${entry.line} (fn ${entry.name}); remediation: update the sentence to include this line number`,
+        `${docsPath}: the chain tx anchor sentence does not cite main.rs:${entry.line} (fn ${entry.name}); remediation: update the sentence to include this line number in the matching half (kind-strings or top-level-schema)`,
       );
     }
   }

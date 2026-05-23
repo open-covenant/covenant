@@ -197,6 +197,7 @@ run node ./scripts/validate-capability-list-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-capability-granted-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-capability-revoked-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-capabilities-purged-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-peers-purged-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

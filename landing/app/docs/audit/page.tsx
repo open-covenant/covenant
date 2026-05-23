@@ -1072,6 +1072,90 @@ export default function AuditPage() {
         actions or the three id-array categories compaction reports).
       </p>
 
+      <h3>
+        <code>MemoryRecordBackfillApplied</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":           "memory_record_backfill_applied",
+  "row_count":      3,
+  "savepoint_name": "backfill_receipt_correlation",
+  "dry_run":        false
+}`}</code>
+      </pre>
+      <p>
+        Emitted when{" "}
+        <code>covenantd::Server::backfill_memory_record_correlations</code>{" "}
+        completes the authorized memory-record receipt-correlation
+        backfill mutation. The issuer is the requesting peer
+        (operator-as-issuer audience), recorded only after the
+        dispatch-time <code>memory.backfill.{`<mode>`}</code> capability
+        check, a follow-up operator-identity equality check, and the{" "}
+        <code>memory-backfill</code> capability scope check all pass;
+        capability-scope failures emit{" "}
+        <code>CapabilityScopeRejected</code> instead, so a{" "}
+        <code>MemoryRecordBackfillApplied</code> row never coexists with
+        a rejection row for the same request. The row is emitted only
+        after{" "}
+        <code>SqliteStore::backfill_receipt_correlation</code> returned{" "}
+        <code>Ok</code> — i.e. after the{" "}
+        <code>BEGIN IMMEDIATE</code> +{" "}
+        <code>SAVEPOINT backfill_receipt_correlation</code> + per-row{" "}
+        <code>UPDATE</code> + <code>RELEASE SAVEPOINT</code> +{" "}
+        <code>COMMIT</code> all succeed — so the audit log cannot claim
+        a mutation whose data did not durably land.{" "}
+        <code>row_count</code> is the count of memory records the
+        planner would correlate on a dry run and the count actually
+        rewritten on an apply; an apply that found nothing to change
+        (all correlations matched the existing{" "}
+        <code>metadata.receipt_id</code>) reports{" "}
+        <code>row_count: 0</code> and the mutator short-circuits without
+        leaving any visible savepoint behind.{" "}
+        <code>dry_run</code> is the plan-vs-mutation triage signal: a
+        dry-run row always carries <code>dry_run: true</code> and{" "}
+        <code>savepoint_name: null</code>, and a refactor that{" "}
+        <code>#[serde(default)]</code>-ed either field would let an
+        applied rewrite masquerade as a dry run or mask the
+        applied-vs-planned distinction. <code>savepoint_name</code> is
+        the SQLite SAVEPOINT identifier the mutator wrapped the apply
+        batch in (the constant{" "}
+        <code>backfill_receipt_correlation</code> exported as{" "}
+        <code>covenant_memory::MEMORY_BACKFILL_SAVEPOINT_NAME</code>),{" "}
+        <code>null</code> on a dry run or a no-op apply that changed
+        nothing; the field carries no{" "}
+        <code>#[serde(skip_serializing_if)]</code> so the wire form is
+        always four keys (the key stays present as <code>null</code>{" "}
+        when None) — a consumer that filters on the applied-vs-dry
+        split reads <code>dry_run</code> while one that wants the
+        SAVEPOINT identifier reads <code>savepoint_name</code>, so both
+        must stay on the wire across the Some and None cases, and the
+        stable column set is what lets operator dashboards JOIN this
+        row with <code>SettlementReceiptBackfillApplied</code> under
+        the same backfill-family schema. The row is best-effort like
+        every other completed-mutation kind — the SAVEPOINT-wrapped
+        batch already <code>COMMIT</code>ted, so audit-write success is
+        not a precondition for the response (the variant is
+        intentionally absent from{" "}
+        <code>audit_kind_requires_persistence</code>, which is reserved
+        for suppressible rejection probes whose suppression would hide
+        an attacker probe). Distinct from{" "}
+        <code>SettlementReceiptBackfillApplied</code> (the two-sided
+        counterpart writes <code>memory_record_id</code> onto the
+        receipts JSONL store under an on-disk rollback checkpoint
+        rather than{" "}
+        <code>metadata.receipt_id</code> onto memory records under a
+        SQLite SAVEPOINT — same correlation operation, opposite
+        direction and different rollback mechanism), and from{" "}
+        <code>MemoryRepairApplied</code> and{" "}
+        <code>MemoryCompactionApplied</code> (different action
+        vocabulary: the receipt-correlation backfill writes the{" "}
+        <code>receipt_id</code> field into metadata rather than
+        detaching parents, deleting records, backfilling provenance,
+        or marking long-term entries stale, and the rollback evidence
+        here is a SAVEPOINT identifier rather than per-record
+        before/after payloads or id-array categories).
+      </p>
+
       <h2>Properties</h2>
       <ul>
         <li>

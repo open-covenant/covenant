@@ -244,6 +244,21 @@ fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of two u64 fields is infallible")
 }
 
+// Mirrors agent-os/programs/settlement/src/lib.rs:91
+// `buy_credits(ctx, amount_covnt: u64)`. The on-chain handler
+// reads a single u64 argument; a struct grow without an on-chain
+// mirror would silently truncate at deserialize-time on chain.
+#[allow(dead_code)] // wired in by sub-slice buy-credits
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct BuyCreditsArgs {
+    amount_covnt: u64,
+}
+
+#[allow(dead_code)] // wired in by sub-slice buy-credits
+fn serialize_buy_credits_args(args: &BuyCreditsArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of one u64 field is infallible")
+}
+
 // Account ordering and signer/writable flags mirror the on-chain
 // RegisterAgent struct at agent-os/programs/settlement/src/lib.rs:429-448:
 //   config           — PDA, read-only
@@ -7967,6 +7982,51 @@ mod tests {
             let mut l = fixture();
             l.lock_until = l.lock_until.wrapping_add(1);
             assert_ne!(serialize_stake_args(&l), base);
+        }
+    }
+
+    mod buy_credits_args {
+        use super::super::{serialize_buy_credits_args, BuyCreditsArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 0xdead_beef_cafe_babe,
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_little_endian_u64() {
+            // The on-chain buy_credits handler reads a single
+            // u64 in little-endian. A regression that emitted
+            // big-endian would still produce 8 bytes, so the
+            // length-only test would pass; pin the byte layout
+            // explicitly here.
+            let expected = 0xdead_beef_cafe_babeu64.to_le_bytes();
+            assert_eq!(serialize_buy_credits_args(&fixture()), expected);
+        }
+
+        #[test]
+        fn encoded_length_is_one_u64() {
+            // Exactly 8 bytes. A regression that grew the
+            // struct without updating the on-chain mirror would
+            // change this.
+            assert_eq!(serialize_buy_credits_args(&fixture()).len(), 8);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            let original = fixture();
+            let bytes = serialize_buy_credits_args(&original);
+            let decoded = BuyCreditsArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn different_amounts_produce_different_byte_streams() {
+            let a = serialize_buy_credits_args(&BuyCreditsArgs { amount_covnt: 1 });
+            let b = serialize_buy_credits_args(&BuyCreditsArgs { amount_covnt: 2 });
+            assert_ne!(a, b, "amount_covnt must influence the encoded bytes");
         }
     }
 

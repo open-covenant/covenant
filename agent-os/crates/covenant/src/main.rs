@@ -63,6 +63,7 @@ use covenant_types::{
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
     SettlementReceipt,
 };
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair::Keypair;
 use std::path::{Path, PathBuf};
 use tokio::net::UnixStream;
@@ -127,6 +128,27 @@ fn classify_keypair_read_error(path: PathBuf, source: std::io::Error) -> Keypair
         std::io::ErrorKind::PermissionDenied => KeypairLoadError::PermissionDenied { path, source },
         _ => KeypairLoadError::NotReadable { path, source },
     }
+}
+
+// Settlement-program PDA seed bytes mirror agent-os/programs/settlement/
+// src/lib.rs. Wrapping each find_program_address call lets the verb
+// sub-slices use the canonical seeds without re-spelling the byte
+// literals at every call site, where a one-character typo would derive a
+// deterministic-but-wrong PDA and surface only as AccountNotInitialized
+// from on-chain simulation.
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn settlement_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"config"], program_id)
+}
+
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn settlement_agent_pda(program_id: &Pubkey, agent_key: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"agent", agent_key.as_ref()], program_id)
+}
+
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
 
 // First 8 bytes of sha256("global:<method>") — Anchor's instruction
@@ -6444,6 +6466,84 @@ mod tests {
                 compute_anchor_global_discriminator("register_agent"),
                 compute_anchor_global_discriminator("RegisterAgent")
             );
+        }
+    }
+
+    mod settlement_pda {
+        use super::super::{settlement_agent_pda, settlement_config_pda, settlement_credits_pda};
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            // The devnet settlement program ID pinned in
+            // docs/internal/status.md row "On-chain settlement".
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_agent_key() -> Pubkey {
+            Pubkey::new_from_array([7u8; 32])
+        }
+
+        fn fixed_owner() -> Pubkey {
+            Pubkey::new_from_array([11u8; 32])
+        }
+
+        #[test]
+        fn config_pda_is_deterministic_for_fixed_program() {
+            let p = fixed_program();
+            assert_eq!(settlement_config_pda(&p), settlement_config_pda(&p));
+        }
+
+        #[test]
+        fn config_pda_depends_on_program_id() {
+            let a = settlement_config_pda(&fixed_program()).0;
+            let b = settlement_config_pda(&Pubkey::new_from_array([1u8; 32])).0;
+            assert_ne!(a, b, "config PDA must vary with program_id");
+        }
+
+        #[test]
+        fn config_pda_matches_literal_seed_bytes() {
+            // The literal seed bytes are spelled out a second time in
+            // the test body so any drift between the helper's seeds and
+            // the on-chain program's seeds = [b"config"] is caught by
+            // this comparison instead of silently routing to the wrong
+            // address.
+            let p = fixed_program();
+            let expected = Pubkey::find_program_address(&[b"config"], &p);
+            assert_eq!(settlement_config_pda(&p), expected);
+        }
+
+        #[test]
+        fn agent_pda_depends_on_agent_key() {
+            let p = fixed_program();
+            let a = settlement_agent_pda(&p, &fixed_agent_key()).0;
+            let b = settlement_agent_pda(&p, &Pubkey::new_from_array([8u8; 32])).0;
+            assert_ne!(a, b, "agent PDA must vary with agent_key");
+        }
+
+        #[test]
+        fn agent_pda_matches_literal_seed_bytes() {
+            let p = fixed_program();
+            let key = fixed_agent_key();
+            let expected = Pubkey::find_program_address(&[b"agent", key.as_ref()], &p);
+            assert_eq!(settlement_agent_pda(&p, &key), expected);
+        }
+
+        #[test]
+        fn credits_pda_depends_on_owner() {
+            let p = fixed_program();
+            let a = settlement_credits_pda(&p, &fixed_owner()).0;
+            let b = settlement_credits_pda(&p, &Pubkey::new_from_array([12u8; 32])).0;
+            assert_ne!(a, b, "credits PDA must vary with owner");
+        }
+
+        #[test]
+        fn credits_pda_matches_literal_seed_bytes() {
+            let p = fixed_program();
+            let owner = fixed_owner();
+            let expected = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &p);
+            assert_eq!(settlement_credits_pda(&p, &owner), expected);
         }
     }
 }

@@ -397,7 +397,7 @@ The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/co
 
 `covenant memory purge --json` emits a summary of time-bounded memory-store garbage collection. Envelope shape:
 
-- `kind`: literal string `"memory_purged"`.
+- `kind`: literal string `"memory_purged"`. Pinned at the value level by `main.rs:6532` (asserts `value["kind"].as_str() == Some("memory_purged")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `tier` (string or null): the memory tier slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `memory_tier_slug` at `main.rs:1719-1724`). Null when `--tier` was omitted, meaning the purge applied to all tiers. Note an input-form asymmetry: the CLI parser at `main.rs:1729-1731` accepts `longterm`, `long-term`, and `long_term` for the `--tier` argument, but only the `longterm` slug is ever emitted in the envelope. Pinned as string-or-null by `main.rs:6533-6536` — never a structured object.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. Same `--before-ms` / `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:6537-6540` — never a string-of-integer.
 - `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2164`, confirming the unit is a memory record. May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:6541-6544` — never a string-of-integer.

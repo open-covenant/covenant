@@ -22,6 +22,7 @@
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
 //!   covenant chain register-agent --program-id <BASE58> --agent-key <BASE58> --metadata-hash <HEX64> --capability-hash <HEX64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain stake --program-id <BASE58> --agent-key <BASE58> --owner-covnt <BASE58> --stake-vault <BASE58> --amount <U64> --lock-until <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
@@ -201,7 +202,6 @@ fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
 // with ConstraintSeeds at submission time, which surfaces as an
 // opaque RPC error rather than a local-test failure — so the helper
 // is unit-pinned against the literal seed bytes.
-#[allow(dead_code)] // wired in by sub-slice stake
 fn settlement_stake_position_pda(
     program_id: &Pubkey,
     agent_key: &Pubkey,
@@ -234,14 +234,12 @@ fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
 // a swap would silently make the on-chain program lock for amount
 // epochs and stake lock_until lamports — both numerically valid u64s,
 // so neither side errors at the wire layer.
-#[allow(dead_code)] // wired in by sub-slice stake
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 struct StakeArgs {
     amount: u64,
     lock_until: u64,
 }
 
-#[allow(dead_code)] // wired in by sub-slice stake
 fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of two u64 fields is infallible")
 }
@@ -286,7 +284,6 @@ fn build_register_agent_instruction(
 // accepts this address; the Token-2022 program at
 // TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb is a different
 // program and a substitution would be rejected with InvalidProgramId.
-#[allow(dead_code)] // wired in by sub-slices stake / buy-credits
 const SPL_TOKEN_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
@@ -303,7 +300,6 @@ const SPL_TOKEN_PROGRAM_ID: Pubkey =
 // Anchor's dispatcher reads accounts positionally, so a single-slot
 // reorder silently remaps roles and either fails ConstraintSeeds
 // (PDAs) or Unauthorized (token-owner checks).
-#[allow(dead_code)] // wired in by sub-slice stake verb
 fn build_stake_instruction(
     program_id: &Pubkey,
     operator: &Pubkey,
@@ -646,6 +642,320 @@ fn register_agent_timeout_json(
     })
 }
 
+#[derive(Debug)]
+struct StakeCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    agent_key: Pubkey,
+    owner_covnt: Pubkey,
+    stake_vault: Pubkey,
+    amount: u64,
+    lock_until: u64,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_u64_arg(flag: &'static str, value: &str) -> Result<u64> {
+    value
+        .parse::<u64>()
+        .with_context(|| format!("--{flag} must be a non-negative integer (got {value:?})"))
+}
+
+fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut agent_key: Option<Pubkey> = None;
+    let mut owner_covnt: Option<Pubkey> = None;
+    let mut stake_vault: Option<Pubkey> = None;
+    let mut amount: Option<u64> = None;
+    let mut lock_until: Option<u64> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--agent-key" => {
+                i += 1;
+                let v = args.get(i).context("--agent-key needs a value")?;
+                agent_key = Some(parse_pubkey_arg("agent-key", v)?);
+            }
+            "--owner-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--owner-covnt needs a value")?;
+                owner_covnt = Some(parse_pubkey_arg("owner-covnt", v)?);
+            }
+            "--stake-vault" => {
+                i += 1;
+                let v = args.get(i).context("--stake-vault needs a value")?;
+                stake_vault = Some(parse_pubkey_arg("stake-vault", v)?);
+            }
+            "--amount" => {
+                i += 1;
+                let v = args.get(i).context("--amount needs a value")?;
+                let parsed = parse_u64_arg("amount", v)?;
+                if parsed == 0 {
+                    // A zero stake transfers nothing, opens a
+                    // 0-balance StakePosition the operator paid
+                    // rent for, and still costs a tx fee — almost
+                    // certainly a typo rather than intent.
+                    bail!("--amount must be greater than zero");
+                }
+                amount = Some(parsed);
+            }
+            "--lock-until" => {
+                i += 1;
+                let v = args.get(i).context("--lock-until needs a value")?;
+                lock_until = Some(parse_u64_arg("lock-until", v)?);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed = parse_u64_arg("confirm-timeout-ms", v)?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let agent_key = agent_key.context("--agent-key is required")?;
+    let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
+    let stake_vault = stake_vault.context("--stake-vault is required")?;
+    let amount = amount.context("--amount is required")?;
+    let lock_until = lock_until.context("--lock-until is required")?;
+    Ok(StakeCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        agent_key,
+        owner_covnt,
+        stake_vault,
+        amount,
+        lock_until,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+fn sign_stake_tx(
+    operator: &Keypair,
+    program_id: &Pubkey,
+    agent_key: &Pubkey,
+    owner_covnt: &Pubkey,
+    stake_vault: &Pubkey,
+    args: &StakeArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix = build_stake_instruction(
+        program_id,
+        &operator.pubkey(),
+        agent_key,
+        owner_covnt,
+        stake_vault,
+        args,
+    );
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn stake_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    amount: u64,
+    lock_until: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "stake",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "amount": amount,
+        "lock_until": lock_until,
+        "status": "confirmed",
+    })
+}
+
+fn stake_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    amount: u64,
+    lock_until: u64,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "stake",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "amount": amount,
+        "lock_until": lock_until,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+async fn run_chain_stake(args: &[String]) -> Result<()> {
+    let parsed = parse_stake_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = StakeArgs {
+        amount: parsed.amount,
+        lock_until: parsed.lock_until,
+    };
+    let program_id = parsed.program_id;
+    let agent_key = parsed.agent_key;
+    let owner_covnt = parsed.owner_covnt;
+    let stake_vault = parsed.stake_vault;
+    let agent_key_b58 = agent_key.to_string();
+
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_stake_tx(
+                &kp,
+                &program_id,
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &prep_args,
+                blockhash,
+            );
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    RpcSendTransactionConfig::default(),
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            let envelope = stake_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.amount,
+                parsed.lock_until,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!("amount: {}", parsed.amount);
+                println!("lock_until: {}", parsed.lock_until);
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!("send_and_confirm_transaction failed: {client_err}")
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = stake_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.amount,
+                parsed.lock_until,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!("amount: {}", parsed.amount);
+                println!("lock_until: {}", parsed.lock_until);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn run_chain_register_agent(args: &[String]) -> Result<()> {
     let parsed = parse_register_agent_cli_args(args)?;
 
@@ -829,6 +1139,9 @@ fn print_usage() {
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
     eprintln!(
         "  covenant chain register-agent --program-id BASE58 --agent-key BASE58 --metadata-hash HEX64 --capability-hash HEX64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement register_agent transaction with the operator keypair"
+    );
+    eprintln!(
+        "  covenant chain stake --program-id BASE58 --agent-key BASE58 --owner-covnt BASE58 --stake-vault BASE58 --amount U64 --lock-until U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement stake transaction with the operator keypair"
     );
     eprintln!(
         "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
@@ -2385,7 +2698,10 @@ async fn main() -> Result<()> {
                 "register-agent" => {
                     run_chain_register_agent(&args[2..]).await?;
                 }
-                "stake" | "buy-credits" => {
+                "stake" => {
+                    run_chain_stake(&args[2..]).await?;
+                }
+                "buy-credits" => {
                     bail!(
                         "chain {} is prepared by the Solana SDK; daemon signing is not wired yet",
                         args[1]
@@ -8038,6 +8354,298 @@ mod tests {
             assert_eq!(v["status"], "submitted-not-confirmed");
             assert_eq!(v["signature"], "sig999");
             assert_eq!(v["timeout_ms"], 30_000);
+        }
+    }
+
+    mod stake_arg_parsing {
+        use super::super::{parse_stake_cli_args, parse_u64_arg};
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn minimal_argv() -> Vec<String> {
+            let pk = valid_pubkey_b58();
+            vec![
+                "--program-id".into(),
+                pk.clone(),
+                "--agent-key".into(),
+                pk.clone(),
+                "--owner-covnt".into(),
+                pk.clone(),
+                "--stake-vault".into(),
+                pk,
+                "--amount".into(),
+                "1000".into(),
+                "--lock-until".into(),
+                "1700000000".into(),
+            ]
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let parsed = parse_stake_cli_args(&minimal_argv()).expect("parses");
+            assert_eq!(parsed.cluster, "devnet", "default cluster is devnet");
+            assert_eq!(parsed.confirm_timeout_ms, 60_000);
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.amount, 1000);
+            assert_eq!(parsed.lock_until, 1_700_000_000);
+        }
+
+        #[test]
+        fn rejects_zero_amount_with_named_reason() {
+            // Zero amount opens a 0-balance StakePosition the
+            // operator paid rent for and still costs a tx fee;
+            // a typo for amount=1000 should not silently submit.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "0".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "names the reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_non_integer_amount_with_named_flag() {
+            // A typo like --amount 1_000 would silently parse to
+            // 1 with a stray underscore — u64::from_str rejects
+            // it. The error must name --amount so the operator
+            // knows which flag to fix.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "1_000".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+
+        #[test]
+        fn rejects_negative_amount() {
+            // A bare "-1" would fail u64::from_str; the error
+            // surfaces the offending value so the operator can
+            // see the typo without guessing.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "-1".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+
+        #[test]
+        fn missing_each_required_flag_errors_with_its_name() {
+            // Drop each required flag one at a time and confirm
+            // the error names that flag. Iterating across all six
+            // required flags prevents a future refactor from
+            // silently making any one of them optional.
+            let required = [
+                "--program-id",
+                "--agent-key",
+                "--owner-covnt",
+                "--stake-vault",
+                "--amount",
+                "--lock-until",
+            ];
+            for flag in required {
+                let base = minimal_argv();
+                let mut filtered: Vec<String> = Vec::new();
+                let mut i = 0;
+                while i < base.len() {
+                    if base[i] == flag {
+                        i += 2;
+                        continue;
+                    }
+                    filtered.push(base[i].clone());
+                    i += 1;
+                }
+                let err = parse_stake_cli_args(&filtered)
+                    .err()
+                    .unwrap_or_else(|| panic!("expected error when {flag} is missing"));
+                assert!(
+                    err.to_string().contains(flag),
+                    "error must name the missing flag {flag}: {err}"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_u64_arg_round_trips_max_value() {
+            assert_eq!(
+                parse_u64_arg("amount", &u64::MAX.to_string()).unwrap(),
+                u64::MAX
+            );
+        }
+
+        #[test]
+        fn parse_u64_arg_rejects_empty_with_flag_name() {
+            let err = parse_u64_arg("amount", "").expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+    }
+
+    mod stake_tx_shape {
+        use super::super::{build_stake_instruction, sign_stake_tx, StakeArgs};
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> StakeArgs {
+            StakeArgs {
+                amount: 2_500_000,
+                lock_until: 1_800_000_000,
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            // Same fee-payer invariant as register-agent. The
+            // Stake instruction's `owner` Signer also doubles as
+            // the fee payer at message.account_keys[0].
+            let kp = Keypair::new();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let tx = sign_stake_tx(
+                &kp,
+                &fixed_program(),
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            // The on-chain Stake struct has exactly one Signer
+            // field (owner). A tx with more or fewer signers
+            // would be rejected.
+            let kp = Keypair::new();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let tx = sign_stake_tx(
+                &kp,
+                &fixed_program(),
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.signatures.len(), 1);
+            assert_eq!(tx.message.header.num_required_signatures, 1);
+        }
+
+        #[test]
+        fn instruction_matches_build_stake_instruction_output() {
+            // The encoded instruction in the tx must equal the
+            // standalone build_stake_instruction output for the
+            // same inputs; a future refactor that inlined the
+            // builder could drift in shape without the standalone
+            // unit tests catching it.
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let args = fixed_args();
+            let expected_ix = build_stake_instruction(
+                &program,
+                &kp.pubkey(),
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &args,
+            );
+            let tx = sign_stake_tx(
+                &kp,
+                &program,
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &args,
+                Hash::default(),
+            );
+            assert_eq!(tx.message.instructions.len(), 1);
+            assert_eq!(tx.message.instructions[0].data, expected_ix.data);
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod stake_json_envelopes {
+        use super::super::{stake_confirmed_json, stake_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            let v = stake_confirmed_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "stake");
+            assert_eq!(v["status"], "confirmed");
+            assert_eq!(v["amount"], 12_345);
+            assert_eq!(v["lock_until"], 1_700_000_000);
+            assert_eq!(v["agent_key"], "agentB58");
+            assert_eq!(v["cluster"], "localnet");
+        }
+
+        #[test]
+        fn timeout_envelope_includes_amount_lock_until_and_timeout_ms() {
+            let v = stake_timeout_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+                45_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["verb"], "stake");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["amount"], 12_345);
+            assert_eq!(v["lock_until"], 1_700_000_000);
+            assert_eq!(v["timeout_ms"], 45_000);
         }
     }
 }

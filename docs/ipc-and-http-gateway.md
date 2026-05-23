@@ -519,6 +519,15 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `a2a_retry_json` in `agent-os/crates/covenant/src/main.rs:4606`. Two unit tests at `main.rs:6005` (`a2a_retry_json_renders_stable_shape`) and `main.rs:6042` cover the shape. The CLI verb is wired at `main.rs:3531-3587`; without `--json`, the same response prints `considered <N> task(s), requeued <M>, skipped <K>` followed by `automatic retry disabled; pass --enable to mutate` whenever `report.policy.enabled` is `false` (per `main.rs:3573-3581`).
 
+`covenant a2a compact --json` emits a summary of the event-log compaction that drops lines for fully-resolved A2A tasks. Envelope shape:
+
+- `kind`: literal string `"a2a_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"a2a_compact"`) or guessing a noun form (`"a2a_compaction"`).
+- `dropped` (u64): count of event-log lines removed for resolved tasks. May legitimately be `0` when no resolved tasks remain — the unsuffixed CLI still prints `dropped 0 a2a event(s)` at `main.rs:3604`, and JSON consumers must not treat `dropped=0` as an error.
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5977` (`a2a_compact_json_pins_top_level_schema`), exercised against both a populated (`dropped=3`) and an empty (`dropped=0`) case.
+
+The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/covenant/src/main.rs:4407`. Two unit tests at `main.rs:5969` (`a2a_compact_json_renders_stable_shape`) and `main.rs:5977` cover the shape. The CLI verb is wired at `main.rs:3588-3610`; without `--json`, the same response prints `dropped <N> a2a event(s)` at `main.rs:3604`.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

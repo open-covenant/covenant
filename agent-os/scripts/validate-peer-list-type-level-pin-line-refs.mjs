@@ -4,9 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // peer_list envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// docs/ipc-and-http-gateway.md cites four inner assertion ranges
 // inside peer_list_json_pins_top_level_schema:
 //
+//   - line 293 cites `limit` (u64) type pin at :5048-5051.
 //   - line 294 cites `filter_pubkey_prefix` (string or null) type pin.
 //   - line 295 cites `matched_count` (u64) type pin.
 //   - line 298 cites `truncated` (boolean) type pin.
@@ -45,6 +46,16 @@ const sourcePath = "agent-os/crates/covenant/src/main.rs";
 const testFnName = "peer_list_json_pins_top_level_schema";
 
 const targets = [
+  {
+    field: "limit",
+    selectorFirstLine: 'value["limit"].is_u64(),',
+    match: "exact",
+    docsRegex:
+      /- `limit` \(u64\): the request limit echoed back from `--limit` \(default `20`, per `main\.rs:3708`\)\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./,
+    docsLabel: "peer_list.limit type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string.",
+  },
   {
     field: "filter_pubkey_prefix",
     selectorFirstLine: 'value["filter_pubkey_prefix"].is_string()',

@@ -290,7 +290,7 @@ The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/cra
 `covenant peers list [--limit <N>] [--prefix <P>] [--live-only|--revoked-only] --json` emits the registered peer roster filtered by the supplied flags. Envelope shape:
 
 - `kind`: literal string `"peer_list"`.
-- `limit` (u64): the request limit echoed back from `--limit` (default `20`, per `main.rs:3708`).
+- `limit` (u64): the request limit echoed back from `--limit` (default `20`, per `main.rs:3708`). Pinned as u64 by `main.rs:5048-5051` — never a string.
 - `filter_pubkey_prefix` (string or null): the prefix echoed from `--prefix`, or `null` when the flag was omitted. Pinned at the type level by the schema test (`main.rs:5052-5056`) — never an integer or array.
 - `matched_count` (u64): row count of the `peers` array; equals the exhaustive match count when `truncated` is `false`. Pinned as u64 by `main.rs:5057-5060` — never a string.
 - `peers` (array of `PeerSummary`): the matched roster slice, see below.

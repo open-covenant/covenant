@@ -77,6 +77,7 @@ run node ./scripts/validate-memory-read-line-refs.mjs
 run node ./scripts/validate-memory-compaction-line-refs.mjs
 run node ./scripts/validate-capability-grant-line-refs.mjs
 run node ./scripts/validate-peer-revoke-line-refs.mjs
+run node ./scripts/validate-memory-purge-line-refs.mjs
 
 case "$mode" in
   scripts)

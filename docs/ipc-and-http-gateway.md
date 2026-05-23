@@ -128,6 +128,25 @@ Top-level keys are pinned to exactly these five by the test at `agent-os/crates/
 
 The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:4537`. The shape-pinning test at `main.rs:6987-7033` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
 
+`covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
+
+- `kind`: literal string `"receipt_batch_flushed"`.
+- `limit` (u64): the batch-size cap echoed back from the `--limit` argument.
+- `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch.
+- `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7055` (`flush_receipts_json_pins_top_level_schema`).
+
+`ReceiptBatchSummary` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:53`:
+
+- `batch_id` (string) — opaque batch identifier.
+- `merkle_root` (string, 64 hex characters) — Merkle root over the included receipts.
+- `receipt_count` (u32) — number of receipts in the batch (note u32, not u64).
+- `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; null before submission completes.
+- `slot` (u64 or null) — confirmation slot once available; null until then.
+
+The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:4552`. Two unit tests at `main.rs:7036` (`flush_receipts_json_renders_stable_shape`) and `main.rs:7054` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

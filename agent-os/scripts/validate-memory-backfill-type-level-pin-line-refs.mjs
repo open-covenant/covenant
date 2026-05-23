@@ -4,39 +4,38 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md line 650 cites a single main.rs range
-// for the memory_backfill.row_count (u64) type pin inside the
-// memory_backfill_json_pins_top_level_schema fn body.
+// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
+// memory_backfill_json_pins_top_level_schema:
 //
-// Before this validator landed, the docs prose described `row_count`
-// as "(u64): count of memory records the correlation pass operated on
-// (mutation path) or *would* operate on (dry-run path)" with no
-// main.rs cite. The assertion at main.rs:5637-5640
-// (assert!(value["row_count"].is_u64(), ...);) was only enforced at
-// test runtime. The validator binds the docs prose to the source-of-
-// truth so a regression that turned the field into a string-of-integer
-// surfaces at the docs-validator level (not just at test runtime).
+//   - line 650 cites `row_count` (u64) at main.rs:5637-5640.
+//   - line 651 cites `savepoint_name` (string) at main.rs:5641-5644.
 //
-// Sibling collision risk (mirrors validate-settlement-backfill-
-// type-level-pin-line-refs.mjs): the settlement_backfill envelope's
-// pins test at main.rs:5550 carries the same `value["row_count"].is_u64(),`
-// selector at main.rs:5575, and its row_count docs bullet at line 635
-// carries near-identical prose. Both risks are addressed:
+// The row_count cite landed first as a single-target validator; the
+// savepoint_name cite was added later when the validator was converted
+// to the multi-target shape (mirroring validate-bootstrap-result and
+// validate-tool-result conversions).
 //
-//   - The validator scopes the selector lookup to the brace-balanced
+// Sibling collision risk (mirrors validate-settlement-backfill):
+// the settlement_backfill envelope's pins test at main.rs:5550 carries
+// the same `value["row_count"].is_u64(),` selector at main.rs:5575
+// and a near-identical row_count docs bullet at line 635. The
+// savepoint_name selector and bullet are currently unique to
+// memory_backfill (settlement uses rollback_path with a string-or-null
+// shape instead). Both risks are addressed:
+//
+//   - Selector lookups scope to the brace-balanced
 //     `memory_backfill_json_pins_top_level_schema` fn body, so the
-//     settlement_backfill occurrence at main.rs:5575 cannot contaminate
-//     the result.
-//   - The docsRegex anchors on the memory-specific phrase
-//     "memory records the correlation pass operated on". The
-//     settlement_backfill bullet at line 635 uses "legacy settlement-
-//     receipt rows the backfill operated on" instead, so the regex
-//     will not match it even on a first-match scan.
+//     settlement_backfill row_count occurrence at main.rs:5575 cannot
+//     contaminate the result.
+//   - The row_count docsRegex anchors on the memory-specific phrase
+//     "memory records the correlation pass operated on", and the
+//     savepoint_name docsRegex anchors on "SQLite SAVEPOINT identifier
+//     the daemon emitted for this pass". Neither phrase appears in the
+//     settlement_backfill bullets, so first-match capture cannot drift.
 //
-// The range is derived as assert!-opener-to-closer (4-line convention)
+// Each range is derived as assert!-opener-to-closer (4-line convention)
 // — the cite spans the `assert!(` opener directly above the selector
-// through the closing `);` on its own line, mirroring
-// validate-settlement-backfill-type-level-pin-line-refs.mjs.
+// through the closing `);` on its own line.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -49,13 +48,27 @@ const docsPath = "docs/ipc-and-http-gateway.md";
 const sourcePath = "agent-os/crates/covenant/src/main.rs";
 
 const testFnName = "memory_backfill_json_pins_top_level_schema";
-const selector = 'value["row_count"].is_u64(),';
 
-const docsRegex =
-  /- `row_count` \(u64\): count of memory records the correlation pass operated on \(mutation path\) or \*would\* operate on \(dry-run path\)\. May legitimately be `0` when no legacy rows match\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./;
-const docsLabel = "memory_backfill.row_count type-level pin citation";
-const docsTemplate =
-  "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.";
+const targets = [
+  {
+    field: "row_count",
+    selector: 'value["row_count"].is_u64(),',
+    docsRegex:
+      /- `row_count` \(u64\): count of memory records the correlation pass operated on \(mutation path\) or \*would\* operate on \(dry-run path\)\. May legitimately be `0` when no legacy rows match\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+    docsLabel: "memory_backfill.row_count type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
+  {
+    field: "savepoint_name",
+    selector: 'value["savepoint_name"].is_string(),',
+    docsRegex:
+      /- `savepoint_name` \(string\): SQLite SAVEPOINT identifier the daemon emitted for this pass\. \*\*Always a non-null string\*\* — the field type at `memory_backfill_json` \(`main\.rs:\d+`\) is `&str`, not `Option<&str>`, so even a dry-run call returns a real savepoint name \(the daemon allocates one so consumers can correlate planning runs against later mutation runs\)\. JSON consumers must not write null-vs-value branching for this field; treat absence as a protocol violation\. This is the only field-shape difference from `settlement\.backfill\.v1`, whose sibling `rollback_path` is string-or-null\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never null \(the &str emitter type forbids null at compile time\)\./,
+    docsLabel: "memory_backfill.savepoint_name type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never null (the &str emitter type forbids null at compile time).",
+  },
+];
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -92,8 +105,6 @@ function scanBraceBalance(lines, openerLine) {
   return null;
 }
 
-let startLine = null;
-let endLine = null;
 if (source) {
   const lines = source.split("\n");
   const testOpenerRegex = new RegExp(`^\\s+fn\\s+${testFnName}\\s*\\(`);
@@ -115,17 +126,19 @@ if (source) {
         `${sourcePath}: could not find the matching closing brace for "fn ${testFnName}" starting at line ${testStart}; remediation: confirm the test fn body is brace-balanced`,
       );
     } else {
-      const selectorMatches = [];
-      for (let index = testStart; index < testEnd; index += 1) {
-        if (lines[index].trim() === selector) {
-          selectorMatches.push(index + 1);
+      for (const target of targets) {
+        const selectorMatches = [];
+        for (let index = testStart; index < testEnd; index += 1) {
+          if (lines[index].trim() === target.selector) {
+            selectorMatches.push(index + 1);
+          }
         }
-      }
-      if (selectorMatches.length !== 1) {
-        fail(
-          `${sourcePath}: expected exactly 1 occurrence of \`${selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the row_count type-level assertion is present exactly once in this test`,
-        );
-      } else {
+        if (selectorMatches.length !== 1) {
+          fail(
+            `${sourcePath}: expected exactly 1 occurrence of \`${target.selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the ${target.field} type-level assertion is present exactly once in this test`,
+          );
+          continue;
+        }
         const selectorLine = selectorMatches[0];
         const assertOpenerLine = selectorLine - 1;
         if (
@@ -133,40 +146,48 @@ if (source) {
           lines[assertOpenerLine - 1].trim() !== "assert!("
         ) {
           fail(
-            `${sourcePath}:${assertOpenerLine}: expected line above \`${selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector`,
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector`,
           );
-        } else {
-          startLine = assertOpenerLine;
-          for (let index = selectorLine; index < testEnd; index += 1) {
-            if (lines[index].trim() === ");") {
-              endLine = index + 1;
-              break;
-            }
-          }
-          if (endLine === null) {
-            fail(
-              `${sourcePath}: could not find the closing \`);\` after the row_count selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
-            );
+          continue;
+        }
+        const startLine = assertOpenerLine;
+        let endLine = null;
+        for (let index = selectorLine; index < testEnd; index += 1) {
+          if (lines[index].trim() === ");") {
+            endLine = index + 1;
+            break;
           }
         }
+        if (endLine === null) {
+          fail(
+            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
+          );
+          continue;
+        }
+        target.startLine = startLine;
+        target.endLine = endLine;
       }
     }
   }
 }
 
 if (docs) {
-  const match = docs.match(docsRegex);
-  if (!match) {
-    fail(
-      `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the row_count type-level pin line range`,
-    );
-  } else if (startLine !== null && endLine !== null) {
-    const citedStart = parseInt(match[1], 10);
-    const citedEnd = parseInt(match[2], 10);
-    if (citedStart !== startLine || citedEnd !== endLine) {
+  for (const target of targets) {
+    const match = docs.match(target.docsRegex);
+    if (!match) {
       fail(
-        `${docsPath}: the ${docsLabel} cites main.rs:${citedStart}-${citedEnd} but the row_count type-level assertion spans :${startLine}-${endLine}; remediation: update the citation to :${startLine}-${endLine}`,
+        `${docsPath}: missing the ${target.docsLabel} ("${target.docsTemplate}"); remediation: restore the citation that records the ${target.field} type-level pin line range`,
       );
+      continue;
+    }
+    if (target.startLine !== undefined && target.endLine !== undefined) {
+      const citedStart = parseInt(match[1], 10);
+      const citedEnd = parseInt(match[2], 10);
+      if (citedStart !== target.startLine || citedEnd !== target.endLine) {
+        fail(
+          `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} type-level assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,
+        );
+      }
     }
   }
 }
@@ -180,5 +201,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-memory-backfill-type-level-pin-line-refs: ok (memory_backfill.row_count main.rs:${startLine}-${endLine})`,
+  `validate-memory-backfill-type-level-pin-line-refs: ok (${targets.map((t) => `${t.field} main.rs:${t.startLine}-${t.endLine}`).join(", ")})`,
 );

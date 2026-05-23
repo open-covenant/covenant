@@ -231,7 +231,7 @@ The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/s
 
 `covenant intent [--json] [--stream] <text>` emits the dispatched intent's outcome with optional settlement evidence. Envelope shape:
 
-- `kind`: literal string `"intent_result"`.
+- `kind`: literal string `"intent_result"`. Pinned at the value level by `main.rs:5784` (asserts `value["kind"].as_str() == Some("intent_result")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `intent_id` (string): the dispatched intent's UUID, serialized as the canonical hyphenated string form. Pinned as a string by the schema test (`main.rs:5785-5788`) — never a byte array or struct.
 - `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:5789-5792`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2069` (a single-line `println!("{text}")`), so `covenant intent --json` and `covenant intent` share the result payload but only `--json` wraps it in the envelope.

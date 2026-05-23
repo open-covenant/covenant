@@ -26,7 +26,7 @@ covenant-permissions = { path = "../covenant-permissions" }
 covenant-types = { path = "../covenant-types" }
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3"
-ratatui = "0.28"
+ratatui = "0.30"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

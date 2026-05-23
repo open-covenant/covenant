@@ -232,8 +232,8 @@ The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/s
 `covenant intent [--json] [--stream] <text>` emits the dispatched intent's outcome with optional settlement evidence. Envelope shape:
 
 - `kind`: literal string `"intent_result"`.
-- `intent_id` (string): the dispatched intent's UUID, serialized as the canonical hyphenated string form. Pinned as a string by the schema test (`main.rs:5563-5566`) — never a byte array or struct.
-- `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:5567-5570`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
+- `intent_id` (string): the dispatched intent's UUID, serialized as the canonical hyphenated string form. Pinned as a string by the schema test (`main.rs:5785-5788`) — never a byte array or struct.
+- `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:5789-5792`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2069` (a single-line `println!("{text}")`), so `covenant intent --json` and `covenant intent` share the result payload but only `--json` wraps it in the envelope.
 - `sources` (array of strings): source labels that contributed to the result (e.g., `["research"]`). Empty when no sources are attached.
 - `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:5799-5801` — never an integer or array.

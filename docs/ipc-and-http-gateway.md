@@ -331,7 +331,7 @@ The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/co
 
 `covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] --json` emits the outcome of revoking a single peer by its base58 token prefix. Envelope shape:
 
-- `kind`: literal string `"peer_revoke"` — verb-form, not past-tense. Distinct from the sibling envelopes whose outcome names took the past-tense form (`capability_revoked`, `peer_token_rotated`, `peers_purged`); consumers routing on `kind` must match the literal exactly rather than guessing `peer_revoked` or `peers_revoke`.
+- `kind`: literal string `"peer_revoke"` — verb-form, not past-tense. Distinct from the sibling envelopes whose outcome names took the past-tense form (`capability_revoked`, `peer_token_rotated`, `peers_purged`); consumers routing on `kind` must match the literal exactly rather than guessing `peer_revoked` or `peers_revoke`. Pinned at the value level by `main.rs:5164` (asserts `value["kind"].as_str() == Some("peer_revoke")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `outcome` (object): a tagged-enum `RevokeOutcome` (defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:182` with `#[serde(tag = "type", rename_all = "snake_case")]`). The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:5165-5168` to be a JSON object, never a string blob.
 
 The five `RevokeOutcome` variants the daemon may return:

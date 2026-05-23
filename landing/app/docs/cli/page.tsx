@@ -271,6 +271,12 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
 {"kind":"intents_resume","ok":false,"mode":"latest","intent_id":"...","error":{"code":"daemon_error","message":"budget exhausted; try again later"}}`}</code>
       </pre>
 
+      <h3>Resume a checkpointed intent successfully</h3>
+      <pre>
+        <code>{`$ covenant intents resume latest --json
+{"kind":"intents_resume","ok":true,"mode":"latest","intent_id":"...","status":"ok","text":"...","sources":[],"settlement":null}`}</code>
+      </pre>
+
       <h3>Inspect daemon protocol metadata</h3>
       <pre>
         <code>{`$ covenant version

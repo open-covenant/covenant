@@ -81,6 +81,51 @@ export default function CliPage() {
                                      Batch local receipts into a receipt root.
   chain receipt-batches [-n N] [--json]
                                      List local receipt batches.
+  chain register-agent
+        --program-id BASE58
+        --agent-key BASE58
+        --metadata-hash HEX64
+        --capability-hash HEX64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     register_agent transaction with the
+                                     operator keypair.
+  chain stake
+        --program-id BASE58
+        --agent-key BASE58
+        --owner-covnt BASE58
+        --stake-vault BASE58
+        --amount U64
+        --lock-until U64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     stake transaction with the operator
+                                     keypair.
+  chain buy-credits
+        --program-id BASE58
+        --owner-covnt BASE58
+        --treasury BASE58
+        --amount-covnt U64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     buy_credits transaction with the
+                                     operator keypair; --treasury MUST
+                                     equal config.treasury (fetch via
+                                     chain status if unknown).
+
+  settlement backfill-receipts
+        [--dry-run] [--json]         Repair legacy settlement-receipt
+                                     rows (--scope-pubkey reserved,
+                                     not yet supported).
 
   a2a status [-n N]
         [--min-lease-age-ms N]

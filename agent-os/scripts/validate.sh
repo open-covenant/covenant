@@ -94,6 +94,7 @@ run node ./scripts/validate-covenant-ipc-verify-check-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-verify-drift-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-receipt-batch-summary-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-struct-line-refs.mjs
+run node ./scripts/validate-covenant-peer-auth-peer-summary-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-variant-range-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-enum-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-truncated-attribute-line-refs.mjs

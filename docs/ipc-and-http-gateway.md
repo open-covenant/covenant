@@ -186,7 +186,7 @@ The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/
 
 - `kind`: literal string `"receipt_batch_list"`.
 - `limit` (u64): the result cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:7092-7095` — never a string.
-- `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty.
+- `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty. Pinned as an array by `main.rs:7096-7099` — never null or a string.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7075` (`receipt_batch_list_json_pins_top_level_schema`).
 

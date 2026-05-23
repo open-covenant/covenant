@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // intents_resume envelopes type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges that
+// docs/ipc-and-http-gateway.md cites four inner assertion ranges that
 // pin types in the intents_resume envelopes:
 //
 //   - line 619 cites the error envelope's `intent_id` (string or null)
@@ -13,11 +13,20 @@ import { fileURLToPath } from "node:url";
 //   - line 615 cites the ok envelope's `settlement` (object or null)
 //     at main.rs:5389-5392 — inside
 //     intents_resume_ok_json_pins_top_level_schema.
+//   - line 606 cites the ok envelope's `ok` (boolean) at the first
+//     range, inside intents_resume_ok_json_pins_top_level_schema.
+//   - line 606 cites the error envelope's `ok` (boolean) at the second
+//     range, inside intents_resume_error_json_pins_top_level_schema.
 //
-// Both docs cites use the assert!-to-closing convention: the cite spans
+// All docs cites use the assert!-to-closing convention: the cite spans
 // from the line containing `assert!(` through the closing `);` line.
 // This convention is chosen to match the existing docs cites without
 // requiring a docs prose change.
+//
+// The two ok-pin cites share a single docs sentence with two cites in
+// it. Each ok target's docs regex anchors on the cite's unique context
+// ("tests at " for the ok-branch cite, " and " for the error-branch
+// cite) so each target reads only its own range from the sentence.
 //
 // The validator scopes each lookup to the brace-balanced test fn body
 // so a same-named selector inside a different envelope's pins test
@@ -54,6 +63,26 @@ const targets = [
     docsLabel: "intents_resume_ok.settlement type-level pin citation",
     docsTemplate:
       "Pinned as object-or-null by `main.rs:N-M` — never an integer or array.",
+  },
+  {
+    field: "ok_in_ok_branch",
+    testFnName: "intents_resume_ok_json_pins_top_level_schema",
+    selector: 'value["ok"].is_boolean(),',
+    docsRegex:
+      /Pinned as a JSON boolean by the schema tests at `main\.rs:(\d+)-(\d+)` and `main\.rs:\d+-\d+` — never `0`\/`1` or a string-truthy value\./,
+    docsLabel: "intents_resume_ok.ok type-level pin citation",
+    docsTemplate:
+      "Pinned as a JSON boolean by the schema tests at `main.rs:N-M` and `main.rs:N-M` — never `0`/`1` or a string-truthy value.",
+  },
+  {
+    field: "ok_in_error_branch",
+    testFnName: "intents_resume_error_json_pins_top_level_schema",
+    selector: 'value["ok"].is_boolean(),',
+    docsRegex:
+      /Pinned as a JSON boolean by the schema tests at `main\.rs:\d+-\d+` and `main\.rs:(\d+)-(\d+)` — never `0`\/`1` or a string-truthy value\./,
+    docsLabel: "intents_resume_error.ok type-level pin citation",
+    docsTemplate:
+      "Pinned as a JSON boolean by the schema tests at `main.rs:N-M` and `main.rs:N-M` — never `0`/`1` or a string-truthy value.",
   },
 ];
 

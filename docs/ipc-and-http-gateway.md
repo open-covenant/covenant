@@ -603,7 +603,7 @@ The envelope source-of-truth lives at `bootstrap_result_json` in `agent-os/crate
 Both branches share these fields:
 
 - `kind`: literal string `"intents_resume"` — verb-name asymmetry: the CLI verb is `resume` but the envelope discriminator is `intents_resume` (the noun-verb compound, not the verb token alone); consumers routing on `kind` must match the literal exactly. The same literal is emitted on both `ok=true` and `ok=false` envelopes.
-- `ok` (boolean): `true` on success, `false` on every error path. Pinned as a JSON boolean by the schema tests at `main.rs:5372-5375` and `main.rs:5214-5217` — never `0`/`1` or a string-truthy value. JSON consumers branching on `ok` alone get the correct outcome class without inspecting variant-specific fields.
+- `ok` (boolean): `true` on success, `false` on every error path. Pinned as a JSON boolean by the schema tests at `main.rs:5371-5374` and `main.rs:5214-5217` — never `0`/`1` or a string-truthy value. JSON consumers branching on `ok` alone get the correct outcome class without inspecting variant-specific fields.
 - `mode` (string): exactly `"explicit"` or `"latest"`, derived from the CLI invocation form at `main.rs:3889` (`--latest`/`latest` → `"latest"`, any positional intent-id → `"explicit"`). The envelope echoes the operator's input form, so consumers can distinguish a targeted resume from a "resume the most recent paused intent" call.
 
 **Success branch (`ok=true`)** carries these eight top-level keys per the test EXPECTED_KEYS at `main.rs:5346`:

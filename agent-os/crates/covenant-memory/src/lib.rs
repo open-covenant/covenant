@@ -49,6 +49,32 @@ pub enum MemoryError {
     InvalidCompaction(String),
 }
 
+/// One memory-record-to-receipt correlation queued for backfill into the
+/// memory store's `metadata.receipt_id` field. Produced by the CLI
+/// `memory plan-receipt-backfill` planner and consumed by
+/// [`SqliteStore::backfill_receipt_correlation`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryReceiptBackfillCorrelation {
+    pub memory_record_id: Uuid,
+    pub receipt_id: Uuid,
+}
+
+/// Outcome of one [`SqliteStore::backfill_receipt_correlation`] call.
+/// `row_count` is the number of rows that actually changed (apply mode)
+/// or would change (dry-run mode). `savepoint_name` is the SQLite
+/// SAVEPOINT identifier the mutator wraps each batch in so a per-row
+/// failure rolls back the entire batch atomically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillReceiptCorrelationOutcome {
+    pub row_count: u64,
+    pub savepoint_name: String,
+    pub dry_run: bool,
+}
+
+/// SAVEPOINT identifier wrapping every backfill batch. Fixed so the
+/// audit row's savepoint_name field is stable across releases.
+pub const MEMORY_BACKFILL_SAVEPOINT_NAME: &str = "backfill_receipt_correlation";
+
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
     async fn put(&self, record: MemoryRecord) -> Result<(), MemoryError>;
@@ -762,6 +788,144 @@ impl MemoryStore for SqliteStore {
         .await
         .map_err(|e| MemoryError::Worker(e.to_string()))?
     }
+}
+
+impl SqliteStore {
+    /// Apply receipt-id correlations onto memory records inside a single
+    /// SAVEPOINT-wrapped transaction. The planner that produces the
+    /// correlation list lives in the CLI binary; this method is the
+    /// mutator the future authorized `memory backfill-receipt-correlation`
+    /// surface dispatches through, mirroring the settlement-side
+    /// [`covenant_settlement::backfill_receipts_with_correlations`] API
+    /// shape.
+    ///
+    /// Per correlation the existing record's metadata is read, the
+    /// `receipt_id` key is merged in (other keys are preserved; a
+    /// non-object metadata is wrapped under `previous_metadata` to match
+    /// the [`MemoryRepairCommand::BackfillProvenance`] convention), and
+    /// the row is rewritten. The mutator opens an IMMEDIATE-mode
+    /// transaction and a named [`MEMORY_BACKFILL_SAVEPOINT_NAME`]
+    /// SAVEPOINT before any UPDATE; if any per-row step fails the
+    /// SAVEPOINT is rolled back, the transaction is rolled back, and
+    /// the original error surfaces to the caller. Zero rows change on
+    /// failure.
+    ///
+    /// `dry_run` skips every write and returns the row_count the apply
+    /// path would have produced. `row_count` excludes correlations that
+    /// would not change the stored metadata (e.g., the same receipt_id
+    /// is already present), which keeps repeated invocations idempotent.
+    ///
+    /// A correlation that references a missing memory_record_id returns
+    /// [`MemoryError::RecordNotFound`] and aborts the batch so the
+    /// caller does not silently report success against stale planner
+    /// data.
+    pub async fn backfill_receipt_correlation(
+        &self,
+        dry_run: bool,
+        correlations: Vec<MemoryReceiptBackfillCorrelation>,
+    ) -> Result<BackfillReceiptCorrelationOutcome, MemoryError> {
+        let conn = self.conn.clone();
+        task::spawn_blocking(
+            move || -> Result<BackfillReceiptCorrelationOutcome, MemoryError> {
+                let g = conn
+                    .lock()
+                    .map_err(|e| MemoryError::Worker(e.to_string()))?;
+
+                if dry_run {
+                    let mut row_count: u64 = 0;
+                    for correlation in &correlations {
+                        let current = read_record_metadata(&g, correlation.memory_record_id)?;
+                        let next = merge_receipt_id(current.clone(), correlation.receipt_id);
+                        if next != current {
+                            row_count += 1;
+                        }
+                    }
+                    return Ok(BackfillReceiptCorrelationOutcome {
+                        row_count,
+                        savepoint_name: MEMORY_BACKFILL_SAVEPOINT_NAME.into(),
+                        dry_run: true,
+                    });
+                }
+
+                g.execute_batch("BEGIN IMMEDIATE")?;
+                g.execute_batch(&format!("SAVEPOINT {MEMORY_BACKFILL_SAVEPOINT_NAME}"))?;
+
+                let result: Result<u64, MemoryError> = (|| {
+                    let mut count: u64 = 0;
+                    for correlation in &correlations {
+                        let current = read_record_metadata(&g, correlation.memory_record_id)?;
+                        let next = merge_receipt_id(current.clone(), correlation.receipt_id);
+                        if next == current {
+                            continue;
+                        }
+                        let metadata_str = serde_json::to_string(&next)?;
+                        g.execute(
+                            "UPDATE memories SET metadata = ?1 WHERE id = ?2",
+                            rusqlite::params![
+                                metadata_str,
+                                correlation.memory_record_id.to_string()
+                            ],
+                        )?;
+                        count += 1;
+                    }
+                    Ok(count)
+                })();
+
+                match result {
+                    Ok(row_count) => {
+                        g.execute_batch(&format!(
+                            "RELEASE SAVEPOINT {MEMORY_BACKFILL_SAVEPOINT_NAME}"
+                        ))?;
+                        g.execute_batch("COMMIT")?;
+                        Ok(BackfillReceiptCorrelationOutcome {
+                            row_count,
+                            savepoint_name: MEMORY_BACKFILL_SAVEPOINT_NAME.into(),
+                            dry_run: false,
+                        })
+                    }
+                    Err(e) => {
+                        let _ = g.execute_batch(&format!(
+                            "ROLLBACK TO SAVEPOINT {MEMORY_BACKFILL_SAVEPOINT_NAME}"
+                        ));
+                        let _ = g.execute_batch(&format!(
+                            "RELEASE SAVEPOINT {MEMORY_BACKFILL_SAVEPOINT_NAME}"
+                        ));
+                        let _ = g.execute_batch("ROLLBACK");
+                        Err(e)
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(|e| MemoryError::Worker(e.to_string()))?
+    }
+}
+
+fn read_record_metadata(
+    conn: &rusqlite::Connection,
+    id: Uuid,
+) -> Result<serde_json::Value, MemoryError> {
+    let mut stmt = conn.prepare("SELECT metadata FROM memories WHERE id = ?1")?;
+    let mut rows = stmt.query(rusqlite::params![id.to_string()])?;
+    let row = rows.next()?.ok_or(MemoryError::RecordNotFound(id))?;
+    let metadata_s: String = row.get(0)?;
+    Ok(serde_json::from_str(&metadata_s)?)
+}
+
+fn merge_receipt_id(metadata: serde_json::Value, receipt_id: Uuid) -> serde_json::Value {
+    let mut map = match metadata {
+        serde_json::Value::Object(m) => m,
+        other => {
+            let mut m = serde_json::Map::new();
+            m.insert("previous_metadata".into(), other);
+            m
+        }
+    };
+    map.insert(
+        "receipt_id".into(),
+        serde_json::Value::String(receipt_id.to_string()),
+    );
+    serde_json::Value::Object(map)
 }
 
 #[cfg(test)]
@@ -2604,6 +2768,277 @@ mod tests {
         assert!(
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_memory::MemoryError::Serde source() must downcast_ref to serde_json::Error so daemon-side memory diagnostics can call serde_json::Error::line/column/classify for malformed-row identification; a refactor that wrapped the inner in a project-local newtype (e.g., MemorySerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies memory-store JSON parse faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    async fn store_with_records(records: &[MemoryRecord]) -> SqliteStore {
+        let s = SqliteStore::open_in_memory().expect("open_in_memory");
+        for r in records {
+            s.put(r.clone()).await.expect("put");
+        }
+        s
+    }
+
+    #[tokio::test]
+    async fn backfill_receipt_correlation_apply_writes_receipt_id_into_metadata() {
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        let receipt_a = Uuid::new_v4();
+        let receipt_b = Uuid::new_v4();
+        let s = store_with_records(&[
+            record(id_a, MemoryTier::Working, "a", 1),
+            record(id_b, MemoryTier::Episodic, "b", 2),
+        ])
+        .await;
+
+        let outcome = s
+            .backfill_receipt_correlation(
+                false,
+                vec![
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_a,
+                        receipt_id: receipt_a,
+                    },
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_b,
+                        receipt_id: receipt_b,
+                    },
+                ],
+            )
+            .await
+            .expect("apply succeeds");
+
+        assert_eq!(
+            outcome,
+            BackfillReceiptCorrelationOutcome {
+                row_count: 2,
+                savepoint_name: MEMORY_BACKFILL_SAVEPOINT_NAME.into(),
+                dry_run: false,
+            },
+            "apply outcome must report the exact row_count rewritten plus the \
+             stable savepoint identifier audit/surface sub-slices will pin on; \
+             a refactor that returned the input length instead of the \
+             actually-changed count would let an idempotent-second-call \
+             produce a phantom audit row of mutations that did not happen"
+        );
+
+        let got_a = s.get(id_a).await.unwrap().unwrap();
+        assert_eq!(
+            got_a.metadata["receipt_id"].as_str(),
+            Some(receipt_a.to_string().as_str()),
+            "apply must write the receipt_id into the metadata.receipt_id \
+             string field verbatim — the planner emits Uuid::to_string() and \
+             a downstream reconciler comparing this field to the settlement \
+             receipt's id MUST see the same canonical-hyphenated form"
+        );
+        let got_b = s.get(id_b).await.unwrap().unwrap();
+        assert_eq!(
+            got_b.metadata["receipt_id"].as_str(),
+            Some(receipt_b.to_string().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_receipt_correlation_dry_run_reports_count_without_writes() {
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        let s = store_with_records(&[
+            record(id_a, MemoryTier::Working, "a", 1),
+            record(id_b, MemoryTier::Working, "b", 2),
+        ])
+        .await;
+
+        let outcome = s
+            .backfill_receipt_correlation(
+                true,
+                vec![
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_a,
+                        receipt_id: Uuid::new_v4(),
+                    },
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_b,
+                        receipt_id: Uuid::new_v4(),
+                    },
+                ],
+            )
+            .await
+            .expect("dry-run succeeds");
+
+        assert_eq!(
+            outcome,
+            BackfillReceiptCorrelationOutcome {
+                row_count: 2,
+                savepoint_name: MEMORY_BACKFILL_SAVEPOINT_NAME.into(),
+                dry_run: true,
+            },
+            "dry-run must report the apply-path row_count plus dry_run=true so \
+             the planner-equivalent surface can advertise the exact mutation \
+             count without writing; a refactor that returned row_count=0 on \
+             dry-run would silently hide the planned mutation size from the \
+             operator's pre-apply review"
+        );
+
+        let got_a = s.get(id_a).await.unwrap().unwrap();
+        assert!(
+            got_a.metadata.get("receipt_id").is_none(),
+            "dry-run must NOT write metadata.receipt_id — a refactor that \
+             shared the apply UPDATE path under a 'dry_run flag toggles \
+             commit only' rationale would silently mutate the store on every \
+             dry-run preview, defeating the planner-equivalence guarantee"
+        );
+        let got_b = s.get(id_b).await.unwrap().unwrap();
+        assert!(got_b.metadata.get("receipt_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn backfill_receipt_correlation_rolls_back_when_one_correlation_targets_missing_record() {
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        let missing = Uuid::new_v4();
+        let receipt_a = Uuid::new_v4();
+        let receipt_b = Uuid::new_v4();
+        let receipt_missing = Uuid::new_v4();
+        let s = store_with_records(&[
+            record(id_a, MemoryTier::Working, "a", 1),
+            record(id_b, MemoryTier::Working, "b", 2),
+        ])
+        .await;
+
+        let err = s
+            .backfill_receipt_correlation(
+                false,
+                vec![
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_a,
+                        receipt_id: receipt_a,
+                    },
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: id_b,
+                        receipt_id: receipt_b,
+                    },
+                    MemoryReceiptBackfillCorrelation {
+                        memory_record_id: missing,
+                        receipt_id: receipt_missing,
+                    },
+                ],
+            )
+            .await
+            .expect_err("missing record must surface as an error");
+
+        match err {
+            MemoryError::RecordNotFound(id) => assert_eq!(
+                id, missing,
+                "RecordNotFound must name the exact missing memory_record_id \
+                 so the caller can attribute the rejection to a specific \
+                 planner row; a refactor that returned RecordNotFound(Uuid::nil()) \
+                 would silently strip the diagnostic the operator needs to \
+                 refuse the bad batch"
+            ),
+            other => panic!("expected MemoryError::RecordNotFound, got {other:?}"),
+        }
+
+        let got_a = s.get(id_a).await.unwrap().unwrap();
+        assert!(
+            got_a.metadata.get("receipt_id").is_none(),
+            "the SAVEPOINT-wrapped batch must roll back EVERY prior UPDATE \
+             when a later row fails — the first two correlations were \
+             applied inside the savepoint before the missing-id failure, so \
+             a refactor that escalated each per-row UPDATE to its own \
+             autocommit transaction would leave id_a half-mutated, breaking \
+             the all-or-nothing contract the umbrella task pins"
+        );
+        let got_b = s.get(id_b).await.unwrap().unwrap();
+        assert!(
+            got_b.metadata.get("receipt_id").is_none(),
+            "second pre-failure row must also be unchanged after rollback — \
+             a refactor that only rolled back the failing row would leave \
+             id_b mutated and produce a half-applied batch"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_receipt_correlation_is_idempotent_when_receipt_id_already_matches() {
+        let id_a = Uuid::new_v4();
+        let receipt_a = Uuid::new_v4();
+        let mut existing = record(id_a, MemoryTier::Working, "a", 1);
+        existing.metadata = serde_json::json!({
+            "receipt_id": receipt_a.to_string(),
+            "provenance": {"source": "operator"}
+        });
+        let s = store_with_records(&[existing]).await;
+
+        let outcome = s
+            .backfill_receipt_correlation(
+                false,
+                vec![MemoryReceiptBackfillCorrelation {
+                    memory_record_id: id_a,
+                    receipt_id: receipt_a,
+                }],
+            )
+            .await
+            .expect("apply succeeds");
+
+        assert_eq!(
+            outcome.row_count, 0,
+            "a correlation that would not change the stored metadata must \
+             NOT increment row_count — the audit-row count must reflect \
+             actually-mutated rows so repeated invocations don't inflate \
+             the SettlementReceiptBackfill-equivalent audit claim"
+        );
+
+        let got = s.get(id_a).await.unwrap().unwrap();
+        assert_eq!(
+            got.metadata["receipt_id"].as_str(),
+            Some(receipt_a.to_string().as_str())
+        );
+        assert_eq!(
+            got.metadata["provenance"]["source"].as_str(),
+            Some("operator"),
+            "pre-existing sibling metadata keys (provenance, stale_context, \
+             ...) MUST survive the no-op apply — a refactor that always \
+             rewrote the metadata field on every correlation would silently \
+             clobber every other planner's prior backfill output"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_receipt_correlation_wraps_non_object_metadata_under_previous_metadata() {
+        let id_a = Uuid::new_v4();
+        let receipt_a = Uuid::new_v4();
+        let mut existing = record(id_a, MemoryTier::Working, "a", 1);
+        existing.metadata = serde_json::json!("legacy-string-metadata");
+        let s = store_with_records(&[existing]).await;
+
+        let outcome = s
+            .backfill_receipt_correlation(
+                false,
+                vec![MemoryReceiptBackfillCorrelation {
+                    memory_record_id: id_a,
+                    receipt_id: receipt_a,
+                }],
+            )
+            .await
+            .expect("apply succeeds");
+
+        assert_eq!(outcome.row_count, 1);
+
+        let got = s.get(id_a).await.unwrap().unwrap();
+        assert_eq!(
+            got.metadata["receipt_id"].as_str(),
+            Some(receipt_a.to_string().as_str())
+        );
+        assert_eq!(
+            got.metadata["previous_metadata"].as_str(),
+            Some("legacy-string-metadata"),
+            "non-object pre-existing metadata MUST be wrapped under the \
+             previous_metadata key so a downstream audit operator can still \
+             retrieve the v0 value; this mirrors MemoryRepairCommand::BackfillProvenance \
+             behavior on non-object metadata — a refactor that dropped the \
+             non-object branch under the rationale that 'metadata is always \
+             an object by convention' would silently destroy legacy memory \
+             records on the first backfill apply against a pre-convention \
+             store"
         );
     }
 }

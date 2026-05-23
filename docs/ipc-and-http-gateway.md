@@ -108,7 +108,7 @@ The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.
 - `ready` (bool) — true when every required config field is present.
 - `missing` (array of strings) — names of the absent config fields when `ready` is false; an empty array when `ready` is true.
 
-The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4530`. Two unit tests at `main.rs:6893` (`chain_status_json_renders_stable_shape`) and `main.rs:6915` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
+The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4523`. Two unit tests at `main.rs:7115` (`chain_status_json_renders_stable_shape`) and `main.rs:7137` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
 
 `covenant verify --json` emits a cross-check report comparing the audit log against memory and receipt rows. Envelope shape:
 
@@ -118,7 +118,7 @@ The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/co
 - `drift` (array of `VerifyDrift`): correlation gaps, see below.
 - `orphans_total` (u64): total number of unmatched rows the checks discovered.
 
-Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:6987` (`verify_report_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:7209` (`verify_report_json_pins_top_level_schema`).
 
 `VerifyCheck` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:26`:
 
@@ -133,7 +133,7 @@ Top-level keys are pinned to exactly these five by the test at `agent-os/crates/
 - `message` (string) — drift description.
 - `repair` (string) — operator-facing remediation hint.
 
-The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:4537`. The shape-pinning test at `main.rs:6987-7033` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
+The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:4530`. The shape-pinning test at `main.rs:7209-7255` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
 
 `covenant tools list --json` emits the registered MCP-style tool catalog. Envelope shape:
 

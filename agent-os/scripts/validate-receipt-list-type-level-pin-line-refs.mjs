@@ -4,12 +4,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // receipt_list envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
-// the receipt_list pins test:
+// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// inside the receipt_list pins test:
 //
-//   - line 198 cites `main.rs:5491-5493` for the `limit` (u64) type pin.
+//   - line 198 cites `main.rs:5490-5493` for the `limit` (u64) type
+//     pin.
 //   - line 199 cites `main.rs:5494-5497` for the `since_ms`
 //     (u64 or null) type pin.
+//   - line 200 cites `main.rs:5498-5501` for the `receipts` (array)
+//     type pin.
 //
 // The existing validate-receipt-list-line-refs.mjs covers the helper fn,
 // renders test, and pins test declaration lines, but not the inner
@@ -62,6 +65,15 @@ const targets = [
     docsLabel: "receipt_list.since_ms type-level pin citation",
     docsTemplate:
       "Pinned as u64-or-null at the schema test (`main.rs:N-M`) — never a string-of-integer.",
+  },
+  {
+    field: "receipts",
+    selector: 'value["receipts"].is_array(),',
+    docsRegex:
+      /- `receipts` \(array of `SettlementReceipt`\): the matched receipts in the order returned by the daemon\. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `\(no receipts\)` for that case at `main\.rs:\d+`\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "receipt_list.receipts type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
 ];
 

@@ -64,7 +64,6 @@ const targets = [
     field: "settlement",
     selector:
       'value["settlement"].is_object() || value["settlement"].is_null(),',
-    convention: "selector",
     docsRegex:
       /- `settlement` \(object or null\): an optional `SettlementReceipt` \(defined at `agent-os\/crates\/covenant-types\/src\/lib\.rs:\d+`\) carrying the on-chain or local settlement evidence when the intent consumed credits\. `null` when the intent did not settle \(e\.g\., a phase-0 echo that does not charge\)\. Pinned as object-or-null by `main\.rs:(\d+)-(\d+)` — never an integer or array\./,
     docsLabel: "intent_result.settlement type-level pin citation",
@@ -154,7 +153,8 @@ if (source) {
         }
         const selectorLine = selectorMatches[0];
         let startLine;
-        if (target.convention === "assert-opener") {
+        const convention = target.convention ?? "assert-opener";
+        if (convention === "assert-opener") {
           const assertOpenerLine = selectorLine - 1;
           if (
             assertOpenerLine < 1 ||

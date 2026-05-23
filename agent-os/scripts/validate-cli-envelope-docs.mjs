@@ -27,8 +27,6 @@ const headings = ["## Chain Transaction Envelopes", "## CLI Read Envelopes"];
 // subfamily) must appear in both the emitter (main.rs) and the docs section. If
 // the validator fails for a new entry, either add the literal to the docs
 // section or remove it from this array if the emitter renamed or dropped it.
-// Scope is intentionally broader than the script's filename suggests; renaming
-// to validate-cli-envelope-docs.mjs is a separate follow-up.
 const kinds = [
   "covenant.chain.tx.v1",
   "covenant.chain.tx.timeout.v1",
@@ -87,7 +85,7 @@ if (docs) {
   for (const heading of headings) {
     if (!docs.includes(heading)) {
       fail(
-        `${docsPath} is missing the "${heading}" section; remediation: restore the section that pins the chain CLI envelopes`,
+        `${docsPath} is missing the "${heading}" section; remediation: restore the section that pins the CLI envelopes`,
       );
     }
   }
@@ -97,7 +95,7 @@ if (docs) {
   for (const kind of kinds) {
     if (!docs.includes(kind)) {
       fail(
-        `${docsPath} does not mention kind "${kind}"; remediation: the docs section must list every kind emitted by the chain CLI verbs`,
+        `${docsPath} does not mention kind "${kind}"; remediation: the docs section must list every kind emitted by the CLI verbs`,
       );
     }
   }

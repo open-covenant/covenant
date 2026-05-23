@@ -4,19 +4,20 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_purge envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges
+// docs/ipc-and-http-gateway.md cites three inner assertion ranges
 // inside memory_purge_json_pins_top_level_schema:
 //
 //   - line 401 cites `tier` (string or null) type pin.
 //   - line 402 cites `before_ms` (u64) type pin.
+//   - line 403 cites `purged` (u64) type pin.
 //
-// Both cites are correct under the assert!-opener-to-closer
+// All three cites are correct under the assert!-opener-to-closer
 // 4-line convention. The validator scopes each lookup to the
 // brace-balanced memory_purge_json_pins_top_level_schema fn body
 // so sibling pins-tests that share the same value["tier"]
-// disjunction and value["before_ms"].is_u64() selectors
-// (memory_read.tier, capabilities_purge.before_ms, audit_purge
-// .before_ms) cannot contaminate the result. Pattern mirrors
+// disjunction, value["before_ms"].is_u64() and value["purged"]
+// .is_u64() selectors (memory_read.tier, capabilities_purge,
+// audit_purge) cannot contaminate the result. Pattern mirrors
 // validate-audit-purge-type-level-pin-line-refs.mjs.
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,15 @@ const targets = [
     docsRegex:
       /- `before_ms` \(u64\): resolved Unix-epoch millisecond cutoff\. Same `--before-ms` \/ `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
     docsLabel: "memory_purge.before_ms type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
+  {
+    field: "purged",
+    selector: 'value["purged"].is_u64(),',
+    docsRegex:
+      /- `purged` \(u64\): count of memory records removed\. The unsuffixed CLI prints `purged <n> record\(s\)` at `main\.rs:\d+`, confirming the unit is a memory record\. May legitimately be `0` when no rows matched\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+    docsLabel: "memory_purge.purged type-level pin citation",
     docsTemplate:
       "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
   },

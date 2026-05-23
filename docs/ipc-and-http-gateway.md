@@ -400,7 +400,7 @@ The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/co
 - `kind`: literal string `"memory_purged"`.
 - `tier` (string or null): the memory tier slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `memory_tier_slug` at `main.rs:1719-1724`). Null when `--tier` was omitted, meaning the purge applied to all tiers. Note an input-form asymmetry: the CLI parser at `main.rs:1729-1731` accepts `longterm`, `long-term`, and `long_term` for the `--tier` argument, but only the `longterm` slug is ever emitted in the envelope. Pinned as string-or-null by `main.rs:6533-6536` — never a structured object.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. Same `--before-ms` / `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:6537-6540` — never a string-of-integer.
-- `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2164`, confirming the unit is a memory record. May legitimately be `0` when no rows matched.
+- `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2164`, confirming the unit is a memory record. May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:6541-6544` — never a string-of-integer.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6516` (`memory_purge_json_pins_top_level_schema`), which also exercises the null-tier case.
 

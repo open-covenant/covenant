@@ -93,6 +93,7 @@ run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
 run node ./scripts/validate-covenant-audit-struct-line-refs.mjs
 run node ./scripts/validate-covenant-types-struct-line-refs.mjs
 run node ./scripts/validate-covenant-types-agent-id-serialize-impl-line-refs.mjs
+run node ./scripts/validate-covenant-types-enum-serde-rename-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-struct-line-refs.mjs
 
 case "$mode" in

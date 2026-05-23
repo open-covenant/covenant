@@ -9100,6 +9100,112 @@ mod tests {
             assert_eq!(v["signature"], "sig999");
             assert_eq!(v["timeout_ms"], 30_000);
         }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "cluster",
+                "kind",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = register_agent_confirmed_json(
+                "sig123",
+                "https://api.devnet.solana.com",
+                "devnet",
+                "agentB58",
+            );
+            let object = value
+                .as_object()
+                .expect("register_agent_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "register_agent_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("register-agent"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "cluster",
+                "kind",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = register_agent_timeout_json(
+                "sig999",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                30_000,
+            );
+            let object = value
+                .as_object()
+                .expect("register_agent_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "register_agent_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("register-agent"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
+        }
     }
 
     mod stake_arg_parsing {
@@ -9392,6 +9498,136 @@ mod tests {
             assert_eq!(v["lock_until"], 1_700_000_000);
             assert_eq!(v["timeout_ms"], 45_000);
         }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "amount",
+                "cluster",
+                "kind",
+                "lock_until",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = stake_confirmed_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+            );
+            let object = value
+                .as_object()
+                .expect("stake_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "stake_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("stake"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["amount"].is_u64(),
+                "amount must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["lock_until"].is_u64(),
+                "lock_until must serialize as u64, not string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "amount",
+                "cluster",
+                "kind",
+                "lock_until",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = stake_timeout_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+                45_000,
+            );
+            let object = value
+                .as_object()
+                .expect("stake_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "stake_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("stake"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["amount"].is_u64(),
+                "amount must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["lock_until"].is_u64(),
+                "lock_until must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
+        }
     }
 
     mod buy_credits_arg_parsing {
@@ -9624,6 +9860,124 @@ mod tests {
             assert_eq!(v["status"], "submitted-not-confirmed");
             assert_eq!(v["amount_covnt"], 42_000);
             assert_eq!(v["timeout_ms"], 15_000);
+        }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "amount_covnt",
+                "cluster",
+                "kind",
+                "owner",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = buy_credits_confirmed_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+            );
+            let object = value
+                .as_object()
+                .expect("buy_credits_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "buy_credits_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("buy-credits"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["owner"].is_string(),
+                "owner must be a string: {value}"
+            );
+            assert!(
+                value["amount_covnt"].is_u64(),
+                "amount_covnt must serialize as u64, not string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "amount_covnt",
+                "cluster",
+                "kind",
+                "owner",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = buy_credits_timeout_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+                15_000,
+            );
+            let object = value
+                .as_object()
+                .expect("buy_credits_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "buy_credits_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("buy-credits"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["owner"].is_string(),
+                "owner must be a string: {value}"
+            );
+            assert!(
+                value["amount_covnt"].is_u64(),
+                "amount_covnt must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
         }
     }
 }

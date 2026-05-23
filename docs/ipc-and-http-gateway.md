@@ -95,7 +95,7 @@ In addition to the per-envelope `*_pins_top_level_schema` unit tests, the docs/e
 `covenant chain status --json` emits:
 
 - `kind`: literal string `"chain_status"`.
-- `status`: a structured `covenant_ipc::ChainStatus` object with the following fields. The top-level object has exactly two keys (`kind` and `status`); the inner `status` is never a string blob.
+- `status`: a structured `covenant_ipc::ChainStatus` object with the following fields. The top-level object has exactly two keys (`kind` and `status`); the inner `status` is pinned by the schema test at `main.rs:7154-7157` to be a JSON object, never a string blob.
 
 The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:42`:
 

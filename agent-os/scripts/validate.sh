@@ -155,6 +155,7 @@ run node ./scripts/validate-ignore-report-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-recent-type-level-pin-line-refs.mjs
 run node ./scripts/validate-peer-revoke-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-verify-type-level-pin-line-refs.mjs
+run node ./scripts/validate-chain-status-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-type-level-pin-line-refs.mjs
 run node ./scripts/validate-a2a-retry-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-type-level-pin-line-refs.mjs

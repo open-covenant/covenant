@@ -25,11 +25,17 @@ import { fileURLToPath } from "node:url";
 //     declaration line inside each of the three pins tests:
 //       * Success branch ("**Success branch (`ok=true`)** carries these
 //         eight top-level keys per the test EXPECTED_KEYS at
-//         `main.rs:NNN`:")
+//         `main.rs:NNN-MMM`:") — cited as a const-opener-to-closer
+//         multi-line range because the success-branch EXPECTED_KEYS
+//         array spans 10 lines (one entry per line). The range cite
+//         fails loudly the moment the array grows or shrinks, catching
+//         drift the inner test only catches at runtime.
 //       * Error branch ("**Error branch (`ok=false`)** carries these five
-//         top-level keys per the test EXPECTED_KEYS at `main.rs:NNN`:")
+//         top-level keys per the test EXPECTED_KEYS at `main.rs:NNN`:") —
+//         single-line cite because the const is a single-line literal.
 //       * Inner error ("The inner `error` object has exactly two keys per
-//         the test EXPECTED_KEYS at `main.rs:NNN`:")
+//         the test EXPECTED_KEYS at `main.rs:NNN`:") — single-line cite
+//         because the const is a single-line literal.
 //
 // All ten line numbers shift whenever main.rs grows above the cited
 // declarations or a blank line or comment is inserted between a pins-test
@@ -85,10 +91,10 @@ const topLevelFns = {
   [classifierFnName]: { matches: [], line: null },
 };
 const testFns = {
-  [okPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
-  [errorPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
-  [errorObjectPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
-  [slugArmsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
+  [okPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null, expectedKeysEndLine: null },
+  [errorPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null, expectedKeysEndLine: null },
+  [errorObjectPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null, expectedKeysEndLine: null },
+  [slugArmsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null, expectedKeysEndLine: null },
 };
 
 if (emitters) {
@@ -157,7 +163,27 @@ if (emitters) {
         `${emittersPath}: expected exactly 1 "const EXPECTED_KEYS" inside "fn ${name}" but found ${keysMatches.length}; remediation: confirm the test still pins its top-level key set via a single EXPECTED_KEYS const declaration`,
       );
     } else {
-      entry.expectedKeysLine = keysMatches[0];
+      const openerLine = keysMatches[0];
+      entry.expectedKeysLine = openerLine;
+      const openerTrimmed = lines[openerLine - 1].trim();
+      if (openerTrimmed.endsWith("];")) {
+        entry.expectedKeysEndLine = openerLine;
+      } else {
+        let constEndLine = null;
+        for (let index = openerLine; index < endLine - 1; index += 1) {
+          if (lines[index].trim() === "];") {
+            constEndLine = index + 1;
+            break;
+          }
+        }
+        if (constEndLine === null) {
+          fail(
+            `${emittersPath}: could not find the closing \`];\` for "const EXPECTED_KEYS" inside "fn ${name}" (opener at line ${openerLine}); remediation: confirm the const is either a single-line literal ending in \`];\` on the opener line or a multi-line array literal with the closing \`];\` on its own line`,
+          );
+        } else {
+          entry.expectedKeysEndLine = constEndLine;
+        }
+      }
     }
   }
 }
@@ -191,16 +217,21 @@ if (docs) {
 }
 
 let successBranchSentence = null;
+let successBranchCite = null;
 if (docs) {
   const match = docs.match(
-    /\*\*Success branch \(`ok=true`\)\*\* carries these eight top-level keys per the test EXPECTED_KEYS at `main\.rs:\d+`:/,
+    /\*\*Success branch \(`ok=true`\)\*\* carries these eight top-level keys per the test EXPECTED_KEYS at `main\.rs:(\d+)-(\d+)`:/,
   );
   if (!match) {
     fail(
-      `${docsPath}: missing the intents_resume success-branch EXPECTED_KEYS sentence ("**Success branch (\`ok=true\`)** carries these eight top-level keys per the test EXPECTED_KEYS at \`main.rs:NNN\`:"); remediation: restore the sentence that records the success-branch EXPECTED_KEYS line ref`,
+      `${docsPath}: missing the intents_resume success-branch EXPECTED_KEYS sentence ("**Success branch (\`ok=true\`)** carries these eight top-level keys per the test EXPECTED_KEYS at \`main.rs:NNN-MMM\`:"); remediation: restore the sentence that records the success-branch EXPECTED_KEYS const-opener-to-closer line range`,
     );
   } else {
     successBranchSentence = match[0];
+    successBranchCite = {
+      start: parseInt(match[1], 10),
+      end: parseInt(match[2], 10),
+    };
   }
 }
 
@@ -285,12 +316,17 @@ assertCitation(
   "pins-anchor sentence",
 );
 
-assertCitation(
-  successBranchSentence,
-  `${okPinsTestFnName} EXPECTED_KEYS`,
-  testFns[okPinsTestFnName].expectedKeysLine,
-  "success-branch EXPECTED_KEYS sentence",
-);
+if (successBranchSentence && successBranchCite) {
+  const start = testFns[okPinsTestFnName].expectedKeysLine;
+  const end = testFns[okPinsTestFnName].expectedKeysEndLine;
+  if (start !== null && end !== null) {
+    if (successBranchCite.start !== start || successBranchCite.end !== end) {
+      fail(
+        `${docsPath}: the intents_resume success-branch EXPECTED_KEYS sentence cites main.rs:${successBranchCite.start}-${successBranchCite.end} but the const spans :${start}-${end} (fn ${okPinsTestFnName}); remediation: update the sentence to cite \`main.rs:${start}-${end}\``,
+      );
+    }
+  }
+}
 assertCitation(
   errorBranchSentence,
   `${errorPinsTestFnName} EXPECTED_KEYS`,
@@ -313,5 +349,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-intents-resume-line-refs: ok (ok-helper main.rs:${topLevelFns[okHelperFnName].line}, error-helper main.rs:${topLevelFns[errorHelperFnName].line}, classifier main.rs:${topLevelFns[classifierFnName].line}, ok-pins main.rs:${testFns[okPinsTestFnName].line}, error-pins main.rs:${testFns[errorPinsTestFnName].line}, error-object-pins main.rs:${testFns[errorObjectPinsTestFnName].line}, slug-arms main.rs:${testFns[slugArmsTestFnName].line}, ok-pins-keys main.rs:${testFns[okPinsTestFnName].expectedKeysLine}, error-pins-keys main.rs:${testFns[errorPinsTestFnName].expectedKeysLine}, error-object-pins-keys main.rs:${testFns[errorObjectPinsTestFnName].expectedKeysLine})`,
+  `validate-intents-resume-line-refs: ok (ok-helper main.rs:${topLevelFns[okHelperFnName].line}, error-helper main.rs:${topLevelFns[errorHelperFnName].line}, classifier main.rs:${topLevelFns[classifierFnName].line}, ok-pins main.rs:${testFns[okPinsTestFnName].line}, error-pins main.rs:${testFns[errorPinsTestFnName].line}, error-object-pins main.rs:${testFns[errorObjectPinsTestFnName].line}, slug-arms main.rs:${testFns[slugArmsTestFnName].line}, ok-pins-keys main.rs:${testFns[okPinsTestFnName].expectedKeysLine}-${testFns[okPinsTestFnName].expectedKeysEndLine}, error-pins-keys main.rs:${testFns[errorPinsTestFnName].expectedKeysLine}, error-object-pins-keys main.rs:${testFns[errorObjectPinsTestFnName].expectedKeysLine})`,
 );

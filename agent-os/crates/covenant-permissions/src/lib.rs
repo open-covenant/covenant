@@ -749,6 +749,24 @@ fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Per
 }
 
 fn validate_memory_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    // memory.backfill.* binds neither tiers nor record_id: the mutator applies
+    // to every record the planner classifies, so accepting these fields at
+    // grant time would silently mis-grant — memory_backfill_scope_allows
+    // ignores them at dispatch, leaving the grantor's intent unenforced.
+    if action.starts_with("memory.backfill.") {
+        if obj.contains_key("tiers") {
+            return Err(invalid_scope(
+                action,
+                "tiers is not allowed on memory.backfill scopes",
+            ));
+        }
+        if obj.contains_key("record_id") {
+            return Err(invalid_scope(
+                action,
+                "record_id is not allowed on memory.backfill scopes",
+            ));
+        }
+    }
     optional_string_array(action, obj, "tiers", &["working", "episodic", "longterm"])?;
     optional_string_or_null(action, obj, "record_id")?;
     optional_non_negative_integer_or_null(action, obj, "before_ms")?;
@@ -1954,6 +1972,97 @@ mod tests {
             "memory.write",
             serde_json::json!({ "version": 1, "before_ms": -1 }),
         );
+    }
+
+    #[test]
+    fn validate_memory_scope_rejects_tiers_on_memory_backfill() {
+        // memory_backfill_scope_allows ignores tiers at dispatch; accepting
+        // them at grant time would mis-grant a tier-pinned capability that
+        // silently backfills every tier. Reject at validate_memory_scope.
+        assert_invalid_scope(
+            "memory.backfill.apply",
+            serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        );
+        assert_invalid_scope(
+            "memory.backfill.dry_run",
+            serde_json::json!({ "version": 1, "tiers": ["working", "episodic"] }),
+        );
+    }
+
+    #[test]
+    fn validate_memory_scope_rejects_record_id_on_memory_backfill() {
+        // Same shape-vs-dispatch asymmetry as tiers: the predicate ignores
+        // record_id, so a per-record grant would silently authorize a
+        // batch backfill instead of pinning to one record.
+        assert_invalid_scope(
+            "memory.backfill.apply",
+            serde_json::json!({ "version": 1, "record_id": "a1b2c3" }),
+        );
+        assert_invalid_scope(
+            "memory.backfill.dry_run",
+            serde_json::json!({ "version": 1, "record_id": null }),
+        );
+    }
+
+    #[test]
+    fn validate_memory_scope_pins_backfill_prefix_does_not_overfire_on_lookalikes() {
+        // The reject triggers on the "memory.backfill." prefix (trailing
+        // dot). A future namespace neighbor like memory.backfillextra.* —
+        // or memory.backfill on its own with no sub-action — must NOT
+        // inherit the reject, so the codebase is not constrained against
+        // future namespace growth. Today neither action exists; this is a
+        // boundary pin against an accidental starts_with("memory.backfill")
+        // (no trailing dot) regression.
+        assert!(validate_scope(
+            "memory.backfillextra.apply",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.backfill",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_memory_scope_keeps_tiers_and_record_id_on_other_memory_actions() {
+        // Regression guard: the backfill-prefix reject must not leak into
+        // the sibling memory.* actions. memory.read, memory.write,
+        // memory.repair, memory.compact, memory.purge all legitimately bind
+        // tiers and/or record_id.
+        assert!(validate_scope(
+            "memory.read",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.repair.apply",
+            &serde_json::json!({ "version": 1, "record_id": "abc-123" }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.compact.apply",
+            &serde_json::json!({ "version": 1, "tiers": ["episodic"], "record_id": null }),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_memory_scope_accepts_apply_and_before_ms_on_memory_backfill() {
+        // Positive case: the fields memory_backfill_scope_allows actually
+        // consumes (apply, before_ms) must stay accepted at grant time.
+        assert!(validate_scope(
+            "memory.backfill.apply",
+            &serde_json::json!({ "version": 1, "apply": true, "before_ms": 1_000 }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.backfill.dry_run",
+            &serde_json::json!({ "version": 1, "apply": false, "before_ms": null }),
+        )
+        .is_ok());
+        assert!(validate_scope("memory.backfill.apply", &serde_json::json!({})).is_ok());
     }
 
     #[test]

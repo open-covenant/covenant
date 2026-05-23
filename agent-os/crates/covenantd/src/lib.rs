@@ -35,9 +35,9 @@ use covenant_permissions::{
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
     capabilities_purge_scope_allows as permission_capabilities_purge_scope_allows,
     chain_scope_allows as permission_chain_scope_allows,
+    memory_backfill_scope_allows as permission_memory_backfill_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
-    memory_backfill_scope_allows as permission_memory_backfill_scope_allows,
     memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
     memory_read_scope_allows as permission_memory_read_scope_allows,
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
@@ -5688,25 +5688,15 @@ impl Server {
             Ok(true) => {}
             Ok(false) => {
                 let reason = "mode or before_ms bound does not match capability scope".to_string();
-                self.record_capability_scope_rejected(
-                    peer,
-                    "memory-backfill",
-                    &required,
-                    &reason,
-                )
-                .await;
+                self.record_capability_scope_rejected(peer, "memory-backfill", &required, &reason)
+                    .await;
                 return Response::Error {
                     message: format!("memory backfill rejected by capability scope: {reason}"),
                 };
             }
             Err(reason) => {
-                self.record_capability_scope_rejected(
-                    peer,
-                    "memory-backfill",
-                    &required,
-                    &reason,
-                )
-                .await;
+                self.record_capability_scope_rejected(peer, "memory-backfill", &required, &reason)
+                    .await;
                 return Response::Error {
                     message: format!(
                         "memory backfill rejected by invalid capability scope: {reason}"
@@ -7729,7 +7719,11 @@ required = {caps:?}
         }
         let record = s.memory.get(memory_id).await.unwrap().expect("record");
         assert!(
-            record.metadata.get("receipt_id").and_then(|v| v.as_str()).is_some(),
+            record
+                .metadata
+                .get("receipt_id")
+                .and_then(|v| v.as_str())
+                .is_some(),
             "apply must merge receipt_id into the record metadata: {:?}",
             record.metadata
         );

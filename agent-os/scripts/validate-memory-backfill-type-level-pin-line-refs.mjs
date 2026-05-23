@@ -4,33 +4,41 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// docs/ipc-and-http-gateway.md cites four inner assertion ranges
 // inside memory_backfill_json_pins_top_level_schema:
 //
 //   - line 649 cites `schema` (string) at main.rs:5628-5631.
 //   - line 650 cites `row_count` (u64) at main.rs:5637-5640.
 //   - line 651 cites `savepoint_name` (string) at main.rs:5641-5644.
+//   - line 652 cites `dry_run` (bool) at main.rs:5649-5652.
 //
 // The row_count cite landed first as a single-target validator; the
 // savepoint_name cite was added next when the validator was converted
 // to the multi-target shape (mirroring validate-bootstrap-result and
-// validate-tool-result conversions); the schema cite was added last,
-// mirroring the just-landed settlement_backfill schema conversion.
+// validate-tool-result conversions); the schema cite was added after,
+// mirroring the settlement_backfill schema conversion; the dry_run
+// cite was added last, mirroring the just-landed settlement_backfill
+// dry_run conversion. The schema test has always asserted
+// `value["dry_run"].is_boolean()` at main.rs:5649-5652; the docs prose
+// just lacked a pin citation, carrying only the "Same semantics as
+// `settlement.backfill.v1`'s `dry_run`" cross-reference.
 //
 // Sibling collision risk (mirrors validate-settlement-backfill): the
 // settlement_backfill envelope's pins test at main.rs:5550 carries the
-// same `value["schema"].is_string(),` selector at main.rs:5566 and the
-// same `value["row_count"].is_u64(),` selector at main.rs:5575, plus a
-// near-identical schema docs bullet at line 634 and row_count docs
-// bullet at line 635. The savepoint_name selector and bullet are
-// currently unique to memory_backfill (settlement uses rollback_path
-// with a string-or-null shape instead). All three risks are addressed:
+// same `value["schema"].is_string(),` selector at main.rs:5566, the
+// same `value["row_count"].is_u64(),` selector at main.rs:5575, and
+// the same `value["dry_run"].is_boolean(),` selector at main.rs:5583,
+// plus near-identical schema/row_count/dry_run docs bullets at lines
+// 634/635/637. The savepoint_name selector and bullet are currently
+// unique to memory_backfill (settlement uses rollback_path with a
+// string-or-null shape instead). All four risks are addressed:
 //
 //   - Selector lookups scope to the brace-balanced
 //     `memory_backfill_json_pins_top_level_schema` fn body, so the
-//     settlement_backfill schema occurrence at main.rs:5566 and the
-//     settlement_backfill row_count occurrence at main.rs:5575 cannot
-//     contaminate the result.
+//     settlement_backfill schema occurrence at main.rs:5566, the
+//     settlement_backfill row_count occurrence at main.rs:5575, and
+//     the settlement_backfill dry_run occurrence at main.rs:5583
+//     cannot contaminate the result.
 //   - The row_count docsRegex anchors on the memory-specific phrase
 //     "memory records the correlation pass operated on", and the
 //     savepoint_name docsRegex anchors on "SQLite SAVEPOINT identifier
@@ -44,6 +52,15 @@ import { fileURLToPath } from "node:url";
 //     slot; a future `.v2` would be a separate envelope, not a field
 //     rename inside this one. Consumers must route on the full literal
 //     — matching on the prefix" — different leading prose, so
+//     first-match capture cannot drift.
+//   - The dry_run docsRegex anchors on the memory-specific phrase
+//     "Same semantics as `settlement.backfill.v1`'s `dry_run` — `true`
+//     is a planning preview, `false` is a real mutation pass" in
+//     leading position. The settlement_backfill dry_run bullet at line
+//     637 instead reads "is a safe planning preview that does not
+//     mutate the receipt table; `false` is a real mutation pass that
+//     may write rollback evidence" — different leading prose ("safe",
+//     "does not mutate the receipt table", "rollback evidence"), so
 //     first-match capture cannot drift.
 //
 // Each range is derived as assert!-opener-to-closer (4-line convention)
@@ -89,6 +106,15 @@ const targets = [
     docsLabel: "memory_backfill.savepoint_name type-level pin citation",
     docsTemplate:
       "Pinned as a string by `main.rs:N-M` — never null (the &str emitter type forbids null at compile time).",
+  },
+  {
+    field: "dry_run",
+    selector: 'value["dry_run"].is_boolean(),',
+    docsRegex:
+      /- `dry_run` \(bool\): echoes the `--dry-run` CLI flag\. Same semantics as `settlement\.backfill\.v1`'s `dry_run` — `true` is a planning preview, `false` is a real mutation pass\. Pinned as a JSON boolean by `main\.rs:(\d+)-(\d+)` — never `0`\/`1` or a string\./,
+    docsLabel: "memory_backfill.dry_run type-level pin citation",
+    docsTemplate:
+      "Pinned as a JSON boolean by `main.rs:N-M` — never `0`/`1` or a string.",
   },
 ];
 

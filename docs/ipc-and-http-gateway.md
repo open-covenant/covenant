@@ -475,7 +475,7 @@ The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/cove
 `covenant a2a retry-stale [--enable] [--min-lease-age-ms <N>] [--max-attempts <N>] [--max-requeues <N>] [--scan-limit <N>] --json` emits a per-call report describing what the auto-retry scan considered, requeued, and skipped. Envelope shape:
 
 - `kind`: literal string `"a2a_auto_retry"`.
-- `report` (object): a structured `A2AAutoRetryReport` (defined at `agent-os/crates/covenant-a2a/src/lib.rs:288`), never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6059-6062` to be a JSON object.
+- `report` (object): a structured `A2AAutoRetryReport` (defined at `agent-os/crates/covenant-a2a/src/lib.rs:288`), never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6281-6284` to be a JSON object.
 
 **Dry-run by default**: `A2AAutoRetryPolicy.enabled` defaults to `false` (per `Default for A2AAutoRetryPolicy` at `covenant-a2a/src/lib.rs:228-238`), and the CLI's `--enable` flag is the only path that flips it (`main.rs:3537`). On a `--json` call without `--enable`, every queue entry will appear under `skipped[]` with `reason: "disabled"` and the registry will not be mutated — a `requeued=0` result there is **not** a "nothing to retry" signal. Consumers analysing the report must read `report.policy.enabled` before drawing conclusions about whether `considered` minus `requeued.len()` indicates real skip pressure or a dry-run preview.
 

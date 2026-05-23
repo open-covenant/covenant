@@ -312,7 +312,7 @@ The envelope source-of-truth lives at `peer_list_json` in `agent-os/crates/coven
 
 - `kind`: literal string `"peers_purged"` — the only structural disambiguator from `capabilities_purged`; both envelopes share the same three-key layout, so consumers that route on `kind` must check the full literal rather than treating any `*_purged` envelope as interchangeable.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:6142-6145` — never a string-of-integer.
-- `purged` (u64): count of revoked-peer rows removed. Only revoked rows are eligible — the verb does not touch live peers (the unsuffixed CLI prints `purged <n> revoked peer(s)` at `main.rs:3657`). May legitimately be `0` when no rows matched.
+- `purged` (u64): count of revoked-peer rows removed. Only revoked rows are eligible — the verb does not touch live peers (the unsuffixed CLI prints `purged <n> revoked peer(s)` at `main.rs:3657`). May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:6146-6149` — never a string-of-integer.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6125` (`peers_purge_json_pins_top_level_schema`).
 

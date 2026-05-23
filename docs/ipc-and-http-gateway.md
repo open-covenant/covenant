@@ -351,8 +351,8 @@ The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/cov
 `covenant audit recent [-n|--limit <N>] [--since-ms <M>] [--stream] --json` emits a window of audit events. Envelope shape:
 
 - `kind`: literal string `"audit_recent"`.
-- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `50`, per `main.rs:3205`). Pinned as u64 at the schema test (`main.rs:6178-6181`) — never a string.
-- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:6182-6185`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `50`, per `main.rs:3198`). Pinned as u64 at the schema test (`main.rs:6400-6403`) — never a string.
+- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:6404-6407`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
 - `events` (array of `AuditEvent`): the matched events. The array is empty when no events fall in the window.
 
 The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:43`:
@@ -362,38 +362,38 @@ The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib
 - `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:124`.
 - `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:71` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6161` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6383` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
 
-The envelope source-of-truth lives at `audit_recent_json` in `agent-os/crates/covenant/src/main.rs:4422`. Two unit tests at `main.rs:6134` (`audit_recent_json_renders_stable_shape`) and `main.rs:6161` cover the shape. The CLI verb is wired at `main.rs:3204-3273`; without `--json`, the same response is rendered as JSONL (one `AuditEvent` per line at `main.rs:3267`) mirroring the durable `audit/events.jsonl` row shape, with `(no audit events)` printed at `main.rs:3264` when empty. The optional `--stream` flag sets `Request::RecentAudit.prefer_stream = Some(true)` (`main.rs:3234`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal-response shape is unchanged when the streaming path is not selected.
+The envelope source-of-truth lives at `audit_recent_json` in `agent-os/crates/covenant/src/main.rs:4415`. Two unit tests at `main.rs:6356` (`audit_recent_json_renders_stable_shape`) and `main.rs:6383` cover the shape. The CLI verb is wired at `main.rs:3197-3267`; without `--json`, the same response is rendered as JSONL (one `AuditEvent` per line at `main.rs:3260`) mirroring the durable `audit/events.jsonl` row shape, with `(no audit events)` printed at `main.rs:3257` when empty. The optional `--stream` flag sets `Request::RecentAudit.prefer_stream = Some(true)` (`main.rs:3227`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal-response shape is unchanged when the streaming path is not selected.
 
 `covenant audit purge --json` emits a summary of time-bounded audit-log garbage collection. Envelope shape:
 
 - `kind`: literal string `"audit_purged"`.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above.
-- `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3334` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched.
+- `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3327` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched.
 
 Unlike the capability- and peer-purge verbs, this removes hash-chain entries; the cutoff enforcement is bound to the `audit.purge` capability scope at dispatch time so a delegated caller cannot purge beyond its scope's `before_ms` (see `docs/capabilities.md`).
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6102` (`audit_purge_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6324` (`audit_purge_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/covenant/src/main.rs:4414`. Two unit tests at `main.rs:6094` (`audit_purge_json_renders_stable_shape`) and `main.rs:6102` cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:3298-3340`.
+The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/covenant/src/main.rs:4407`. Two unit tests at `main.rs:6316` (`audit_purge_json_renders_stable_shape`) and `main.rs:6324` cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:3291-3333`.
 
 `covenant audit verify --json` emits the audit-log hash-chain integrity report. Envelope shape:
 
 - `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens.
-- `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6256` to be a JSON object.
+- `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6478` to be a JSON object.
 
 The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:61`:
 
 - `events` (u64) — total audit events the integrity walk visited.
 - `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.
 - `valid` (bool) — `true` when the hash chain is intact end-to-end; `false` when one or more failures were recorded.
-- `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:6229`.
+- `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:6451`.
 - `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6239` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6461` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
 
-The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/covenant/src/main.rs:4435`. Two unit tests at `main.rs:6211` (`audit_verify_json_renders_stable_shape`) and `main.rs:6239` cover the shape. The CLI verb is wired at `main.rs:3275-3296`; without `--json`, the same response is printed as the bare `AuditIntegrityReport` JSON (no envelope wrapper) at `main.rs:3291`, so JSON consumers must use `--json` to get the kind-discriminated envelope — the unsuffixed output is structurally compatible with `report` but lacks the `kind` field.
+The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/covenant/src/main.rs:4428`. Two unit tests at `main.rs:6433` (`audit_verify_json_renders_stable_shape`) and `main.rs:6461` cover the shape. The CLI verb is wired at `main.rs:3268-3290`; without `--json`, the same response is printed as the bare `AuditIntegrityReport` JSON (no envelope wrapper) at `main.rs:3284`, so JSON consumers must use `--json` to get the kind-discriminated envelope — the unsuffixed output is structurally compatible with `report` but lacks the `kind` field.
 
 `covenant memory purge --json` emits a summary of time-bounded memory-store garbage collection. Envelope shape:
 

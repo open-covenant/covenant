@@ -370,7 +370,7 @@ The envelope source-of-truth lives at `audit_recent_json` in `agent-os/crates/co
 
 - `kind`: literal string `"audit_purged"`.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:6341-6344` — never a string-of-integer.
-- `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3327` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched.
+- `purged` (u64): count of audit events removed (the unsuffixed CLI message at `main.rs:3327` reads `purged <n> event(s)`, confirming the unit is an audit event, not a row class). May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:6345-6348` — never a string-of-integer.
 
 Unlike the capability- and peer-purge verbs, this removes hash-chain entries; the cutoff enforcement is bound to the `audit.purge` capability scope at dispatch time so a delegated caller cannot purge beyond its scope's `before_ms` (see `docs/capabilities.md`).
 

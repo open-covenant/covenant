@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 // verify_report_json_pins_top_level_schema:
 //
 //   - line 116 cites `window` (u64) type pin.
+//   - line 117 cites `checks` (array) type pin.
 //   - line 119 cites `orphans_total` (u64) type pin.
 //
 // The existing validate-verify-report-line-refs.mjs covers the helper
@@ -45,6 +46,14 @@ const targets = [
       /- `window` \(u64\): the audit-window record count echoed back from the `--window` argument\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./,
     docsLabel: "verify_report.window type-level pin citation",
     docsTemplate: "Pinned as u64 by `main.rs:N-M` — never a string.",
+  },
+  {
+    field: "checks",
+    selectorFirstLine: 'value["checks"].is_array(),',
+    docsRegex:
+      /- `checks` \(array of `VerifyCheck`\): per-check results, see below\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "verify_report.checks type-level pin citation",
+    docsTemplate: "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
   {
     field: "orphans_total",

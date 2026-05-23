@@ -185,6 +185,7 @@ run node ./scripts/validate-bootstrap-result-granted-entries-object-pin-line-ref
 run node ./scripts/validate-bootstrap-result-already-granted-entries-string-pin-line-refs.mjs
 run node ./scripts/validate-bootstrap-result-empty-granted-no-new-grants-pin-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-schema-value-pin-line-refs.mjs
+run node ./scripts/validate-memory-backfill-schema-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

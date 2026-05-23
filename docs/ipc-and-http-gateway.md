@@ -166,6 +166,16 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
 
+`covenant capabilities purge --json` emits a summary of revoked-capability garbage collection. Envelope shape:
+
+- `kind`: literal string `"capabilities_purged"`.
+- `before_ms` (u64): the resolved Unix-epoch millisecond cutoff. The CLI accepts either `--before-ms <M>` (echoed verbatim) or `--older-than-ms <D>` (resolved against the system clock as `now - D` per `main.rs:2795-2799`); the envelope always reports the single resolved value, so consumers cannot distinguish which input form the operator typed.
+- `purged` (u64): the count of revoked-capability rows removed. May legitimately be `0` when no rows matched the cutoff — the verb does not error on an empty purge.
+
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`).
+
+The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/crates/covenant/src/main.rs:4384`. Two unit tests at `main.rs:5855` (`capabilities_purge_json_renders_stable_shape`) and `main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`) cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:2776-2824`; without `--json`, the same response prints `purged <n> revoked capability(ies)`.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

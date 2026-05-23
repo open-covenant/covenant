@@ -176,6 +176,16 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/crates/covenant/src/main.rs:4384`. Two unit tests at `main.rs:5855` (`capabilities_purge_json_renders_stable_shape`) and `main.rs:5863` (`capabilities_purge_json_pins_top_level_schema`) cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:2776-2824`; without `--json`, the same response prints `purged <n> revoked capability(ies)`.
 
+`covenant peers purge --json` emits a summary of revoked-peer garbage collection. Envelope shape:
+
+- `kind`: literal string `"peers_purged"` — the only structural disambiguator from `capabilities_purged`; both envelopes share the same three-key layout, so consumers that route on `kind` must check the full literal rather than treating any `*_purged` envelope as interchangeable.
+- `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above.
+- `purged` (u64): count of revoked-peer rows removed. Only revoked rows are eligible — the verb does not touch live peers (the unsuffixed CLI prints `purged <n> revoked peer(s)` at `main.rs:3664`). May legitimately be `0` when no rows matched.
+
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5903` (`peers_purge_json_pins_top_level_schema`).
+
+The envelope source-of-truth lives at `peers_purge_json` in `agent-os/crates/covenant/src/main.rs:4392`. Two unit tests at `main.rs:5895` (`peers_purge_json_renders_stable_shape`) and `main.rs:5903` cover the populated and empty cases. The CLI verb is wired at `main.rs:3624-3670`.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

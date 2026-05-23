@@ -579,6 +579,18 @@ Top-level keys are pinned to exactly these four by the test at `agent-os/crates/
 
 The envelope source-of-truth lives at `ignore_report_json` in `agent-os/crates/covenant/src/main.rs:4489`. Two unit tests at `main.rs:6660` (`ignore_report_json_renders_stable_shape`) and `main.rs:6673` cover the shape. The CLI verb is wired at `main.rs:3986-4034`; without `--json`, the matched case prints `ignored — matched rule: <pattern>` at `main.rs:4023` and the unmatched case prints `not ignored (<n> rule(s) loaded)` at `main.rs:4025`. Both paths share the exit-1-when-ignored convention.
 
+`covenant bootstrap --json` emits a summary of the capability-bootstrap pass that grants every action required by manifests under `$COVENANT_HOME/agents/*/agent.toml` (plus the implicit `memory.write`, which the daemon writes on every successful dispatch). Envelope shape:
+
+- `kind`: literal string `"bootstrap_result"`.
+- `granted` (array of `{action: string, signature_b58: string}` objects): the capabilities **newly granted** during this bootstrap call. Each element echoes the action string and the daemon-signed base58 signature that authorises it.
+- `already_granted` (array of strings): the action names the daemon **already had** before this call. Note the asymmetry with `granted`: this field carries **bare action strings**, not the `{action, signature_b58}` object shape — the existing signatures are not echoed here. JSON consumers must not iterate `already_granted` as if it were objects.
+
+**No forcing-function test**: unlike every other envelope in this section, the bootstrap envelope is built inline at the emission site (`main.rs:1944-1951`) rather than via a dedicated `bootstrap_result_json` function with a `*_pins_top_level_schema` test. The shape is anchored only by this documentation and the inline `serde_json::json!` macro; a refactor that drops or renames a key would not fail a unit test. Consumers who depend on this envelope should treat it as a docs-only contract until a forcing-function test lands.
+
+Re-running `covenant bootstrap` is idempotent: if every required action is already granted, `granted` is empty and `already_granted` carries the full set. An empty `granted` array is the **expected** signal for "nothing to do" — not a transport failure. The unsuffixed CLI prints `nothing to do — every required capability is already granted (<n> total)` at `main.rs:1954-1957` for that case.
+
+The CLI verb is wired at `agent-os/crates/covenant/src/main.rs:1866-1975`. Required actions are derived from the union of every `agent.toml`'s `[capabilities].required` list (`main.rs:1882-1902`) plus the unconditional `memory.write` insertion (`main.rs:1884`). The daemon-side dispatch is `Request::GrantCapability` per action (`main.rs:1923-1930`); failures fall through to a `daemon error granting <action>: <message>` bail rather than into the envelope. Without `--json`, the same response prints `granted <n> of <m> capabilities to user@local:` followed by one `  + <friendly-title> (<action>)` line per newly-granted entry and a final `ready. try: covenant intent "say hello"` (per `main.rs:1958-1974`).
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

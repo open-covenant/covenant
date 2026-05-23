@@ -172,7 +172,7 @@ The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/cov
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7277` (`flush_receipts_json_pins_top_level_schema`).
 
-`ReceiptBatchSummary` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:53`:
+`ReceiptBatchSummary` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:54`:
 
 - `batch_id` (string) — opaque batch identifier.
 - `merkle_root` (string, 64 hex characters) — Merkle root over the included receipts.

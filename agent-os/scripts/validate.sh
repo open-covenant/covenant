@@ -87,6 +87,7 @@ run node ./scripts/validate-a2a-status-line-refs.mjs
 run node ./scripts/validate-peer-list-line-refs.mjs
 run node ./scripts/validate-verify-report-line-refs.mjs
 run node ./scripts/validate-intents-resume-line-refs.mjs
+run node ./scripts/validate-covenant-ipc-struct-line-refs.mjs
 
 case "$mode" in
   scripts)

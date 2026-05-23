@@ -424,6 +424,47 @@ Top-level keys are pinned to exactly these seven by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/covenant/src/main.rs:4470`. Two unit tests at `main.rs:6543` (`memory_read_json_renders_stable_shape`) and `main.rs:6586` cover both modes. The CLI verbs are wired at `main.rs:2082-2126` (`covenant memory recent`) and `main.rs:2488-2554` (`covenant memory search`); without `--json`, each record prints as `[<created_at>] <tier>: <text>` at `main.rs:1629`. The optional `--stream` flag is accepted only by `covenant memory recent` (per `main.rs:2101`) and sets `Request::RecentMemory.prefer_stream = Some(true)` to enable the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal envelope shape is unchanged when the streaming path is not selected. `covenant memory search` has no `--stream` flag.
 
+`covenant a2a status [-n|--limit <N>] [--min-lease-age-ms <N>] [--deadline-within-ms <N>] [--state queued|in_flight] --json` emits the current A2A queue snapshot — queued tasks, in-flight leases, and pending results — narrowed by the supplied filters. Envelope shape:
+
+- `kind`: literal string `"a2a_status"`.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:3357`). Pinned as u64 by the schema test (`main.rs:7182-7185`).
+- `min_lease_age_ms` (u64 or null): the threshold echoed from `--min-lease-age-ms`, or `null` when the flag was omitted. Always emitted (as `null` when inactive) — never omitted from the envelope. Pinned as u64-or-null by the schema test (`main.rs:7186-7189`).
+- `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:7190-7193`).
+- `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:124-129`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:7194-7197`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
+- `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty.
+- `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:3422` when both `tasks` and `results` are empty.
+
+The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:131`:
+
+- `state` (string) — `A2ATaskQueueState` slug, exactly `"queued"` or `"in_flight"` (same enumeration as the top-level `state_filter`). The canonical signal for queue-state branching — **not** lease-field presence.
+- `task` (object) — nested `A2ATask` (see below).
+- `lease_id` (string, omitted when null) — UUID of the active lease. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:135-136`, so the key is **absent** when the entry is not leased.
+- `leased_to` (object, omitted when null) — `AgentId` of the leaseholder. Same skip-when-absent contract.
+- `leased_at_ms` (u64, omitted when null) — Unix-epoch milliseconds when the lease was taken. Same skip-when-absent contract.
+- `attempt` (u32) — delivery attempt counter (always emitted; `0` for a fresh queue entry per `#[serde(default)]` at `covenant-a2a/src/lib.rs:141-142`).
+
+The nested `A2ATask` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:109`:
+
+- `id` (string) — task UUID.
+- `sender` (object) — `AgentId` `{display, pubkey}` per the form documented in the `peer_list` block.
+- `recipient` (object) — `AgentId` of the routed-to peer.
+- `intent_text` (string) — the task body.
+- `task_kind` (string, omitted when null) — optional task-kind label; `skip_serializing_if = "Option::is_none"`.
+- `parent` (string, omitted when null) — optional parent task UUID; same skip contract.
+- `deadline_ms` (u64, omitted when null) — optional deadline (Unix-epoch ms); same skip contract.
+- `idempotency` (object, omitted when null) — optional `A2AIdempotency` `{duplicate_safety: "unsafe"|"idempotent", key: string}` (defined at `covenant-a2a/src/lib.rs:55-59`); same skip contract.
+
+The inner `A2ATaskResult` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:387`:
+
+- `task_id` (string) — the task UUID this result binds to.
+- `status` (string) — `A2ATaskStatus` slug, exactly one of `"ok"`, `"error"`, `"partial"` (snake_case per `covenant-a2a/src/lib.rs:40-46`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
+- `content` (array of `Content`) — the same tagged-enum `Content` shape (`{type: "text", text: <string>}` or `{type: "json", value: <JSON>}`) already documented in the `tool_result` block above; empty for `error` results per `A2ATaskResult::error` at `covenant-a2a/src/lib.rs:406-413`.
+- `error_message` (string, omitted when null) — diagnostic message for `error` results; `skip_serializing_if = "Option::is_none"` per `covenant-a2a/src/lib.rs:392-393`. Absent on `ok` and `partial` results.
+
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7157` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
+
+The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:4587`. Three unit tests at `main.rs:7106` (`a2a_status_json_renders_stable_shape`), `main.rs:7148` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:7157` cover the shape. The CLI verb is wired at `main.rs:3356-3441`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3424-3435`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

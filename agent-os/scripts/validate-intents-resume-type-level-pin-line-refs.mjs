@@ -4,14 +4,20 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // intents_resume envelopes type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four inner assertion ranges that
+// docs/ipc-and-http-gateway.md cites six inner assertion ranges that
 // pin types in the intents_resume envelopes:
 //
 //   - line 619 cites the error envelope's `intent_id` (string or null)
 //     at main.rs:5224-5227 — inside
 //     intents_resume_error_json_pins_top_level_schema.
+//   - line 620 cites the error envelope's `error` (object) at
+//     main.rs:5228-5231 — inside
+//     intents_resume_error_json_pins_top_level_schema.
 //   - line 615 cites the ok envelope's `settlement` (object or null)
 //     at main.rs:5389-5392 — inside
+//     intents_resume_ok_json_pins_top_level_schema.
+//   - line 612 cites the ok envelope's `status` (string) at
+//     main.rs:5380-5383 — inside
 //     intents_resume_ok_json_pins_top_level_schema.
 //   - line 606 cites the ok envelope's `ok` (boolean) at the first
 //     range, inside intents_resume_ok_json_pins_top_level_schema.
@@ -83,6 +89,26 @@ const targets = [
     docsLabel: "intents_resume_error.ok type-level pin citation",
     docsTemplate:
       "Pinned as a JSON boolean by the schema tests at `main.rs:N-M` and `main.rs:N-M` — never `0`/`1` or a string-truthy value.",
+  },
+  {
+    field: "status",
+    testFnName: "intents_resume_ok_json_pins_top_level_schema",
+    selector: 'value["status"].is_string(),',
+    docsRegex:
+      /- `status` \(string\) — the daemon-returned outcome status \(typically `"ok"`\)\. The string shape is pinned at `main\.rs:(\d+)-(\d+)`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface\./,
+    docsLabel: "intents_resume_ok.status type-level pin citation",
+    docsTemplate:
+      "The string shape is pinned at `main.rs:N-M`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.",
+  },
+  {
+    field: "error",
+    testFnName: "intents_resume_error_json_pins_top_level_schema",
+    selector: 'value["error"].is_object(),',
+    docsRegex:
+      /- `error` \(object\): a structured `\{code, message\}` pair, never a string blob\. Pinned as a JSON object by `main\.rs:(\d+)-(\d+)`\. The inner `error` object has exactly two keys per the test EXPECTED_KEYS at `main\.rs:\d+`:/,
+    docsLabel: "intents_resume_error.error type-level pin citation",
+    docsTemplate:
+      "Pinned as a JSON object by `main.rs:N-M`. The inner `error` object has exactly two keys per the test EXPECTED_KEYS at `main.rs:N`:",
   },
 ];
 

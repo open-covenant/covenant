@@ -5588,6 +5588,69 @@ mod tests {
     }
 
     #[test]
+    fn memory_backfill_json_renders_stable_shape() {
+        let dry_run = memory_backfill_json(0, "memory_backfill_sp_001", true);
+        assert_eq!(dry_run["schema"], "covenant.memory.backfill.v1");
+        assert_eq!(dry_run["row_count"], 0);
+        assert_eq!(dry_run["savepoint_name"], "memory_backfill_sp_001");
+        assert_eq!(dry_run["dry_run"], true);
+
+        let mutation = memory_backfill_json(7, "memory_backfill_sp_002", false);
+        assert_eq!(mutation["schema"], "covenant.memory.backfill.v1");
+        assert_eq!(mutation["row_count"], 7);
+        assert_eq!(mutation["savepoint_name"], "memory_backfill_sp_002");
+        assert_eq!(mutation["dry_run"], false);
+    }
+
+    #[test]
+    fn memory_backfill_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["dry_run", "row_count", "savepoint_name", "schema"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("memory_backfill_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_backfill_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["schema"].is_string(),
+                "schema must be a string: {value}"
+            );
+            assert_eq!(
+                value["schema"].as_str(),
+                Some("covenant.memory.backfill.v1"),
+                "schema literal must match the documented version slot exactly; renaming to a future v2 is a separate envelope, not a field rename",
+            );
+            assert!(
+                value["row_count"].is_u64(),
+                "row_count must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["savepoint_name"].is_string(),
+                "savepoint_name must always be a non-null string; the &str type at the emitter forbids null and the docs contract treats absence as a protocol violation: {value}",
+            );
+            assert!(
+                !value["savepoint_name"].as_str().unwrap().is_empty(),
+                "savepoint_name must be non-empty; the daemon allocates a real identifier even on dry-run so consumers can correlate planning runs against later mutation runs: {value}",
+            );
+            assert!(
+                value["dry_run"].is_boolean(),
+                "dry_run must serialize as a JSON boolean, never 0/1 or a string: {value}",
+            );
+        }
+
+        assert_shape(&memory_backfill_json(0, "memory_backfill_sp_001", true));
+        assert_shape(&memory_backfill_json(7, "memory_backfill_sp_002", false));
+        assert_shape(&memory_backfill_json(0, "memory_backfill_sp_003", true));
+    }
+
+    #[test]
     fn intent_result_json_renders_stable_shape() {
         let value = intent_result_json(
             uuid::Uuid::nil(),

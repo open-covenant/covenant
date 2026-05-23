@@ -589,7 +589,7 @@ The envelope source-of-truth lives at `ignore_report_json` in `agent-os/crates/c
 `covenant bootstrap --json` emits a summary of the capability-bootstrap pass that grants every action required by manifests under `$COVENANT_HOME/agents/*/agent.toml` (plus the implicit `memory.write`, which the daemon writes on every successful dispatch). Envelope shape:
 
 - `kind`: literal string `"bootstrap_result"`.
-- `granted` (array of `{action: string, signature_b58: string}` objects): the capabilities **newly granted** during this bootstrap call. Each element echoes the action string and the daemon-signed base58 signature that authorises it.
+- `granted` (array of `{action: string, signature_b58: string}` objects): the capabilities **newly granted** during this bootstrap call. Each element echoes the action string and the daemon-signed base58 signature that authorises it. Pinned as an array by `main.rs:5701-5704` — never null or a string.
 - `already_granted` (array of strings): the action names the daemon **already had** before this call. Note the asymmetry with `granted`: this field carries **bare action strings**, not the `{action, signature_b58}` object shape — the existing signatures are not echoed here. JSON consumers must not iterate `already_granted` as if it were objects.
 
 Top-level keys are pinned by the test at `agent-os/crates/covenant/src/main.rs:5684` (`bootstrap_result_json_pins_top_level_schema`), exercised against a populated case (two newly-granted entries plus one already-granted entry), an empty-granted case (no new grants, two already-granted entries), and a fully-empty case. The test also asserts the asymmetric inner shape: `granted` entries are `{action, signature_b58}` objects while `already_granted` entries are bare action strings.

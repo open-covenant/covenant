@@ -143,6 +143,7 @@ run node ./scripts/validate-covenant-permissions-sig-b58-module-range-line-refs.
 run node ./scripts/validate-covenant-permissions-signed-capability-field-list-line-refs.mjs
 run node ./scripts/validate-covenantd-recent-capabilities-fn-block-range-line-refs.mjs
 run node ./scripts/validate-receipt-list-type-level-pin-line-refs.mjs
+run node ./scripts/validate-capability-list-type-level-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

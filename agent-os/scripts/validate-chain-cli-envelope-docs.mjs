@@ -21,6 +21,8 @@ const kinds = [
   "verify_report",
   "receipt_batch_flushed",
   "receipt_batch_list",
+  "covenant.settlement.backfill.v1",
+  "covenant.memory.backfill.v1",
 ];
 
 const errors = [];

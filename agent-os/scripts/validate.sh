@@ -182,6 +182,7 @@ run node ./scripts/validate-memory-compaction-outcome-deleted-empty-renders-pin-
 run node ./scripts/validate-memory-compaction-outcome-parents-detached-empty-renders-pin-line-refs.mjs
 run node ./scripts/validate-intents-resume-error-ok-false-pin-line-refs.mjs
 run node ./scripts/validate-bootstrap-result-granted-entries-object-pin-line-refs.mjs
+run node ./scripts/validate-bootstrap-result-already-granted-entries-string-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

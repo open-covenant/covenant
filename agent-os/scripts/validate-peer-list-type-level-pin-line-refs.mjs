@@ -4,12 +4,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // peer_list envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four inner assertion ranges
+// docs/ipc-and-http-gateway.md cites five inner assertion ranges
 // inside peer_list_json_pins_top_level_schema:
 //
 //   - line 293 cites `limit` (u64) type pin at :5048-5051.
 //   - line 294 cites `filter_pubkey_prefix` (string or null) type pin.
 //   - line 295 cites `matched_count` (u64) type pin.
+//   - line 297 cites `operator_pubkey_b58` (string) type pin at
+//     :5062-5065.
 //   - line 298 cites `truncated` (boolean) type pin.
 //
 // The existing validate-peer-list-line-refs.mjs covers the helper fn,
@@ -75,6 +77,16 @@ const targets = [
     docsLabel: "peer_list.matched_count type-level pin citation",
     docsTemplate:
       "Pinned as u64 by `main.rs:N-M` — never a string.",
+  },
+  {
+    field: "operator_pubkey_b58",
+    selectorFirstLine: 'value["operator_pubkey_b58"].is_string(),',
+    match: "exact",
+    docsRegex:
+      /- `operator_pubkey_b58` \(string\): the requesting operator's own pubkey in base58\. The unsuffixed CLI line formatter at `peer_list_lines` \(`main\.rs:\d+`\) compares each peer's `pubkey_base58\(\)` against this value to append a ` \(self\)` marker on the operator's own row; JSON consumers must apply the same comparison to render the self-tag, not assume the operator's row is reliably first\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an object or array\./,
+    docsLabel: "peer_list.operator_pubkey_b58 type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an object or array.",
   },
   {
     field: "truncated",

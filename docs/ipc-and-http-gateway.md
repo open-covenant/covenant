@@ -312,27 +312,27 @@ The envelope source-of-truth lives at `peer_list_json` in `agent-os/crates/coven
 
 - `kind`: literal string `"peers_purged"` — the only structural disambiguator from `capabilities_purged`; both envelopes share the same three-key layout, so consumers that route on `kind` must check the full literal rather than treating any `*_purged` envelope as interchangeable.
 - `before_ms` (u64): resolved Unix-epoch millisecond cutoff. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above.
-- `purged` (u64): count of revoked-peer rows removed. Only revoked rows are eligible — the verb does not touch live peers (the unsuffixed CLI prints `purged <n> revoked peer(s)` at `main.rs:3664`). May legitimately be `0` when no rows matched.
+- `purged` (u64): count of revoked-peer rows removed. Only revoked rows are eligible — the verb does not touch live peers (the unsuffixed CLI prints `purged <n> revoked peer(s)` at `main.rs:3657`). May legitimately be `0` when no rows matched.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5903` (`peers_purge_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6125` (`peers_purge_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `peers_purge_json` in `agent-os/crates/covenant/src/main.rs:4392`. Two unit tests at `main.rs:5895` (`peers_purge_json_renders_stable_shape`) and `main.rs:5903` cover the populated and empty cases. The CLI verb is wired at `main.rs:3624-3670`.
+The envelope source-of-truth lives at `peers_purge_json` in `agent-os/crates/covenant/src/main.rs:4385`. Two unit tests at `main.rs:6117` (`peers_purge_json_renders_stable_shape`) and `main.rs:6125` cover the populated and empty cases. The CLI verb is wired at `main.rs:3617-3663`.
 
 `covenant peers rotate --json` emits the new operator token after rotation. Envelope shape:
 
 - `kind`: literal string `"peer_token_rotated"`.
 - `token_b58` (string): the full base58 operator token. The value is the new authentication credential, not a fingerprint — the envelope is **secret-bearing** and JSON output must be treated as sensitive (no logging, no shell history capture, no transport over unsecured channels).
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5942` (`peers_rotate_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6164` (`peers_rotate_json_pins_top_level_schema`).
 
-Side effects before the envelope returns (per the CLI comment at `main.rs:3684-3690`): the daemon has already persisted the new token to `$COVENANT_HOME/peers/operator.token` (mode `0600`), so the envelope is informational. Existing shells holding the previous token continue to authenticate with the old value until they re-read the file; consumers that cache the token in memory must refresh after rotation.
+Side effects before the envelope returns (per the CLI comment at `main.rs:3677-3683`): the daemon has already persisted the new token to `$COVENANT_HOME/peers/operator.token` (mode `0600`), so the envelope is informational. Existing shells holding the previous token continue to authenticate with the old value until they re-read the file; consumers that cache the token in memory must refresh after rotation.
 
-The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4400`. The shape-pinning tests at `main.rs:5935` (`peers_rotate_json_renders_stable_shape`) and `main.rs:5942` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3671-3706`; without `--json`, the same response prints a two-line message terminating in the raw token value.
+The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4393`. The shape-pinning tests at `main.rs:6157` (`peers_rotate_json_renders_stable_shape`) and `main.rs:6164` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3664-3699`; without `--json`, the same response prints a two-line message terminating in the raw token value.
 
 `covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] --json` emits the outcome of revoking a single peer by its base58 token prefix. Envelope shape:
 
 - `kind`: literal string `"peer_revoke"` — verb-form, not past-tense. Distinct from the sibling envelopes whose outcome names took the past-tense form (`capability_revoked`, `peer_token_rotated`, `peers_purged`); consumers routing on `kind` must match the literal exactly rather than guessing `peer_revoked` or `peers_revoke`.
-- `outcome` (object): a tagged-enum `RevokeOutcome` (defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:182` with `#[serde(tag = "type", rename_all = "snake_case")]`). The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:5158-5161` to be a JSON object, never a string blob.
+- `outcome` (object): a tagged-enum `RevokeOutcome` (defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:182` with `#[serde(tag = "type", rename_all = "snake_case")]`). The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:5165-5168` to be a JSON object, never a string blob.
 
 The five `RevokeOutcome` variants the daemon may return:
 
@@ -342,11 +342,11 @@ The five `RevokeOutcome` variants the daemon may return:
 - `{type: "ambiguous", matches: [PeerSummary...], truncated: bool}` — more than one entry matched the prefix; the registry is unchanged. `matches.len()` is bounded by `--limit-matches`; `truncated` is `true` when more than that limit matched (see `RevokeOutcome::Ambiguous` at `covenant-peer-auth/src/lib.rs:207-211`). The field carries `#[serde(default)]` so a stale CLI built before `truncated` landed still deserialises a new daemon's response (degrading to the pre-bound assumption that the displayed matches are exhaustive); the daemon-side serializer always writes the field.
 - `{type: "self_revoke_forbidden", agent_id, token_prefix, registered_at, revoked_at}` — same inlined `PeerSummary` shape; the unique live match is the operator's own bootstrap row and the request did not pass `--force`. The registry is unchanged and `revoked_at` is `null` (the entry remained live). This is defence-in-depth against the "fat-finger via web UI bypassed by curl" failure mode where a UI-only confirmation guard is trivially circumvented by a direct daemon API call.
 
-**Exit-code coupling**: the `peer_revoke_is_failure` classifier at `agent-os/crates/covenant/src/main.rs:4675-4682` maps `not_found`, `ambiguous`, and `self_revoke_forbidden` to a CLI exit code of `1` — including in the `--json` path (`main.rs:3814-3816`). `revoked` and `already_revoked` map to exit `0`. JSON consumers must branch on `outcome.type` for success/failure semantics; transport success (exit `0`) is **not** synonymous with revocation success. The classifier's mapping is pinned by the test at `main.rs:7388` (`peer_revoke_json_exit_classification_matches_human_cli`).
+**Exit-code coupling**: the `peer_revoke_is_failure` classifier at `agent-os/crates/covenant/src/main.rs:4682-4689` maps `not_found`, `ambiguous`, and `self_revoke_forbidden` to a CLI exit code of `1` — including in the `--json` path (`main.rs:3807-3809`). `revoked` and `already_revoked` map to exit `0`. JSON consumers must branch on `outcome.type` for success/failure semantics; transport success (exit `0`) is **not** synonymous with revocation success. The classifier's mapping is pinned by the test at `main.rs:7610` (`peer_revoke_json_exit_classification_matches_human_cli`).
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5141` (`peer_revoke_json_pins_top_level_schema`), which also asserts `outcome` is a tagged-enum object and exercises both the `Ambiguous` and `NotFound` variants.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5148` (`peer_revoke_json_pins_top_level_schema`), which also asserts `outcome` is a tagged-enum object and exercises both the `Ambiguous` and `NotFound` variants.
 
-The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/covenant/src/main.rs:4613`. Two unit tests at `main.rs:5122` (`peer_revoke_json_renders_stable_ambiguous_shape`) and `main.rs:5141` cover the shape. The CLI verb is wired at `main.rs:3771-3871`; without `--json`, `Revoked` and `AlreadyRevoked` print tab-separated success lines to stdout, while `NotFound`, `Ambiguous`, and `SelfRevokeForbidden` print human-readable diagnostics to stderr before exiting `1`.
+The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/covenant/src/main.rs:4620`. Two unit tests at `main.rs:5130` (`peer_revoke_json_renders_stable_ambiguous_shape`) and `main.rs:5148` cover the shape. The CLI verb is wired at `main.rs:3764-3864`; without `--json`, `Revoked` and `AlreadyRevoked` print tab-separated success lines to stdout, while `NotFound`, `Ambiguous`, and `SelfRevokeForbidden` print human-readable diagnostics to stderr before exiting `1`.
 
 `covenant audit recent [-n|--limit <N>] [--since-ms <M>] [--stream] --json` emits a window of audit events. Envelope shape:
 
@@ -468,9 +468,9 @@ The inner `A2ATaskResult` shape, defined at `agent-os/crates/covenant-a2a/src/li
 - `content` (array of `Content`) — the same tagged-enum `Content` shape (`{type: "text", text: <string>}` or `{type: "json", value: <JSON>}`) already documented in the `tool_result` block above; empty for `error` results per `A2ATaskResult::error` at `covenant-a2a/src/lib.rs:406-413`.
 - `error_message` (string, omitted when null) — diagnostic message for `error` results; `skip_serializing_if = "Option::is_none"` per `covenant-a2a/src/lib.rs:392-393`. Absent on `ok` and `partial` results.
 
-Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7157` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7379` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
 
-The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:4587`. Three unit tests at `main.rs:7106` (`a2a_status_json_renders_stable_shape`), `main.rs:7148` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:7157` cover the shape. The CLI verb is wired at `main.rs:3356-3441`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3424-3435`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
+The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:4594`. Three unit tests at `main.rs:7328` (`a2a_status_json_renders_stable_shape`), `main.rs:7370` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:7379` cover the shape. The CLI verb is wired at `main.rs:3349-3434`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3417-3428`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
 
 `covenant a2a retry-stale [--enable] [--min-lease-age-ms <N>] [--max-attempts <N>] [--max-requeues <N>] [--scan-limit <N>] --json` emits a per-call report describing what the auto-retry scan considered, requeued, and skipped. Envelope shape:
 
@@ -522,18 +522,18 @@ The inner `A2AAutoRetrySkipped` shape, defined at `covenant-a2a/src/lib.rs:271`:
 
 Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Disabled"`, `"NotInFlight"`, etc.) — those never appear on the wire.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6042` (`a2a_retry_json_pins_top_level_schema`), exercised against both a populated (requeued + skipped) case and an empty (fresh policy) case.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6264` (`a2a_retry_json_pins_top_level_schema`), exercised against both a populated (requeued + skipped) case and an empty (fresh policy) case.
 
-The envelope source-of-truth lives at `a2a_retry_json` in `agent-os/crates/covenant/src/main.rs:4606`. Two unit tests at `main.rs:6005` (`a2a_retry_json_renders_stable_shape`) and `main.rs:6042` cover the shape. The CLI verb is wired at `main.rs:3531-3587`; without `--json`, the same response prints `considered <N> task(s), requeued <M>, skipped <K>` followed by `automatic retry disabled; pass --enable to mutate` whenever `report.policy.enabled` is `false` (per `main.rs:3573-3581`).
+The envelope source-of-truth lives at `a2a_retry_json` in `agent-os/crates/covenant/src/main.rs:4613`. Two unit tests at `main.rs:6227` (`a2a_retry_json_renders_stable_shape`) and `main.rs:6264` cover the shape. The CLI verb is wired at `main.rs:3524-3580`; without `--json`, the same response prints `considered <N> task(s), requeued <M>, skipped <K>` followed by `automatic retry disabled; pass --enable to mutate` whenever `report.policy.enabled` is `false` (per `main.rs:3566-3574`).
 
 `covenant a2a compact --json` emits a summary of the event-log compaction that drops lines for fully-resolved A2A tasks. Envelope shape:
 
 - `kind`: literal string `"a2a_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"a2a_compact"`) or guessing a noun form (`"a2a_compaction"`).
-- `dropped` (u64): count of event-log lines removed for resolved tasks. May legitimately be `0` when no resolved tasks remain — the unsuffixed CLI still prints `dropped 0 a2a event(s)` at `main.rs:3604`, and JSON consumers must not treat `dropped=0` as an error.
+- `dropped` (u64): count of event-log lines removed for resolved tasks. May legitimately be `0` when no resolved tasks remain — the unsuffixed CLI still prints `dropped 0 a2a event(s)` at `main.rs:3597`, and JSON consumers must not treat `dropped=0` as an error.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5977` (`a2a_compact_json_pins_top_level_schema`), exercised against both a populated (`dropped=3`) and an empty (`dropped=0`) case.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6199` (`a2a_compact_json_pins_top_level_schema`), exercised against both a populated (`dropped=3`) and an empty (`dropped=0`) case.
 
-The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/covenant/src/main.rs:4407`. Two unit tests at `main.rs:5969` (`a2a_compact_json_renders_stable_shape`) and `main.rs:5977` cover the shape. The CLI verb is wired at `main.rs:3588-3610`; without `--json`, the same response prints `dropped <N> a2a event(s)` at `main.rs:3604`.
+The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/covenant/src/main.rs:4400`. Two unit tests at `main.rs:6192` (`a2a_compact_json_renders_stable_shape`) and `main.rs:6199` cover the shape. The CLI verb is wired at `main.rs:3581-3603`; without `--json`, the same response prints `dropped <N> a2a event(s)` at `main.rs:3597`.
 
 `covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits the outcome of a memory-store compaction pass. Envelope shape:
 

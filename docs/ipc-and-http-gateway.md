@@ -270,7 +270,7 @@ The envelope source-of-truth lives at `capability_grant_json` in `agent-os/crate
 `covenant capabilities revoke <signature-b58> --json` emits the outcome of revoking a single signed capability by its signature. Envelope shape:
 
 - `kind`: literal string `"capability_revoked"` — past-tense outcome name, distinct from the verb name `revoke`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token.
-- `signature_b58` (string): the base58 signature echoed back from the request, so consumers can correlate the response to the revoke call without tracking it out of band.
+- `signature_b58` (string): the base58 signature echoed back from the request, so consumers can correlate the response to the revoke call without tracking it out of band. Pinned as a string by `main.rs:6062-6065` — never an object or array.
 - `removed` (boolean): `true` if a live capability matched and was tombstoned, `false` if no live row matched that signature. Pinned as a JSON boolean by `main.rs:6066-6069` — never `0`/`1` or a string. `false` is a benign no-op outcome, not an error — the daemon still returns `Response::CapabilityRevoked` and the unsuffixed CLI prints `(no live capability with that signature)` for that case at `main.rs:2769`. JSON consumers must not treat `removed=false` as a failure.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6045` (`capability_revoke_json_pins_top_level_schema`), which also asserts `removed` is a JSON boolean (never `0`/`1` or a string).

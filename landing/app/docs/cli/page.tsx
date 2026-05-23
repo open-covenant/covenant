@@ -448,6 +448,18 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
 {"kind":"tool_result","name":"echo","content":[{"type":"text","text":"hello"}],"is_error":false}`}</code>
       </pre>
 
+      <h3>Repair legacy settlement receipts</h3>
+      <pre>
+        <code>{`$ covenant settlement backfill-receipts --dry-run --json
+{"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
+      </pre>
+
+      <h3>Repair legacy memory-receipt correlations</h3>
+      <pre>
+        <code>{`$ covenant memory backfill-receipt-correlation --dry-run --json
+{"schema":"covenant.memory.backfill.v1","row_count":7,"savepoint_name":"memory_backfill_sp_001","dry_run":true}`}</code>
+      </pre>
+
       <h2>Environment</h2>
       <table>
         <thead>

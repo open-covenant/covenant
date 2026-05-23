@@ -169,6 +169,7 @@ run node ./scripts/validate-receipt-batch-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-bootstrap-result-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-type-level-pin-line-refs.mjs
 run node ./scripts/validate-a2a-retry-type-level-pin-line-refs.mjs
+run node ./scripts/validate-a2a-compact-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-compaction-plan-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-verify-root-hash-hex-length-pin-line-refs.mjs
 

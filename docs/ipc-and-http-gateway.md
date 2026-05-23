@@ -528,6 +528,26 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/covenant/src/main.rs:4407`. Two unit tests at `main.rs:5969` (`a2a_compact_json_renders_stable_shape`) and `main.rs:5977` cover the shape. The CLI verb is wired at `main.rs:3588-3610`; without `--json`, the same response prints `dropped <N> a2a event(s)` at `main.rs:3604`.
 
+`covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits the outcome of a memory-store compaction pass. Envelope shape:
+
+- `kind`: literal string `"memory_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"memory_compact"`) or guessing a noun form (`"memory_compaction"`).
+- `outcome` (object): a structured `MemoryCompactionOutcome` (defined at `agent-os/crates/covenant-types/src/lib.rs:297`), never a string blob. The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:6379-6382` to be a JSON object.
+
+**Dry-run by default, mutates only with `--apply`**: the CLI defaults to `MemoryRepairMode::DryRun` (per `main.rs:2270-2278`) and `--reason <text>` is mandatory regardless of mode (the CLI bails with `"missing --reason"` at `main.rs:2277` when omitted). Without `--apply`, the daemon evaluates the policy and reports what *would* change but does not mutate the store.
+
+The inner `MemoryCompactionOutcome` shape:
+
+- `mode` (string) — `MemoryRepairMode` slug, exactly `"dry_run"` or `"apply"` (snake_case, per `MemoryRepairMode`'s `#[serde(rename_all = "snake_case")]` at `covenant-types/src/lib.rs:196-201`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
+- `would_change` (bool) — the policy identified at least one mutation that would land. Reliable in both modes — `true` whenever the policy matched records.
+- `changed` (bool) — the store was actually mutated by this call. In `mode: "dry_run"` this is **always `false`** even when `would_change` is `true`; only `mode: "apply"` can set it. JSON consumers branching on `changed` alone will silently treat dry-run planning runs as no-ops; route on the `(mode, would_change, changed)` triple instead.
+- `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode).
+- `stale_marked` (array of strings) — UUIDs of long-term records the policy marked stale (or would mark, in dry-run mode).
+- `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied).
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6362` (`memory_compaction_json_pins_top_level_schema`), exercised against both a populated `apply` case and an empty `dry_run` case.
+
+The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crates/covenant/src/main.rs:4451`. Two unit tests at `main.rs:6334` (`memory_compaction_json_renders_stable_shape`) and `main.rs:6362` cover the shape. The CLI verb is wired at `main.rs:2178-2286` (shared with `covenant memory plan-compaction`; the `plan-compaction` arm forces dry-run and emits a different envelope documented below).
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

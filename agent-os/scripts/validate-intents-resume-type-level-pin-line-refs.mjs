@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // intents_resume envelopes type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites seven inner assertion ranges that
+// docs/ipc-and-http-gateway.md cites eight inner assertion ranges that
 // pin types in the intents_resume envelopes:
 //
 //   - line 619 cites the error envelope's `intent_id` (string or null)
@@ -23,6 +23,13 @@ import { fileURLToPath } from "node:url";
 //   - line 612 cites the ok envelope's `status` (string) at
 //     main.rs:5380-5383 — inside
 //     intents_resume_ok_json_pins_top_level_schema.
+//   - line 611 cites the ok envelope's `intent_id` (string) at
+//     main.rs:5377-5379 — inside
+//     intents_resume_ok_json_pins_top_level_schema. This cite uses the
+//     3-line selector-to-closer convention (no assert!( opener line);
+//     every other target uses the 4-line assert!-opener-to-closer
+//     convention. Per-target `convention` field selects between the
+//     two; default is "assert-opener" to keep prior targets correct.
 //   - line 606 cites the ok envelope's `ok` (boolean) at the first
 //     range, inside intents_resume_ok_json_pins_top_level_schema.
 //   - line 606 cites the error envelope's `ok` (boolean) at the second
@@ -124,6 +131,17 @@ const targets = [
     docsTemplate:
       "Pinned as a string by `main.rs:N-M` — never a structured object.",
   },
+  {
+    field: "intent_id_in_ok_branch",
+    testFnName: "intents_resume_ok_json_pins_top_level_schema",
+    selector: 'value["intent_id"].is_string(),',
+    convention: "selector",
+    docsRegex:
+      /- `intent_id` \(string\) — the resumed intent's UUID in canonical hyphenated form\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a byte array\./,
+    docsLabel: "intents_resume_ok.intent_id type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never a byte array.",
+  },
 ];
 
 const errors = [];
@@ -198,14 +216,19 @@ if (source) {
       continue;
     }
     const selectorLine = selectorMatches[0];
-    const assertOpenerLine = selectorLine - 1;
-    if (assertOpenerLine < 1 || lines[assertOpenerLine - 1].trim() !== "assert!(") {
-      fail(
-        `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-to-closing range convention requires the assert!( opener on the line directly above the selector`,
-      );
-      continue;
+    const convention = target.convention ?? "assert-opener";
+    if (convention === "assert-opener") {
+      const assertOpenerLine = selectorLine - 1;
+      if (assertOpenerLine < 1 || lines[assertOpenerLine - 1].trim() !== "assert!(") {
+        fail(
+          `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-to-closing range convention requires the assert!( opener on the line directly above the selector`,
+        );
+        continue;
+      }
+      target.startLine = assertOpenerLine;
+    } else {
+      target.startLine = selectorLine;
     }
-    target.startLine = assertOpenerLine;
     let endLine = null;
     for (let index = selectorLine; index < testEnd; index += 1) {
       if (lines[index].trim() === ");") {

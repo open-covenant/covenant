@@ -294,6 +294,25 @@ Side effects before the envelope returns (per the CLI comment at `main.rs:3684-3
 
 The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4400`. The shape-pinning tests at `main.rs:5935` (`peers_rotate_json_renders_stable_shape`) and `main.rs:5942` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3671-3706`; without `--json`, the same response prints a two-line message terminating in the raw token value.
 
+`covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] --json` emits the outcome of revoking a single peer by its base58 token prefix. Envelope shape:
+
+- `kind`: literal string `"peer_revoke"` — verb-form, not past-tense. Distinct from the sibling envelopes whose outcome names took the past-tense form (`capability_revoked`, `peer_token_rotated`, `peers_purged`); consumers routing on `kind` must match the literal exactly rather than guessing `peer_revoked` or `peers_revoke`.
+- `outcome` (object): a tagged-enum `RevokeOutcome` (defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:182` with `#[serde(tag = "type", rename_all = "snake_case")]`). The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:5158-5161` to be a JSON object, never a string blob.
+
+The five `RevokeOutcome` variants the daemon may return:
+
+- `{type: "revoked", agent_id, token_prefix, registered_at, revoked_at}` — the unique live match was tombstoned. The four extra fields are the inlined `PeerSummary` shape documented in the `peer_list` block above; `revoked_at` carries the moment of revocation and is non-null for this variant.
+- `{type: "already_revoked", agent_id, token_prefix, registered_at, revoked_at}` — same inlined `PeerSummary` shape; the unique match was already tombstoned. Idempotent — the operator's intent is satisfied — and `revoked_at` carries the *original* revocation timestamp, not the moment of this call.
+- `{type: "not_found"}` — no entry's full base58 token matched the supplied prefix. No extra fields.
+- `{type: "ambiguous", matches: [PeerSummary...], truncated: bool}` — more than one entry matched the prefix; the registry is unchanged. `matches.len()` is bounded by `--limit-matches`; `truncated` is `true` when more than that limit matched (see `RevokeOutcome::Ambiguous` at `covenant-peer-auth/src/lib.rs:207-211`). The field carries `#[serde(default)]` so a stale CLI built before `truncated` landed still deserialises a new daemon's response (degrading to the pre-bound assumption that the displayed matches are exhaustive); the daemon-side serializer always writes the field.
+- `{type: "self_revoke_forbidden", agent_id, token_prefix, registered_at, revoked_at}` — same inlined `PeerSummary` shape; the unique live match is the operator's own bootstrap row and the request did not pass `--force`. The registry is unchanged and `revoked_at` is `null` (the entry remained live). This is defence-in-depth against the "fat-finger via web UI bypassed by curl" failure mode where a UI-only confirmation guard is trivially circumvented by a direct daemon API call.
+
+**Exit-code coupling**: the `peer_revoke_is_failure` classifier at `agent-os/crates/covenant/src/main.rs:4675-4682` maps `not_found`, `ambiguous`, and `self_revoke_forbidden` to a CLI exit code of `1` — including in the `--json` path (`main.rs:3814-3816`). `revoked` and `already_revoked` map to exit `0`. JSON consumers must branch on `outcome.type` for success/failure semantics; transport success (exit `0`) is **not** synonymous with revocation success. The classifier's mapping is pinned by the test at `main.rs:7388` (`peer_revoke_json_exit_classification_matches_human_cli`).
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5141` (`peer_revoke_json_pins_top_level_schema`), which also asserts `outcome` is a tagged-enum object and exercises both the `Ambiguous` and `NotFound` variants.
+
+The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/covenant/src/main.rs:4613`. Two unit tests at `main.rs:5122` (`peer_revoke_json_renders_stable_ambiguous_shape`) and `main.rs:5141` cover the shape. The CLI verb is wired at `main.rs:3771-3871`; without `--json`, `Revoked` and `AlreadyRevoked` print tab-separated success lines to stdout, while `NotFound`, `Ambiguous`, and `SelfRevokeForbidden` print human-readable diagnostics to stderr before exiting `1`.
+
 `covenant audit recent [-n|--limit <N>] [--since-ms <M>] [--stream] --json` emits a window of audit events. Envelope shape:
 
 - `kind`: literal string `"audit_recent"`.

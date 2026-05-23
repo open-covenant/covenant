@@ -183,6 +183,19 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/src/main.rs:4344`. The shape-pinning tests at `main.rs:5610` (`ping_json_renders_stable_shape`) and `main.rs:5617` cover the single emitted shape; the CLI verb is wired at `main.rs:1977-1999` (the unsuffixed `covenant ping` prints `pong` instead).
 
+`covenant intent [--json] [--stream] <text>` emits the dispatched intent's outcome with optional settlement evidence. Envelope shape:
+
+- `kind`: literal string `"intent_result"`.
+- `intent_id` (string): the dispatched intent's UUID, serialized as the canonical hyphenated string form. Pinned as a string by the schema test (`main.rs:5563-5566`) — never a byte array or struct.
+- `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:5567-5570`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
+- `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2069` (a single-line `println!("{text}")`), so `covenant intent --json` and `covenant intent` share the result payload but only `--json` wraps it in the envelope.
+- `sources` (array of strings): source labels that contributed to the result (e.g., `["research"]`). Empty when no sources are attached.
+- `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:5576-5579` — never an integer or array.
+
+Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:5539` (`intent_result_json_pins_top_level_schema`), exercised against both a populated `Some(SettlementReceipt)` case and an empty unsettled case.
+
+The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/covenant/src/main.rs:4327`. Two unit tests at `main.rs:5521` (`intent_result_json_renders_stable_shape`) and `main.rs:5539` cover the shape. The CLI verb is wired at `main.rs:2000-2074`; the `--json`/`--stream` flags are recognized only in leading position (`main.rs:2013-2022`) so an interior `--json` token is preserved as part of the intent text. The optional `--stream` flag sets `Request::SubmitIntent.prefer_stream = Some(true)` (`main.rs:2033`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal `IntentResult` envelope shape is unchanged when the streaming path is not selected.
+
 `covenant capabilities recent [-n|--limit <N>] --json` emits a peer-scoped view of recent signed capabilities. Envelope shape:
 
 - `kind`: literal string `"capability_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `capability_list`. Consumers routing on `kind` must match the latter literal exactly rather than reusing the verb token.

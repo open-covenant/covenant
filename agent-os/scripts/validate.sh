@@ -140,6 +140,7 @@ run node ./scripts/validate-covenant-types-memory-compaction-outcome-field-list-
 run node ./scripts/validate-covenant-types-tx-sig-doc-comment-range-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-struct-line-refs.mjs
 run node ./scripts/validate-covenant-permissions-sig-b58-module-range-line-refs.mjs
+run node ./scripts/validate-covenant-permissions-signed-capability-field-list-line-refs.mjs
 
 case "$mode" in
   scripts)

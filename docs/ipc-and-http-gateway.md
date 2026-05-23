@@ -575,7 +575,7 @@ The envelope source-of-truth lives at `memory_compaction_plan_json` in `agent-os
 
 `covenant ignore check <text> --json` emits the result of evaluating the configured ignore rules against operator-supplied text. Envelope shape:
 
-- `kind`: literal string `"ignore_report"`.
+- `kind`: literal string `"ignore_report"`. Pinned at the value level by `main.rs:6911` (asserts `value["kind"].as_str() == Some("ignore_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `ignored` (boolean): `true` when at least one loaded rule matched the supplied text; `false` otherwise. Pinned as a JSON boolean by the schema test (`main.rs:6912-6915`) — never `0`/`1` or a string-truthy value.
 - `matched_pattern` (string or null): the matched rule pattern when `ignored` is `true`; **always `null`** when `ignored` is `false`. Pinned as string-or-null by the schema test (`main.rs:6916-6919`) — never an empty string for the unmatched case. JSON consumers must use `null` (not `""`) as the unmatched discriminator.
 - `rules_loaded` (u64): count of ignore rules the daemon evaluated. May legitimately be `0` when no rules are configured, in which case `ignored` is always `false` and `matched_pattern` is always `null`. Pinned as u64 by `main.rs:6920-6923` — never a string-of-integer.

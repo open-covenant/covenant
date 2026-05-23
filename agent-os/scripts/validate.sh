@@ -102,6 +102,7 @@ run node ./scripts/validate-covenant-a2a-task-result-error-fn-block-range-line-r
 run node ./scripts/validate-covenant-a2a-a2a-idempotency-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-status-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-queue-state-variant-list-line-refs.mjs
+run node ./scripts/validate-covenant-a2a-auto-retry-skip-reason-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-tool-spec-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-content-enum-annotation-line-refs.mjs

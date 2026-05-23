@@ -279,7 +279,7 @@ The envelope source-of-truth lives at `capability_revoke_json` in `agent-os/crat
 
 `covenant capabilities purge --json` emits a summary of revoked-capability garbage collection. Envelope shape:
 
-- `kind`: literal string `"capabilities_purged"`.
+- `kind`: literal string `"capabilities_purged"`. Pinned at the value level by `main.rs:6101` (asserts `value["kind"].as_str() == Some("capabilities_purged")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `before_ms` (u64): the resolved Unix-epoch millisecond cutoff. The CLI accepts either `--before-ms <M>` (echoed verbatim) or `--older-than-ms <D>` (resolved against the system clock as `now - D` per `main.rs:2795-2799`); the envelope always reports the single resolved value, so consumers cannot distinguish which input form the operator typed. Pinned as u64 by `main.rs:6102-6105` — never a string-of-integer.
 - `purged` (u64): the count of revoked-capability rows removed. May legitimately be `0` when no rows matched the cutoff — the verb does not error on an empty purge. Pinned as u64 by `main.rs:6106-6109` — never a string-of-integer.
 

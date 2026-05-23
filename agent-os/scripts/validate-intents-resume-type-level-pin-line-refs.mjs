@@ -151,6 +151,16 @@ const targets = [
     docsTemplate:
       "Pinned as a string by `main.rs:N-M` — never a byte array.",
   },
+  {
+    field: "sources_in_ok_branch",
+    testFnName: "intents_resume_ok_json_pins_top_level_schema",
+    selector: 'value["sources"].is_array(),',
+    docsRegex:
+      /- `sources` \(array of strings\) — source labels that contributed to the result\. Pinned as an array of strings by `main\.rs:(\d+)-(\d+)` — never a comma-joined string\./,
+    docsLabel: "intents_resume_ok.sources type-level pin citation",
+    docsTemplate:
+      "Pinned as an array of strings by `main.rs:N-M` — never a comma-joined string.",
+  },
 ];
 
 const errors = [];

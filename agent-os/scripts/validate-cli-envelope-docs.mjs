@@ -107,7 +107,7 @@ if (emitters) {
 }
 
 if (errors.length > 0) {
-  console.error("validate-chain-cli-envelope-docs: failed");
+  console.error("validate-cli-envelope-docs: failed");
   for (const error of errors) {
     console.error(`- ${error}`);
   }
@@ -115,5 +115,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-chain-cli-envelope-docs: ok (${kinds.length} kinds pinned across docs and emitters)`,
+  `validate-cli-envelope-docs: ok (${kinds.length} kinds pinned across docs and emitters)`,
 );

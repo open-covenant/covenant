@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Intents-resume envelope line-ref drift guard. docs/ipc-and-http-gateway.md
-// cites seven name-anchored main.rs line refs for the intents_resume envelope,
+// cites ten name-anchored main.rs line refs for the intents_resume envelope,
 // which is the only two-shape envelope in this section (success and error
 // envelopes share the `intents_resume` discriminator and branch on a flat
 // `ok` boolean) and therefore has two helper fns plus a typed-slug
@@ -21,15 +21,28 @@ import { fileURLToPath } from "node:url";
 //     `intents_resume_ok_json` (`main.rs:NNN`) and `intents_resume_error_json`
 //     (`main.rs:NNN`), with the slug classifier at `intents_resume_error_code`
 //     (`main.rs:NNN`)"): cites three top-level fn declarations.
+//   - Three EXPECTED_KEYS sentences cite the `const EXPECTED_KEYS`
+//     declaration line inside each of the three pins tests:
+//       * Success branch ("**Success branch (`ok=true`)** carries these
+//         eight top-level keys per the test EXPECTED_KEYS at
+//         `main.rs:NNN`:")
+//       * Error branch ("**Error branch (`ok=false`)** carries these five
+//         top-level keys per the test EXPECTED_KEYS at `main.rs:NNN`:")
+//       * Inner error ("The inner `error` object has exactly two keys per
+//         the test EXPECTED_KEYS at `main.rs:NNN`:")
 //
-// All seven line numbers shift whenever main.rs grows above the cited
-// declarations, and the docs do not auto-update.
+// All ten line numbers shift whenever main.rs grows above the cited
+// declarations or a blank line or comment is inserted between a pins-test
+// fn declaration and its EXPECTED_KEYS const, and the docs do not auto-update.
 //
 // This validator derives the line numbers from main.rs at run time by
 // matching the three top-level helper/classifier fns (strict `^fn` regex,
-// no indentation) and the four pins-test fns (indented `fn` inside a
-// `mod tests` block). Every derived line number must appear in its
-// expected anchor sentence. Line numbers are never hardcoded.
+// no indentation), the four pins-test fns (indented `fn` inside a
+// `mod tests` block), and the `const EXPECTED_KEYS` line inside each of
+// the three pins tests (scanned forward from the fn line up to the
+// matching closing brace at the fn's indentation). Every derived line
+// number must appear in its expected anchor sentence. Line numbers are
+// never hardcoded.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -72,10 +85,10 @@ const topLevelFns = {
   [classifierFnName]: { matches: [], line: null },
 };
 const testFns = {
-  [okPinsTestFnName]: { matches: [], line: null },
-  [errorPinsTestFnName]: { matches: [], line: null },
-  [errorObjectPinsTestFnName]: { matches: [], line: null },
-  [slugArmsTestFnName]: { matches: [], line: null },
+  [okPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
+  [errorPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
+  [errorObjectPinsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
+  [slugArmsTestFnName]: { matches: [], line: null, indent: null, expectedKeysLine: null },
 };
 
 if (emitters) {
@@ -85,9 +98,9 @@ if (emitters) {
     if (helperMatch && topLevelFns[helperMatch[1]] !== undefined) {
       topLevelFns[helperMatch[1]].matches.push(index + 1);
     }
-    const testMatch = lines[index].match(/^\s+fn\s+(\w+)\s*\(/);
-    if (testMatch && testFns[testMatch[1]] !== undefined) {
-      testFns[testMatch[1]].matches.push(index + 1);
+    const testMatch = lines[index].match(/^(\s+)fn\s+(\w+)\s*\(/);
+    if (testMatch && testFns[testMatch[2]] !== undefined) {
+      testFns[testMatch[2]].matches.push({ line: index + 1, indent: testMatch[1] });
     }
   }
 
@@ -106,7 +119,45 @@ if (emitters) {
         `${emittersPath}: expected exactly 1 "fn ${name}" but found ${entry.matches.length}; remediation: confirm the intents_resume ${name} pinning test still exists inside the tests module`,
       );
     } else {
-      entry.line = entry.matches[0];
+      entry.line = entry.matches[0].line;
+      entry.indent = entry.matches[0].indent;
+    }
+  }
+
+  const expectedKeysTests = [
+    okPinsTestFnName,
+    errorPinsTestFnName,
+    errorObjectPinsTestFnName,
+  ];
+  for (const name of expectedKeysTests) {
+    const entry = testFns[name];
+    if (entry.line === null) continue;
+    const closing = new RegExp(`^${entry.indent}}\\s*$`);
+    let endLine = null;
+    for (let index = entry.line; index < lines.length; index += 1) {
+      if (closing.test(lines[index])) {
+        endLine = index + 1;
+        break;
+      }
+    }
+    if (endLine === null) {
+      fail(
+        `${emittersPath}: could not find the matching closing brace for "fn ${name}" (started at line ${entry.line}); remediation: confirm the test body is well-formed`,
+      );
+      continue;
+    }
+    const keysMatches = [];
+    for (let index = entry.line; index < endLine - 1; index += 1) {
+      if (/^\s+const\s+EXPECTED_KEYS\b/.test(lines[index])) {
+        keysMatches.push(index + 1);
+      }
+    }
+    if (keysMatches.length !== 1) {
+      fail(
+        `${emittersPath}: expected exactly 1 "const EXPECTED_KEYS" inside "fn ${name}" but found ${keysMatches.length}; remediation: confirm the test still pins its top-level key set via a single EXPECTED_KEYS const declaration`,
+      );
+    } else {
+      entry.expectedKeysLine = keysMatches[0];
     }
   }
 }
@@ -136,6 +187,48 @@ if (docs) {
     );
   } else {
     pinsAnchorSentence = match[0];
+  }
+}
+
+let successBranchSentence = null;
+if (docs) {
+  const match = docs.match(
+    /\*\*Success branch \(`ok=true`\)\*\* carries these eight top-level keys per the test EXPECTED_KEYS at `main\.rs:\d+`:/,
+  );
+  if (!match) {
+    fail(
+      `${docsPath}: missing the intents_resume success-branch EXPECTED_KEYS sentence ("**Success branch (\`ok=true\`)** carries these eight top-level keys per the test EXPECTED_KEYS at \`main.rs:NNN\`:"); remediation: restore the sentence that records the success-branch EXPECTED_KEYS line ref`,
+    );
+  } else {
+    successBranchSentence = match[0];
+  }
+}
+
+let errorBranchSentence = null;
+if (docs) {
+  const match = docs.match(
+    /\*\*Error branch \(`ok=false`\)\*\* carries these five top-level keys per the test EXPECTED_KEYS at `main\.rs:\d+`:/,
+  );
+  if (!match) {
+    fail(
+      `${docsPath}: missing the intents_resume error-branch EXPECTED_KEYS sentence ("**Error branch (\`ok=false\`)** carries these five top-level keys per the test EXPECTED_KEYS at \`main.rs:NNN\`:"); remediation: restore the sentence that records the error-branch EXPECTED_KEYS line ref`,
+    );
+  } else {
+    errorBranchSentence = match[0];
+  }
+}
+
+let innerErrorSentence = null;
+if (docs) {
+  const match = docs.match(
+    /The inner `error` object has exactly two keys per the test EXPECTED_KEYS at `main\.rs:\d+`:/,
+  );
+  if (!match) {
+    fail(
+      `${docsPath}: missing the intents_resume inner-error EXPECTED_KEYS sentence ("The inner \`error\` object has exactly two keys per the test EXPECTED_KEYS at \`main.rs:NNN\`:"); remediation: restore the sentence that records the inner-error EXPECTED_KEYS line ref`,
+    );
+  } else {
+    innerErrorSentence = match[0];
   }
 }
 
@@ -192,6 +285,25 @@ assertCitation(
   "pins-anchor sentence",
 );
 
+assertCitation(
+  successBranchSentence,
+  `${okPinsTestFnName} EXPECTED_KEYS`,
+  testFns[okPinsTestFnName].expectedKeysLine,
+  "success-branch EXPECTED_KEYS sentence",
+);
+assertCitation(
+  errorBranchSentence,
+  `${errorPinsTestFnName} EXPECTED_KEYS`,
+  testFns[errorPinsTestFnName].expectedKeysLine,
+  "error-branch EXPECTED_KEYS sentence",
+);
+assertCitation(
+  innerErrorSentence,
+  `${errorObjectPinsTestFnName} EXPECTED_KEYS`,
+  testFns[errorObjectPinsTestFnName].expectedKeysLine,
+  "inner-error EXPECTED_KEYS sentence",
+);
+
 if (errors.length > 0) {
   console.error("validate-intents-resume-line-refs: failed");
   for (const error of errors) {
@@ -201,5 +313,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-intents-resume-line-refs: ok (ok-helper main.rs:${topLevelFns[okHelperFnName].line}, error-helper main.rs:${topLevelFns[errorHelperFnName].line}, classifier main.rs:${topLevelFns[classifierFnName].line}, ok-pins main.rs:${testFns[okPinsTestFnName].line}, error-pins main.rs:${testFns[errorPinsTestFnName].line}, error-object-pins main.rs:${testFns[errorObjectPinsTestFnName].line}, slug-arms main.rs:${testFns[slugArmsTestFnName].line})`,
+  `validate-intents-resume-line-refs: ok (ok-helper main.rs:${topLevelFns[okHelperFnName].line}, error-helper main.rs:${topLevelFns[errorHelperFnName].line}, classifier main.rs:${topLevelFns[classifierFnName].line}, ok-pins main.rs:${testFns[okPinsTestFnName].line}, error-pins main.rs:${testFns[errorPinsTestFnName].line}, error-object-pins main.rs:${testFns[errorObjectPinsTestFnName].line}, slug-arms main.rs:${testFns[slugArmsTestFnName].line}, ok-pins-keys main.rs:${testFns[okPinsTestFnName].expectedKeysLine}, error-pins-keys main.rs:${testFns[errorPinsTestFnName].expectedKeysLine}, error-object-pins-keys main.rs:${testFns[errorObjectPinsTestFnName].expectedKeysLine})`,
 );

@@ -116,7 +116,7 @@ The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/co
 - `window` (u64): the audit-window record count echoed back from the `--window` argument. Pinned as u64 by `main.rs:7226-7229` — never a string.
 - `checks` (array of `VerifyCheck`): per-check results, see below.
 - `drift` (array of `VerifyDrift`): correlation gaps, see below.
-- `orphans_total` (u64): total number of unmatched rows the checks discovered.
+- `orphans_total` (u64): total number of unmatched rows the checks discovered. Pinned as u64 by `main.rs:7230-7233` — never a string-of-integer.
 
 Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:7209` (`verify_report_json_pins_top_level_schema`).
 

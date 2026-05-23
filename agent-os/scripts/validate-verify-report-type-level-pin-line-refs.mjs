@@ -4,30 +4,26 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // verify_report envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md line 116 cites a single main.rs range
-// for the verify_report.window (u64) type pin inside the
-// verify_report_json_pins_top_level_schema fn body.
+// docs/ipc-and-http-gateway.md cites inner assertion ranges inside
+// verify_report_json_pins_top_level_schema:
 //
-// Before this validator landed, the docs prose said the field was
-// "(u64)" with no main.rs cite; the assertion at main.rs:7226-7229
-// (assert!(value["window"].is_u64(), ...);) was only enforced at test
-// runtime. The validator binds the docs prose to the source-of-truth
-// so a regression that turned the field into a non-u64 type (e.g.,
-// is_string for a string-of-integer encoding) surfaces at the
-// docs-validator level (not just at test runtime).
+//   - line 116 cites `window` (u64) type pin.
+//   - line 119 cites `orphans_total` (u64) type pin.
 //
-// The validator scopes its lookup to the brace-balanced
-// `verify_report_json_pins_top_level_schema` fn body. The
-// value["window"].is_u64(), selector is currently unique inside
-// main.rs (this is the only verify_report envelope assertion using
-// that exact form), but the brace-scoping plus exact-trim-match
-// also isolates the verify_report one if a sibling envelope later
-// adds the same selector.
+// The existing validate-verify-report-line-refs.mjs covers the helper
+// fn, pins test declaration line, and the test-body range, but not
+// the inner type-level selector ranges. Each cite would otherwise go
+// stale silently whenever main.rs grew inside the pins test fn body.
 //
-// The range is derived as assert!-opener-to-closer (4-line
-// convention) — the cite spans the `assert!(` opener directly above
-// the selector through the closing `);` on its own line, mirroring
-// validate-capability-revoke-type-level-pin-line-refs.mjs.
+// The validator scopes each lookup to the brace-balanced
+// `verify_report_json_pins_top_level_schema` fn body. Each target's
+// selector is matched as an exact trim against the value[...].is_u64(),
+// line; the brace-scoping plus exact-match isolates verify_report's
+// pins even if a sibling envelope's pins test later carries a
+// same-named field. Each range starts at the `assert!(` opener line
+// directly above the selector (assert!-opener-to-closer 4-line
+// convention, mirroring validate-peer-list-type-level-pin-line-refs.mjs)
+// and ends at the next closing `);` line.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -40,13 +36,26 @@ const docsPath = "docs/ipc-and-http-gateway.md";
 const sourcePath = "agent-os/crates/covenant/src/main.rs";
 
 const testFnName = "verify_report_json_pins_top_level_schema";
-const selector = 'value["window"].is_u64(),';
 
-const docsRegex =
-  /- `window` \(u64\): the audit-window record count echoed back from the `--window` argument\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./;
-const docsLabel = "verify_report.window type-level pin citation";
-const docsTemplate =
-  "Pinned as u64 by `main.rs:N-M` — never a string.";
+const targets = [
+  {
+    field: "window",
+    selectorFirstLine: 'value["window"].is_u64(),',
+    docsRegex:
+      /- `window` \(u64\): the audit-window record count echoed back from the `--window` argument\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./,
+    docsLabel: "verify_report.window type-level pin citation",
+    docsTemplate: "Pinned as u64 by `main.rs:N-M` — never a string.",
+  },
+  {
+    field: "orphans_total",
+    selectorFirstLine: 'value["orphans_total"].is_u64(),',
+    docsRegex:
+      /- `orphans_total` \(u64\): total number of unmatched rows the checks discovered\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+    docsLabel: "verify_report.orphans_total type-level pin citation",
+    docsTemplate:
+      "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",
+  },
+];
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -83,8 +92,6 @@ function scanBraceBalance(lines, openerLine) {
   return null;
 }
 
-let startLine = null;
-let endLine = null;
 if (source) {
   const lines = source.split("\n");
   const testOpenerRegex = new RegExp(`^\\s+fn\\s+${testFnName}\\s*\\(`);
@@ -106,17 +113,19 @@ if (source) {
         `${sourcePath}: could not find the matching closing brace for "fn ${testFnName}" starting at line ${testStart}; remediation: confirm the test fn body is brace-balanced`,
       );
     } else {
-      const selectorMatches = [];
-      for (let index = testStart; index < testEnd; index += 1) {
-        if (lines[index].trim() === selector) {
-          selectorMatches.push(index + 1);
+      for (const target of targets) {
+        const selectorMatches = [];
+        for (let index = testStart; index < testEnd; index += 1) {
+          if (lines[index].trim() === target.selectorFirstLine) {
+            selectorMatches.push(index + 1);
+          }
         }
-      }
-      if (selectorMatches.length !== 1) {
-        fail(
-          `${sourcePath}: expected exactly 1 occurrence of \`${selector}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the window type-level assertion is present exactly once in this test`,
-        );
-      } else {
+        if (selectorMatches.length !== 1) {
+          fail(
+            `${sourcePath}: expected exactly 1 occurrence of \`${target.selectorFirstLine}\` inside ${testFnName} (lines ${testStart}-${testEnd}) but found ${selectorMatches.length}; remediation: confirm the ${target.field} type-level assertion's first line is present exactly once in this test`,
+          );
+          continue;
+        }
         const selectorLine = selectorMatches[0];
         const assertOpenerLine = selectorLine - 1;
         if (
@@ -124,40 +133,48 @@ if (source) {
           lines[assertOpenerLine - 1].trim() !== "assert!("
         ) {
           fail(
-            `${sourcePath}:${assertOpenerLine}: expected line above \`${selector}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector`,
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selectorFirstLine}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector for the ${target.field} type pin`,
           );
-        } else {
-          startLine = assertOpenerLine;
-          for (let index = selectorLine; index < testEnd; index += 1) {
-            if (lines[index].trim() === ");") {
-              endLine = index + 1;
-              break;
-            }
-          }
-          if (endLine === null) {
-            fail(
-              `${sourcePath}: could not find the closing \`);\` after the window selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
-            );
+          continue;
+        }
+        const startLine = assertOpenerLine;
+        let endLine = null;
+        for (let index = selectorLine; index < testEnd; index += 1) {
+          if (lines[index].trim() === ");") {
+            endLine = index + 1;
+            break;
           }
         }
+        if (endLine === null) {
+          fail(
+            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
+          );
+          continue;
+        }
+        target.startLine = startLine;
+        target.endLine = endLine;
       }
     }
   }
 }
 
 if (docs) {
-  const match = docs.match(docsRegex);
-  if (!match) {
-    fail(
-      `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the window type-level pin line range`,
-    );
-  } else if (startLine !== null && endLine !== null) {
-    const citedStart = parseInt(match[1], 10);
-    const citedEnd = parseInt(match[2], 10);
-    if (citedStart !== startLine || citedEnd !== endLine) {
+  for (const target of targets) {
+    const match = docs.match(target.docsRegex);
+    if (!match) {
       fail(
-        `${docsPath}: the ${docsLabel} cites main.rs:${citedStart}-${citedEnd} but the window type-level assertion spans :${startLine}-${endLine}; remediation: update the citation to :${startLine}-${endLine}`,
+        `${docsPath}: missing the ${target.docsLabel} ("${target.docsTemplate}"); remediation: restore the citation that records the ${target.field} type-level pin line range`,
       );
+      continue;
+    }
+    if (target.startLine !== undefined && target.endLine !== undefined) {
+      const citedStart = parseInt(match[1], 10);
+      const citedEnd = parseInt(match[2], 10);
+      if (citedStart !== target.startLine || citedEnd !== target.endLine) {
+        fail(
+          `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} type-level assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,
+        );
+      }
     }
   }
 }
@@ -171,5 +188,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-verify-report-type-level-pin-line-refs: ok (verify_report.window main.rs:${startLine}-${endLine})`,
+  `validate-verify-report-type-level-pin-line-refs: ok (${targets.map((t) => `${t.field} main.rs:${t.startLine}-${t.endLine}`).join(", ")})`,
 );

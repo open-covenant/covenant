@@ -548,6 +548,24 @@ Top-level keys are pinned to exactly these two by the test at `agent-os/crates/c
 
 The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crates/covenant/src/main.rs:4451`. Two unit tests at `main.rs:6334` (`memory_compaction_json_renders_stable_shape`) and `main.rs:6362` cover the shape. The CLI verb is wired at `main.rs:2178-2286` (shared with `covenant memory plan-compaction`; the `plan-compaction` arm forces dry-run and emits a different envelope documented below).
 
+`covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits a read-only compaction plan. The verb shares its argument parser with `covenant memory compact` but is forced into dry-run mode. Envelope shape:
+
+- `kind`: literal string `"memory_compaction_plan"` — distinct from `memory_compacted` so consumers can route on the planning vs mutating outcome without inspecting `outcome.mode`.
+- `outcome` (object): the same `MemoryCompactionOutcome` shape documented in the `memory_compacted` block above. For this verb, `outcome.mode` is **always** `"dry_run"` and `outcome.changed` is **always** `false`; a non-`dry_run` value here indicates daemon/CLI drift and JSON consumers should treat it as a protocol violation.
+- `expected_receipt_changes` (object): a forward-compatibility placeholder pinned by the schema test at `main.rs:6480` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`). The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic.
+
+**`--apply` is rejected** at the CLI level (`main.rs:2187-2189`: `bail!("memory plan-compaction is read-only and does not accept --apply")`) even though the underlying `Request::CompactMemory` request accepts both modes. `--reason <text>` remains mandatory, matching the `memory compact` verb.
+
+The inner `expected_receipt_changes` shape:
+
+- `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:6499-6503` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale.
+- `records` (array): empty today (length pinned to `0` at `main.rs:6508-6514`). Will gain a real shape once receipt-aware compaction lands.
+- `reason` (string): a human-readable explanation of why the block is empty. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main.rs:4465`; consumers must not branch on the exact text — only on the field's existence and type.
+
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:6431` (`memory_compaction_plan_json_pins_top_level_schema`), exercised against both a populated dry-run case and an empty dry-run case.
+
+The envelope source-of-truth lives at `memory_compaction_plan_json` in `agent-os/crates/covenant/src/main.rs:4458`. Three unit tests at `main.rs:6407` (`memory_compaction_plan_json_renders_stable_shape`), `main.rs:6431` (`memory_compaction_plan_json_pins_top_level_schema`), and `main.rs:6480` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`) cover both the outer envelope and the placeholder block. The CLI verb is wired at `main.rs:2178-2286` (shared parser with `covenant memory compact`, branched into the plan-only path at `main.rs:2179`); the `plan-compaction` arm sets `as_json` to `true` by default (`main.rs:2183`) so the unsuffixed CLI also emits the JSON envelope — there is no human-readable plan rendering.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

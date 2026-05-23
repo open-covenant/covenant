@@ -193,6 +193,7 @@ run node ./scripts/validate-peer-list-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-peer-revoke-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-intent-result-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-receipt-list-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-capability-list-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

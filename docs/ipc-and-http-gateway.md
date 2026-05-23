@@ -244,7 +244,7 @@ The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/c
 
 `covenant capabilities recent [-n|--limit <N>] --json` emits a peer-scoped view of recent signed capabilities. Envelope shape:
 
-- `kind`: literal string `"capability_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `capability_list`. Consumers routing on `kind` must match the latter literal exactly rather than reusing the verb token.
+- `kind`: literal string `"capability_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `capability_list`. Consumers routing on `kind` must match the latter literal exactly rather than reusing the verb token. Pinned at the value level by `main.rs:5918` (asserts `value["kind"].as_str() == Some("capability_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:2569`). Pinned at the type level by the schema test (`main.rs:5919-5922`) — JSON consumers must never receive a string here.
 - `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:171` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:5923-5926` — never null or a string.
 

@@ -186,6 +186,17 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `peers_purge_json` in `agent-os/crates/covenant/src/main.rs:4392`. Two unit tests at `main.rs:5895` (`peers_purge_json_renders_stable_shape`) and `main.rs:5903` cover the populated and empty cases. The CLI verb is wired at `main.rs:3624-3670`.
 
+`covenant peers rotate --json` emits the new operator token after rotation. Envelope shape:
+
+- `kind`: literal string `"peer_token_rotated"`.
+- `token_b58` (string): the full base58 operator token. The value is the new authentication credential, not a fingerprint — the envelope is **secret-bearing** and JSON output must be treated as sensitive (no logging, no shell history capture, no transport over unsecured channels).
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:5942` (`peers_rotate_json_pins_top_level_schema`).
+
+Side effects before the envelope returns (per the CLI comment at `main.rs:3684-3690`): the daemon has already persisted the new token to `$COVENANT_HOME/peers/operator.token` (mode `0600`), so the envelope is informational. Existing shells holding the previous token continue to authenticate with the old value until they re-read the file; consumers that cache the token in memory must refresh after rotation.
+
+The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4400`. The shape-pinning tests at `main.rs:5935` (`peers_rotate_json_renders_stable_shape`) and `main.rs:5942` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3671-3706`; without `--json`, the same response prints a two-line message terminating in the raw token value.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

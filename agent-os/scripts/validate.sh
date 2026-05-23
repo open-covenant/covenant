@@ -203,6 +203,7 @@ run node ./scripts/validate-audit-recent-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-audit-purged-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-audit-integrity-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-memory-purged-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-memory-read-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

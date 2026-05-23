@@ -129,7 +129,7 @@ Top-level keys are pinned to exactly these five by the test at `agent-os/crates/
 `VerifyDrift` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:33`:
 
 - `kind` (string) — drift category (e.g., `"memory_without_audit"`).
-- `id` (string, omitted when null) — record identifier when the drift entry binds to a specific row. Serialized via `#[serde(skip_serializing_if = "Option::is_none")]`, so absent rather than `null` when unbound.
+- `id` (string, omitted when null) — record identifier when the drift entry binds to a specific row. Serialized via `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-ipc/src/lib.rs:35-36`, so absent rather than `null` when unbound.
 - `message` (string) — drift description.
 - `repair` (string) — operator-facing remediation hint.
 

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // intents_resume envelopes type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites six inner assertion ranges that
+// docs/ipc-and-http-gateway.md cites seven inner assertion ranges that
 // pin types in the intents_resume envelopes:
 //
 //   - line 619 cites the error envelope's `intent_id` (string or null)
@@ -13,6 +13,10 @@ import { fileURLToPath } from "node:url";
 //   - line 620 cites the error envelope's `error` (object) at
 //     main.rs:5228-5231 — inside
 //     intents_resume_error_json_pins_top_level_schema.
+//   - line 622 cites the error envelope's inner `error.message`
+//     (string) at main.rs:5269-5272 — inside
+//     intents_resume_error_json_pins_error_object_schema (a different
+//     test fn than the top-level pins-tests).
 //   - line 615 cites the ok envelope's `settlement` (object or null)
 //     at main.rs:5389-5392 — inside
 //     intents_resume_ok_json_pins_top_level_schema.
@@ -109,6 +113,16 @@ const targets = [
     docsLabel: "intents_resume_error.error type-level pin citation",
     docsTemplate:
       "Pinned as a JSON object by `main.rs:N-M`. The inner `error` object has exactly two keys per the test EXPECTED_KEYS at `main.rs:N`:",
+  },
+  {
+    field: "error_message",
+    testFnName: "intents_resume_error_json_pins_error_object_schema",
+    selector: 'value["error"]["message"].is_string(),',
+    docsRegex:
+      /- `message` \(string\) — the human-readable diagnostic the daemon or CLI produced\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a structured object\./,
+    docsLabel: "intents_resume_error.error.message type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never a structured object.",
   },
 ];
 

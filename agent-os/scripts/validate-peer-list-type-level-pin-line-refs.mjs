@@ -23,7 +23,14 @@ import { fileURLToPath } from "node:url";
 // either as an exact-match (single-line selectors) or as a
 // startsWith match (the multi-line filter_pubkey_prefix selector,
 // which is broken across two lines as `is_string()` then `|| is_null(),`).
-// Each range ends at the next closing `);` line.
+// Each range starts at the `assert!(` opener line directly above the
+// selector match (assert!-opener-to-closer 4/5-line convention,
+// mirroring validate-capability-list-type-level-pin-line-refs.mjs and
+// validate-capability-grant-type-level-pin-line-refs.mjs) and ends at
+// the next closing `);` line. The opener-to-closer convention catches
+// a wider set of drift modes than the prior body-to-closer convention:
+// a body-to-closer cite stays correct silently when the assert!( opener
+// moves up/down by 1 line while the opener-to-closer cite fails loudly.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -144,9 +151,20 @@ if (source) {
           );
           continue;
         }
-        const startLine = selectorMatches[0];
+        const selectorLine = selectorMatches[0];
+        const assertOpenerLine = selectorLine - 1;
+        if (
+          assertOpenerLine < 1 ||
+          lines[assertOpenerLine - 1].trim() !== "assert!("
+        ) {
+          fail(
+            `${sourcePath}:${assertOpenerLine}: expected line above \`${target.selectorFirstLine}\` to contain exactly \`assert!(\`, but found \`${lines[assertOpenerLine - 1]}\`; remediation: the assert!-opener-to-closer convention requires the assert!( opener on the line directly above the selector for the ${target.field} type pin`,
+          );
+          continue;
+        }
+        const startLine = assertOpenerLine;
         let endLine = null;
-        for (let index = startLine; index < testEnd; index += 1) {
+        for (let index = selectorLine; index < testEnd; index += 1) {
           if (lines[index].trim() === ");") {
             endLine = index + 1;
             break;
@@ -154,7 +172,7 @@ if (source) {
         }
         if (endLine === null) {
           fail(
-            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${startLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
+            `${sourcePath}: could not find the closing \`);\` after the ${target.field} selector at line ${selectorLine}; remediation: confirm the surrounding assert! macro is closed on its own line`,
           );
           continue;
         }

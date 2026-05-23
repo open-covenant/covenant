@@ -189,6 +189,27 @@ fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
 
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:877-882
+// (agent_key, metadata_hash, capability_hash). Borsh serializes in
+// struct declaration order; following the alphabetical data_keys order
+// in packages/sdk/compatibility/instructions.v1.json (which is a sorted
+// set used by validate-sdk-compatibility, not a serialization spec)
+// would silently swap capability_hash and metadata_hash on the wire,
+// and the on-chain account would deserialize with the operator's
+// capability_hash parsed as metadata_hash and vice versa.
+#[allow(dead_code)] // wired in by sub-slice register-agent
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+struct RegisterAgentArgs {
+    agent_key: [u8; 32],
+    metadata_hash: [u8; 32],
+    capability_hash: [u8; 32],
+}
+
+#[allow(dead_code)] // wired in by sub-slice register-agent
+fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
+}
+
 // First 8 bytes of sha256("global:<method>") — Anchor's instruction
 // discriminator scheme. The "global:" namespace is the only one Anchor's
 // macro-generated dispatcher accepts for #[program] mod methods; dropping
@@ -6504,6 +6525,71 @@ mod tests {
                 compute_anchor_global_discriminator("register_agent"),
                 compute_anchor_global_discriminator("RegisterAgent")
             );
+        }
+    }
+
+    mod register_agent_args {
+        use super::super::{serialize_register_agent_args, RegisterAgentArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [1u8; 32],
+                metadata_hash: [2u8; 32],
+                capability_hash: [3u8; 32],
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_struct_declaration_order() {
+            // The on-chain RegisterAgentArgs struct declares fields in
+            // order agent_key, metadata_hash, capability_hash. Borsh
+            // serializes in struct order, so the wire bytes must be the
+            // 96-byte concatenation in that exact order. The expected
+            // bytes are spelled out inline so a refactor that switches
+            // to data_keys order would break the assertion loudly.
+            let mut expected = Vec::with_capacity(96);
+            expected.extend_from_slice(&[1u8; 32]); // agent_key
+            expected.extend_from_slice(&[2u8; 32]); // metadata_hash
+            expected.extend_from_slice(&[3u8; 32]); // capability_hash
+            assert_eq!(serialize_register_agent_args(&fixture()), expected);
+            assert_eq!(serialize_register_agent_args(&fixture()).len(), 96);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            // Anchor's on-chain dispatcher decodes the args via the same
+            // borsh wire format we emit here. A round-trip with
+            // BorshDeserialize confirms our encoded bytes can be parsed
+            // back to the identical struct — if a field were skipped or
+            // re-ordered, the deserialized struct would differ.
+            let original = fixture();
+            let bytes = serialize_register_agent_args(&original);
+            let decoded = RegisterAgentArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn each_field_contributes_to_the_encoded_output() {
+            // A regression that silently dropped any one field would
+            // produce a shorter byte stream that still decodes if borsh
+            // is permissive about trailing length. The on-chain program
+            // is strict, so we pin per-field byte sensitivity: mutating
+            // each field changes the output, proving no field is
+            // skipped.
+            let base = serialize_register_agent_args(&fixture());
+
+            let mut a = fixture();
+            a.agent_key[0] = 99;
+            assert_ne!(serialize_register_agent_args(&a), base);
+
+            let mut m = fixture();
+            m.metadata_hash[0] = 99;
+            assert_ne!(serialize_register_agent_args(&m), base);
+
+            let mut c = fixture();
+            c.capability_hash[0] = 99;
+            assert_ne!(serialize_register_agent_args(&c), base);
         }
     }
 

@@ -1941,14 +1941,7 @@ async fn main() -> Result<()> {
             }
 
             if as_json {
-                let payload = serde_json::json!({
-                    "kind": "bootstrap_result",
-                    "granted": granted
-                        .iter()
-                        .map(|(a, s)| serde_json::json!({ "action": a, "signature_b58": s }))
-                        .collect::<Vec<_>>(),
-                    "already_granted": already,
-                });
+                let payload = bootstrap_result_json(&granted, &already);
                 println!("{}", serde_json::to_string(&payload)?);
             } else if granted.is_empty() {
                 println!(
@@ -4584,6 +4577,20 @@ fn memory_backfill_json(row_count: u64, savepoint_name: &str, dry_run: bool) -> 
     })
 }
 
+fn bootstrap_result_json(
+    granted: &[(String, String)],
+    already_granted: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "bootstrap_result",
+        "granted": granted
+            .iter()
+            .map(|(a, s)| serde_json::json!({ "action": a, "signature_b58": s }))
+            .collect::<Vec<_>>(),
+        "already_granted": already_granted,
+    })
+}
+
 fn a2a_status_json(
     limit: usize,
     min_lease_age_ms: Option<u64>,
@@ -5648,6 +5655,88 @@ mod tests {
         assert_shape(&memory_backfill_json(0, "memory_backfill_sp_001", true));
         assert_shape(&memory_backfill_json(7, "memory_backfill_sp_002", false));
         assert_shape(&memory_backfill_json(0, "memory_backfill_sp_003", true));
+    }
+
+    #[test]
+    fn bootstrap_result_json_renders_stable_shape() {
+        let granted = vec![
+            ("memory.read".to_string(), "sig_b58_a".to_string()),
+            ("a2a.send".to_string(), "sig_b58_b".to_string()),
+        ];
+        let already = vec!["audit.read".to_string()];
+        let populated = bootstrap_result_json(&granted, &already);
+        assert_eq!(populated["kind"], "bootstrap_result");
+        assert_eq!(populated["granted"][0]["action"], "memory.read");
+        assert_eq!(populated["granted"][0]["signature_b58"], "sig_b58_a");
+        assert_eq!(populated["granted"][1]["action"], "a2a.send");
+        assert_eq!(populated["granted"][1]["signature_b58"], "sig_b58_b");
+        assert_eq!(populated["already_granted"][0], "audit.read");
+
+        let no_new_grants =
+            bootstrap_result_json(&[], &["memory.read".to_string(), "audit.read".to_string()]);
+        assert_eq!(no_new_grants["kind"], "bootstrap_result");
+        assert!(no_new_grants["granted"].as_array().unwrap().is_empty());
+        assert_eq!(no_new_grants["already_granted"][0], "memory.read");
+        assert_eq!(no_new_grants["already_granted"][1], "audit.read");
+    }
+
+    #[test]
+    fn bootstrap_result_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["already_granted", "granted", "kind"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("bootstrap_result_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "bootstrap_result_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("bootstrap_result"));
+            assert!(
+                value["granted"].is_array(),
+                "granted must be an array: {value}",
+            );
+            assert!(
+                value["already_granted"].is_array(),
+                "already_granted must be an array: {value}",
+            );
+        }
+
+        let granted = vec![
+            ("memory.read".to_string(), "sig_b58_a".to_string()),
+            ("a2a.send".to_string(), "sig_b58_b".to_string()),
+        ];
+        let already = vec!["audit.read".to_string()];
+        let populated = bootstrap_result_json(&granted, &already);
+        assert_shape(&populated);
+        assert!(
+            populated["granted"][0].is_object(),
+            "granted entries must be {{action, signature_b58}} objects, never bare strings: {populated}",
+        );
+        assert!(
+            populated["already_granted"][0].is_string(),
+            "already_granted entries must be bare action strings, never objects — the asymmetry is documented: {populated}",
+        );
+
+        let no_new_grants =
+            bootstrap_result_json(&[], &["memory.read".to_string(), "audit.read".to_string()]);
+        assert_shape(&no_new_grants);
+        assert!(
+            no_new_grants["granted"].as_array().unwrap().is_empty(),
+            "empty-granted case must serialize as [], not null or absent: {no_new_grants}",
+        );
+        assert!(
+            no_new_grants["already_granted"][0].is_string(),
+            "already_granted entries must be bare strings even when granted is empty: {no_new_grants}",
+        );
+
+        assert_shape(&bootstrap_result_json(&[], &[]));
     }
 
     #[test]

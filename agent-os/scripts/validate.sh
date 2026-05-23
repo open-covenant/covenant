@@ -70,6 +70,7 @@ run node ./scripts/validate-capability-list-line-refs.mjs
 run node ./scripts/validate-capability-revoke-line-refs.mjs
 run node ./scripts/validate-intent-result-line-refs.mjs
 run node ./scripts/validate-peers-purge-line-refs.mjs
+run node ./scripts/validate-audit-recent-line-refs.mjs
 
 case "$mode" in
   scripts)

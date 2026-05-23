@@ -61,6 +61,7 @@ run node ./scripts/validate-settlement-backfill-line-refs.mjs
 run node ./scripts/validate-chain-status-line-refs.mjs
 run node ./scripts/validate-flush-receipts-line-refs.mjs
 run node ./scripts/validate-receipt-batch-list-line-refs.mjs
+run node ./scripts/validate-capabilities-purge-line-refs.mjs
 
 case "$mode" in
   scripts)

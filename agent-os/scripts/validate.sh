@@ -110,6 +110,7 @@ run node ./scripts/validate-covenant-a2a-task-queue-entry-field-list-line-refs.m
 run node ./scripts/validate-covenant-a2a-task-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-auto-retry-report-field-list-line-refs.mjs
+run node ./scripts/validate-covenant-a2a-auto-retry-policy-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-status-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-queue-state-variant-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-auto-retry-skip-reason-variant-list-line-refs.mjs

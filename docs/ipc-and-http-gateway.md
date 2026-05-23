@@ -270,6 +270,24 @@ Side effects before the envelope returns (per the CLI comment at `main.rs:3684-3
 
 The envelope source-of-truth lives at `peers_rotate_json` in `agent-os/crates/covenant/src/main.rs:4400`. The shape-pinning tests at `main.rs:5935` (`peers_rotate_json_renders_stable_shape`) and `main.rs:5942` (`peers_rotate_json_pins_top_level_schema`) cover both a typical-token case and an empty-string defensive case (the latter exercises the key-set invariant rather than a legitimate runtime value). The CLI verb is wired at `main.rs:3671-3706`; without `--json`, the same response prints a two-line message terminating in the raw token value.
 
+`covenant audit recent [-n|--limit <N>] [--since-ms <M>] [--stream] --json` emits a window of audit events. Envelope shape:
+
+- `kind`: literal string `"audit_recent"`.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `50`, per `main.rs:3205`). Pinned as u64 at the schema test (`main.rs:6178-6181`) — never a string.
+- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:6182-6185`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
+- `events` (array of `AuditEvent`): the matched events. The array is empty when no events fall in the window.
+
+The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:43`:
+
+- `id` (string) — event UUID.
+- `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
+- `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:124`.
+- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:71` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
+
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6161` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
+
+The envelope source-of-truth lives at `audit_recent_json` in `agent-os/crates/covenant/src/main.rs:4422`. Two unit tests at `main.rs:6134` (`audit_recent_json_renders_stable_shape`) and `main.rs:6161` cover the shape. The CLI verb is wired at `main.rs:3204-3273`; without `--json`, the same response is rendered as JSONL (one `AuditEvent` per line at `main.rs:3267`) mirroring the durable `audit/events.jsonl` row shape, with `(no audit events)` printed at `main.rs:3264` when empty. The optional `--stream` flag sets `Request::RecentAudit.prefer_stream = Some(true)` (`main.rs:3234`), enabling the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal-response shape is unchanged when the streaming path is not selected.
+
 `covenant audit purge --json` emits a summary of time-bounded audit-log garbage collection. Envelope shape:
 
 - `kind`: literal string `"audit_purged"`.

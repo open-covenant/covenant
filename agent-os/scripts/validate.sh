@@ -72,6 +72,7 @@ run node ./scripts/validate-intent-result-line-refs.mjs
 run node ./scripts/validate-peers-purge-line-refs.mjs
 run node ./scripts/validate-audit-recent-line-refs.mjs
 run node ./scripts/validate-audit-purge-line-refs.mjs
+run node ./scripts/validate-audit-verify-line-refs.mjs
 
 case "$mode" in
   scripts)

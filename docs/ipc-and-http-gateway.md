@@ -103,6 +103,31 @@ The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.
 
 The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:4530`. Two unit tests at `main.rs:6892` (`chain_status_json_renders_stable_shape`) and `main.rs:6914` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
 
+`covenant verify --json` emits a cross-check report comparing the audit log against memory and receipt rows. Envelope shape:
+
+- `kind`: literal string `"verify_report"`.
+- `window` (u64): the audit-window record count echoed back from the `--window` argument.
+- `checks` (array of `VerifyCheck`): per-check results, see below.
+- `drift` (array of `VerifyDrift`): correlation gaps, see below.
+- `orphans_total` (u64): total number of unmatched rows the checks discovered.
+
+Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:6987` (`verify_report_json_pins_top_level_schema`).
+
+`VerifyCheck` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:26`:
+
+- `name` (string) — human-readable check name (e.g., `"memory audit"`).
+- `passed` (bool) — whether the check passed.
+- `message` (string) — diagnostic message (empty when the check passed cleanly).
+
+`VerifyDrift` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:33`:
+
+- `kind` (string) — drift category (e.g., `"memory_without_audit"`).
+- `id` (string, omitted when null) — record identifier when the drift entry binds to a specific row. Serialized via `#[serde(skip_serializing_if = "Option::is_none")]`, so absent rather than `null` when unbound.
+- `message` (string) — drift description.
+- `repair` (string) — operator-facing remediation hint.
+
+The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:4537`. The shape-pinning test at `main.rs:6987-7033` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

@@ -4,18 +4,20 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_read envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
+// docs/ipc-and-http-gateway.md cites four inner assertion ranges inside
 // memory_read_json_pins_top_level_schema:
 //
 //   - line 413 cites `tier` (string or null) at main.rs:6838-6841.
+//   - line 414 cites `limit` (u64) at main.rs:6834-6837.
 //   - line 415 cites `query` (string or null) at main.rs:6842-6845.
+//   - line 416 cites `min_relevance` (f64 or null) at main.rs:6846-6849.
 //
-// Both docs cites use the assert!-to-closing convention: the cite spans
+// All docs cites use the assert!-to-closing convention: the cite spans
 // from the line containing `assert!(` through the closing `);` line.
 // This convention is chosen to match the existing docs cites without
 // requiring a docs prose change.
 //
-// The validator scopes both selector lookups to the brace-balanced
+// The validator scopes each selector lookup to the brace-balanced
 // memory_read_json_pins_top_level_schema fn body so a same-named
 // selector inside a different envelope's pins test cannot contaminate
 // the result.
@@ -49,6 +51,24 @@ const targets = [
       /- `query` \(string or null\): for `mode="search"`, the request query \(whitespace-joined when the operator passed multiple positional tokens, per `main\.rs:\d+`\)\. For `mode="recent"`, always `null` \(the recent verb does not accept a query\)\. Pinned as string-or-null by the schema test \(`main\.rs:(\d+)-(\d+)`\)\./,
     docsLabel: "memory_read.query type-level pin citation",
     docsTemplate: "Pinned as string-or-null by the schema test (`main.rs:N-M`).",
+  },
+  {
+    field: "limit",
+    selector: 'value["limit"].is_u64(),',
+    docsRegex:
+      /- `limit` \(u64\): the request limit echoed back from `-n`\/`--limit` \(default `10` for both verbs, per `main\.rs:\d+` and `main\.rs:\d+`\)\. Pinned as u64 at the schema test \(`main\.rs:(\d+)-(\d+)`\)\./,
+    docsLabel: "memory_read.limit type-level pin citation",
+    docsTemplate: "Pinned as u64 at the schema test (`main.rs:N-M`).",
+  },
+  {
+    field: "min_relevance",
+    selector:
+      'value["min_relevance"].is_f64() || value["min_relevance"].is_null(),',
+    docsRegex:
+      /- `min_relevance` \(number or null\): for `mode="search"`, the float echoed from `--min-relevance` \(validated to a finite `f32` in `\[0\.0, 1\.0\]` at `main\.rs:\d+-\d+`\), or `null` when the flag was omitted\. For `mode="recent"`, always `null`\. Pinned as f64-or-null by the schema test \(`main\.rs:(\d+)-(\d+)`\) — never a string\./,
+    docsLabel: "memory_read.min_relevance type-level pin citation",
+    docsTemplate:
+      "Pinned as f64-or-null by the schema test (`main.rs:N-M`) — never a string.",
   },
 ];
 

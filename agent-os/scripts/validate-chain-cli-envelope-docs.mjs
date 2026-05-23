@@ -20,6 +20,7 @@ const kinds = [
   "chain_status",
   "verify_report",
   "receipt_batch_flushed",
+  "receipt_batch_list",
 ];
 
 const errors = [];

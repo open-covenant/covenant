@@ -21,6 +21,7 @@
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
+//!   covenant chain register-agent --program-id <BASE58> --agent-key <BASE58> --metadata-hash <HEX64> --capability-hash <HEX64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
@@ -63,9 +64,15 @@ use covenant_types::{
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
     SettlementReceipt,
 };
+use solana_client::rpc_client::RpcClient;
+use solana_client::rpc_config::RpcSendTransactionConfig;
+use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair::Keypair;
+use solana_sdk::signer::Signer;
+use solana_sdk::transaction::Transaction;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::net::UnixStream;
 
 fn covenant_home() -> Result<PathBuf> {
@@ -143,7 +150,6 @@ enum ClusterResolveError {
 // names to the same endpoints. Default cluster is devnet to align with
 // the devnet program ID pinned in docs/internal/status.md row "On-chain
 // settlement".
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn resolve_solana_rpc_url(
     cluster: Option<&str>,
     rpc_url_override: Option<&str>,
@@ -174,17 +180,15 @@ fn resolve_solana_rpc_url(
 // literals at every call site, where a one-character typo would derive a
 // deterministic-but-wrong PDA and surface only as AccountNotInitialized
 // from on-chain simulation.
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn settlement_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"config"], program_id)
 }
 
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn settlement_agent_pda(program_id: &Pubkey, agent_key: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"agent", agent_key.as_ref()], program_id)
 }
 
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+#[allow(dead_code)] // wired in by sub-slice buy-credits
 fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
@@ -197,15 +201,13 @@ fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
 // would silently swap capability_hash and metadata_hash on the wire,
 // and the on-chain account would deserialize with the operator's
 // capability_hash parsed as metadata_hash and vice versa.
-#[allow(dead_code)] // wired in by sub-slice register-agent
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 struct RegisterAgentArgs {
     agent_key: [u8; 32],
     metadata_hash: [u8; 32],
     capability_hash: [u8; 32],
 }
 
-#[allow(dead_code)] // wired in by sub-slice register-agent
 fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
 }
@@ -219,7 +221,6 @@ fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
 // Anchor's dispatcher routes accounts positionally; any reorder silently
 // remaps roles and the transaction would fail with a confusing
 // ConstraintSeeds / AccountNotInitialized error.
-#[allow(dead_code)] // wired in by sub-slice register-agent verb
 fn build_register_agent_instruction(
     program_id: &Pubkey,
     operator_pubkey: &Pubkey,
@@ -250,7 +251,6 @@ fn build_register_agent_instruction(
 // discriminator scheme. The "global:" namespace is the only one Anchor's
 // macro-generated dispatcher accepts for #[program] mod methods; dropping
 // it would silently produce bytes that never route on chain.
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn compute_anchor_global_discriminator(method: &str) -> [u8; 8] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -262,7 +262,6 @@ fn compute_anchor_global_discriminator(method: &str) -> [u8; 8] {
     out
 }
 
-#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
 fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLoadError> {
     let path = resolve_operator_keypair_path(provided)?;
     let raw = std::fs::read(&path).map_err(|e| classify_keypair_read_error(path.clone(), e))?;
@@ -281,6 +280,397 @@ fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLo
         path,
         reason: e.to_string(),
     })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum KeypairModeError {
+    #[error("operator keypair file at {path} cannot be inspected for permissions")]
+    Stat {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "operator keypair file at {path} has overly-permissive mode {mode:#o}; group or world read \
+         would let any local user steal the signing key. fix with: chmod 0600 {path}"
+    )]
+    GroupOrWorldReadable { path: PathBuf, mode: u32 },
+}
+
+// Operator keypairs are 64-byte ed25519 secret material. A mode that
+// permits group or world read (any bit in mode & 0o077) lets a co-tenant
+// or shared-CI scrape it without the operator's knowledge — the cluster
+// would then mint settlement transactions signed by the operator's key
+// for an attacker. Fail loudly before signing, with a chmod hint so the
+// operator can fix it without guessing.
+#[cfg(unix)]
+fn check_keypair_mode(path: &Path) -> Result<(), KeypairModeError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(|source| KeypairModeError::Stat {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mode = meta.mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(KeypairModeError::GroupOrWorldReadable {
+            path: path.to_path_buf(),
+            mode,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_keypair_mode(_path: &Path) -> Result<(), KeypairModeError> {
+    // Windows uses an ACL model rather than POSIX mode bits; the
+    // 0o077 check would be a category error there. Operators on
+    // non-Unix platforms must verify keypair ACLs out-of-band.
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PubkeyArgError {
+    #[error("--{flag} value is empty; expected a 32-byte base58-encoded Solana public key")]
+    Empty { flag: &'static str },
+    #[error("--{flag} {value:?} is not a valid 32-byte base58 Solana public key: {reason}")]
+    Invalid {
+        flag: &'static str,
+        value: String,
+        reason: String,
+    },
+}
+
+fn parse_pubkey_arg(flag: &'static str, value: &str) -> Result<Pubkey, PubkeyArgError> {
+    use std::str::FromStr;
+    if value.is_empty() {
+        return Err(PubkeyArgError::Empty { flag });
+    }
+    Pubkey::from_str(value).map_err(|e| PubkeyArgError::Invalid {
+        flag,
+        value: value.to_string(),
+        reason: e.to_string(),
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum Hash32ArgError {
+    #[error("--{flag} value is empty; expected exactly 64 hex characters (32 bytes)")]
+    Empty { flag: &'static str },
+    #[error("--{flag} expected exactly 64 hex characters (32 bytes); got {actual} characters")]
+    WrongLength { flag: &'static str, actual: usize },
+    #[error("--{flag} contains a non-hex character at position {position}: {ch:?}")]
+    BadHexChar {
+        flag: &'static str,
+        position: usize,
+        ch: char,
+    },
+}
+
+fn parse_hash32_arg(flag: &'static str, value: &str) -> Result<[u8; 32], Hash32ArgError> {
+    if value.is_empty() {
+        return Err(Hash32ArgError::Empty { flag });
+    }
+    if value.len() != 64 {
+        return Err(Hash32ArgError::WrongLength {
+            flag,
+            actual: value.len(),
+        });
+    }
+    let mut out = [0u8; 32];
+    let bytes = value.as_bytes();
+    for i in 0..32 {
+        let hi = hex_nibble(bytes[2 * i]).ok_or(Hash32ArgError::BadHexChar {
+            flag,
+            position: 2 * i,
+            ch: bytes[2 * i] as char,
+        })?;
+        let lo = hex_nibble(bytes[2 * i + 1]).ok_or(Hash32ArgError::BadHexChar {
+            flag,
+            position: 2 * i + 1,
+            ch: bytes[2 * i + 1] as char,
+        })?;
+        out[i] = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct RegisterAgentCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    agent_key: [u8; 32],
+    metadata_hash: [u8; 32],
+    capability_hash: [u8; 32],
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_register_agent_cli_args(args: &[String]) -> Result<RegisterAgentCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut agent_key_pubkey: Option<Pubkey> = None;
+    let mut metadata_hash: Option<[u8; 32]> = None;
+    let mut capability_hash: Option<[u8; 32]> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--agent-key" => {
+                i += 1;
+                let v = args.get(i).context("--agent-key needs a value")?;
+                agent_key_pubkey = Some(parse_pubkey_arg("agent-key", v)?);
+            }
+            "--metadata-hash" => {
+                i += 1;
+                let v = args.get(i).context("--metadata-hash needs a value")?;
+                metadata_hash = Some(parse_hash32_arg("metadata-hash", v)?);
+            }
+            "--capability-hash" => {
+                i += 1;
+                let v = args.get(i).context("--capability-hash needs a value")?;
+                capability_hash = Some(parse_hash32_arg("capability-hash", v)?);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed: u64 = v
+                    .parse()
+                    .context("--confirm-timeout-ms must be a non-negative integer")?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let agent_key_pubkey = agent_key_pubkey.context("--agent-key is required")?;
+    let metadata_hash = metadata_hash.context("--metadata-hash is required")?;
+    let capability_hash = capability_hash.context("--capability-hash is required")?;
+    Ok(RegisterAgentCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        agent_key: agent_key_pubkey.to_bytes(),
+        metadata_hash,
+        capability_hash,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+// Splitting tx construction out of run_chain_register_agent lets unit
+// tests pin the fee-payer + single-signer invariant without standing
+// up a real RPC client. Anchor's dispatcher reads
+// message.account_keys[0] as the fee payer, and a tx whose fee payer
+// disagrees with the only signer would be rejected by the cluster
+// with a SignatureFailure error that surfaces only at submission
+// time.
+fn sign_register_agent_tx(
+    operator: &Keypair,
+    program_id: &Pubkey,
+    args: &RegisterAgentArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix = build_register_agent_instruction(program_id, &operator.pubkey(), args);
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn register_agent_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "register-agent",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "status": "confirmed",
+    })
+}
+
+fn register_agent_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "register-agent",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+async fn run_chain_register_agent(args: &[String]) -> Result<()> {
+    let parsed = parse_register_agent_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = RegisterAgentArgs {
+        agent_key: parsed.agent_key,
+        metadata_hash: parsed.metadata_hash,
+        capability_hash: parsed.capability_hash,
+    };
+    let program_id = parsed.program_id;
+    let agent_key_b58 = Pubkey::new_from_array(parsed.agent_key).to_string();
+
+    // Build + sign the tx on a dedicated blocking thread. The blocking
+    // RpcClient builds its own current-thread tokio runtime in its
+    // constructor; constructing it inside the outer #[tokio::main]
+    // runtime would panic ("Cannot start a runtime from within a
+    // runtime"), so the construction lives behind spawn_blocking.
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_register_agent_tx(&kp, &program_id, &prep_args, blockhash);
+            // tx.signatures[0] is the canonical signature for the
+            // tx; Transaction::new_signed_with_payer guarantees it is
+            // filled when the operator keypair signs as fee payer.
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    // ClientError carries large detail fields; box it through the
+    // join handle so clippy::result_large_err is satisfied and the
+    // join payload stays a single pointer-sized smart pointer.
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    RpcSendTransactionConfig::default(),
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            // The blocking submit task keeps running in the
+            // background; we only stop waiting on confirmation. The
+            // signature is already known from the locally-signed tx,
+            // so the operator can poll the cluster manually.
+            let envelope = register_agent_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!("send_and_confirm_transaction failed: {client_err}")
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = register_agent_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result<()> {
@@ -346,6 +736,9 @@ fn print_usage() {
         "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
+    eprintln!(
+        "  covenant chain register-agent --program-id BASE58 --agent-key BASE58 --metadata-hash HEX64 --capability-hash HEX64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement register_agent transaction with the operator keypair"
+    );
     eprintln!(
         "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
     );
@@ -1898,7 +2291,10 @@ async fn main() -> Result<()> {
                         other => bail!("unexpected response: {other:?}"),
                     }
                 }
-                "register-agent" | "stake" | "buy-credits" => {
+                "register-agent" => {
+                    run_chain_register_agent(&args[2..]).await?;
+                }
+                "stake" | "buy-credits" => {
                     bail!(
                         "chain {} is prepared by the Solana SDK; daemon signing is not wired yet",
                         args[1]
@@ -6875,6 +7271,393 @@ mod tests {
             let owner = fixed_owner();
             let expected = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &p);
             assert_eq!(settlement_credits_pda(&p, &owner), expected);
+        }
+    }
+
+    mod keypair_mode {
+        use super::super::{check_keypair_mode, KeypairModeError};
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        #[cfg(unix)]
+        fn set_mode(path: &std::path::Path, mode: u32) {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("set mode");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn rejects_world_readable_mode_with_chmod_hint() {
+            // Mode 0644 leaves the secret material readable by any
+            // local user. The check must bail with a message that
+            // names the file and points the operator at the chmod
+            // remediation; otherwise the operator could miss the
+            // exposure window.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("id.json");
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(b"placeholder").expect("write");
+            set_mode(&path, 0o644);
+            let err = check_keypair_mode(&path).expect_err("must error");
+            match &err {
+                KeypairModeError::GroupOrWorldReadable { mode, .. } => {
+                    assert_eq!(*mode, 0o644)
+                }
+                other => panic!("expected GroupOrWorldReadable, got {other:?}"),
+            }
+            let msg = err.to_string();
+            assert!(msg.contains("chmod 0600"), "message hints at chmod: {msg}");
+            assert!(
+                msg.contains(path.to_string_lossy().as_ref()),
+                "message names the offending path: {msg}",
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn rejects_group_readable_mode() {
+            // 0640 grants the group read access — still enough for
+            // a co-tenant in the same posix group to scrape the
+            // operator's signing key.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("id.json");
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(b"placeholder").expect("write");
+            set_mode(&path, 0o640);
+            let err = check_keypair_mode(&path).expect_err("must error");
+            assert!(
+                matches!(
+                    err,
+                    KeypairModeError::GroupOrWorldReadable { mode: 0o640, .. }
+                ),
+                "expected GroupOrWorldReadable(0o640), got {err:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn accepts_owner_only_mode() {
+            // 0600 (and 0400) leave only the file owner with read
+            // access; the check must pass without raising.
+            for mode in [0o600u32, 0o400u32] {
+                let dir = tempdir().expect("tempdir");
+                let path = dir.path().join("id.json");
+                let mut f = std::fs::File::create(&path).expect("create fixture");
+                f.write_all(b"placeholder").expect("write");
+                set_mode(&path, mode);
+                check_keypair_mode(&path)
+                    .unwrap_or_else(|e| panic!("mode {mode:o} must be accepted: {e}"));
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn missing_file_returns_stat_variant() {
+            // A path that does not exist must surface Stat, not the
+            // generic GroupOrWorldReadable variant, so the operator
+            // can tell "the key file is missing" from "the key file
+            // is exposed".
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("absent.json");
+            let err = check_keypair_mode(&path).expect_err("must error");
+            assert!(
+                matches!(err, KeypairModeError::Stat { .. }),
+                "expected Stat, got {err:?}"
+            );
+        }
+    }
+
+    mod register_agent_arg_parsing {
+        use super::super::{
+            parse_hash32_arg, parse_pubkey_arg, parse_register_agent_cli_args, Hash32ArgError,
+            PubkeyArgError,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            // 32-byte all-1s array encodes to a known-valid 32-byte
+            // base58 Pubkey; using a fixed value keeps the test
+            // hermetic across architectures.
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn hex_32(b: u8) -> String {
+            (0..32).map(|_| format!("{b:02x}")).collect::<String>()
+        }
+
+        #[test]
+        fn rejects_short_agent_key_with_named_flag() {
+            // A 31-byte base58 input would silently parse if we
+            // accepted any byte length; the helper must surface the
+            // flag name so the operator knows which value is wrong.
+            let short_b58 = bs58::encode([1u8; 31]).into_string();
+            let err = parse_pubkey_arg("agent-key", &short_b58).expect_err("must error");
+            match err {
+                PubkeyArgError::Invalid { flag, value, .. } => {
+                    assert_eq!(flag, "agent-key");
+                    assert_eq!(value, short_b58);
+                }
+                other => panic!("expected Invalid, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn rejects_empty_pubkey() {
+            let err = parse_pubkey_arg("program-id", "").expect_err("must error");
+            assert!(matches!(err, PubkeyArgError::Empty { flag: "program-id" }));
+        }
+
+        #[test]
+        fn parses_canonical_pubkey_round_trip() {
+            let v = valid_pubkey_b58();
+            let parsed = parse_pubkey_arg("agent-key", &v).expect("parses");
+            assert_eq!(parsed.to_string(), v);
+        }
+
+        #[test]
+        fn rejects_hex_hash_with_wrong_length() {
+            // 63-char input must not silently truncate to 31 bytes.
+            // The helper surfaces the actual char count so the
+            // operator can fix the off-by-one.
+            let too_short = "a".repeat(63);
+            let err = parse_hash32_arg("metadata-hash", &too_short).expect_err("must error");
+            match err {
+                Hash32ArgError::WrongLength { flag, actual } => {
+                    assert_eq!(flag, "metadata-hash");
+                    assert_eq!(actual, 63);
+                }
+                other => panic!("expected WrongLength, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn rejects_hex_hash_with_non_hex_character() {
+            let mut v = hex_32(0xab);
+            v.replace_range(10..11, "g");
+            let err = parse_hash32_arg("capability-hash", &v).expect_err("must error");
+            match err {
+                Hash32ArgError::BadHexChar {
+                    flag, position, ch, ..
+                } => {
+                    assert_eq!(flag, "capability-hash");
+                    assert_eq!(position, 10);
+                    assert_eq!(ch, 'g');
+                }
+                other => panic!("expected BadHexChar, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn parses_canonical_hash_round_trip() {
+            let bytes = parse_hash32_arg("metadata-hash", &hex_32(0x5a)).expect("parses");
+            assert_eq!(bytes, [0x5a; 32]);
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let pubkey = valid_pubkey_b58();
+            let meta = hex_32(0xab);
+            let cap = hex_32(0xcd);
+            let argv: Vec<String> = vec![
+                "--program-id".into(),
+                pubkey.clone(),
+                "--agent-key".into(),
+                pubkey.clone(),
+                "--metadata-hash".into(),
+                meta.clone(),
+                "--capability-hash".into(),
+                cap.clone(),
+            ];
+            let parsed = parse_register_agent_cli_args(&argv).expect("parses");
+            assert_eq!(parsed.cluster, "devnet", "default cluster is devnet");
+            assert_eq!(
+                parsed.confirm_timeout_ms, 60_000,
+                "default confirm-timeout-ms is 60000"
+            );
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.metadata_hash, [0xab; 32]);
+            assert_eq!(parsed.capability_hash, [0xcd; 32]);
+        }
+
+        #[test]
+        fn missing_required_program_id_errors() {
+            let argv: Vec<String> = vec![
+                "--agent-key".into(),
+                valid_pubkey_b58(),
+                "--metadata-hash".into(),
+                hex_32(1),
+                "--capability-hash".into(),
+                hex_32(2),
+            ];
+            let err = parse_register_agent_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("--program-id"),
+                "error names the missing flag: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_zero_confirm_timeout() {
+            let pubkey = valid_pubkey_b58();
+            let argv: Vec<String> = vec![
+                "--program-id".into(),
+                pubkey.clone(),
+                "--agent-key".into(),
+                pubkey,
+                "--metadata-hash".into(),
+                hex_32(1),
+                "--capability-hash".into(),
+                hex_32(2),
+                "--confirm-timeout-ms".into(),
+                "0".into(),
+            ];
+            let err = parse_register_agent_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "rejects 0 with named reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_flag() {
+            let err = parse_register_agent_cli_args(&["--unknown".into()]).expect_err("must error");
+            assert!(
+                err.to_string().contains("--unknown"),
+                "names the unknown flag: {err}"
+            );
+        }
+    }
+
+    mod register_agent_tx_shape {
+        use super::super::{
+            build_register_agent_instruction, sign_register_agent_tx, RegisterAgentArgs,
+        };
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [42u8; 32],
+                metadata_hash: [43u8; 32],
+                capability_hash: [44u8; 32],
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            // Anchor's dispatcher and the cluster's signature check
+            // both read message.account_keys[0] as the fee payer.
+            // A regression that derived the fee payer from a
+            // different account would land the tx in
+            // SignatureFailure at the cluster, which only surfaces
+            // at submission. Pinning account_keys[0] here makes the
+            // regression a local-test failure.
+            let kp = Keypair::new();
+            let tx = sign_register_agent_tx(&kp, &fixed_program(), &fixed_args(), Hash::default());
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            // The on-chain RegisterAgent struct expects exactly one
+            // signer (the operator). A tx built with extra signing
+            // keypairs would be rejected with SignerCountMismatch.
+            let kp = Keypair::new();
+            let tx = sign_register_agent_tx(&kp, &fixed_program(), &fixed_args(), Hash::default());
+            assert_eq!(tx.signatures.len(), 1, "exactly one signature");
+            assert_eq!(
+                tx.message.header.num_required_signatures, 1,
+                "exactly one required signature"
+            );
+        }
+
+        #[test]
+        fn instruction_matches_build_register_agent_instruction_output() {
+            // The encoded instruction in the tx must equal the
+            // standalone build_register_agent_instruction output for
+            // the same inputs; otherwise a refactor that inlined the
+            // builder could drift in shape without the standalone
+            // unit tests catching it.
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let args = fixed_args();
+            let expected_ix = build_register_agent_instruction(&program, &kp.pubkey(), &args);
+            let tx = sign_register_agent_tx(&kp, &program, &args, Hash::default());
+
+            assert_eq!(tx.message.instructions.len(), 1, "exactly one instruction");
+            let actual_ix = &tx.message.instructions[0];
+            assert_eq!(actual_ix.data, expected_ix.data, "instruction data matches");
+            // The compiled message references each account-meta from the
+            // instruction by index into message.account_keys; verify every
+            // account from the builder is present in the compiled
+            // message. The program_id is also added to account_keys by
+            // Message::new, so account_keys.len() ≥ accounts.len() + 1
+            // — count equality is intentionally not asserted.
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod register_agent_json_envelopes {
+        use super::super::{register_agent_confirmed_json, register_agent_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            // Operators and downstream tooling consume this envelope
+            // by key. Pinning the shape inline makes a renamed key
+            // (e.g. "tx" → "transaction") fail loudly during local
+            // tests instead of breaking downstream parsers silently.
+            let v = register_agent_confirmed_json(
+                "sig123",
+                "https://api.devnet.solana.com",
+                "devnet",
+                "agentB58",
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "register-agent");
+            assert_eq!(v["signature"], "sig123");
+            assert_eq!(v["rpc_url"], "https://api.devnet.solana.com");
+            assert_eq!(v["cluster"], "devnet");
+            assert_eq!(v["agent_key"], "agentB58");
+            assert_eq!(v["status"], "confirmed");
+        }
+
+        #[test]
+        fn timeout_envelope_uses_distinct_kind_and_status() {
+            // Distinct kind + status let monitors disambiguate a
+            // confirmed transaction from a submitted-but-not-yet-
+            // confirmed one without parsing free-form text.
+            let v = register_agent_timeout_json(
+                "sig999",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                30_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["signature"], "sig999");
+            assert_eq!(v["timeout_ms"], 30_000);
         }
     }
 }

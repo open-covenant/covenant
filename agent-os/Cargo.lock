@@ -1236,6 +1236,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh 1.6.1",
+ "bs58",
  "covenant-a2a",
  "covenant-audit",
  "covenant-ipc",

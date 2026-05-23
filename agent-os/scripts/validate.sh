@@ -99,6 +99,7 @@ run node ./scripts/validate-covenant-a2a-enum-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-struct-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-default-impl-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-error-fn-block-range-line-refs.mjs
+run node ./scripts/validate-covenant-a2a-a2a-idempotency-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-struct-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-tool-spec-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-content-enum-annotation-line-refs.mjs

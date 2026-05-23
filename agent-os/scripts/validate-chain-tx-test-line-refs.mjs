@@ -4,12 +4,18 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Chain tx test line-ref drift guard. docs/ipc-and-http-gateway.md, in the
-// Chain Transaction Envelopes section, cites twelve unit-test line numbers
-// across two halves of the same anchor sentence: six kind-pinning tests
-// (the original "Six unit tests at ... pin the kind strings" phrase) and
-// six sibling *_pins_top_level_schema tests that assert the full
-// documented top-level key set. The line numbers shift whenever main.rs
-// grows above the cited tests, and the docs do not auto-update.
+// Chain Transaction Envelopes section, cites two sets of main.rs line refs:
+//
+//   - Six helper-function line refs in the source-of-truth sentence
+//     ("The verb-source-of-truth lives in the CLI emitters: ... at
+//     `main.rs:NNN` ...") naming the six envelope emitters.
+//   - Twelve unit-test line refs across both halves of the test anchor
+//     sentence ("Six unit tests at ... pin the kind strings, and six
+//     sibling *_pins_top_level_schema tests at ... assert the full
+//     documented top-level key set").
+//
+// All eighteen line numbers shift whenever main.rs grows above the cited
+// declarations, and the docs do not auto-update.
 //
 // This validator derives the line numbers from main.rs at run time by
 // matching twelve expected test fn names — three copies each of
@@ -17,10 +23,14 @@ import { fileURLToPath } from "node:url";
 // `confirmed_envelope_pins_top_level_schema`, and
 // `timeout_envelope_pins_top_level_schema` (one in each of the chain
 // register_agent / stake / buy_credits test modules) plus one each of the
-// three uniquely-named timeout-envelope kind-pinning tests — and asserts
-// every derived line number appears inside the captured anchor sentence
-// that spans both halves. Line numbers are never hardcoded; the validator
-// self-corrects to wherever the tests currently live.
+// three uniquely-named timeout-envelope kind-pinning tests — and six
+// helper fn names (the chain register-agent / stake / buy-credits
+// confirmed and timeout JSON emitters). Helper fns are matched with a
+// strict `^fn` regex (no indentation) so they cannot collide with the
+// indented test fns inside `mod` blocks. Every derived line number must
+// appear inside the captured anchor sentence for its set (test or
+// helper). Line numbers are never hardcoded; the validator self-corrects
+// to wherever the declarations currently live.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -46,6 +56,16 @@ const expectedConfirmedDocumentedCount = 3;
 const expectedConfirmedTopLevelSchemaCount = 3;
 const expectedTimeoutTopLevelSchemaCount = 3;
 
+const expectedHelperFnNames = new Set([
+  "register_agent_confirmed_json",
+  "register_agent_timeout_json",
+  "stake_confirmed_json",
+  "stake_timeout_json",
+  "buy_credits_confirmed_json",
+  "buy_credits_timeout_json",
+]);
+const expectedHelperTotal = 6;
+
 const errors = [];
 const fail = (message) => errors.push(message);
 
@@ -63,12 +83,17 @@ try {
 }
 
 const found = [];
+const foundHelpers = [];
 if (emitters) {
   const lines = emitters.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^\s*fn\s+(\w+)\s*\(/);
-    if (match && expectedTestFnNames.has(match[1])) {
-      found.push({ name: match[1], line: index + 1 });
+    const testMatch = lines[index].match(/^\s*fn\s+(\w+)\s*\(/);
+    if (testMatch && expectedTestFnNames.has(testMatch[1])) {
+      found.push({ name: testMatch[1], line: index + 1 });
+    }
+    const helperMatch = lines[index].match(/^fn\s+(\w+)\s*\(/);
+    if (helperMatch && expectedHelperFnNames.has(helperMatch[1])) {
+      foundHelpers.push({ name: helperMatch[1], line: index + 1 });
     }
   }
 }
@@ -107,6 +132,23 @@ if (emitters) {
   }
 }
 
+if (emitters && foundHelpers.length !== expectedHelperTotal) {
+  fail(
+    `${emittersPath}: expected ${expectedHelperTotal} chain tx helper fn declarations matching the six expected names but found ${foundHelpers.length}; remediation: confirm the helper fn names at top level still match the expectedHelperFnNames set (register_agent / stake / buy_credits, confirmed and timeout)`,
+  );
+}
+
+if (emitters) {
+  for (const helperName of expectedHelperFnNames) {
+    const count = foundHelpers.filter((entry) => entry.name === helperName).length;
+    if (count !== 1) {
+      fail(
+        `${emittersPath}: expected exactly 1 top-level "fn ${helperName}" but found ${count}; remediation: confirm the chain tx envelope emitter is a single top-level helper, not merged or duplicated`,
+      );
+    }
+  }
+}
+
 let sentence = null;
 if (docs) {
   const match = docs.match(
@@ -131,6 +173,30 @@ if (sentence) {
   }
 }
 
+let helperSentence = null;
+if (docs) {
+  const match = docs.match(
+    /The verb-source-of-truth lives in the CLI emitters:[\s\S]{0,600}?buy_credits_timeout_json` at `:\d+` and `:\d+`\./,
+  );
+  if (!match) {
+    fail(
+      `${docsPath}: missing the source-of-truth sentence ("The verb-source-of-truth lives in the CLI emitters: ... \`buy_credits_confirmed_json\` and \`buy_credits_timeout_json\` at \`:NNNN\` and \`:NNNN\`.") in the Chain Transaction Envelopes section; remediation: restore the sentence that records the chain tx helper-fn line refs`,
+    );
+  } else {
+    helperSentence = match[0];
+  }
+}
+
+if (helperSentence) {
+  for (const entry of foundHelpers) {
+    if (!helperSentence.includes(`:${entry.line}`)) {
+      fail(
+        `${docsPath}: the chain tx source-of-truth sentence does not cite main.rs:${entry.line} (fn ${entry.name}); remediation: update the sentence to include this line number`,
+      );
+    }
+  }
+}
+
 if (errors.length > 0) {
   console.error("validate-chain-tx-test-line-refs: failed");
   for (const error of errors) {
@@ -140,5 +206,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-chain-tx-test-line-refs: ok (${found.length} chain tx test fn line refs match)`,
+  `validate-chain-tx-test-line-refs: ok (${found.length} chain tx test fn line refs + ${foundHelpers.length} helper fn line refs match)`,
 );

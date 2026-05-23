@@ -559,7 +559,7 @@ The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crat
 
 - `kind`: literal string `"memory_compaction_plan"` — distinct from `memory_compacted` so consumers can route on the planning vs mutating outcome without inspecting `outcome.mode`.
 - `outcome` (object): the same `MemoryCompactionOutcome` shape documented in the `memory_compacted` block above. For this verb, `outcome.mode` is **always** `"dry_run"` and `outcome.changed` is **always** `false`; a non-`dry_run` value here indicates daemon/CLI drift and JSON consumers should treat it as a protocol violation. Pinned as a structured object by `main.rs:6670-6673` — never a string blob.
-- `expected_receipt_changes` (object): a forward-compatibility placeholder pinned by the schema test at `main.rs:6702` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`). The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic.
+- `expected_receipt_changes` (object): a forward-compatibility placeholder pinned by the schema test at `main.rs:6702` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`). The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic. Pinned as a structured object by `main.rs:6674-6677` — never a string blob.
 
 **`--apply` is rejected** at the CLI level (`main.rs:2180-2182`: `bail!("memory plan-compaction is read-only and does not accept --apply")`) even though the underlying `Request::CompactMemory` request accepts both modes. `--reason <text>` remains mandatory, matching the `memory compact` verb.
 

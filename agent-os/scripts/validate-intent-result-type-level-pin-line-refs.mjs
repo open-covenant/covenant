@@ -71,6 +71,16 @@ const targets = [
     docsTemplate:
       "Pinned as object-or-null by `main.rs:N-M` — never an integer or array.",
   },
+  {
+    field: "sources",
+    selector: 'value["sources"].is_array(),',
+    convention: "assert-opener",
+    docsRegex:
+      /- `sources` \(array of strings\): source labels that contributed to the result \(e\.g\., `\["research"\]`\)\. Pinned as an array of strings by `main\.rs:(\d+)-(\d+)` — never a comma-joined string\./,
+    docsLabel: "intent_result.sources type-level pin citation",
+    docsTemplate:
+      "Pinned as an array of strings by `main.rs:N-M` — never a comma-joined string.",
+  },
 ];
 
 const errors = [];

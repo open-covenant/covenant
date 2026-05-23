@@ -18,6 +18,7 @@ const kinds = [
   "covenant.chain.tx.v1",
   "covenant.chain.tx.timeout.v1",
   "chain_status",
+  "verify_report",
 ];
 
 const errors = [];

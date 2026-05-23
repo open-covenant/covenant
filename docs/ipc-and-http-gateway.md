@@ -441,7 +441,7 @@ The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/cov
 - `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty.
 - `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:3422` when both `tasks` and `results` are empty.
 
-The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:131`:
+The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:132`:
 
 - `state` (string) — `A2ATaskQueueState` slug, exactly `"queued"` or `"in_flight"` (same enumeration as the top-level `state_filter`). The canonical signal for queue-state branching — **not** lease-field presence.
 - `task` (object) — nested `A2ATask` (see below).

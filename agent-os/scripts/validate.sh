@@ -81,6 +81,7 @@ run node ./scripts/validate-memory-purge-line-refs.mjs
 run node ./scripts/validate-a2a-compact-line-refs.mjs
 run node ./scripts/validate-a2a-retry-line-refs.mjs
 run node ./scripts/validate-ignore-report-line-refs.mjs
+run node ./scripts/validate-bootstrap-result-line-refs.mjs
 
 case "$mode" in
   scripts)

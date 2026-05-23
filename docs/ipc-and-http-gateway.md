@@ -232,6 +232,23 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/covenant/src/main.rs:4414`. Two unit tests at `main.rs:6094` (`audit_purge_json_renders_stable_shape`) and `main.rs:6102` cover the populated (`purged=3`) and empty (`purged=0`) cases. The CLI verb is wired at `main.rs:3298-3340`.
 
+`covenant audit verify --json` emits the audit-log hash-chain integrity report. Envelope shape:
+
+- `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens.
+- `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:6256` to be a JSON object.
+
+The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:61`:
+
+- `events` (u64) — total audit events the integrity walk visited.
+- `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.
+- `valid` (bool) — `true` when the hash chain is intact end-to-end; `false` when one or more failures were recorded.
+- `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:6229`.
+- `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`.
+
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6239` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
+
+The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/covenant/src/main.rs:4435`. Two unit tests at `main.rs:6211` (`audit_verify_json_renders_stable_shape`) and `main.rs:6239` cover the shape. The CLI verb is wired at `main.rs:3275-3296`; without `--json`, the same response is printed as the bare `AuditIntegrityReport` JSON (no envelope wrapper) at `main.rs:3291`, so JSON consumers must use `--json` to get the kind-discriminated envelope — the unsuffixed output is structurally compatible with `report` but lacks the `kind` field.
+
 `covenant memory purge --json` emits a summary of time-bounded memory-store garbage collection. Envelope shape:
 
 - `kind`: literal string `"memory_purged"`.

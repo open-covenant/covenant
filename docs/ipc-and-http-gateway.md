@@ -195,9 +195,9 @@ The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/cra
 `covenant receipts recent [-n|--limit <N>] [--since-ms <M>] --json` emits a window of local settlement receipts. Envelope shape:
 
 - `kind`: literal string `"receipt_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `receipt_list` (singular `receipt_`, not `receipts_`); consumers routing on `kind` must match the literal exactly rather than reusing the verb token or pluralising.
-- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:2837`). Pinned at the type level by the schema test (`main.rs:5484-5486`) — never a string.
-- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:5487-5490`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
-- `receipts` (array of `SettlementReceipt`): the matched receipts in the order returned by the daemon. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `(no receipts)` for that case at `main.rs:2867`.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:2830`). Pinned at the type level by the schema test (`main.rs:5491-5493`) — never a string.
+- `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:5494-5497`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
+- `receipts` (array of `SettlementReceipt`): the matched receipts in the order returned by the daemon. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `(no receipts)` for that case at `main.rs:2860`.
 
 The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:339`:
 
@@ -214,11 +214,11 @@ The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/
 - `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; `null` until then. Always present on the wire.
 - `slot` (u64 or null) — confirmation slot once available; `null` until then. Always present on the wire.
 - `confirmed_at` (u64 or null) — Unix-epoch milliseconds when the on-chain transaction confirmed; `null` until then. Always present on the wire.
-- `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:335-337`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:2871-2874` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
+- `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:335-337`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:2864-2867` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:5473` (`receipt_list_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, populated without `since_ms`, and empty without `since_ms`.
 
-The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/covenant/src/main.rs:4307`. Two unit tests at `main.rs:5432` (`receipt_list_json_renders_stable_shape`) and `main.rs:5473` cover the shape. The CLI verb is wired at `main.rs:2832-2885`; without `--json`, each receipt is printed as `[<settled_at>] <resource>: <credits> credits — <onchain>` at `main.rs:2875-2879`, with `<onchain>` resolving to the `tx_sig`/`onchain_sig` value or the literal `(local-only)` when both are null.
+The envelope source-of-truth lives at `receipt_list_json` in `agent-os/crates/covenant/src/main.rs:4307`. Two unit tests at `main.rs:5432` (`receipt_list_json_renders_stable_shape`) and `main.rs:5473` cover the shape. The CLI verb is wired at `main.rs:2825-2878`; without `--json`, each receipt is printed as `[<settled_at>] <resource>: <credits> credits — <onchain>` at `main.rs:2868-2871`, with `<onchain>` resolving to the `tx_sig`/`onchain_sig` value or the literal `(local-only)` when both are null.
 
 `covenant ping --json` emits a daemon-liveness probe. Envelope shape:
 

@@ -54,6 +54,7 @@ fi
 run node ./scripts/provenance.mjs verify-all
 run node ./scripts/validate-cli-envelope-docs.mjs
 run node ./scripts/validate-chain-cli-envelope-fields.mjs
+run node ./scripts/validate-chain-tx-test-line-refs.mjs
 
 case "$mode" in
   scripts)

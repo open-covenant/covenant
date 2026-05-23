@@ -635,6 +635,23 @@ Envelope shape:
 
 The envelope source-of-truth lives at `settlement_backfill_json` in `agent-os/crates/covenant/src/main.rs:4565`. The CLI verb is wired at `main.rs:4041-4095` (the `settlement backfill-receipts` subcommand); without `--json`, the same response prints `row_count: <N>`, `dry_run: <bool>`, and `rollback_path: <path>|(none)` on three separate lines at `main.rs:4084-4089`. The daemon-side `Response::SettlementReceiptsBackfilled` variant carries the three fields directly (`main.rs:4069-4073`); a future schema bump must propagate through the daemon variant, the CLI emitter, and this docs block as one atomic change.
 
+`covenant memory backfill-receipt-correlation [--dry-run] [--json]` emits a versioned-schema envelope describing the legacy memory-record-to-receipt correlation backfill pass. Sibling to `settlement.backfill.v1` above — both use the `covenant.<area>.backfill.v<n>` convention, both predate forcing-function tests, and both share the `--scope-pubkey` reservation. The structural diff is the rollback channel: settlement uses a **filesystem** rollback file (`rollback_path`), memory uses a **SQLite SAVEPOINT** identifier (`savepoint_name`) so a future mutator can `ROLLBACK TO SAVEPOINT` within the same DB transaction.
+
+Envelope shape:
+
+- `schema`: literal string `"covenant.memory.backfill.v1"`. Same versioning semantics as `covenant.settlement.backfill.v1` — route on the full literal, not the prefix.
+- `row_count` (u64): count of memory records the correlation pass operated on (mutation path) or *would* operate on (dry-run path). May legitimately be `0` when no legacy rows match.
+- `savepoint_name` (string): SQLite SAVEPOINT identifier the daemon emitted for this pass. **Always a non-null string** — the field type at `memory_backfill_json` (`main.rs:4578`) is `&str`, not `Option<&str>`, so even a dry-run call returns a real savepoint name (the daemon allocates one so consumers can correlate planning runs against later mutation runs). JSON consumers must not write null-vs-value branching for this field; treat absence as a protocol violation. This is the only field-shape difference from `settlement.backfill.v1`, whose sibling `rollback_path` is string-or-null.
+- `dry_run` (bool): echoes the `--dry-run` CLI flag. Same semantics as `settlement.backfill.v1`'s `dry_run` — `true` is a planning preview, `false` is a real mutation pass.
+
+**Verb-name asymmetry**: the CLI verb is the long form `memory backfill-receipt-correlation`, **not** `memory backfill` or `memory backfill-receipts` (which would mirror the settlement sibling's shorter name). The match arm is at `main.rs:2357`; the shorter spellings do not parse and return an `unknown flag` bail. JSON consumers driving the CLI from a wrapper must hard-code the long verb token.
+
+**`--scope-pubkey` is reserved, not yet wired**: same caveat as `settlement.backfill.v1`. The CLI accepts the flag and forwards it through `Request::BackfillMemoryRecords.scope_pubkey` (`main.rs:2366-2371`, `main.rs:2380`), but the daemon-side filter is not yet implemented (see the help text at `main.rs:1454` and the file-header CLI summary at `main.rs:12`). This will change when the approved `memory-record-receipt-backfill-mutation` slice lands.
+
+**No forcing-function test**: like `bootstrap_result` and `settlement.backfill.v1`, this envelope is built inline by `memory_backfill_json` at `main.rs:4578-4585` rather than via a dedicated `*_pins_top_level_schema` test. The shape is anchored only by this documentation and the inline `serde_json::json!` macro; consumers should treat it as a docs-only contract until a forcing-function test lands.
+
+The envelope source-of-truth lives at `memory_backfill_json` in `agent-os/crates/covenant/src/main.rs:4578`. The CLI verb is wired at `main.rs:2357-2407` (the `memory backfill-receipt-correlation` arm under the `memory` subcommand); without `--json`, the same response prints `row_count: <N>`, `dry_run: <bool>`, and `savepoint_name: <name>` on three separate lines at `main.rs:2400-2402`. The daemon-side `Response::MemoryRecordsBackfilled` variant carries the three fields directly (`main.rs:2385-2389`); a future schema bump must propagate through the daemon variant, the CLI emitter, and this docs block as one atomic change.
+
 ## Human Authority
 
 The decision to bump the IPC/HTTP protocol, the wire shapes that change, the migration window, and the public release notes for v2 remain human-owned. Automation keeps this contract documented and validated; with the v2 `StreamEnvelope` fixtures landed under ADR 0010, the validator now runs in strict mode rather than dormant. It must not introduce v2 fixtures, edit `PROTOCOL_VERSION`, or relax the migration-note pairing without an approved decision.

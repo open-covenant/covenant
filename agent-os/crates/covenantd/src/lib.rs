@@ -26,7 +26,7 @@ use covenant_ipc::{
 };
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
-use covenant_memory::{IgnoreSet, MemoryStore};
+use covenant_memory::{memory_receipt_backfill_correlations, IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 #[cfg(test)]
 use covenant_permissions::verify_with_clock;
@@ -37,6 +37,7 @@ use covenant_permissions::{
     chain_scope_allows as permission_chain_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
+    memory_backfill_scope_allows as permission_memory_backfill_scope_allows,
     memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
     memory_read_scope_allows as permission_memory_read_scope_allows,
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
@@ -1452,6 +1453,13 @@ impl Server {
                 scope_pubkey,
             } => {
                 self.backfill_settlement_receipts(dry_run, scope_pubkey, peer)
+                    .await
+            }
+            Request::BackfillMemoryRecords {
+                dry_run,
+                scope_pubkey,
+            } => {
+                self.backfill_memory_records(dry_run, scope_pubkey, peer)
                     .await
             }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
@@ -5637,6 +5645,161 @@ impl Server {
         .await
     }
 
+    async fn backfill_memory_records(
+        &self,
+        dry_run: bool,
+        scope_pubkey: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        if scope_pubkey.is_some() {
+            return Response::Error {
+                message: "memory backfill --scope-pubkey is not yet supported; the operation evaluates the authenticated operator's own capability grants".into(),
+            };
+        }
+
+        let apply = !dry_run;
+        let mode = if apply { "apply" } else { "dry_run" };
+        let required = format!("memory.backfill.{mode}");
+        let check = self
+            .check_capabilities("memory-backfill".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "memory backfill {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "memory backfill requires the operator identity".into(),
+            };
+        }
+
+        // memory_receipt_backfill_correlations runs against every row the
+        // store returns with no recency filter, so probe the scope with
+        // `before_ms = u64::MAX`: only an unbounded grant (or one
+        // omitting `before_ms`) authorizes the full repair window.
+        match self
+            .memory_backfill_scope_allows(&required, apply, u64::MAX, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "mode or before_ms bound does not match capability scope".to_string();
+                self.record_capability_scope_rejected(
+                    peer,
+                    "memory-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("memory backfill rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "memory-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "memory backfill rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
+        // Server-authoritative: fetch the operator's memory records and
+        // receipts directly from the stores (filtering to the operator's
+        // own pubkey so the same scoping that recent_memory/recent_receipts
+        // enforce applies) and recompute correlations with the shared
+        // covenant_memory planner. Never accept client-supplied
+        // correlations — a peer holding memory.backfill.apply could
+        // otherwise rewrite metadata.receipt_id on arbitrary memory_record
+        // ids by inventing pairings.
+        let memories = match self.memory.recent(None, usize::MAX).await {
+            Ok(records) => records
+                .into_iter()
+                .filter(|r| r.owner.pubkey == peer.pubkey)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("memory: {e}"),
+                };
+            }
+        };
+        let receipts = match self.settlement.recent(usize::MAX).await {
+            Ok(receipts) => receipts
+                .into_iter()
+                .filter(|r| r.payer.pubkey == peer.pubkey)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("settlement: {e}"),
+                };
+            }
+        };
+        let correlations = memory_receipt_backfill_correlations(&memories, &receipts);
+
+        match self
+            .memory
+            .backfill_receipt_correlation(dry_run, correlations)
+            .await
+        {
+            Ok(outcome) => {
+                // Emitted only here, after backfill_receipt_correlation
+                // returned Ok — i.e. after the SAVEPOINT released and
+                // the surrounding transaction committed — so the audit
+                // log never claims a mutation whose data did not durably
+                // land. Issuer is the acting operator (peer), matching
+                // the SettlementReceiptBackfillApplied audience: the row
+                // surfaces on the operator's own /audit feed under the
+                // issuer==peer filter.
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::MemoryRecordBackfillApplied {
+                            row_count: outcome.row_count,
+                            savepoint_name: Some(outcome.savepoint_name.clone()),
+                            dry_run: outcome.dry_run,
+                        },
+                    },
+                )
+                .await;
+                Response::MemoryRecordsBackfilled {
+                    row_count: outcome.row_count,
+                    savepoint_name: outcome.savepoint_name,
+                    dry_run: outcome.dry_run,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("memory: {e}"),
+            },
+        }
+    }
+
+    async fn memory_backfill_scope_allows(
+        &self,
+        action: &str,
+        apply: bool,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_memory_backfill_scope_allows(action, scope, apply, before_ms)
+        })
+        .await
+    }
+
     async fn memory_repair_scope_allows(
         &self,
         action: &str,
@@ -6118,7 +6281,7 @@ mod tests {
     use super::*;
     use covenant_ipc::StreamEnvelope;
     use covenant_manifest::Manifest;
-    use covenant_memory::InMemoryStore;
+    use covenant_memory::{InMemoryStore, MEMORY_BACKFILL_SAVEPOINT_NAME};
     use covenant_router::AgentCard;
     use covenant_runtime::MockRunner;
     use covenant_settlement::InMemorySettlement;
@@ -7492,6 +7655,303 @@ required = {caps:?}
             "a scope_pubkey-rejected backfill must not touch the store"
         );
         assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    /// Seed one operator-owned memory record (no `metadata.receipt_id`) and
+    /// one operator-paid legacy receipt (no `memory_record_id`) so the
+    /// planner pairs them on owner==payer pubkey. Returns the memory id
+    /// so tests can re-read the record after backfill.
+    async fn seed_legacy_memory_and_receipt(s: &Server) -> Uuid {
+        let op = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: op.clone(),
+                text: "legacy memory awaiting receipt".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({"note": "preserved on merge"}),
+                created_at: 1,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        let receipt = SettlementReceipt {
+            id: Uuid::new_v4(),
+            payer: op,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        s.settlement.record(receipt).await.unwrap();
+        memory_id
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_apply_repairs_rows_with_capability() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::MemoryRecordsBackfilled {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(savepoint_name, MEMORY_BACKFILL_SAVEPOINT_NAME);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").and_then(|v| v.as_str()).is_some(),
+            "apply must merge receipt_id into the record metadata: {:?}",
+            record.metadata
+        );
+        assert_eq!(
+            record.metadata.get("note").and_then(|v| v.as_str()),
+            Some("preserved on merge"),
+            "apply must preserve pre-existing metadata keys: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_dry_run_reports_without_writes() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::MemoryRecordsBackfilled {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(dry_run);
+                assert_eq!(savepoint_name, MEMORY_BACKFILL_SAVEPOINT_NAME);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "dry run must not write metadata.receipt_id: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_apply_emits_audit_row_on_operator_feed() {
+        let s = server_with(vec![], "");
+        seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        let response_savepoint = match resp {
+            Response::MemoryRecordsBackfilled { savepoint_name, .. } => savepoint_name,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. }))
+            .expect("backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::MemoryRecordBackfillApplied {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(
+                    savepoint_name.as_deref(),
+                    Some(response_savepoint.as_str()),
+                    "audit row must reference the same SAVEPOINT name the operator received",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "memory.read".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillMemoryRecords {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory.backfill.apply"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "a denied backfill must not touch the store: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_non_operator_even_with_capability() {
+        // Guest holding memory.backfill.apply must still be rejected on the
+        // operator-identity gate. Mirrors the settlement-backfill
+        // operator-identity check; the cap alone is not enough.
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "memory.backfill.apply".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillMemoryRecords {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "memory backfill must reject non-operator peers even when they hold the cap: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "non-operator backfill must not touch the store: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_scope_pubkey_before_auth() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: Some("othersubjectpubkeyb58".into()),
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("--scope-pubkey is not yet supported"),
+                    "scope_pubkey must be rejected on its own guard, not auth: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "scope_pubkey-rejected backfill must not touch the store: {:?}",
+            record.metadata
+        );
     }
 
     #[tokio::test]

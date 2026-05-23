@@ -9,6 +9,7 @@
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-receipt-backfill [--limit N] [--json]
+//!   covenant memory backfill-receipt-correlation [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -120,6 +121,7 @@ fn print_usage() {
         "  covenant memory plan-compaction --reason TEXT [--detach-stale-parents] [--delete-working-before-ms M|--delete-working-older-than-ms D] [--delete-episodic-before-ms M|--delete-episodic-older-than-ms D] [--mark-longterm-stale-before-ms M|--mark-longterm-stale-older-than-ms D] [--json]"
     );
     eprintln!("  covenant memory plan-receipt-backfill [-n N] [--json]  dry-run legacy memory receipt correlation plan");
+    eprintln!("  covenant memory backfill-receipt-correlation [--dry-run] [--json]  apply legacy memory receipt correlation (--scope-pubkey reserved, not yet supported)");
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
     );
@@ -1011,6 +1013,58 @@ async fn main() -> Result<()> {
                             "receipt backfill plan: {records} candidate(s), {unmatched_receipts} unmatched legacy receipt(s), {unmatched_memory} unmatched memory record(s)"
                         );
                         println!("mutation: unsupported; this command only emits a dry-run plan");
+                    }
+                }
+                "backfill-receipt-correlation" => {
+                    let mut dry_run = false;
+                    let mut as_json = false;
+                    let mut scope_pubkey = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--dry-run" => dry_run = true,
+                            "--json" => as_json = true,
+                            "--scope-pubkey" => {
+                                i += 1;
+                                scope_pubkey = Some(
+                                    args.get(i).context("--scope-pubkey needs a value")?.clone(),
+                                );
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::BackfillMemoryRecords {
+                            dry_run,
+                            scope_pubkey,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::MemoryRecordsBackfilled {
+                            row_count,
+                            savepoint_name,
+                            dry_run,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&memory_backfill_json(
+                                        row_count,
+                                        &savepoint_name,
+                                        dry_run
+                                    ))?
+                                );
+                            } else {
+                                println!("row_count: {row_count}");
+                                println!("dry_run: {dry_run}");
+                                println!("savepoint_name: {savepoint_name}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
                     }
                 }
                 "repair" => {
@@ -3175,6 +3229,15 @@ fn settlement_backfill_json(
         "schema": "covenant.settlement.backfill.v1",
         "row_count": row_count,
         "rollback_path": rollback_path,
+        "dry_run": dry_run,
+    })
+}
+
+fn memory_backfill_json(row_count: u64, savepoint_name: &str, dry_run: bool) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "covenant.memory.backfill.v1",
+        "row_count": row_count,
+        "savepoint_name": savepoint_name,
         "dry_run": dry_run,
     })
 }

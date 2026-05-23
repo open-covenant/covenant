@@ -158,6 +158,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
         )
+        .route("/memory/records/backfill", post(memory_backfill_records))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -995,6 +996,32 @@ async fn settlement_backfill_receipts(
         s.server
             .respond(
                 Request::BackfillSettlementReceipts {
+                    dry_run: b.dry_run,
+                    scope_pubkey: b.scope_pubkey,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Deserialize, Default)]
+struct MemoryBackfillBody {
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    scope_pubkey: Option<String>,
+}
+
+async fn memory_backfill_records(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<MemoryBackfillBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::BackfillMemoryRecords {
                     dry_run: b.dry_run,
                     scope_pubkey: b.scope_pubkey,
                 },

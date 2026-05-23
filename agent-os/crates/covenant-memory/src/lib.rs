@@ -168,6 +168,47 @@ pub trait MemoryStore: Send + Sync {
 
         Ok(outcome)
     }
+
+    /// Apply legacy receipt-id correlations to the `metadata.receipt_id`
+    /// field of each named memory record. The default impl walks the
+    /// trait's [`MemoryStore::get`] / [`MemoryStore::put`] pair and is
+    /// non-atomic — a per-row failure mid-batch leaves prior rows
+    /// committed. [`SqliteStore`] overrides this with a named
+    /// [`MEMORY_BACKFILL_SAVEPOINT_NAME`] SAVEPOINT so a failure rolls
+    /// the entire batch back to zero rows changed.
+    ///
+    /// `dry_run` reports the row_count an apply would change without
+    /// writing; the count excludes correlations that would not change
+    /// stored metadata (idempotent re-runs).
+    async fn backfill_receipt_correlation(
+        &self,
+        dry_run: bool,
+        correlations: Vec<MemoryReceiptBackfillCorrelation>,
+    ) -> Result<BackfillReceiptCorrelationOutcome, MemoryError> {
+        let mut row_count: u64 = 0;
+        for correlation in &correlations {
+            let record = self
+                .get(correlation.memory_record_id)
+                .await?
+                .ok_or(MemoryError::RecordNotFound(correlation.memory_record_id))?;
+            let current = record.metadata.clone();
+            let next = merge_receipt_id(current.clone(), correlation.receipt_id);
+            if next == current {
+                continue;
+            }
+            row_count += 1;
+            if !dry_run {
+                let mut updated = record;
+                updated.metadata = next;
+                self.put(updated).await?;
+            }
+        }
+        Ok(BackfillReceiptCorrelationOutcome {
+            row_count,
+            savepoint_name: MEMORY_BACKFILL_SAVEPOINT_NAME.into(),
+            dry_run,
+        })
+    }
 }
 
 fn validate_repair_request(request: &MemoryRepairRequest) -> Result<(), MemoryError> {
@@ -944,16 +985,13 @@ impl MemoryStore for SqliteStore {
         .await
         .map_err(|e| MemoryError::Worker(e.to_string()))?
     }
-}
 
-impl SqliteStore {
     /// Apply receipt-id correlations onto memory records inside a single
-    /// SAVEPOINT-wrapped transaction. The planner that produces the
-    /// correlation list lives in the CLI binary; this method is the
-    /// mutator the future authorized `memory backfill-receipt-correlation`
-    /// surface dispatches through, mirroring the settlement-side
-    /// [`covenant_settlement::backfill_receipts_with_correlations`] API
-    /// shape.
+    /// SAVEPOINT-wrapped transaction. Overrides the trait default with a
+    /// SQLite-native SAVEPOINT so a per-row failure rolls the entire
+    /// batch back to zero rows changed. The planner that produces the
+    /// correlation list lives next to this mutator in
+    /// [`memory_receipt_backfill_correlations`].
     ///
     /// Per correlation the existing record's metadata is read, the
     /// `receipt_id` key is merged in (other keys are preserved; a
@@ -975,7 +1013,7 @@ impl SqliteStore {
     /// [`MemoryError::RecordNotFound`] and aborts the batch so the
     /// caller does not silently report success against stale planner
     /// data.
-    pub async fn backfill_receipt_correlation(
+    async fn backfill_receipt_correlation(
         &self,
         dry_run: bool,
         correlations: Vec<MemoryReceiptBackfillCorrelation>,

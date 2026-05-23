@@ -440,6 +440,21 @@ pub enum Request {
         #[serde(default)]
         scope_pubkey: Option<String>,
     },
+    /// Operator-driven backfill of `metadata.receipt_id` correlations on
+    /// legacy memory records. The daemon computes the planner output
+    /// server-side from the operator's own memory and receipt rows and
+    /// applies the resulting [`covenant_memory::MemoryReceiptBackfillCorrelation`]
+    /// list under a SQLite SAVEPOINT, so clients cannot inject arbitrary
+    /// id pairs. `dry_run` reports the row count an apply would change
+    /// without writing; `scope_pubkey` is reserved for a future
+    /// delegated mode and is rejected today. Gated to the operator
+    /// identity, mirroring [`Request::BackfillSettlementReceipts`].
+    BackfillMemoryRecords {
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        scope_pubkey: Option<String>,
+    },
     SearchMemory {
         query: String,
         #[serde(default)]
@@ -754,6 +769,18 @@ pub enum Response {
         row_count: u64,
         #[serde(default)]
         rollback_path: Option<String>,
+        dry_run: bool,
+    },
+    /// Successful response to [`Request::BackfillMemoryRecords`].
+    /// `row_count` is the number of memory rows the backfill rewrote (or
+    /// would rewrite on a dry run); `savepoint_name` is the SQLite
+    /// SAVEPOINT identifier the mutator wrapped the batch in so a
+    /// per-row failure rolled back atomically. Carries the
+    /// `covenant_memory::BackfillReceiptCorrelationOutcome` fields
+    /// inline so this crate keeps no dependency on the memory crate.
+    MemoryRecordsBackfilled {
+        row_count: u64,
+        savepoint_name: String,
         dry_run: bool,
     },
     VerifyReport {
@@ -2498,6 +2525,135 @@ mod tests {
              must default to a dry_run=false, unscoped apply — dropping \
              the #[serde(default)] would break stale CLIs and the \
              v1-additive contract",
+        );
+    }
+
+    #[test]
+    fn request_backfill_memory_records_serde_pins_additive_two_field_variant() {
+        // Request::BackfillMemoryRecords is the operator-driven
+        // memory-record backfill the CLI and HTTP gateway send to
+        // repair legacy memory rows lacking metadata.receipt_id. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] the wire
+        // object is exactly three top-level keys: kind='backfill_memory_records',
+        // dry_run, and scope_pubkey. Both fields are #[serde(default)]
+        // so a stale CLI omitting them decodes as a dry_run=false,
+        // unscoped apply — the additive-only contract that keeps v1
+        // fixture replay byte-for-byte. It pairs with
+        // Response::MemoryRecordsBackfilled.
+        let event = Request::BackfillMemoryRecords {
+            dry_run: true,
+            scope_pubkey: Some("subjectpubkeyb58".into()),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "scope_pubkey"],
+            "Request::BackfillMemoryRecords wire form must be exactly \
+             three top-level keys: 'kind' plus 'dry_run' and \
+             'scope_pubkey'. A refactor that nested the mode/subject \
+             under a typed options struct would shift them one level \
+             deeper and every CLI/HTTP memory-backfill trigger would \
+             fail to decode on the daemon side — the operator could \
+             not repair legacy memory rows through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("backfill_memory_records")),
+            "Request discriminator slug must be the durable \
+             'backfill_memory_records'; a slug regression silently \
+             routes incoming backfill frames to the daemon's catch-all \
+             error branch",
+        );
+        assert_eq!(
+            obj.get("dry_run"),
+            Some(&serde_json::json!(true)),
+            "dry_run must surface as the literal boolean mode selector — \
+             the daemon binds apply = !dry_run, so a rename or retype \
+             would silently flip a reporting probe into a destructive \
+             rewrite",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::BackfillMemoryRecords must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             every CLI/HTTP backfill consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "backfill_memory_records"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::BackfillMemoryRecords must decode from a payload \
+             missing both optional fields — the #[serde(default)] \
+             attributes are the additive-only compatibility hinge that \
+             keeps v1 fixture replay byte-for-byte",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            },
+            "Request::BackfillMemoryRecords with both fields missing \
+             must default to a dry_run=false, unscoped apply — dropping \
+             the #[serde(default)] would break stale CLIs and the \
+             v1-additive contract",
+        );
+    }
+
+    #[test]
+    fn response_memory_records_backfilled_serde_pins_three_field_variant() {
+        // Response::MemoryRecordsBackfilled is the success answer the
+        // daemon returns to Request::BackfillMemoryRecords. The wire
+        // form is exactly four top-level keys: kind='memory_records_backfilled',
+        // row_count (u64), savepoint_name (String), and dry_run (bool).
+        // None of the fields are skip_serializing_if so the shape is
+        // identical across success and apply/dry-run modes — operators
+        // shouldn't have to special-case the absence of savepoint_name
+        // when computing rollback latency dashboards.
+        let event = Response::MemoryRecordsBackfilled {
+            row_count: 7,
+            savepoint_name: "backfill_receipt_correlation".into(),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "row_count", "savepoint_name"],
+            "Response::MemoryRecordsBackfilled wire form must be \
+             exactly four top-level keys: 'kind' plus 'row_count', \
+             'savepoint_name', and 'dry_run'. A refactor that wrapped \
+             the outcome under an 'outcome' nested object would shift \
+             every key one level deeper and silently break operator \
+             dashboards keyed off the flat shape",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("memory_records_backfilled")),
+            "Response discriminator slug must be the durable \
+             'memory_records_backfilled'; a slug regression silently \
+             routes the answer to the CLI's catch-all unexpected-response \
+             branch",
+        );
+
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::MemoryRecordsBackfilled must round-trip through \
+             serde_json verbatim — operator-side parsers lean on \
+             PartialEq for fixture replay",
         );
     }
 

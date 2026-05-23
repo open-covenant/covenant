@@ -188,6 +188,7 @@ run node ./scripts/validate-settlement-backfill-schema-value-pin-line-refs.mjs
 run node ./scripts/validate-memory-backfill-schema-value-pin-line-refs.mjs
 run node ./scripts/validate-memory-backfill-savepoint-name-non-empty-pin-line-refs.mjs
 run node ./scripts/validate-bootstrap-result-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-daemon-ping-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

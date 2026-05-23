@@ -414,7 +414,7 @@ The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/co
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10` for both verbs, per `main.rs:2077` and `main.rs:2487`). Pinned as u64 at the schema test (`main.rs:6834-6837`).
 - `query` (string or null): for `mode="search"`, the request query (whitespace-joined when the operator passed multiple positional tokens, per `main.rs:2522`). For `mode="recent"`, always `null` (the recent verb does not accept a query). Pinned as string-or-null by the schema test (`main.rs:6842-6845`).
 - `min_relevance` (number or null): for `mode="search"`, the float echoed from `--min-relevance` (validated to a finite `f32` in `[0.0, 1.0]` at `main.rs:2510-2514`), or `null` when the flag was omitted. For `mode="recent"`, always `null`. Pinned as f64-or-null by the schema test (`main.rs:6846-6849`) — never a string.
-- `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1625`.
+- `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1625`. Pinned as an array by `main.rs:6850-6853` — never null or a string.
 
 The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:183`:
 

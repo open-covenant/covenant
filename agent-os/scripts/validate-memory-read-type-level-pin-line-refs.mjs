@@ -4,13 +4,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // memory_read envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites four inner assertion ranges inside
+// docs/ipc-and-http-gateway.md cites five inner assertion ranges inside
 // memory_read_json_pins_top_level_schema:
 //
 //   - line 413 cites `tier` (string or null) at main.rs:6838-6841.
 //   - line 414 cites `limit` (u64) at main.rs:6834-6837.
 //   - line 415 cites `query` (string or null) at main.rs:6842-6845.
 //   - line 416 cites `min_relevance` (f64 or null) at main.rs:6846-6849.
+//   - line 417 cites `records` (array) at main.rs:6850-6853.
 //
 // All docs cites use the assert!-to-closing convention: the cite spans
 // from the line containing `assert!(` through the closing `);` line.
@@ -20,7 +21,9 @@ import { fileURLToPath } from "node:url";
 // The validator scopes each selector lookup to the brace-balanced
 // memory_read_json_pins_top_level_schema fn body so a same-named
 // selector inside a different envelope's pins test cannot contaminate
-// the result.
+// the result. The records docsRegex anchors on "array of `MemoryRecord`"
+// so it does not collide with the memory_compaction_plan.records bullet
+// (line 569) which opens "(array): empty today".
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -69,6 +72,15 @@ const targets = [
     docsLabel: "memory_read.min_relevance type-level pin citation",
     docsTemplate:
       "Pinned as f64-or-null by the schema test (`main.rs:N-M`) — never a string.",
+  },
+  {
+    field: "records",
+    selector: 'value["records"].is_array(),',
+    docsRegex:
+      /- `records` \(array of `MemoryRecord`\): the matched records in the order returned by the daemon\. The array is empty when no records match; the unsuffixed CLI prints `\(no records\)` for that case at `main\.rs:\d+`\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string\./,
+    docsLabel: "memory_read.records type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N-M` — never null or a string.",
   },
 ];
 

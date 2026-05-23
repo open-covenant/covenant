@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
 
 ## Scope Envelope
 
@@ -48,7 +48,7 @@ Live HTTP coverage pins this boundary for `tool.call.echo`: a scoped grant rejec
 
 ### `memory.*`
 
-Use for memory reads, writes, repair, compaction, and purge.
+Use for memory reads, writes, repair, compaction, purge, and receipt backfill.
 
 ```json
 {
@@ -70,6 +70,7 @@ Rules:
 - `memory.write` is required before successful intent dispatch writes a working-tier memory record. The scope is checked before agent execution or fallback dispatch.
 - A tier-scoped `memory.purge` grant only permits purging that tier. An un-tiered purge request requires the scope to include all tiers.
 - A tier-scoped `memory.compact.*` grant only permits policies that touch the listed tiers. `detach_stale_parents` with an explicit tier scope requires all tiers because parent detaches are not tier-isolated.
+- `memory.backfill.apply` and `memory.backfill.dry_run` are distinct grants for the memory-record receipt-correlation backfill; the backfill mode is part of the action and a scope may pin `apply` to bind a grant to a single mode. `before_ms` bounds the backfill to records at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded. Grants for `memory.backfill.*` reject `tiers` and `record_id` at validation time because the dispatch predicate does not bind by tier or record. The dispatch predicate is available; operator-facing surfaces wire the mutator in a follow-up change.
 
 ### `a2a.*`
 

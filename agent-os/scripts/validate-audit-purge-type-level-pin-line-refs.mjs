@@ -36,7 +36,7 @@ const targets = [
     field: "before_ms",
     selector: 'value["before_ms"].is_u64(),',
     docsRegex:
-      /- `before_ms` \(u64\): resolved Unix-epoch millisecond cutoff\. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\./,
+      /- `before_ms` \(u64\): resolved Unix-epoch millisecond cutoff\. The CLI accepts `--before-ms` or `--older-than-ms` with the same resolution semantics as `covenant capabilities purge --json` above\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string-of-integer\.\n- `purged` \(u64\): count of audit events removed/,
     docsLabel: "audit_purge.before_ms type-level pin citation",
     docsTemplate:
       "Pinned as u64 by `main.rs:N-M` — never a string-of-integer.",

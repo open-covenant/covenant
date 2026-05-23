@@ -210,6 +210,42 @@ fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
 }
 
+// Account ordering and signer/writable flags mirror the on-chain
+// RegisterAgent struct at agent-os/programs/settlement/src/lib.rs:429-448:
+//   config           — PDA, read-only
+//   agent            — PDA, writable, NOT signer (init-by-operator)
+//   operator         — signer, writable (fee payer)
+//   system_program   — read-only
+// Anchor's dispatcher routes accounts positionally; any reorder silently
+// remaps roles and the transaction would fail with a confusing
+// ConstraintSeeds / AccountNotInitialized error.
+#[allow(dead_code)] // wired in by sub-slice register-agent verb
+fn build_register_agent_instruction(
+    program_id: &Pubkey,
+    operator_pubkey: &Pubkey,
+    args: &RegisterAgentArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (agent_pda, _) = settlement_agent_pda(program_id, &Pubkey::new_from_array(args.agent_key));
+
+    let mut data = Vec::with_capacity(8 + 96);
+    data.extend_from_slice(&compute_anchor_global_discriminator("register_agent"));
+    data.extend_from_slice(&serialize_register_agent_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(agent_pda, false),
+            AccountMeta::new(*operator_pubkey, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
 // First 8 bytes of sha256("global:<method>") — Anchor's instruction
 // discriminator scheme. The "global:" namespace is the only one Anchor's
 // macro-generated dispatcher accepts for #[program] mod methods; dropping
@@ -6525,6 +6561,111 @@ mod tests {
                 compute_anchor_global_discriminator("register_agent"),
                 compute_anchor_global_discriminator("RegisterAgent")
             );
+        }
+    }
+
+    mod build_register_agent_instruction {
+        use super::super::{
+            build_register_agent_instruction, compute_anchor_global_discriminator,
+            serialize_register_agent_args, settlement_agent_pda, settlement_config_pda,
+            RegisterAgentArgs,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixture_args() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [9u8; 32],
+                metadata_hash: [10u8; 32],
+                capability_hash: [11u8; 32],
+            }
+        }
+
+        #[test]
+        fn data_is_discriminator_followed_by_serialized_args() {
+            // The on-chain Anchor dispatcher reads the first 8 bytes as
+            // the instruction discriminator and the remainder as the
+            // borsh-encoded args payload. Any other layout (args first,
+            // discriminator omitted, padding) routes to
+            // InstructionFallbackNotFound.
+            let ix = build_register_agent_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixture_args(),
+            );
+            let disc = compute_anchor_global_discriminator("register_agent");
+            assert_eq!(&ix.data[..8], &disc, "data prefix must be discriminator");
+            let args_bytes = serialize_register_agent_args(&fixture_args());
+            assert_eq!(
+                &ix.data[8..],
+                &args_bytes,
+                "data tail must be serialized args"
+            );
+            assert_eq!(ix.data.len(), 8 + 96);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order() {
+            // agent-os/programs/settlement/src/lib.rs:429-448 declares
+            // RegisterAgent { config, agent, operator, system_program }.
+            // The Instruction.accounts vector must match positionally.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let args = fixture_args();
+            let ix = build_register_agent_instruction(&program, &operator, &args);
+            assert_eq!(ix.accounts.len(), 4);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_agent_pda(&program, &Pubkey::new_from_array(args.agent_key)).0
+            );
+            assert_eq!(ix.accounts[2].pubkey, operator);
+            assert_eq!(ix.accounts[3].pubkey, solana_sdk::system_program::id());
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config        — read-only (no #[account(mut)])
+            // agent         — writable (#[account(init, ...)]), not signer
+            // operator      — signer + writable (#[account(mut)] + Signer)
+            // system_program— read-only (Program<...>)
+            let ix = build_register_agent_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixture_args(),
+            );
+            assert_eq!(
+                (ix.accounts[0].is_signer, ix.accounts[0].is_writable),
+                (false, false)
+            );
+            assert_eq!(
+                (ix.accounts[1].is_signer, ix.accounts[1].is_writable),
+                (false, true)
+            );
+            assert_eq!(
+                (ix.accounts[2].is_signer, ix.accounts[2].is_writable),
+                (true, true)
+            );
+            assert_eq!(
+                (ix.accounts[3].is_signer, ix.accounts[3].is_writable),
+                (false, false)
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_register_agent_instruction(&program, &fixed_operator(), &fixture_args());
+            assert_eq!(ix.program_id, program);
         }
     }
 

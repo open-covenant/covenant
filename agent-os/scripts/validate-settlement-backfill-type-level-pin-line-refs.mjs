@@ -4,9 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // settlement_backfill envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two inner assertion ranges inside
-// settlement_backfill_json_pins_top_level_schema:
+// docs/ipc-and-http-gateway.md cites three inner assertion ranges
+// inside settlement_backfill_json_pins_top_level_schema:
 //
+//   - line 634 cites `schema` (string) at main.rs:5565-5568.
 //   - line 635 cites `row_count` (u64) at main.rs:5574-5577.
 //   - line 636 cites `rollback_path` (string or null) at
 //     main.rs:5578-5581.
@@ -19,22 +20,32 @@ import { fileURLToPath } from "node:url";
 // Sibling collision risk (mirrors validate-memory-backfill): the
 // memory_backfill envelope's pins test at main.rs:5613 carries the
 // same `value["row_count"].is_u64(),` selector at main.rs:5638 and
-// a near-identical row_count docs bullet at line 650. The rollback_path
-// selector and bullet are currently unique to settlement_backfill
-// (memory uses savepoint_name with a non-nullable shape instead). Both
-// risks are addressed:
+// the same `value["schema"].is_string(),` selector at main.rs:5629,
+// plus a near-identical row_count docs bullet at line 650 and a
+// schema docs bullet at line 649 that references the
+// settlement.backfill.v1 literal by name ("Same versioning semantics
+// as `covenant.settlement.backfill.v1`"). The rollback_path selector
+// and bullet are currently unique to settlement_backfill (memory uses
+// savepoint_name with a non-nullable shape instead). All three risks
+// are addressed:
 //
 //   - Selector lookups scope to the brace-balanced
 //     `settlement_backfill_json_pins_top_level_schema` fn body, so the
-//     memory_backfill row_count occurrence at main.rs:5638 cannot
+//     memory_backfill row_count occurrence at main.rs:5638 and the
+//     memory_backfill schema occurrence at main.rs:5629 cannot
 //     contaminate the result.
 //   - The row_count docsRegex anchors on the settlement-specific
 //     phrase "legacy settlement-receipt rows the backfill operated on"
-//     plus the closer "the verb does not error on an empty backfill",
-//     and the rollback_path docsRegex anchors on "filesystem path to
-//     the rollback-evidence file written by a mutation pass". Neither
-//     phrase appears in the memory_backfill bullets, so first-match
-//     capture cannot drift.
+//     plus the closer "the verb does not error on an empty backfill".
+//   - The rollback_path docsRegex anchors on "filesystem path to the
+//     rollback-evidence file written by a mutation pass".
+//   - The schema docsRegex anchors on "literal string
+//     `\"covenant.settlement.backfill.v1\"`" in leading position
+//     (followed by ". The `.v1` suffix is the version slot"). The
+//     memory_backfill schema bullet at line 649 instead opens with
+//     "literal string `\"covenant.memory.backfill.v1\"`. Same
+//     versioning semantics as ..." — different leading literal, so
+//     first-match capture cannot drift.
 //
 // Each range is derived as assert!-opener-to-closer (4-line convention)
 // — the cite spans the `assert!(` opener directly above the selector
@@ -53,6 +64,15 @@ const sourcePath = "agent-os/crates/covenant/src/main.rs";
 const testFnName = "settlement_backfill_json_pins_top_level_schema";
 
 const targets = [
+  {
+    field: "schema",
+    selector: 'value["schema"].is_string(),',
+    docsRegex:
+      /- `schema`: literal string `"covenant\.settlement\.backfill\.v1"`\. The `\.v1` suffix is the version slot; a future `\.v2` would be a separate envelope, not a field rename inside this one\. Consumers must route on the full literal — matching on the prefix `"covenant\.settlement\.backfill\."` will swallow incompatible future versions\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an integer or object\./,
+    docsLabel: "settlement_backfill.schema type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an integer or object.",
+  },
   {
     field: "row_count",
     selector: 'value["row_count"].is_u64(),',

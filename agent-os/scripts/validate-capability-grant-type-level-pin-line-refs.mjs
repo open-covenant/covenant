@@ -4,21 +4,21 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // capability_grant envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites two main.rs ranges inside
+// docs/ipc-and-http-gateway.md cites three main.rs ranges inside
 // capability_grant_json_pins_top_level_schema:
 //
+//   - line 261 cites the `action` (string) type pin at :5996-5999.
 //   - line 263 cites the `scope` (object or null) type pin at
 //     :6004-6007.
 //   - line 264 cites the `expires_at` (u64 or null) type pin at
 //     :6008-6011.
 //
-// The cites previously used a single-line shape (just the selector
-// line); this validator now uses the 4-line assert!-opener-to-closer
-// range convention that sibling envelopes already use (audit_verify
-// at line 384 :6478-6481, capability_list at line 248 :5919-5922).
-// The range convention catches a wider set of drift modes: a single-
-// line cite stays correct when the assert!( opener silently moves
-// up/down, while the 4-line range cite fails loudly.
+// The cites use the 4-line assert!-opener-to-closer range convention
+// that sibling envelopes already use (audit_verify at line 384
+// :6478-6481, capability_list at line 248 :5919-5922). The range
+// convention catches a wider set of drift modes: a single-line cite
+// stays correct when the assert!( opener silently moves up/down,
+// while the 4-line range cite fails loudly.
 //
 // The validator scopes each lookup to the brace-balanced
 // `capability_grant_json_pins_top_level_schema` fn body so a same-named
@@ -38,6 +38,15 @@ const sourcePath = "agent-os/crates/covenant/src/main.rs";
 const testFnName = "capability_grant_json_pins_top_level_schema";
 
 const targets = [
+  {
+    field: "action",
+    selector: 'value["action"].is_string(),',
+    docsRegex:
+      /- `action` \(string\): the action the capability was granted for\. \*\*Not always the verbatim CLI argument\*\*: when the CLI receives an a2a peer-prefix shorthand it expands the prefix to the full peer-bound action before signing \(see `expand_a2a_action` invoked at `main\.rs:\d+-\d+`\); the envelope reports the post-expansion full form, and the unsuffixed CLI prints an `expanding <prefix> → <full>` line to stderr at `main\.rs:\d+`\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never an object or array\./,
+    docsLabel: "capability_grant.action type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never an object or array.",
+  },
   {
     field: "scope",
     selector: 'value["scope"].is_object() || value["scope"].is_null(),',

@@ -122,6 +122,16 @@ const targets = [
       "Pinned as a JSON object by `main.rs:N-M`. The inner `error` object has exactly two keys per the test EXPECTED_KEYS at `main.rs:N`:",
   },
   {
+    field: "error_code",
+    testFnName: "intents_resume_error_json_pins_error_object_schema",
+    selector: 'value["error"]["code"].is_string(),',
+    docsRegex:
+      /- `code` \(string\) — typed error slug \(snake_case\)\. Pinned as a string by `main\.rs:(\d+)-(\d+)` — never a structured object\./,
+    docsLabel: "intents_resume_error.error.code type-level pin citation",
+    docsTemplate:
+      "Pinned as a string by `main.rs:N-M` — never a structured object.",
+  },
+  {
     field: "error_message",
     testFnName: "intents_resume_error_json_pins_error_object_schema",
     selector: 'value["error"]["message"].is_string(),',

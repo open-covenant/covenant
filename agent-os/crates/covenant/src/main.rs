@@ -130,6 +130,44 @@ fn classify_keypair_read_error(path: PathBuf, source: std::io::Error) -> Keypair
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ClusterResolveError {
+    #[error("unknown Solana cluster {name:?}; accepted values are devnet, localnet, mainnet, mainnet-beta")]
+    UnknownCluster { name: String },
+    #[error("--rpc-url was provided but the value is empty")]
+    EmptyRpcUrl,
+}
+
+// Cluster -> default RPC URL mapping mirrors packages/config/networks.mjs
+// so the CLI and the landing/UI route the same operator-supplied cluster
+// names to the same endpoints. Default cluster is devnet to align with
+// the devnet program ID pinned in docs/internal/status.md row "On-chain
+// settlement".
+#[allow(dead_code)] // wired in by sub-slices register-agent / stake / buy-credits
+fn resolve_solana_rpc_url(
+    cluster: Option<&str>,
+    rpc_url_override: Option<&str>,
+) -> Result<String, ClusterResolveError> {
+    if let Some(url) = rpc_url_override {
+        if url.is_empty() {
+            return Err(ClusterResolveError::EmptyRpcUrl);
+        }
+        return Ok(url.to_string());
+    }
+    let name = cluster.unwrap_or("devnet");
+    let url = match name {
+        "devnet" => "https://api.devnet.solana.com",
+        "localnet" => "http://127.0.0.1:8899",
+        "mainnet" | "mainnet-beta" => "https://api.mainnet-beta.solana.com",
+        other => {
+            return Err(ClusterResolveError::UnknownCluster {
+                name: other.to_string(),
+            })
+        }
+    };
+    Ok(url.to_string())
+}
+
 // Settlement-program PDA seed bytes mirror agent-os/programs/settlement/
 // src/lib.rs. Wrapping each find_program_address call lets the verb
 // sub-slices use the canonical seeds without re-spelling the byte
@@ -6466,6 +6504,72 @@ mod tests {
                 compute_anchor_global_discriminator("register_agent"),
                 compute_anchor_global_discriminator("RegisterAgent")
             );
+        }
+    }
+
+    mod cluster_rpc_url {
+        use super::super::{resolve_solana_rpc_url, ClusterResolveError};
+
+        #[test]
+        fn devnet_resolves_to_canonical_url() {
+            assert_eq!(
+                resolve_solana_rpc_url(Some("devnet"), None).unwrap(),
+                "https://api.devnet.solana.com"
+            );
+        }
+
+        #[test]
+        fn localnet_resolves_to_loopback_rpc() {
+            assert_eq!(
+                resolve_solana_rpc_url(Some("localnet"), None).unwrap(),
+                "http://127.0.0.1:8899"
+            );
+        }
+
+        #[test]
+        fn mainnet_and_mainnet_beta_are_aliases() {
+            // Solana CLI accepts --url mainnet-beta. Operators following
+            // that convention must not see UnknownCluster for it.
+            let mb = resolve_solana_rpc_url(Some("mainnet-beta"), None).unwrap();
+            let mn = resolve_solana_rpc_url(Some("mainnet"), None).unwrap();
+            assert_eq!(mb, "https://api.mainnet-beta.solana.com");
+            assert_eq!(mb, mn);
+        }
+
+        #[test]
+        fn rpc_url_override_wins_over_cluster() {
+            let url = "https://operator.private/solana-rpc";
+            let resolved =
+                resolve_solana_rpc_url(Some("mainnet"), Some(url)).expect("override wins");
+            assert_eq!(resolved, url);
+        }
+
+        #[test]
+        fn default_cluster_is_devnet() {
+            assert_eq!(
+                resolve_solana_rpc_url(None, None).unwrap(),
+                "https://api.devnet.solana.com"
+            );
+        }
+
+        #[test]
+        fn unknown_cluster_errors_with_offending_name() {
+            // A typo like "devnest" must not silently fall through to a
+            // default URL — the operator could otherwise sign against
+            // the wrong cluster.
+            let err = resolve_solana_rpc_url(Some("devnest"), None).expect_err("must error");
+            match err {
+                ClusterResolveError::UnknownCluster { name } => assert_eq!(name, "devnest"),
+                other => panic!("expected UnknownCluster, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn empty_override_is_rejected() {
+            // Some(\"\") would route to a low-level connection error
+            // downstream; reject it early with a clear cause.
+            let err = resolve_solana_rpc_url(Some("devnet"), Some("")).expect_err("must error");
+            assert!(matches!(err, ClusterResolveError::EmptyRpcUrl));
         }
     }
 

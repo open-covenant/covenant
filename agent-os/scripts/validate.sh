@@ -90,6 +90,7 @@ run node ./scripts/validate-intents-resume-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-struct-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-field-attribute-range-line-refs.mjs
 run node ./scripts/validate-covenant-ipc-chain-status-field-list-line-refs.mjs
+run node ./scripts/validate-covenant-ipc-verify-check-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-struct-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-ambiguous-variant-range-line-refs.mjs
 run node ./scripts/validate-covenant-peer-auth-revoke-outcome-enum-annotation-line-refs.mjs

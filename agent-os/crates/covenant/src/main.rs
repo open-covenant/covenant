@@ -281,6 +281,63 @@ fn build_register_agent_instruction(
     }
 }
 
+// The canonical SPL Token (legacy, v3) program ID. The on-chain
+// Stake / BuyCredits instructions declare Program<Token> which only
+// accepts this address; the Token-2022 program at
+// TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb is a different
+// program and a substitution would be rejected with InvalidProgramId.
+#[allow(dead_code)] // wired in by sub-slices stake / buy-credits
+const SPL_TOKEN_PROGRAM_ID: Pubkey =
+    Pubkey::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+// Account ordering and signer/writable flags mirror the on-chain
+// Stake struct at agent-os/programs/settlement/src/lib.rs:531-567:
+//   config         — PDA, read-only
+//   agent          — PDA, writable, !signer
+//   position       — PDA, writable, !signer (#[account(init, ...)])
+//   owner          — signer, writable (fee payer)
+//   owner_covnt    — writable, !signer (source of the stake transfer)
+//   stake_vault    — writable, !signer (destination of the stake transfer)
+//   token_program  — read-only, legacy SPL Token
+//   system_program — read-only
+// Anchor's dispatcher reads accounts positionally, so a single-slot
+// reorder silently remaps roles and either fails ConstraintSeeds
+// (PDAs) or Unauthorized (token-owner checks).
+#[allow(dead_code)] // wired in by sub-slice stake verb
+fn build_stake_instruction(
+    program_id: &Pubkey,
+    operator: &Pubkey,
+    agent_key: &Pubkey,
+    owner_covnt: &Pubkey,
+    stake_vault: &Pubkey,
+    args: &StakeArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (agent_pda, _) = settlement_agent_pda(program_id, agent_key);
+    let (position_pda, _) = settlement_stake_position_pda(program_id, agent_key, operator);
+
+    let mut data = Vec::with_capacity(8 + 16);
+    data.extend_from_slice(&compute_anchor_global_discriminator("stake"));
+    data.extend_from_slice(&serialize_stake_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(agent_pda, false),
+            AccountMeta::new(position_pda, false),
+            AccountMeta::new(*operator, true),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new(*stake_vault, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
 // First 8 bytes of sha256("global:<method>") — Anchor's instruction
 // discriminator scheme. The "global:" namespace is the only one Anchor's
 // macro-generated dispatcher accepts for #[program] mod methods; dropping
@@ -7095,6 +7152,174 @@ mod tests {
         fn program_id_is_propagated() {
             let program = fixed_program();
             let ix = build_register_agent_instruction(&program, &fixed_operator(), &fixture_args());
+            assert_eq!(ix.program_id, program);
+        }
+    }
+
+    mod build_stake_instruction {
+        use super::super::{
+            build_stake_instruction, compute_anchor_global_discriminator, serialize_stake_args,
+            settlement_agent_pda, settlement_config_pda, settlement_stake_position_pda, StakeArgs,
+            SPL_TOKEN_PROGRAM_ID,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixed_agent_key() -> Pubkey {
+            Pubkey::new_from_array([7u8; 32])
+        }
+
+        fn fixed_owner_covnt() -> Pubkey {
+            Pubkey::new_from_array([13u8; 32])
+        }
+
+        fn fixed_stake_vault() -> Pubkey {
+            Pubkey::new_from_array([17u8; 32])
+        }
+
+        fn fixture_args() -> StakeArgs {
+            StakeArgs {
+                amount: 1_500_000,
+                lock_until: 1_700_999_999,
+            }
+        }
+
+        fn build_fixture_ix() -> solana_sdk::instruction::Instruction {
+            build_stake_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixed_agent_key(),
+                &fixed_owner_covnt(),
+                &fixed_stake_vault(),
+                &fixture_args(),
+            )
+        }
+
+        #[test]
+        fn data_prefix_equals_stake_discriminator_literal() {
+            // The literal stake discriminator is also pinned by the
+            // existing anchor_discriminator mod. Repeating the byte
+            // sequence here makes a regression in either source
+            // surface as a duplicate failure rather than a silent
+            // pass through one path.
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[..8],
+                &[206, 176, 202, 18, 200, 209, 179, 108],
+                "data prefix must be the stake discriminator"
+            );
+            assert_eq!(&ix.data[..8], &compute_anchor_global_discriminator("stake"));
+        }
+
+        #[test]
+        fn data_tail_equals_serialized_stake_args() {
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[8..],
+                &serialize_stake_args(&fixture_args()),
+                "data tail must be the borsh-encoded StakeArgs"
+            );
+        }
+
+        #[test]
+        fn data_length_is_discriminator_plus_two_u64s() {
+            // 8 (discriminator) + 16 (StakeArgs) = 24. A regression
+            // that pads to alignment or drops the discriminator
+            // would change this.
+            let ix = build_fixture_ix();
+            assert_eq!(ix.data.len(), 8 + 16);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order_positionally() {
+            // agent-os/programs/settlement/src/lib.rs:531-567 declares
+            // Stake { config, agent, position, owner, owner_covnt,
+            // stake_vault, token_program, system_program }.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let agent_key = fixed_agent_key();
+            let ix = build_fixture_ix();
+
+            assert_eq!(ix.accounts.len(), 8);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_agent_pda(&program, &agent_key).0
+            );
+            assert_eq!(
+                ix.accounts[2].pubkey,
+                settlement_stake_position_pda(&program, &agent_key, &operator).0
+            );
+            assert_eq!(ix.accounts[3].pubkey, operator);
+            assert_eq!(ix.accounts[4].pubkey, fixed_owner_covnt());
+            assert_eq!(ix.accounts[5].pubkey, fixed_stake_vault());
+            assert_eq!(ix.accounts[6].pubkey, SPL_TOKEN_PROGRAM_ID);
+            assert_eq!(ix.accounts[7].pubkey, solana_sdk::system_program::id());
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config:         ro
+            // agent:          w, !signer
+            // position:       w, !signer (init by owner)
+            // owner:          signer, w (fee payer + transfer authority)
+            // owner_covnt:    w, !signer
+            // stake_vault:    w, !signer
+            // token_program:  ro
+            // system_program: ro
+            let ix = build_fixture_ix();
+            let expected = [
+                (false, false), // config
+                (false, true),  // agent
+                (false, true),  // position
+                (true, true),   // owner
+                (false, true),  // owner_covnt
+                (false, true),  // stake_vault
+                (false, false), // token_program
+                (false, false), // system_program
+            ];
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(
+                    (ix.accounts[i].is_signer, ix.accounts[i].is_writable),
+                    *exp,
+                    "account[{i}] flag mismatch (expected (signer, writable) = {exp:?})"
+                );
+            }
+        }
+
+        #[test]
+        fn token_program_id_is_legacy_spl_token_constant() {
+            // Pin the canonical legacy-Token program ID inline. A
+            // substitution with the Token-2022 program at
+            // TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb would be
+            // rejected on-chain with InvalidProgramId — this test
+            // surfaces the substitution locally.
+            assert_eq!(
+                SPL_TOKEN_PROGRAM_ID.to_string(),
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_stake_instruction(
+                &program,
+                &fixed_operator(),
+                &fixed_agent_key(),
+                &fixed_owner_covnt(),
+                &fixed_stake_vault(),
+                &fixture_args(),
+            );
             assert_eq!(ix.program_id, program);
         }
     }

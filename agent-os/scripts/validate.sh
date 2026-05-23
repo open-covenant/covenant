@@ -63,6 +63,7 @@ run node ./scripts/validate-flush-receipts-line-refs.mjs
 run node ./scripts/validate-receipt-batch-list-line-refs.mjs
 run node ./scripts/validate-capabilities-purge-line-refs.mjs
 run node ./scripts/validate-peers-rotate-line-refs.mjs
+run node ./scripts/validate-ping-line-refs.mjs
 
 case "$mode" in
   scripts)

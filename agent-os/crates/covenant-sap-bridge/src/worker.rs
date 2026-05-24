@@ -108,7 +108,8 @@ where
         serde_json::from_value(env.data).map_err(|e| BridgeError::Decode(e.to_string()))
     } else {
         Err(BridgeError::Rpc(
-            env.error.unwrap_or_else(|| "worker reported an error".into()),
+            env.error
+                .unwrap_or_else(|| "worker reported an error".into()),
         ))
     }
 }

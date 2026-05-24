@@ -50,6 +50,7 @@ use covenant_permissions::{
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
+use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
     build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
     Settlement,
@@ -195,6 +196,16 @@ pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
         std::env::var("HERMES_API_BASE_URL").ok().as_deref(),
         std::env::var("HERMES_API_KEY").ok().as_deref(),
     )
+}
+
+/// Resolve the Synapse Agent Protocol bridge config from the same
+/// `COVENANT_SAP_*` environment the worker reads, so daemon and worker
+/// stay consistent. The returned config may be `enabled: false`
+/// (default); callers should still construct a [`SapBridge`] from it —
+/// disabled-bridge methods return `BridgeDisabledError` without
+/// touching the network.
+pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
+    SapBridgeConfig::from_env(std::env::vars())
 }
 
 pub fn hermes_gateway_config_from_values(
@@ -748,6 +759,13 @@ pub struct Server {
     /// — they go through the storage traits — so unit tests that don't
     /// exercise rotation leave this `None`.
     home: Option<PathBuf>,
+    /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
+    /// has wired it in (the default); a built [`SapBridge`] when
+    /// `Server::with_sap_bridge` was called at boot. Handlers that
+    /// need on-chain identity / attestation / discovery read this and
+    /// surface `BridgeDisabledError` when it's absent or
+    /// `enabled = false`.
+    sap_bridge: Option<SapBridge>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -786,6 +804,7 @@ impl Server {
             stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
+            sap_bridge: None,
         }
     }
 
@@ -835,6 +854,22 @@ impl Server {
     pub fn with_budget_checkpoints(mut self, store: Arc<JsonlPauseCheckpointStore>) -> Self {
         self.budget_checkpoints = Some(store);
         self
+    }
+
+    /// Attach an opt-in Synapse Agent Protocol bridge. Daemon `main`
+    /// calls this once at boot when [`sap_bridge_config_from_env`]
+    /// resolves an enabled config; otherwise the bridge stays `None`
+    /// and SAP-backed handlers surface `BridgeDisabledError`.
+    pub fn with_sap_bridge(mut self, bridge: SapBridge) -> Self {
+        self.sap_bridge = Some(bridge);
+        self
+    }
+
+    /// Returns the attached SAP bridge, if any. Handlers should treat
+    /// `None` the same as a disabled bridge — a soft no-op surfaced as
+    /// `BridgeDisabledError` to the caller.
+    pub fn sap_bridge(&self) -> Option<&SapBridge> {
+        self.sap_bridge.as_ref()
     }
 
     /// Walk the router's registered agents and seed each one's budget

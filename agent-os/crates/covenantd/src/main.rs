@@ -257,6 +257,20 @@ async fn main() -> Result<()> {
     );
     info!(path = %budget_checkpoints_path.display(), "budget checkpoint log open");
 
+    // SAP bridge — opt-in, off by default. Building the bridge is
+    // cheap (no network) and we log the resolved status either way so
+    // operators can see at a glance whether the on-chain path is live.
+    let sap_config = covenantd::sap_bridge_config_from_env();
+    let sap_bridge =
+        covenant_sap_bridge::SapBridge::new(sap_config.clone()).context("build SAP bridge")?;
+    info!(
+        enabled = sap_config.enabled,
+        cluster = sap_config.cluster.as_str(),
+        program_id = %sap_config.program_id,
+        rpc_url = %sap_config.rpc_url,
+        "sap bridge ready"
+    );
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -274,7 +288,8 @@ async fn main() -> Result<()> {
     )
     .with_home(home.clone())
     .with_budget_checkpoints(budget_checkpoints)
-    .with_subprocess_tracker(subprocess_tracker);
+    .with_subprocess_tracker(subprocess_tracker)
+    .with_sap_bridge(sap_bridge);
 
     server
         .register_agent_budgets()

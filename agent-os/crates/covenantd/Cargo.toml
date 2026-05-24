@@ -25,6 +25,7 @@ covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
+covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
 anyhow = { workspace = true }
 axum = { workspace = true }

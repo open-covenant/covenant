@@ -90,6 +90,46 @@ async fn error_envelope_becomes_rpc_error() {
 }
 
 #[tokio::test]
+async fn update_agent_maps_success_envelope() {
+    let bridge = bridge_with_stub(
+        r#"{"ok":true,"data":{"agentPda":"Agent111","signature":"upd333"}}"#,
+    );
+    let published = bridge.update_agent(&demo_manifest()).await.expect("update");
+    assert_eq!(published.agent_pda, "Agent111");
+    assert_eq!(published.signature, "upd333");
+}
+
+#[tokio::test]
+async fn describe_agent_null_data_is_none() {
+    let bridge = bridge_with_stub(r#"{"ok":true,"data":null}"#);
+    let detail = bridge.describe_agent("Whatever").await.expect("describe");
+    assert!(detail.is_none());
+}
+
+#[tokio::test]
+async fn diff_agent_against_missing_chain_account_is_none() {
+    // describe returns null -> diff is None (caller should publish).
+    let bridge = bridge_with_stub(r#"{"ok":true,"data":null}"#);
+    let diff = bridge
+        .diff_agent("MissingPda", &demo_manifest())
+        .await
+        .expect("diff");
+    assert!(diff.is_none());
+}
+
+#[tokio::test]
+async fn diff_agent_against_matching_chain_account_is_empty() {
+    let envelope = r#"{"ok":true,"data":{"agentPda":"P","wallet":"W","name":"covenant-demo","description":"","capabilities":[],"pricing":[],"protocols":["a2a"],"agentId":null,"agentUri":null,"x402Endpoint":null,"isActive":true,"reputationScore":0}}"#;
+    let bridge = bridge_with_stub(envelope);
+    let diff = bridge
+        .diff_agent("P", &demo_manifest())
+        .await
+        .expect("diff")
+        .expect("some");
+    assert!(diff.is_empty(), "{diff:?}");
+}
+
+#[tokio::test]
 async fn disabled_bridge_never_invokes_worker() {
     // Worker command would error if spawned (nonexistent program), so
     // reaching it at all would surface as a Worker error, not Disabled.

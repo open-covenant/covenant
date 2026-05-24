@@ -211,6 +211,7 @@ run node ./scripts/validate-chain-status-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-verify-report-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-tool-list-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-tool-result-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-receipt-batch-flushed-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

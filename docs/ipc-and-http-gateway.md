@@ -433,7 +433,7 @@ The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/cov
 
 `covenant a2a status [-n|--limit <N>] [--min-lease-age-ms <N>] [--deadline-within-ms <N>] [--state queued|in_flight] --json` emits the current A2A queue snapshot — queued tasks, in-flight leases, and pending results — narrowed by the supplied filters. Envelope shape:
 
-- `kind`: literal string `"a2a_status"`.
+- `kind`: literal string `"a2a_status"`. Pinned at the value level by `main.rs:7403` (asserts `value["kind"].as_str() == Some("a2a_status")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:3357`). Pinned as u64 by the schema test (`main.rs:7404-7407`).
 - `min_lease_age_ms` (u64 or null): the threshold echoed from `--min-lease-age-ms`, or `null` when the flag was omitted. Always emitted (as `null` when inactive) — never omitted from the envelope. Pinned as u64-or-null by the schema test (`main.rs:7408-7411`).
 - `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:7412-7415`).

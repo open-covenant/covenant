@@ -224,6 +224,7 @@ run node ./scripts/validate-a2a-status-tasks-type-level-pin-line-refs.mjs
 run node ./scripts/validate-peer-list-peers-type-level-pin-line-refs.mjs
 run node ./scripts/validate-verify-report-drift-type-level-pin-line-refs.mjs
 run node ./scripts/validate-tool-result-name-type-level-pin-line-refs.mjs
+run node ./scripts/validate-memory-read-mode-type-level-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

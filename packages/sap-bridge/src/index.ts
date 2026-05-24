@@ -114,6 +114,7 @@ export interface BridgeStatus {
 }
 
 const ATTESTATION_SEED = 'sap_attest';
+const AGENT_STATS_SEED = 'sap_stats';
 const DEFAULT_ATTESTATION_TYPE = 'covenant.audit-root';
 
 interface LoadedSdk {
@@ -239,7 +240,14 @@ export class SapBridge {
     const walletPk = new web3.PublicKey(keypair.publicKey.toBase58());
 
     const [agent] = sdk.Pdas.getAgentPDA(walletPk);
-    const [agentStats] = sdk.Pdas.getAgentStatsPDA(walletPk);
+    // SDK 0.18.0's getAgentStatsPDA still seeds from the wallet, but the
+    // deployed program enforces seeds = ["sap_stats", agent]. Derive it
+    // ourselves so the on-chain ConstraintSeeds check passes.
+    const programId = new web3.PublicKey(this.config.programId);
+    const [agentStats] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(AGENT_STATS_SEED), agent.toBuffer()],
+      programId,
+    );
     const [globalRegistry] = sdk.Pdas.getGlobalPDA();
 
     const ix = await client.agent.registerAgent({

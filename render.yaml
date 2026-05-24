@@ -47,6 +47,15 @@ services:
         value: "12"
       - key: COVENANT_DAEMON_URL
         value: http://covenant-sandbox-daemon:8421
+      # Synapse Agent Protocol bridge — read-only on the web side. The
+      # daemon does not hold a signer here, so the page renders the
+      # resolved status + the published agent's explorer links.
+      - key: COVENANT_SAP_ENABLED
+        value: "1"
+      - key: COVENANT_SOLANA_CLUSTER
+        value: devnet
+      - key: COVENANT_SAP_AGENT_PDA
+        value: B86uVNTwuKS9cjtbLJR8NNp8WGmcYzPgvVCFx8BE8cpy
       - fromGroup: covenant-sandbox-shared
 
   - type: cron

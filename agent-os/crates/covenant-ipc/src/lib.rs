@@ -699,6 +699,19 @@ pub enum Request {
         #[serde(default)]
         match_limit: Option<usize>,
     },
+    /// Resolved Synapse Agent Protocol bridge status. Read-only; no
+    /// signer or RPC needed. When the daemon was started without the
+    /// bridge wired in, [`Response::SapStatus`] is returned with
+    /// `enabled = false`.
+    SapStatus,
+    /// Publish an agent through the SAP bridge. The manifest travels
+    /// as a JSON string to keep the IPC surface decoupled from the
+    /// bridge crate's types — the daemon parses it into
+    /// `covenant_sap_bridge::identity::AgentManifest` before invoking
+    /// the worker. Failures surface as [`Response::Error`].
+    SapPublishAgent {
+        manifest_json: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -909,6 +922,24 @@ pub enum Response {
     /// the registry's redaction invariant excludes `PeerToken`.
     PeerRevoked {
         outcome: RevokeOutcome,
+    },
+    /// Snapshot of the SAP bridge config as the daemon resolved it at
+    /// boot. `enabled = false` means the bridge is off (default) and
+    /// any SAP-backed request will return [`Response::Error`].
+    SapStatus {
+        enabled: bool,
+        cluster: String,
+        program_id: String,
+        rpc_url: String,
+        explorer_url: String,
+        /// Whether the worker has a signer configured
+        /// (`COVENANT_SAP_KEYPAIR`). False means publish / update
+        /// paths will fail; status and read paths still work.
+        has_signer: bool,
+    },
+    SapPublishedAgent {
+        agent_pda: String,
+        signature: String,
     },
     Error {
         message: String,

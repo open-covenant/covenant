@@ -1531,6 +1531,12 @@ fn print_usage() {
     eprintln!(
         "  covenant intents resume latest [--json]          re-dispatch the most recent budget-rejected intent"
     );
+    eprintln!(
+        "  covenant sap status [--json]            resolved SAP bridge status (cluster, program, signer presence)"
+    );
+    eprintln!(
+        "  covenant sap publish --manifest <file> [--json]  publish the daemon's agent through the SAP bridge"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -4088,6 +4094,109 @@ async fn main() -> Result<()> {
                 }
                 other => {
                     eprintln!("covenant settlement: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
+        "sap" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "status" => {
+                    let mut as_json = false;
+                    for arg in &args[2..] {
+                        match arg.as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                    }
+                    write_frame(&mut stream, &Request::SapStatus).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapStatus {
+                            enabled,
+                            cluster,
+                            program_id,
+                            rpc_url,
+                            explorer_url,
+                            has_signer,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_status",
+                                    "enabled": enabled,
+                                    "cluster": cluster,
+                                    "program_id": program_id,
+                                    "rpc_url": rpc_url,
+                                    "explorer_url": explorer_url,
+                                    "has_signer": has_signer,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("enabled: {enabled}");
+                                println!("cluster: {cluster}");
+                                println!("program_id: {program_id}");
+                                println!("rpc_url: {rpc_url}");
+                                println!("explorer_url: {explorer_url}");
+                                println!("has_signer: {has_signer}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "publish" => {
+                    let mut manifest_path: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--manifest" => {
+                                i += 1;
+                                manifest_path = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--manifest needs a file path")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let manifest_path = manifest_path.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap publish requires --manifest <file>")
+                    })?;
+                    let manifest_json = std::fs::read_to_string(&manifest_path)
+                        .with_context(|| format!("read manifest at {manifest_path}"))?;
+                    // Parse-and-reserialize round-trip rejects malformed
+                    // JSON up front so the daemon never sees garbage.
+                    let _: serde_json::Value = serde_json::from_str(&manifest_json)
+                        .with_context(|| format!("parse manifest at {manifest_path}"))?;
+                    write_frame(&mut stream, &Request::SapPublishAgent { manifest_json }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAgent {
+                            agent_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_agent",
+                                    "agent_pda": agent_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("agent_pda: {agent_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant sap: unknown subcommand '{other}'");
                     print_usage();
                     std::process::exit(2);
                 }

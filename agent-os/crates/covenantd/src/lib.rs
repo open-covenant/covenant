@@ -872,6 +872,69 @@ impl Server {
         self.sap_bridge.as_ref()
     }
 
+    /// Resolve the SAP bridge status. Returns a disabled snapshot when
+    /// no bridge was wired in at boot — handlers must never panic on
+    /// `sap_bridge().is_none()`.
+    pub(crate) fn sap_status(&self) -> Response {
+        match self.sap_bridge.as_ref() {
+            Some(bridge) => {
+                let cfg = bridge.config();
+                Response::SapStatus {
+                    enabled: cfg.enabled,
+                    cluster: cfg.cluster.as_str().to_owned(),
+                    program_id: cfg.program_id.clone(),
+                    rpc_url: cfg.rpc_url.clone(),
+                    explorer_url: cfg.explorer_url.clone(),
+                    // Bridge config doesn't carry the keypair path; an
+                    // operator can read the daemon env directly. We
+                    // surface "configured" iff COVENANT_SAP_KEYPAIR is
+                    // set (the worker reads the same var).
+                    has_signer: std::env::var("COVENANT_SAP_KEYPAIR")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false),
+                }
+            }
+            None => Response::SapStatus {
+                enabled: false,
+                cluster: String::new(),
+                program_id: String::new(),
+                rpc_url: String::new(),
+                explorer_url: String::new(),
+                has_signer: false,
+            },
+        }
+    }
+
+    /// Publish an agent through the SAP bridge. Errors (disabled
+    /// bridge, RPC failure, missing signer, etc.) flatten onto
+    /// `Response::Error` with the bridge's own message so the CLI
+    /// renders them consistently with other failures.
+    pub(crate) async fn sap_publish_agent(&self, manifest_json: String) -> Response {
+        let Some(bridge) = self.sap_bridge.as_ref() else {
+            return Response::Error {
+                message: "sap bridge is not wired into this daemon".into(),
+            };
+        };
+        let manifest: covenant_sap_bridge::identity::AgentManifest =
+            match serde_json::from_str(&manifest_json) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("invalid manifest JSON: {e}"),
+                    }
+                }
+            };
+        match bridge.publish_agent(&manifest).await {
+            Ok(published) => Response::SapPublishedAgent {
+                agent_pda: published.agent_pda,
+                signature: published.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("sap publish_agent: {e}"),
+            },
+        }
+    }
+
     /// Walk the router's registered agents and seed each one's budget
     /// bucket from its manifest's `Settlement.budget_credits_per_hour`.
     /// Cards with `budget_credits_per_hour == 0` are skipped — the spec's
@@ -1481,6 +1544,10 @@ impl Server {
                 self.recent_receipts(limit, since_ms, peer).await
             }
             Request::ChainStatus => self.chain_status(),
+            Request::SapStatus => self.sap_status(),
+            Request::SapPublishAgent { manifest_json } => {
+                self.sap_publish_agent(manifest_json).await
+            }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::BackfillSettlementReceipts {

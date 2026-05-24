@@ -184,7 +184,7 @@ The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/
 
 `covenant chain receipt-batches --json` emits the list of recent receipt batches recorded on-chain. Envelope shape:
 
-- `kind`: literal string `"receipt_batch_list"`.
+- `kind`: literal string `"receipt_batch_list"`. Pinned at the value level by `main.rs:7091` (asserts `value["kind"].as_str() == Some("receipt_batch_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `limit` (u64): the result cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:7092-7095` — never a string.
 - `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty. Pinned as an array by `main.rs:7096-7099` — never null or a string.
 

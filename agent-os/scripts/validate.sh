@@ -256,6 +256,7 @@ run node ./scripts/validate-memory-backfill-cli-print-range-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-response-variant-line-refs.mjs
 run node ./scripts/validate-memory-backfill-response-variant-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-rollback-path-inline-line-refs.mjs
+run node ./scripts/validate-memory-backfill-savepoint-name-field-type-line-refs.mjs
 
 case "$mode" in
   scripts)

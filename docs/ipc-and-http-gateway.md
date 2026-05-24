@@ -115,7 +115,7 @@ The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/co
 - `kind`: literal string `"verify_report"`. Pinned at the value level by `main.rs:7225` (asserts `value["kind"].as_str() == Some("verify_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `window` (u64): the audit-window record count echoed back from the `--window` argument. Pinned as u64 by `main.rs:7226-7229` — never a string.
 - `checks` (array of `VerifyCheck`): per-check results, see below. Pinned as an array by `main.rs:7234-7237` — never null or a string.
-- `drift` (array of `VerifyDrift`): correlation gaps, see below.
+- `drift` (array of `VerifyDrift`): correlation gaps, see below. Pinned as an array by `main.rs:7238` — never null or a string blob.
 - `orphans_total` (u64): total number of unmatched rows the checks discovered. Pinned as u64 by `main.rs:7230-7233` — never a string-of-integer.
 
 Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:7209` (`verify_report_json_pins_top_level_schema`).

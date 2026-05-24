@@ -85,6 +85,24 @@ export interface PeerRecord {
   reputationScore: number | null;
 }
 
+// Full agent projection used by reconcile / describe paths. Mirrors the
+// fields publishAgent / updateAgent take, plus a few on-chain-only
+// counters that help operators verify state.
+export interface AgentDetail {
+  agentPda: string;
+  wallet: string;
+  name: string;
+  description: string;
+  capabilities: CapabilityDescriptor[];
+  pricing: unknown[];
+  protocols: string[];
+  agentId: string | null;
+  agentUri: string | null;
+  x402Endpoint: string | null;
+  isActive: boolean;
+  reputationScore: number | null;
+}
+
 // Audit-root attestation. Only the 32-byte Merkle root and a small
 // envelope go on-chain — never the underlying audit-log contents.
 export interface AuditRootAttestation {
@@ -115,6 +133,7 @@ export interface BridgeStatus {
 
 const ATTESTATION_SEED = 'sap_attest';
 const AGENT_STATS_SEED = 'sap_stats';
+const PRICING_MENU_SEED = 'sap_pricing';
 const DEFAULT_ATTESTATION_TYPE = 'covenant.audit-root';
 
 interface LoadedSdk {
@@ -308,6 +327,78 @@ export class SapBridge {
     return { attestationPda: attestationPda.toBase58(), signature };
   }
 
+  // Update the daemon's on-chain agent account to reflect the local
+  // manifest. The deployed program accepts each arg as optional — we
+  // always pass non-null values so the manifest is the source of truth.
+  async updateAgent(manifest: AgentManifest): Promise<PublishedAgent> {
+    this.requireEnabled();
+    const keypair = this.requireSigner('updateAgent');
+    const { sdk, web3, anchor } = await loadSdk();
+
+    const kp = keypair as unknown as InstanceType<typeof web3.Keypair>;
+    const wallet = new anchor.Wallet(kp);
+    const client = sdk.createSapClient(this.config.rpcUrl, wallet);
+    const walletPk = new web3.PublicKey(keypair.publicKey.toBase58());
+    const programId = new web3.PublicKey(this.config.programId);
+
+    const [agent] = sdk.Pdas.getAgentPDA(walletPk);
+    const [pricingMenu] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(PRICING_MENU_SEED), agent.toBuffer()],
+      programId,
+    );
+
+    const ix = await client.agent.updateAgent({
+      signer: kp,
+      wallet: walletPk,
+      agent,
+      pricingMenu,
+      name: manifest.name,
+      description: manifest.description ?? '',
+      capabilities: manifest.capabilities.map(toSdkCapability) as never,
+      pricing: (manifest.pricingRaw ?? []) as never,
+      protocols: manifest.protocols,
+      agentId: manifest.agentId ?? null,
+      agentUri: manifest.agentUri ?? null,
+      x402Endpoint: manifest.x402Endpoint ?? null,
+    });
+
+    const tx = await client.buildTransaction([ix], walletPk);
+    const signature = await signAndSend(client, tx, [kp]);
+    return { agentPda: agent.toBase58(), signature };
+  }
+
+  // Full agent projection — the read used by reconcile / diff paths
+  // when a PeerRecord isn't enough.
+  async describeAgent(pda: string): Promise<AgentDetail | null> {
+    this.requireEnabled();
+    const { sdk, web3 } = await loadSdk();
+    const client = sdk.createSapClient(this.config.rpcUrl);
+    const acct = await client.fetchAccount<RawAgentAccountFull>(
+      'agentAccount',
+      new web3.PublicKey(pda),
+    );
+    if (!acct) return null;
+    return {
+      agentPda: pda,
+      wallet: acct.wallet.toBase58(),
+      name: acct.name,
+      description: acct.description ?? '',
+      capabilities: (acct.capabilities ?? []).map((c) => ({
+        id: c.id,
+        protocolId: c.protocol_id ?? null,
+        version: c.version ?? null,
+        description: c.description ?? null,
+      })),
+      pricing: acct.pricing ?? [],
+      protocols: acct.protocols ?? [],
+      agentId: acct.agent_id ?? null,
+      agentUri: acct.agent_uri ?? null,
+      x402Endpoint: acct.x402_endpoint ?? null,
+      isActive: acct.isActive ?? acct.is_active ?? false,
+      reputationScore: acct.reputationScore ?? null,
+    };
+  }
+
   // Resolve a single agent account by its on-chain PDA.
   async findAgentByPda(pda: string): Promise<PeerRecord | null> {
     this.requireEnabled();
@@ -349,6 +440,25 @@ interface RawAgentAccount {
 
 interface RawProtocolIndex {
   agents: PublicKey[];
+}
+
+// Anchor decodes IDL types with mixed casing: snake_case for some
+// fields (matching the Rust struct names) and camelCase for others.
+// The deployed program returns a blend, so we accept both forms where
+// it matters.
+interface RawAgentAccountFull {
+  wallet: PublicKey;
+  name: string;
+  description?: string;
+  capabilities?: { id: string; description?: string | null; protocol_id?: string | null; version?: string | null }[];
+  pricing?: unknown[];
+  protocols?: string[];
+  agent_id?: string | null;
+  agent_uri?: string | null;
+  x402_endpoint?: string | null;
+  is_active?: boolean;
+  isActive?: boolean;
+  reputationScore?: number;
 }
 
 function mapAgent(pda: string, acct: RawAgentAccount): PeerRecord {

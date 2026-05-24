@@ -18,8 +18,10 @@
 // Commands:
 //   status                          — resolved config snapshot (no network)
 //   publish-agent     <stdin: AgentManifest>
+//   update-agent      <stdin: AgentManifest>      — replaces all fields
 //   attest-root       <stdin: AuditRootAttestation>
-//   find-agent        <stdin: { pda }>
+//   find-agent        <stdin: { pda }>            — discovery projection
+//   describe-agent    <stdin: { pda }>            — full agent projection
 //   find-by-protocol  <stdin: { protocol }>
 
 import { SapBridge, resolveSynapseConfig, type SapKeypair } from './index.js';
@@ -79,6 +81,10 @@ async function main(): Promise<void> {
       emit(await bridge.publishAgent(await parsePayload()));
       return;
     }
+    case 'update-agent': {
+      emit(await bridge.updateAgent(await parsePayload()));
+      return;
+    }
     case 'attest-root': {
       emit(await bridge.publishAuditRoot(await parsePayload()));
       return;
@@ -89,6 +95,12 @@ async function main(): Promise<void> {
       emit(await bridge.findAgentByPda(pda));
       return;
     }
+    case 'describe-agent': {
+      const { pda } = await parsePayload<{ pda?: string }>();
+      if (!pda) throw new Error('describe-agent: missing "pda" in payload');
+      emit(await bridge.describeAgent(pda));
+      return;
+    }
     case 'find-by-protocol': {
       const { protocol } = await parsePayload<{ protocol?: string }>();
       if (!protocol) throw new Error('find-by-protocol: missing "protocol" in payload');
@@ -97,8 +109,8 @@ async function main(): Promise<void> {
     }
     default:
       throw new Error(
-        `unknown command '${command ?? ''}'. ` +
-          'Expected: status | publish-agent | attest-root | find-agent | find-by-protocol',
+        `unknown command '${command ?? ''}'. Expected: status | publish-agent | ` +
+          'update-agent | attest-root | find-agent | describe-agent | find-by-protocol',
       );
   }
 }

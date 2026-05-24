@@ -439,7 +439,7 @@ The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/cov
 - `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:7412-7415`).
 - `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:124-129`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:7416-7419`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
 - `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty. Pinned as an array by `main.rs:7420` — never null or a string blob.
-- `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:3422` when both `tasks` and `results` are empty. Pinned as an array by `main.rs:7421-7424` — never null or a string.
+- `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:3415` when both `tasks` and `results` are empty. Pinned as an array by `main.rs:7421-7424` — never null or a string.
 
 The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:132`:
 

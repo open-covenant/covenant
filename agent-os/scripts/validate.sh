@@ -147,6 +147,7 @@ run node ./scripts/validate-covenantd-recent-capabilities-fn-block-range-line-re
 run node ./scripts/validate-receipt-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-capability-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-capability-grant-type-level-pin-line-refs.mjs
+run node ./scripts/validate-capability-grant-expand-action-stderr-line-refs.mjs
 run node ./scripts/validate-peer-list-type-level-pin-line-refs.mjs
 run node ./scripts/validate-intent-result-type-level-pin-line-refs.mjs
 run node ./scripts/validate-intents-resume-type-level-pin-line-refs.mjs

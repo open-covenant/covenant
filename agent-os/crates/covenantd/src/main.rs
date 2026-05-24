@@ -276,6 +276,17 @@ async fn main() -> Result<()> {
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker);
 
+    let server = match x402_dispatch_config_from_env() {
+        Some(cfg) => {
+            info!(
+                signer = %cfg.signer_binary.display(),
+                "x402 outbound dispatch enabled"
+            );
+            server.with_x402_dispatch(cfg)
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -424,6 +435,49 @@ async fn bootstrap_operator_token(
     peers.register(entry).await?;
     info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
     Ok(())
+}
+
+/// Build the outbound x402 dispatch config from env, or return None
+/// when the operator hasn't opted in. Returning None keeps the daemon
+/// running fully offline-from-payments — every `Request::PayX402`
+/// will surface "not configured" until the operator sets these vars
+/// and restarts.
+///
+/// Required when opted in:
+/// - `COVENANT_X402_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_X402_SIGNER_BINARY` — path to a built
+///   `covenant-x402-signer` binary
+///
+/// Forwarded to the sidecar via its env:
+/// - `COVENANT_X402_FUNDING_KEYPAIR` — funding keypair JSON path
+/// - `COVENANT_X402_RPC_URL` — Solana RPC URL
+fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
+    let enabled = std::env::var("COVENANT_X402_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let signer_binary = match std::env::var("COVENANT_X402_SIGNER_BINARY") {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => {
+            tracing::warn!(
+                "COVENANT_X402_ENABLED is set but COVENANT_X402_SIGNER_BINARY is not; outbound x402 dispatch will remain disabled"
+            );
+            return None;
+        }
+    };
+    let mut signer_env = Vec::new();
+    for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
+        if let Ok(v) = std::env::var(key) {
+            signer_env.push((key.to_string(), v));
+        }
+    }
+    Some(covenantd::x402::X402Config {
+        enabled: true,
+        signer_binary,
+        signer_env,
+    })
 }
 
 fn epoch_ms() -> u64 {

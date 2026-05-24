@@ -81,6 +81,7 @@ run node ./scripts/validate-memory-compact-dry-run-default-line-refs.mjs
 run node ./scripts/validate-capability-grant-line-refs.mjs
 run node ./scripts/validate-peer-revoke-line-refs.mjs
 run node ./scripts/validate-memory-purge-line-refs.mjs
+run node ./scripts/validate-memory-purge-record-count-print-line-refs.mjs
 run node ./scripts/validate-a2a-compact-line-refs.mjs
 run node ./scripts/validate-a2a-retry-line-refs.mjs
 run node ./scripts/validate-ignore-report-line-refs.mjs

@@ -31,7 +31,12 @@ struct PdaQuery<'a> {
 impl SapBridge {
     pub async fn find_agents_by_protocol(&self, protocol: &str) -> Result<Vec<PeerRecord>> {
         self.require_enabled()?;
-        worker::invoke(self.config(), "find-by-protocol", &ProtocolQuery { protocol }).await
+        worker::invoke(
+            self.config(),
+            "find-by-protocol",
+            &ProtocolQuery { protocol },
+        )
+        .await
     }
 
     pub async fn find_agent_by_pda(&self, pda: &str) -> Result<Option<PeerRecord>> {

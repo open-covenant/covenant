@@ -7,13 +7,9 @@ authors = ["Covenant contributors"]
 repository = "https://github.com/open-covenant/covenant"
 description = "Opt-in bridge between Covenant and Synapse Agent Protocol on Solana."
 
-# Standalone crate for now — not a workspace member. Joins
-# `agent-os/Cargo.toml` once the bridge is wired into the daemon.
-[workspace]
-
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "1"
-tracing = "0.1"
-tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-thread", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

@@ -133,8 +133,7 @@ impl Config {
         let upper = cluster.upper();
 
         let enabled = parse_bool(
-            get(&format!("COVENANT_SAP_{upper}_ENABLED"))
-                .or_else(|| get("COVENANT_SAP_ENABLED")),
+            get(&format!("COVENANT_SAP_{upper}_ENABLED")).or_else(|| get("COVENANT_SAP_ENABLED")),
         );
 
         let program_id = get(&format!("COVENANT_SAP_{upper}_PROGRAM_ID"))
@@ -215,9 +214,10 @@ mod tests {
 
     #[test]
     fn explorer_url_overridable() {
-        let cfg = Config::from_env(env(&[
-            ("COVENANT_SAP_EXPLORER_URL", "https://staging.synapse.test"),
-        ]));
+        let cfg = Config::from_env(env(&[(
+            "COVENANT_SAP_EXPLORER_URL",
+            "https://staging.synapse.test",
+        )]));
         assert_eq!(cfg.explorer_url, "https://staging.synapse.test");
     }
 

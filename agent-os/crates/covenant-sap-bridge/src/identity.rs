@@ -147,8 +147,11 @@ impl ManifestDiff {
     fn between(current: &AgentDetail, manifest: &AgentManifest) -> Self {
         let current_caps: BTreeSet<&str> =
             current.capabilities.iter().map(|c| c.id.as_str()).collect();
-        let manifest_caps: BTreeSet<&str> =
-            manifest.capabilities.iter().map(|c| c.id.as_str()).collect();
+        let manifest_caps: BTreeSet<&str> = manifest
+            .capabilities
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
 
         let added_capabilities: Vec<CapabilityDescriptor> = manifest
             .capabilities
@@ -263,10 +266,7 @@ mod tests {
 
     #[test]
     fn rename_marks_metadata_changed() {
-        let d = ManifestDiff::between(
-            &detail("old", &[], &[]),
-            &manifest("new", &[], &[]),
-        );
+        let d = ManifestDiff::between(&detail("old", &[], &[]), &manifest("new", &[], &[]));
         assert!(d.metadata_changed);
     }
 }

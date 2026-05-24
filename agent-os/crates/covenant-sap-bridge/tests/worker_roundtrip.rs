@@ -33,19 +33,20 @@ fn demo_manifest() -> AgentManifest {
 
 #[tokio::test]
 async fn publish_agent_maps_success_envelope() {
-    let bridge = bridge_with_stub(
-        r#"{"ok":true,"data":{"agentPda":"Agent111","signature":"sig222"}}"#,
-    );
-    let published = bridge.publish_agent(&demo_manifest()).await.expect("publish");
+    let bridge =
+        bridge_with_stub(r#"{"ok":true,"data":{"agentPda":"Agent111","signature":"sig222"}}"#);
+    let published = bridge
+        .publish_agent(&demo_manifest())
+        .await
+        .expect("publish");
     assert_eq!(published.agent_pda, "Agent111");
     assert_eq!(published.signature, "sig222");
 }
 
 #[tokio::test]
 async fn attest_root_maps_success_envelope() {
-    let bridge = bridge_with_stub(
-        r#"{"ok":true,"data":{"attestationPda":"Att999","signature":"sigZ"}}"#,
-    );
+    let bridge =
+        bridge_with_stub(r#"{"ok":true,"data":{"attestationPda":"Att999","signature":"sigZ"}}"#);
     let att = AuditRootAttestation {
         root_hash_hex: "00".repeat(32),
         release_target: "agent".into(),
@@ -91,9 +92,8 @@ async fn error_envelope_becomes_rpc_error() {
 
 #[tokio::test]
 async fn update_agent_maps_success_envelope() {
-    let bridge = bridge_with_stub(
-        r#"{"ok":true,"data":{"agentPda":"Agent111","signature":"upd333"}}"#,
-    );
+    let bridge =
+        bridge_with_stub(r#"{"ok":true,"data":{"agentPda":"Agent111","signature":"upd333"}}"#);
     let published = bridge.update_agent(&demo_manifest()).await.expect("update");
     assert_eq!(published.agent_pda, "Agent111");
     assert_eq!(published.signature, "upd333");

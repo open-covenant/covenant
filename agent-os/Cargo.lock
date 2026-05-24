@@ -1454,6 +1454,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-sap-bridge"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "covenant-settlement"
 version = "0.1.0"
 dependencies = [
@@ -1544,6 +1555,7 @@ dependencies = [
  "covenant-permissions",
  "covenant-router",
  "covenant-runtime",
+ "covenant-sap-bridge",
  "covenant-settlement",
  "covenant-types",
  "reqwest",

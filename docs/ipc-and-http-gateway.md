@@ -150,7 +150,7 @@ The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6955` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
 
-The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4495`. Two unit tests at `main.rs:6931` (`tool_list_json_renders_stable_shape`) and `main.rs:6955` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3126`.
+The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:4495`. Two unit tests at `main.rs:6931` (`tool_list_json_renders_stable_shape`) and `main.rs:6955` cover both cases. The CLI verb is wired at `main.rs:3107-3133`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3119`.
 
 `covenant tools call <name> [--args <json>] --json` emits the tool invocation result. Envelope shape:
 

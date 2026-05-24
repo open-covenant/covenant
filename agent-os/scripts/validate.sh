@@ -162,6 +162,7 @@ run node ./scripts/validate-audit-recent-type-level-pin-line-refs.mjs
 run node ./scripts/validate-audit-purge-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-purge-type-level-pin-line-refs.mjs
 run node ./scripts/validate-capabilities-purge-type-level-pin-line-refs.mjs
+run node ./scripts/validate-capabilities-purge-older-than-ms-resolution-line-refs.mjs
 run node ./scripts/validate-peers-purge-type-level-pin-line-refs.mjs
 run node ./scripts/validate-peers-rotate-type-level-pin-line-refs.mjs
 run node ./scripts/validate-peer-revoke-type-level-pin-line-refs.mjs

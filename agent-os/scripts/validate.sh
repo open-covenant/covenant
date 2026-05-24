@@ -237,6 +237,7 @@ run node ./scripts/validate-capability-list-print-format-line-refs.mjs
 run node ./scripts/validate-intent-result-prefer-stream-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-section-preamble-line-refs.mjs
 run node ./scripts/validate-ignore-report-exit-code-line-refs.mjs
+run node ./scripts/validate-ignore-report-matched-print-line-refs.mjs
 
 case "$mode" in
   scripts)

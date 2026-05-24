@@ -249,6 +249,7 @@ run node ./scripts/validate-intents-resume-mode-cli-derivation-line-refs.mjs
 run node ./scripts/validate-intents-resume-cli-sources-print-range-line-refs.mjs
 run node ./scripts/validate-intents-resume-exit-code-coupling-line-refs.mjs
 run node ./scripts/validate-intents-resume-error-intent-id-inline-ranges-line-refs.mjs
+run node ./scripts/validate-settlement-backfill-cli-wiring-line-refs.mjs
 
 case "$mode" in
   scripts)

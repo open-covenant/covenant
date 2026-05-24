@@ -232,6 +232,7 @@ run node ./scripts/validate-a2a-status-queue-empty-print-line-refs.mjs
 run node ./scripts/validate-tool-list-tool-format-print-line-refs.mjs
 run node ./scripts/validate-capability-list-limit-default-line-refs.mjs
 run node ./scripts/validate-peer-list-limit-default-line-refs.mjs
+run node ./scripts/validate-a2a-status-limit-default-line-refs.mjs
 
 case "$mode" in
   scripts)

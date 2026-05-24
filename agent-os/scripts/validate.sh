@@ -217,6 +217,7 @@ run node ./scripts/validate-a2a-status-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-a2a-auto-retry-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-a2a-compacted-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-intents-resume-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-intents-resume-ok-text-type-level-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

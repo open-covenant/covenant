@@ -610,7 +610,7 @@ Both branches share these fields:
 
 - `intent_id` (string) — the resumed intent's UUID in canonical hyphenated form. Pinned as a string by `main.rs:5376-5379` — never a byte array.
 - `status` (string) — the daemon-returned outcome status (typically `"ok"`). The string shape is pinned at `main.rs:5380-5383`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
-- `text` (string) — the result text the daemon returned for the resumed intent. The unsuffixed CLI prints this value directly at `main.rs:3938`.
+- `text` (string) — the result text the daemon returned for the resumed intent. The unsuffixed CLI prints this value directly at `main.rs:3938`. Pinned as a string by `main.rs:5384` — never an object or array.
 - `sources` (array of strings) — source labels that contributed to the result. Pinned as an array of strings by `main.rs:5385-5388` — never a comma-joined string. Empty when no sources are attached; the unsuffixed CLI prints a `sources:` block followed by `  - <label>` lines at `main.rs:3941-3944` only when the array is non-empty.
 - `settlement` (object or null) — an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:339` and documented in the `receipt_list` block above) carrying the on-chain or local settlement evidence when the resumed intent consumed credits. `null` when the resume did not settle. Pinned as object-or-null by `main.rs:5389-5392` — never an integer or array.
 

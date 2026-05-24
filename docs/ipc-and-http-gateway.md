@@ -137,7 +137,7 @@ The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/c
 
 `covenant tools list --json` emits the registered MCP-style tool catalog. Envelope shape:
 
-- `kind`: literal string `"tool_list"` (singular `tool_list`, not `tools_list`; consumers routing on `kind` must match the literal exactly).
+- `kind`: literal string `"tool_list"` (singular `tool_list`, not `tools_list`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:6971` (asserts `value["kind"].as_str() == Some("tool_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `tools` (array of `ToolSpec`): the registered tools the daemon advertises via `tools/list`. The array is empty when no tools are registered; the unsuffixed CLI prints `(no tools registered)` for that case at `main.rs:3123`. Pinned as an array by `main.rs:6972-6975` — never null or a string blob.
 
 The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:27`:

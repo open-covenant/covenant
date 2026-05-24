@@ -230,6 +230,7 @@ run node ./scripts/validate-tool-list-no-tools-print-line-refs.mjs
 run node ./scripts/validate-capability-revoke-no-live-print-line-refs.mjs
 run node ./scripts/validate-a2a-status-queue-empty-print-line-refs.mjs
 run node ./scripts/validate-tool-list-tool-format-print-line-refs.mjs
+run node ./scripts/validate-capability-list-limit-default-line-refs.mjs
 
 case "$mode" in
   scripts)

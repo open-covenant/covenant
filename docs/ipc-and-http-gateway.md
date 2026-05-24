@@ -252,7 +252,7 @@ The daemon applies a **peer-visibility filter** before returning the list (see `
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:5902` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
-The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates/covenant/src/main.rs:4344`. Two unit tests at `main.rs:5862` (`capability_list_json_renders_stable_shape`) and `main.rs:5902` cover both cases. The CLI verb is wired at `main.rs:2568-2624`; without `--json`, the same response prints one line per capability in the form `<subject_display> → <action_label> (<granted_by_display>) [<expiry>]` at `main.rs:2612-2618`, or `(no capabilities granted)` when the filtered list is empty.
+The envelope source-of-truth lives at `capability_list_json` in `agent-os/crates/covenant/src/main.rs:4344`. Two unit tests at `main.rs:5862` (`capability_list_json_renders_stable_shape`) and `main.rs:5902` cover both cases. The CLI verb is wired at `main.rs:2568-2624`; without `--json`, the same response prints one line per capability in the form `<subject_display> → <action_label> (<granted_by_display>) [<expiry>]` at `main.rs:2605-2611`, or `(no capabilities granted)` when the filtered list is empty.
 
 `covenant capabilities grant <action> [--scope <json>] [--expires-at <ms>] --json` emits the freshly-signed capability after the daemon accepts the grant. Envelope shape:
 

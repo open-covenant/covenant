@@ -208,6 +208,7 @@ run node ./scripts/validate-memory-compacted-kind-literal-value-pin-line-refs.mj
 run node ./scripts/validate-memory-compaction-plan-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-ignore-report-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-chain-status-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-verify-report-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

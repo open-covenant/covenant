@@ -112,7 +112,7 @@ The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/co
 
 `covenant verify --json` emits a cross-check report comparing the audit log against memory and receipt rows. Envelope shape:
 
-- `kind`: literal string `"verify_report"`.
+- `kind`: literal string `"verify_report"`. Pinned at the value level by `main.rs:7225` (asserts `value["kind"].as_str() == Some("verify_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `window` (u64): the audit-window record count echoed back from the `--window` argument. Pinned as u64 by `main.rs:7226-7229` — never a string.
 - `checks` (array of `VerifyCheck`): per-check results, see below. Pinned as an array by `main.rs:7234-7237` — never null or a string.
 - `drift` (array of `VerifyDrift`): correlation gaps, see below.

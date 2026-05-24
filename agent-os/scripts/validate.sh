@@ -260,6 +260,7 @@ run node ./scripts/validate-memory-backfill-savepoint-name-field-type-line-refs.
 run node ./scripts/validate-settlement-backfill-scope-pubkey-forwarding-line-refs.mjs
 run node ./scripts/validate-memory-backfill-scope-pubkey-forwarding-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-scope-pubkey-reservation-help-line-refs.mjs
+run node ./scripts/validate-memory-backfill-scope-pubkey-reservation-help-line-refs.mjs
 
 case "$mode" in
   scripts)

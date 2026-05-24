@@ -241,6 +241,7 @@ run node ./scripts/validate-ignore-report-matched-print-line-refs.mjs
 run node ./scripts/validate-ignore-report-unmatched-print-line-refs.mjs
 run node ./scripts/validate-ignore-report-cli-wiring-line-refs.mjs
 run node ./scripts/validate-intents-resume-success-return-line-refs.mjs
+run node ./scripts/validate-intents-resume-error-code-fn-range-line-refs.mjs
 
 case "$mode" in
   scripts)

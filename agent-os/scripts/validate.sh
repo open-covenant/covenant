@@ -253,6 +253,7 @@ run node ./scripts/validate-settlement-backfill-cli-wiring-line-refs.mjs
 run node ./scripts/validate-memory-backfill-cli-wiring-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-cli-print-range-line-refs.mjs
 run node ./scripts/validate-memory-backfill-cli-print-range-line-refs.mjs
+run node ./scripts/validate-settlement-backfill-response-variant-line-refs.mjs
 
 case "$mode" in
   scripts)

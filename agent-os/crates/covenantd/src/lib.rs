@@ -744,6 +744,11 @@ pub struct Server {
     /// — they go through the storage traits — so unit tests that don't
     /// exercise rotation leave this `None`.
     home: Option<PathBuf>,
+    /// Opt-in outbound x402 dispatch config. None when no operator
+    /// has wired up the funding-key sidecar; in that state every
+    /// `Request::PayX402` returns a "not configured" error and no
+    /// USDC is ever spent.
+    x402_dispatch: Option<Arc<x402::X402Config>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -782,6 +787,7 @@ impl Server {
             stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
+            x402_dispatch: None,
         }
     }
 
@@ -824,6 +830,15 @@ impl Server {
     /// `RotateOperatorToken` returns `Response::Error`.
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = Some(home);
+        self
+    }
+
+    /// Wire the outbound x402 dispatch config. Without this, every
+    /// `Request::PayX402` returns a "not configured" error and no
+    /// paid call leaves the daemon. The daemon's `main` calls this
+    /// after [`Server::new`] when the operator has opted in via env.
+    pub fn with_x402_dispatch(mut self, config: x402::X402Config) -> Self {
+        self.x402_dispatch = Some(Arc::new(config));
         self
     }
 
@@ -1443,6 +1458,29 @@ impl Server {
             Request::ChainStatus => self.chain_status(),
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
+            Request::PayX402 {
+                provider,
+                endpoint,
+                method,
+                body,
+                network,
+                asset,
+                per_call_cap,
+                credits,
+            } => {
+                self.pay_x402(
+                    provider,
+                    endpoint,
+                    method,
+                    body,
+                    network,
+                    asset,
+                    per_call_cap,
+                    credits,
+                    peer,
+                )
+                .await
+            }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
             Request::GrantCapability {
                 action,
@@ -4593,6 +4631,134 @@ impl Server {
                 slot: None,
             },
             receipts_updated,
+        }
+    }
+
+    /// Dispatch an outbound x402 paid call on the peer's behalf.
+    ///
+    /// Gated by the `x402.outbound.pay` capability. Builds a
+    /// [`x402::SubprocessSigner`] from the daemon's
+    /// [`x402::X402Config`] (the funding key never enters the daemon
+    /// process), runs the 402-then-pay loop, and records the linked
+    /// budget debit + settlement receipt + audit event on success.
+    /// The receipt id surfaces back to the caller for join-keys.
+    ///
+    /// v1: the receipt amount is recorded as the operator-authorized
+    /// `per_call_cap`, not the live signed amount. A follow-up that
+    /// surfaces the chosen [`covenant_x402::PaymentRequirements`]
+    /// from `request_paid` will tighten that to the exact amount.
+    #[allow(clippy::too_many_arguments)]
+    async fn pay_x402(
+        &self,
+        provider: String,
+        endpoint: String,
+        method: String,
+        body: Option<serde_json::Value>,
+        network: String,
+        asset: String,
+        per_call_cap: String,
+        credits: u64,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities("x402:pay".into(), vec!["x402.outbound.pay".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "x402 dispatch requires capability \"x402.outbound.pay\". \
+                          Grant it with `covenant capabilities grant x402.outbound.pay`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.x402_dispatch.clone() else {
+            return Response::Error {
+                message: "x402 dispatch is not configured on this daemon. \
+                          Wire the funding-key sidecar via Server::with_x402_dispatch \
+                          and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "x402 dispatch is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let http_method = match method.parse::<reqwest::Method>() {
+            Ok(m) => m,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid HTTP method: {method:?}"),
+                }
+            }
+        };
+        let per_call_cap_u: u128 = match per_call_cap.parse() {
+            Ok(n) => n,
+            Err(_) => {
+                return Response::Error {
+                    message: format!(
+                        "invalid per_call_cap (must be decimal u128): {per_call_cap:?}"
+                    ),
+                }
+            }
+        };
+
+        let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
+        for (k, v) in &config.signer_env {
+            signer = signer.env(k.clone(), v.clone());
+        }
+
+        let capability = covenant_x402::Capability {
+            provider: provider.clone(),
+            network: network.clone(),
+            asset: asset.clone(),
+            per_call_cap: per_call_cap_u,
+        };
+        let call = x402::PaidCall {
+            provider: &provider,
+            endpoint: &endpoint,
+            method: http_method,
+            capability,
+            body: body.as_ref(),
+            amount: per_call_cap.clone(),
+            network: network.clone(),
+            asset: asset.clone(),
+            credits,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = x402::SettlementContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+
+        let client = covenant_x402::Client::new(reqwest::Client::new());
+        let outcome =
+            match x402::pay_and_record(&context, &config, &client, &signer, peer, &call).await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("x402 dispatch failed: {e}"),
+                    }
+                }
+            };
+        let status = outcome.response.status().as_u16();
+        let body_text = match outcome.response.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("read upstream body: {e}"),
+                }
+            }
+        };
+        let receipt_id = outcome.receipt_id.unwrap_or_else(Uuid::nil);
+        Response::X402Paid {
+            receipt_id,
+            status,
+            body: body_text,
         }
     }
 
@@ -17086,5 +17252,71 @@ budget_credits_per_hour = {credits}
 
         drop(client);
         let _ = server_task.await;
+    }
+
+    fn pay_x402_req() -> Request {
+        Request::PayX402 {
+            provider: "xona".into(),
+            endpoint: "https://example.test/endpoint".into(),
+            method: "POST".into(),
+            body: None,
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            per_call_cap: "100000".into(),
+            credits: 8,
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_x402_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/bin/true"),
+                signer_env: vec![],
+            });
+        let resp = s.op_respond(pay_x402_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("x402.outbound.pay"),
+                "error must name the missing capability so the operator can grant it: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_x402_rejects_when_not_configured() {
+        // Capability is granted, but no dispatch config wired — the
+        // daemon must refuse rather than silently spending or
+        // returning a generic error.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "x402.outbound.pay").await;
+        let resp = s.op_respond(pay_x402_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured' so the operator knows to call with_x402_dispatch: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_x402_rejects_when_disabled() {
+        // Capability granted + dispatch wired but `enabled: false`.
+        // The operator might have temporarily disabled outbound
+        // payments; the daemon must honour that flag.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_x402_dispatch(x402::X402Config::default());
+        grant_action(&s, "x402.outbound.pay").await;
+        let resp = s.op_respond(pay_x402_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("disabled"),
+                "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
     }
 }

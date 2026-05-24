@@ -154,6 +154,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
         .route("/chain/receipt-batches", get(chain_receipt_batches))
+        .route("/x402/pay", post(pay_x402_route))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -979,6 +980,47 @@ struct CallToolBody {
     name: String,
     #[serde(default)]
     arguments: serde_json::Value,
+}
+
+/// HTTP body shape for `POST /x402/pay`. Mirrors the [`Request::PayX402`]
+/// fields except for the `kind` discriminator (the HTTP layer fills
+/// that in). `per_call_cap` is a decimal string so atomic u128
+/// amounts above JSON's 53-bit integer ceiling survive the wire.
+#[derive(Deserialize)]
+struct PayX402Body {
+    provider: String,
+    endpoint: String,
+    method: String,
+    #[serde(default)]
+    body: Option<serde_json::Value>,
+    network: String,
+    asset: String,
+    per_call_cap: String,
+    credits: u64,
+}
+
+async fn pay_x402_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PayX402Body>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::PayX402 {
+                    provider: b.provider,
+                    endpoint: b.endpoint,
+                    method: b.method,
+                    body: b.body,
+                    network: b.network,
+                    asset: b.asset,
+                    per_call_cap: b.per_call_cap,
+                    credits: b.credits,
+                },
+                &peer,
+            )
+            .await,
+    ))
 }
 
 async fn call_tool(

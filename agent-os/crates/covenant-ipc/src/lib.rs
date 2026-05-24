@@ -423,6 +423,27 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Make an outbound x402 paid call. Capability-gated by
+    /// `x402.outbound.pay`; the daemon resolves the chosen requirement
+    /// against `per_call_cap` and shells out to the configured
+    /// `covenant-x402-signer` sidecar for signing. Authoritative
+    /// accounting (budget debit + settlement receipt + audit event)
+    /// lands on success.
+    ///
+    /// `per_call_cap` is the atomic amount string (decimal u128) to
+    /// avoid JSON's 53-bit integer limit. `credits` is the USD-pegged
+    /// budget cost. `body` is optional JSON forwarded to the endpoint.
+    PayX402 {
+        provider: String,
+        endpoint: String,
+        method: String,
+        #[serde(default)]
+        body: Option<serde_json::Value>,
+        network: String,
+        asset: String,
+        per_call_cap: String,
+        credits: u64,
+    },
     SearchMemory {
         query: String,
         #[serde(default)]
@@ -853,6 +874,16 @@ pub enum Response {
     /// the registry's redaction invariant excludes `PeerToken`.
     PeerRevoked {
         outcome: RevokeOutcome,
+    },
+    /// Successful response to [`Request::PayX402`]. `receipt_id`
+    /// joins the budget debit, settlement receipt, and audit event the
+    /// daemon recorded for this call. `status` is the upstream HTTP
+    /// status code; `body` is the upstream response body as a UTF-8
+    /// string (callers parse JSON themselves).
+    X402Paid {
+        receipt_id: Uuid,
+        status: u16,
+        body: String,
     },
     Error {
         message: String,
@@ -10782,5 +10813,68 @@ mod tests {
         let collected = collect_stream_envelopes(&envelopes).expect("zero-chunk path collects");
         assert!(collected.chunks.is_empty(), "no chunks expected");
         assert_eq!(collected.response_kind, "audit_events");
+    }
+
+    #[test]
+    fn request_pay_x402_serde_pins_wire_shape() {
+        // PayX402 is the spend-trigger variant. Wire-shape regressions
+        // here would either silently spend the wrong amount or stop
+        // dispatching paid calls entirely.
+        let event = Request::PayX402 {
+            provider: "xona".into(),
+            endpoint: "https://api.xona-agent.com/img".into(),
+            method: "POST".into(),
+            body: Some(serde_json::json!({ "prompt": "hi" })),
+            network: "solana:mainnet".into(),
+            asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into(),
+            per_call_cap: "100000".into(),
+            credits: 8,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("pay_x402")));
+        assert_eq!(
+            obj.get("per_call_cap"),
+            Some(&serde_json::json!("100000")),
+            "per_call_cap must round-trip as a decimal string so u128 \
+             amounts above JSON's 53-bit integer ceiling survive the wire",
+        );
+        assert_eq!(obj.get("credits").and_then(serde_json::Value::as_u64), Some(8));
+
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "PayX402 must round-trip verbatim");
+
+        // body is optional via #[serde(default)] so callers that don't
+        // need to forward a payload can omit the key.
+        let no_body = serde_json::json!({
+            "kind": "pay_x402",
+            "provider": "xona",
+            "endpoint": "https://api.xona-agent.com/img",
+            "method": "GET",
+            "network": "solana:mainnet",
+            "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "per_call_cap": "100000",
+            "credits": 8,
+        });
+        let decoded: Request = serde_json::from_value(no_body).expect("body is optional");
+        assert!(matches!(decoded, Request::PayX402 { body: None, .. }));
+    }
+
+    #[test]
+    fn response_x402_paid_serde_pins_wire_shape() {
+        let id = Uuid::from_u128(0xfeed_face_dead_beefu128);
+        let resp = Response::X402Paid {
+            receipt_id: id,
+            status: 200,
+            body: "{\"ok\":true}".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("x402_paid")));
+        assert_eq!(obj.get("status").and_then(serde_json::Value::as_u64), Some(200));
+        assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
     }
 }

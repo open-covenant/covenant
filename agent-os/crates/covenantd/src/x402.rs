@@ -40,10 +40,15 @@ use covenant_x402::{Capability, Client, PaymentRequirements, Signer, X402Error};
 
 /// Opt-in switch for the daemon's outbound x402 surface. `enabled`
 /// defaults to `false` so a daemon with no operator opt-in never
-/// makes paid calls.
+/// makes paid calls. When `enabled` is true, `signer_binary` must
+/// point at a runnable `covenant-x402-signer` and `signer_env`
+/// should carry the funding-key path + RPC URL the sidecar reads
+/// from its environment.
 #[derive(Debug, Clone, Default)]
 pub struct X402Config {
     pub enabled: bool,
+    pub signer_binary: PathBuf,
+    pub signer_env: Vec<(String, String)>,
 }
 
 /// A [`Signer`] that delegates to the standalone `covenant-x402-signer`
@@ -257,6 +262,18 @@ pub async fn record_paid_call(
     Ok(receipt_id)
 }
 
+/// Outcome of a [`pay_and_record`] call.
+///
+/// `receipt_id` is `Some` when the call paid and the daemon recorded
+/// the accounting; it is `None` only on a non-success upstream
+/// response (no spend, no receipt). The caller joins this id against
+/// the budget log, settlement log, and audit log.
+#[derive(Debug)]
+pub struct PaidOutcome {
+    pub response: Response,
+    pub receipt_id: Option<Uuid>,
+}
+
 /// Pre-checks budget, runs the 402-then-pay loop, and records the
 /// accounting on a successful paid response.
 ///
@@ -271,7 +288,7 @@ pub async fn pay_and_record(
     signer: &dyn Signer,
     payer: &AgentId,
     call: &PaidCall<'_>,
-) -> Result<Response, X402DaemonError> {
+) -> Result<PaidOutcome, X402DaemonError> {
     if !config.enabled {
         return Err(X402DaemonError::Disabled);
     }
@@ -283,7 +300,7 @@ pub async fn pay_and_record(
         Err(e) => return Err(X402DaemonError::Budget(e)),
     }
 
-    let resp = client
+    let response = client
         .request_paid(
             call.method.clone(),
             call.endpoint,
@@ -298,16 +315,21 @@ pub async fn pay_and_record(
     // so the daemon treats any success here as a settled call when the
     // endpoint is in a paid catalog. Endpoints known to be free should
     // not be routed through this path.
-    if resp.status().is_success() {
-        if let Err(e) = record_paid_call(ctx, payer, call).await {
-            // The payment already happened; failing to record it is a
-            // serious accounting gap, so surface it loudly rather than
-            // swallowing.
-            warn!(error = %e, endpoint = call.endpoint, "x402 paid call succeeded but accounting failed");
-            return Err(e);
+    let receipt_id = if response.status().is_success() {
+        match record_paid_call(ctx, payer, call).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                // The payment already happened; failing to record it is a
+                // serious accounting gap, so surface it loudly rather than
+                // swallowing.
+                warn!(error = %e, endpoint = call.endpoint, "x402 paid call succeeded but accounting failed");
+                return Err(e);
+            }
         }
-    }
-    Ok(resp)
+    } else {
+        None
+    };
+    Ok(PaidOutcome { response, receipt_id })
 }
 
 #[cfg(test)]

@@ -155,7 +155,7 @@ The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/coven
 `covenant tools call <name> [--args <json>] --json` emits the tool invocation result. Envelope shape:
 
 - `kind`: literal string `"tool_result"` (singular, not `tools_result`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:7031` (asserts `value["kind"].as_str() == Some("tool_result")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `name` (string): the tool name echoed back from the CLI argument.
+- `name` (string): the tool name echoed back from the CLI argument. Pinned as a string by `main.rs:7032` — never an object or array.
 - `content` (array of `Content`): the tool's output blocks. Each element is a tagged-enum object whose `type` discriminator selects the variant — `{type: "text", text: <string>}` for textual output or `{type: "json", value: <JSON>}` for structured output. The variants are defined at `agent-os/crates/covenant-mcp/src/lib.rs:39` with `#[serde(tag = "type", rename_all = "camelCase")]`; v0 ships text and json variants only. The array is empty when the tool produced no output blocks; the unsuffixed CLI prints each block sequentially at `main.rs:3174-3180`. Pinned as an array by `main.rs:7033-7036` — never null or a string.
 - `is_error` (boolean): `true` when the tool itself raised; pinned as a JSON boolean by the schema test (`main.rs:7037-7040`) — never `0`/`1` or a string. JSON consumers must branch on this boolean, not on the presence/absence of content. `is_error=true` paired with non-empty `content` describes a partial-success outcome with an error indicator.
 

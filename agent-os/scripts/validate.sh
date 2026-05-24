@@ -227,6 +227,7 @@ run node ./scripts/validate-tool-result-name-type-level-pin-line-refs.mjs
 run node ./scripts/validate-memory-read-mode-type-level-pin-line-refs.mjs
 run node ./scripts/validate-daemon-ping-status-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-tool-list-no-tools-print-line-refs.mjs
+run node ./scripts/validate-capability-revoke-no-live-print-line-refs.mjs
 
 case "$mode" in
   scripts)

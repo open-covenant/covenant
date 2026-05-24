@@ -245,6 +245,7 @@ run node ./scripts/validate-intents-resume-error-code-fn-range-line-refs.mjs
 run node ./scripts/validate-intents-resume-cli-wiring-line-refs.mjs
 run node ./scripts/validate-intents-resume-unexpected-response-slug-line-refs.mjs
 run node ./scripts/validate-intents-resume-daemon-error-slug-line-refs.mjs
+run node ./scripts/validate-intents-resume-mode-cli-derivation-line-refs.mjs
 
 case "$mode" in
   scripts)

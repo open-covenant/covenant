@@ -211,6 +211,47 @@ function toSdkCapability(cap: CapabilityDescriptor) {
   };
 }
 
+// Conservative defaults for SDK fields the simple Covenant
+// PricingTier doesn't carry. Operators who need anything richer
+// (custom rate limits, USDC, escrow / batched settlement, volume
+// curves, SPL tokens) should pass SDK-native tiers through
+// `manifest.pricingRaw` instead — that path is left untouched.
+const DEFAULT_RATE_LIMIT = 1_000_000;
+const DEFAULT_MAX_CALLS_PER_SESSION = 10_000;
+
+// Map Covenant's simple PricingTier (id + USD-micros + unit, the
+// shape that drops out of covenant-budget rate cards) into the
+// SDK-native PricingTier the program expects. Native SOL,
+// instant-settlement defaults; the `unit` is folded into the tier_id
+// suffix so the on-chain account preserves the original semantics.
+function toSdkPricingTier(tier: PricingTier, anchor: typeof Anchor) {
+  return {
+    tier_id: tier.unit ? `${tier.id}:${tier.unit}` : tier.id,
+    price_per_call: new anchor.BN(tier.priceUsdMicros),
+    min_price_per_call: null,
+    max_price_per_call: null,
+    rate_limit: DEFAULT_RATE_LIMIT,
+    max_calls_per_session: DEFAULT_MAX_CALLS_PER_SESSION,
+    burst_limit: null,
+    token_type: { sol: {} },
+    token_mint: null,
+    token_decimals: null,
+    settlement_mode: null,
+    min_escrow_deposit: null,
+    batch_interval_sec: null,
+    volume_curve: null,
+  };
+}
+
+// Choose the pricing payload sent to the SDK builder. `pricingRaw`
+// wins when present — that's the escape hatch for callers building
+// SDK-native tiers directly. Otherwise we map the simple
+// Covenant shape through `toSdkPricingTier`.
+function resolvePricing(manifest: AgentManifest, anchor: typeof Anchor): unknown[] {
+  if (manifest.pricingRaw !== undefined) return manifest.pricingRaw;
+  return manifest.pricing.map((t) => toSdkPricingTier(t, anchor));
+}
+
 export class SapBridge {
   readonly config: ResolvedSynapseConfig;
   private readonly signer?: SapKeypair;
@@ -278,7 +319,7 @@ export class SapBridge {
       name: manifest.name,
       description: manifest.description ?? '',
       capabilities: manifest.capabilities.map(toSdkCapability) as never,
-      pricing: (manifest.pricingRaw ?? []) as never,
+      pricing: resolvePricing(manifest, anchor) as never,
       protocols: manifest.protocols,
       agentId: manifest.agentId ?? null,
       agentUri: manifest.agentUri ?? null,
@@ -355,7 +396,7 @@ export class SapBridge {
       name: manifest.name,
       description: manifest.description ?? '',
       capabilities: manifest.capabilities.map(toSdkCapability) as never,
-      pricing: (manifest.pricingRaw ?? []) as never,
+      pricing: resolvePricing(manifest, anchor) as never,
       protocols: manifest.protocols,
       agentId: manifest.agentId ?? null,
       agentUri: manifest.agentUri ?? null,

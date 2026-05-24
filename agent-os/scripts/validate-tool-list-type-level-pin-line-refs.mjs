@@ -41,7 +41,7 @@ const testFnName = "tool_list_json_pins_top_level_schema";
 const selector = 'value["tools"].is_array(),';
 
 const docsRegex =
-  /- `tools` \(array of `ToolSpec`\): the registered tools the daemon advertises via `tools\/list`\. The array is empty when no tools are registered; the unsuffixed CLI prints `\(no tools registered\)` for that case at `main\.rs:3123`\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string blob\./;
+  /- `tools` \(array of `ToolSpec`\): the registered tools the daemon advertises via `tools\/list`\. The array is empty when no tools are registered; the unsuffixed CLI prints `\(no tools registered\)` for that case at `main\.rs:\d+`\. Pinned as an array by `main\.rs:(\d+)-(\d+)` — never null or a string blob\./;
 const docsLabel = "tool_list.tools type-level pin citation";
 const docsTemplate =
   "Pinned as an array by `main.rs:N-M` — never null or a string blob.";

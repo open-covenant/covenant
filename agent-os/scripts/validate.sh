@@ -261,6 +261,7 @@ run node ./scripts/validate-settlement-backfill-scope-pubkey-forwarding-line-ref
 run node ./scripts/validate-memory-backfill-scope-pubkey-forwarding-line-refs.mjs
 run node ./scripts/validate-settlement-backfill-scope-pubkey-reservation-help-line-refs.mjs
 run node ./scripts/validate-memory-backfill-scope-pubkey-reservation-help-line-refs.mjs
+run node ./scripts/validate-memory-backfill-verb-asymmetry-match-arm-line-refs.mjs
 
 case "$mode" in
   scripts)

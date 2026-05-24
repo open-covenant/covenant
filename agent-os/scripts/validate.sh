@@ -215,6 +215,7 @@ run node ./scripts/validate-receipt-batch-flushed-kind-literal-value-pin-line-re
 run node ./scripts/validate-receipt-batch-list-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-a2a-status-kind-literal-value-pin-line-refs.mjs
 run node ./scripts/validate-a2a-auto-retry-kind-literal-value-pin-line-refs.mjs
+run node ./scripts/validate-a2a-compacted-kind-literal-value-pin-line-refs.mjs
 
 case "$mode" in
   scripts)

@@ -53,7 +53,7 @@ const targets = [
     selectorFirstLine: 'value["limit"].is_u64(),',
     match: "exact",
     docsRegex:
-      /- `limit` \(u64\): the request limit echoed back from `--limit` \(default `20`, per `main\.rs:3708`\)\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./,
+      /- `limit` \(u64\): the request limit echoed back from `--limit` \(default `20`, per `main\.rs:\d+`\)\. Pinned as u64 by `main\.rs:(\d+)-(\d+)` — never a string\./,
     docsLabel: "peer_list.limit type-level pin citation",
     docsTemplate:
       "Pinned as u64 by `main.rs:N-M` — never a string.",

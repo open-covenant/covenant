@@ -293,7 +293,7 @@ The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/cra
 - `limit` (u64): the request limit echoed back from `--limit` (default `20`, per `main.rs:3708`). Pinned as u64 by `main.rs:5048-5051` — never a string.
 - `filter_pubkey_prefix` (string or null): the prefix echoed from `--prefix`, or `null` when the flag was omitted. Pinned at the type level by the schema test (`main.rs:5052-5056`) — never an integer or array.
 - `matched_count` (u64): row count of the `peers` array; equals the exhaustive match count when `truncated` is `false`. Pinned as u64 by `main.rs:5057-5060` — never a string.
-- `peers` (array of `PeerSummary`): the matched roster slice, see below.
+- `peers` (array of `PeerSummary`): the matched roster slice, see below. Pinned as an array by `main.rs:5061` — never null or a string blob.
 - `operator_pubkey_b58` (string): the requesting operator's own pubkey in base58. The unsuffixed CLI line formatter at `peer_list_lines` (`main.rs:4238`) compares each peer's `pubkey_base58()` against this value to append a ` (self)` marker on the operator's own row; JSON consumers must apply the same comparison to render the self-tag, not assume the operator's row is reliably first. Pinned as a string by `main.rs:5062-5065` — never an object or array.
 - `truncated` (boolean): `true` when the registry held more matching entries than `limit`, `false` otherwise. Pinned as a JSON boolean by the schema test at `main.rs:5066-5069` — never `0`/`1`. **This is the only signal of incomplete results**; `matched_count == limit` with `truncated == false` means the page is the exhaustive match set, not a hint to paginate.
 

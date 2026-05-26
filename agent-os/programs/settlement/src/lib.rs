@@ -488,7 +488,12 @@ pub struct BuyCredits<'info> {
         has_one = treasury,
     )]
     pub config: Account<'info, Config>,
-    #[account(mut, has_one = owner)]
+    #[account(
+        mut,
+        has_one = owner,
+        seeds = [b"credits", owner.key().as_ref()],
+        bump = credits.bump,
+    )]
     pub credits: Account<'info, CreditAccount>,
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -523,7 +528,12 @@ pub struct ConsumeCredits<'info> {
         bump = config.bump,
     )]
     pub config: Account<'info, Config>,
-    #[account(mut, has_one = owner)]
+    #[account(
+        mut,
+        has_one = owner,
+        seeds = [b"credits", owner.key().as_ref()],
+        bump = credits.bump,
+    )]
     pub credits: Account<'info, CreditAccount>,
     pub owner: Signer<'info>,
 }

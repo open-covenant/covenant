@@ -4,10 +4,10 @@
 //! instruction handlers (no mocks), so guard logic is exercised against actual
 //! Anchor account validation and SPL token CPIs.
 
-use anchor_lang::InstructionData;
+use anchor_lang::{AccountDeserialize, AccountSerialize, InstructionData};
 use litesvm::LiteSVM;
 use solana_sdk::{
-    account::ReadableAccount,
+    account::{Account, ReadableAccount},
     instruction::{AccountMeta, Instruction},
     program_pack::Pack,
     pubkey::Pubkey,
@@ -17,7 +17,9 @@ use solana_sdk::{
     transaction::{Transaction, TransactionError},
 };
 
-use covenant_settlement_program::{instruction as ix, InitializeArgs, RegisterAgentArgs, ID};
+use covenant_settlement_program::{
+    instruction as ix, CreditAccount, InitializeArgs, RegisterAgentArgs, ID,
+};
 
 const SO_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy/covenant_settlement_program.so");
@@ -30,10 +32,15 @@ pub struct Env {
     pub slash_authority: Keypair,
     pub mint: Pubkey,
     pub config: Pubkey,
+    pub treasury: Pubkey,
 }
 
 pub fn config_pda() -> Pubkey {
     Pubkey::find_program_address(&[b"config"], &ID).0
+}
+
+pub fn credits_pda(owner: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[b"credits", owner.as_ref()], &ID).0
 }
 
 pub fn agent_pda(agent_key: &[u8; 32]) -> Pubkey {
@@ -73,7 +80,75 @@ pub fn boot() -> Env {
     send(&mut svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
         .expect("initialize");
 
-    Env { svm, payer, slash_authority, mint, config }
+    Env { svm, payer, slash_authority, mint, config, treasury }
+}
+
+/// Open the canonical credit account PDA for the payer.
+pub fn open_credit_account(env: &mut Env) -> Pubkey {
+    let owner = env.payer.pubkey();
+    let credits = credits_pda(&owner);
+    let data = ix::OpenCreditAccount {}.data();
+    let metas = vec![
+        AccountMeta::new(credits, false),
+        AccountMeta::new(owner, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+        .expect("open_credit_account");
+    credits
+}
+
+/// Fund a fresh owner COVNT account with `amount` and return it.
+pub fn funded_covnt(env: &mut Env, amount: u64) -> Pubkey {
+    let owner = env.payer.pubkey();
+    let acct = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner);
+    mint_to(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &acct, amount);
+    acct
+}
+
+pub fn buy_credits(
+    env: &mut Env,
+    credits: &Pubkey,
+    owner_covnt: &Pubkey,
+    amount_covnt: u64,
+) -> Result<(), TransactionError> {
+    let data = ix::BuyCredits { amount_covnt }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(*credits, false),
+        AccountMeta::new(env.payer.pubkey(), true),
+        AccountMeta::new(*owner_covnt, false),
+        AccountMeta::new(env.treasury, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+}
+
+/// Inject a program-owned, CreditAccount-shaped account at a non-canonical
+/// address (not the `[b"credits", owner]` PDA) to model a phantom-account
+/// substitution attempt.
+pub fn plant_phantom_credit_account(env: &mut Env, owner: &Pubkey) -> Pubkey {
+    let addr = Keypair::new().pubkey();
+    let mut data = Vec::new();
+    CreditAccount { owner: *owner, balance: 0, bump: 255 }
+        .try_serialize(&mut data)
+        .unwrap();
+    let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
+    env.svm
+        .set_account(
+            addr,
+            Account { lamports, data, owner: ID, executable: false, rent_epoch: 0 },
+        )
+        .unwrap();
+    addr
+}
+
+pub fn credit_balance(env: &Env, credits: &Pubkey) -> u64 {
+    let acc = env.svm.get_account(credits).expect("credit account exists");
+    let mut data = acc.data();
+    CreditAccount::try_deserialize(&mut data).expect("credit account").balance
 }
 
 pub fn register_agent(env: &mut Env, agent_key: &[u8; 32]) -> Pubkey {
@@ -254,3 +329,6 @@ pub fn custom_error(err: &TransactionError) -> Option<u32> {
 
 /// Anchor maps `CovenantError::ProtocolPaused` (3rd variant) to 6000 + 2.
 pub const E_PROTOCOL_PAUSED: u32 = 6002;
+
+/// Anchor's built-in seeds-constraint violation.
+pub const E_CONSTRAINT_SEEDS: u32 = 2006;

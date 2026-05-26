@@ -212,6 +212,7 @@ pub mod settlement {
     }
 
     pub fn slash_stake(ctx: Context<SlashStake>, amount: u64, reason_hash: [u8; 32]) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(amount > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.position.active, CovenantError::StakeInactive);
         require!(

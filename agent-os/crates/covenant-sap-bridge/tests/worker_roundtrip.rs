@@ -46,7 +46,7 @@ async fn publish_agent_maps_success_envelope() {
 #[tokio::test]
 async fn attest_root_maps_success_envelope() {
     let bridge =
-        bridge_with_stub(r#"{"ok":true,"data":{"attestationPda":"Att999","signature":"sigZ"}}"#);
+        bridge_with_stub(r#"{"ok":true,"data":{"ledgerPda":"Ledg999","signature":"sigZ"}}"#);
     let att = AuditRootAttestation {
         root_hash_hex: "00".repeat(32),
         release_target: "agent".into(),
@@ -55,7 +55,7 @@ async fn attest_root_maps_success_envelope() {
         recorded_at: 0,
     };
     let published = bridge.publish_audit_root(&att).await.expect("attest");
-    assert_eq!(published.attestation_pda, "Att999");
+    assert_eq!(published.ledger_pda, "Ledg999");
     assert_eq!(published.signature, "sigZ");
 }
 

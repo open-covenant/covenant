@@ -10,6 +10,7 @@
 // throws `BridgeDisabledError`, which callers must treat as a soft
 // no-op.
 
+import { createHash } from 'node:crypto';
 import { resolveSynapseConfig, type ResolvedSynapseConfig } from '@covenant/config/networks';
 import type { PublicKey } from '@solana/web3.js';
 // Type-only namespace imports. Erased at compile time — the runtime
@@ -103,17 +104,32 @@ export interface AgentDetail {
   reputationScore: number | null;
 }
 
-// Audit-root attestation. Only the 32-byte Merkle root and a small
-// envelope go on-chain — never the underlying audit-log contents.
+// Audit-root anchoring. Only the 32-byte Merkle root and a small
+// provenance envelope go on-chain — never the underlying audit-log
+// contents. The root is written into a self-anchored SAP ledger (the
+// daemon signs for its own agent); SAP rejects self-attestation by
+// design, so the ledger module is the intended path for single-party
+// audit trails.
 export interface AuditRootAttestation {
+  // 32-byte Merkle root as hex (with or without 0x). Goes on-chain as
+  // the ledger entry's content_hash.
   rootHashHex: string;
-  attestationType?: string;
-  // Unix seconds. 0 means "no expiry".
-  expiresAt?: number;
+  // Release provenance, packed into the ledger entry's `data` blob as a
+  // compact JSON envelope. Identifiers only — never log contents.
+  releaseTarget?: string;
+  releaseSubject?: string;
+  releaseScope?: string;
+  recordedAt?: number;
+  // Selects the audit ledger to append to (hashed into the session
+  // seed). Defaults to a single canonical Covenant audit ledger so
+  // successive roots accumulate in one append-only trail.
+  ledgerLabel?: string;
 }
 
-export interface PublishedAttestation {
-  attestationPda: string;
+export interface PublishedAuditRoot {
+  // The ledger PDA the root was appended to. Stable across calls for a
+  // given ledgerLabel, so external parties can follow the trail.
+  ledgerPda: string;
   signature: string;
 }
 
@@ -131,15 +147,40 @@ export interface BridgeStatus {
   hasSigner: boolean;
 }
 
-const ATTESTATION_SEED = 'sap_attest';
 const AGENT_STATS_SEED = 'sap_stats';
 const PRICING_MENU_SEED = 'sap_pricing';
-const DEFAULT_ATTESTATION_TYPE = 'covenant.audit-root';
+// Ledger-flow PDA seeds, matching the deployed program's account
+// constraints: vault = [sap_vault, agent], session = [sap_session,
+// vault, session_hash], ledger = [sap_ledger, session].
+const VAULT_SEED = 'sap_vault';
+const SESSION_SEED = 'sap_session';
+const LEDGER_SEED = 'sap_ledger';
+// Canonical label for the daemon's audit ledger. Hashed into the
+// session seed so the same ledger PDA is reused across roots.
+const DEFAULT_AUDIT_LABEL = 'covenant.audit-root';
+const AUDIT_VAULT_LABEL = 'covenant.audit-vault';
 
 interface LoadedSdk {
   sdk: typeof SapSdk;
   web3: typeof Web3;
   anchor: typeof Anchor;
+}
+
+// Minimal shape of the Anchor methods builder, for the raw-program
+// escape hatch (the ledger flow has no high-level SDK wrapper). The
+// SDK types `program.methods.*` as possibly-undefined; we only need
+// the two-step accountsPartial → instruction chain.
+interface AnchorMethodBuilder {
+  accountsPartial(accounts: Record<string, unknown>): AnchorMethodBuilder;
+  instruction(): Promise<InstanceType<typeof Web3.TransactionInstruction>>;
+}
+// Named so access isn't widened to `| undefined` under
+// noUncheckedIndexedAccess (an index signature would be).
+interface LedgerProgramMethods {
+  initVault(vaultNonce: number[]): AnchorMethodBuilder;
+  openSession(sessionHash: number[]): AnchorMethodBuilder;
+  initLedger(): AnchorMethodBuilder;
+  writeLedger(data: Buffer, contentHash: number[]): AnchorMethodBuilder;
 }
 
 // Lazily pull in the optional on-chain dependencies. We load them
@@ -200,6 +241,13 @@ function hexToBytes32(hex: string): number[] {
     out.push(parseInt(clean.slice(i, i + 2), 16));
   }
   return out;
+}
+
+// Deterministic 32-byte seed from a label (sha256). Used for the
+// session_hash and vault_nonce so the vault / session / ledger PDAs are
+// stable across runs and roots append to one ledger.
+function label32(label: string): number[] {
+  return Array.from(createHash('sha256').update(label).digest());
 }
 
 function toSdkCapability(cap: CapabilityDescriptor) {
@@ -331,9 +379,18 @@ export class SapBridge {
     return { agentPda: agent.toBase58(), signature };
   }
 
-  // Publish a Covenant audit-root attestation under this daemon's own
-  // agent account (self-attestation). Hashes only — never log contents.
-  async publishAuditRoot(attestation: AuditRootAttestation): Promise<PublishedAttestation> {
+  // Anchor a Covenant audit root on-chain by appending it to a
+  // self-anchored SAP ledger. The daemon signs for its own agent — SAP
+  // rejects self-attestation by design (SelfAttestationNotAllowed), so
+  // create_attestation is not usable for a single-party trail; the
+  // ledger module (init → write → seal) is the intended path.
+  //
+  // Only the 32-byte root (as the entry's content_hash) and a small
+  // provenance envelope (the entry's `data`) go on-chain — never the
+  // underlying audit-log contents. The vault, session, and ledger are
+  // created on first use and reused thereafter, so successive roots
+  // accumulate in one append-only ledger keyed by `ledgerLabel`.
+  async publishAuditRoot(attestation: AuditRootAttestation): Promise<PublishedAuditRoot> {
     this.requireEnabled();
     const keypair = this.requireSigner('publishAuditRoot');
     const { sdk, web3, anchor } = await loadSdk();
@@ -343,29 +400,82 @@ export class SapBridge {
     const client = sdk.createSapClient(this.config.rpcUrl, wallet);
     const walletPk = new web3.PublicKey(keypair.publicKey.toBase58());
     const programId = new web3.PublicKey(this.config.programId);
+    const systemProgram = web3.SystemProgram.programId;
 
+    // Derive the ledger lineage directly from the documented seeds
+    // rather than via SDK helpers — those have drifted from the program
+    // (e.g. getAgentStatsPDA), and the on-chain ConstraintSeeds check is
+    // the only contract that matters.
     const [agent] = sdk.Pdas.getAgentPDA(walletPk);
-    const attester = walletPk;
-    const [attestationPda] = web3.PublicKey.findProgramAddressSync(
-      [Buffer.from(ATTESTATION_SEED), agent.toBuffer(), attester.toBuffer()],
+    const [globalRegistry] = sdk.Pdas.getGlobalPDA();
+    const [vault] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(VAULT_SEED), agent.toBuffer()],
       programId,
     );
-    const [globalRegistry] = sdk.Pdas.getGlobalPDA();
+    const sessionHash = label32(attestation.ledgerLabel ?? DEFAULT_AUDIT_LABEL);
+    const [session] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(SESSION_SEED), vault.toBuffer(), Buffer.from(sessionHash)],
+      programId,
+    );
+    const [ledger] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(LEDGER_SEED), session.toBuffer()],
+      programId,
+    );
 
-    const ix = await client.attestation.createAttestation({
-      signer: kp,
-      attester,
-      agent,
-      attestation: attestationPda,
-      globalRegistry,
-      attestationType: attestation.attestationType ?? DEFAULT_ATTESTATION_TYPE,
-      metadataHash: hexToBytes32(attestation.rootHashHex),
-      expiresAt: new anchor.BN(attestation.expiresAt ?? 0),
-    });
+    const contentHash = hexToBytes32(attestation.rootHashHex);
+    // Provenance envelope — identifiers only, never contents.
+    const data = Buffer.from(
+      JSON.stringify({
+        target: attestation.releaseTarget ?? null,
+        subject: attestation.releaseSubject ?? null,
+        scope: attestation.releaseScope ?? null,
+        recordedAt: attestation.recordedAt ?? null,
+      }),
+      'utf8',
+    );
 
-    const tx = await client.buildTransaction([ix], walletPk);
+    // The ledger module has no high-level SDK wrapper, so we build
+    // against the raw Anchor program. Create the vault / session /
+    // ledger on first use only; the write_ledger call always runs.
+    const methods = client.program.methods as unknown as LedgerProgramMethods;
+    const exists = async (pk: InstanceType<typeof web3.PublicKey>): Promise<boolean> =>
+      (await client.connection.getAccountInfo(pk)) !== null;
+
+    const ixs: InstanceType<typeof Web3.TransactionInstruction>[] = [];
+    if (!(await exists(vault))) {
+      ixs.push(
+        await methods
+          .initVault(label32(AUDIT_VAULT_LABEL))
+          .accountsPartial({ wallet: walletPk, agent, vault, globalRegistry, systemProgram })
+          .instruction(),
+      );
+    }
+    if (!(await exists(session))) {
+      ixs.push(
+        await methods
+          .openSession(sessionHash)
+          .accountsPartial({ wallet: walletPk, agent, vault, session, systemProgram })
+          .instruction(),
+      );
+    }
+    if (!(await exists(ledger))) {
+      ixs.push(
+        await methods
+          .initLedger()
+          .accountsPartial({ wallet: walletPk, agent, vault, session, ledger, systemProgram })
+          .instruction(),
+      );
+    }
+    ixs.push(
+      await methods
+        .writeLedger(data, contentHash)
+        .accountsPartial({ wallet: walletPk, session, vault, agent, ledger })
+        .instruction(),
+    );
+
+    const tx = await client.buildTransaction(ixs, walletPk);
     const signature = await signAndSend(client, tx, [kp]);
-    return { attestationPda: attestationPda.toBase58(), signature };
+    return { ledgerPda: ledger.toBase58(), signature };
   }
 
   // Update the daemon's on-chain agent account to reflect the local

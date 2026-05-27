@@ -45,6 +45,8 @@ services:
         sync: false  # coding gateway (Codex backend) model key; set value in dashboard
       - key: E2B_API_KEY
         sync: false  # coding gateway ephemeral sandbox provider; set value in dashboard
+      - key: HERMES_API_BASE_URL
+        value: http://covenant-coding-gateway:8642/v1  # delegates the coder agent to the gateway; entrypoint seeds it when set
       - fromGroup: covenant-sandbox-shared
 
   - type: web
@@ -98,6 +100,40 @@ services:
       - key: FAIRSCALE_API_TOKEN
         sync: false
       - fromGroup: covenant-sandbox-shared
+
+  # Coding gateway: Hermes /v1-compatible service that runs the pluggable coding
+  # agent in an ephemeral sandbox. PRIVATE (pserv) — only the daemon calls it; a
+  # public URL would bypass the daemon's auth/budget/abuse controls.
+  - type: pserv
+    name: covenant-coding-gateway
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: services/coding-gateway
+    buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
+    startCommand: pnpm start
+    healthCheckPath: /v1/capabilities
+    buildFilter:
+      paths:
+        - services/coding-gateway/**
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: PORT
+        value: "8642"
+      - key: CODER_MODEL
+        value: claude-sonnet-4-6  # public default; Opus is the gated tier
+      - key: CODER_DAILY_USD
+        value: "6"
+      - key: CODER_MONTHLY_USD
+        value: "200"
+      - key: ANTHROPIC_API_KEY
+        sync: false  # set via Render API after first deploy
+      - key: OPENAI_API_KEY
+        sync: false  # codex backend (coder-05)
+      - key: E2B_API_KEY
+        sync: false  # ephemeral sandbox provider
 
   - type: cron
     name: covenant-sandbox-reset

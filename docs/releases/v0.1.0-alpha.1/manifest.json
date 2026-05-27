@@ -1,0 +1,17 @@
+{
+  "schema": "covenant.alpha-release-manifest.v1",
+  "kind": "alpha_release_manifest",
+  "release_id": "v0.1.0-alpha.1",
+  "files": [
+    {
+      "path": "evidence.json",
+      "bytes": 3693,
+      "sha256": "89546b2621b2dc1a82f7f96dad2c49871bc7609a970829791baae92870a7538e"
+    },
+    {
+      "path": "validation.md",
+      "bytes": 1738,
+      "sha256": "804f6119d0416657f8fc5de7e8b725e2b50d57234a1e6e30b3fbfe33e4a997b4"
+    }
+  ]
+}

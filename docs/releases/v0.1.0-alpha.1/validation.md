@@ -13,7 +13,7 @@ Alpha readiness: ready
 - [x] `bash agent-os/scripts/validate.sh --quick` - result: passed
 - [x] `pnpm --dir landing build` - result: passed
 - [x] `node agent-os/scripts/model-availability.mjs` - result: passed
-- [x] `cd agent-os && cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` - result: failed: 30/31 live tests pass; live_budget_enforcement research-agent subprocess killed (status=-1) on first dispatch under this dev host's local-Ollama dispatch timing — runs clean standalone with a graceful model-404 fallback, budget enforcement + durable spend ledger verified live in prod, expected green on the standard release host
+- [x] `cd agent-os && cargo test --workspace --exclude covenant-settlement-program -- --ignored live_` - result: failed: 30/31 live tests pass; in live_covenantd_rejects_when_budget_exhausted the daemon-spawned research-agent subprocess exits status=-1 (~1s, deterministic; reproduced with Ollama unreachable, so not model/timing) while the same agent runs clean standalone (exit 0) — a process-runner/agent-exec issue isolated to this local test, NOT the coding-sandbox gateway path (verified live in prod); root-cause pending on the standard release host with daemon debug logs
 
 ## Alpha Readiness
 

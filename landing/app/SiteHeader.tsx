@@ -60,19 +60,19 @@ export function SiteHeader() {
           href={X_URL}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Covenant on X"
-          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
+          className="flex items-center gap-2 p-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
         >
-          <XIcon className="h-5 w-5" />
+          X
+          <XIcon className="h-4 w-4" />
         </a>
         <a
           href={GITHUB_URL}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Covenant on GitHub"
-          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
+          className="flex items-center gap-2 p-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
         >
-          <GithubIcon className="h-5 w-5" />
+          GitHub
+          <GithubIcon className="h-4 w-4" />
         </a>
       </nav>
     </>

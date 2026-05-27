@@ -230,11 +230,20 @@ pub fn runtime_runner_composite(
     local: &RuntimeRunnerConfig,
     hermes: Option<&HermesGatewayConfig>,
     tracker: Arc<covenant_runtime::SubprocessTracker>,
+    events: Option<covenant_runtime::RuntimeEventSink>,
 ) -> Arc<dyn Runner> {
     let local_runner = runtime_runner_from_config(local, tracker);
-    let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(|cfg| {
+    let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(move |cfg| {
         match covenant_runtime::HermesRunner::new(cfg.base_url.clone(), cfg.api_key.clone()) {
-            Ok(r) => Some(Arc::new(r) as Arc<dyn Runner>),
+            Ok(r) => {
+                // Wire the live event sink so the gateway's SSE trace stream
+                // folds into the audit chain as it arrives, not all at once.
+                let r = match events {
+                    Some(tx) => r.with_event_sink(tx),
+                    None => r,
+                };
+                Some(Arc::new(r) as Arc<dyn Runner>)
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -486,6 +495,28 @@ pub fn spawn_projection_tick_driver(
                     "budget projection tick preempted in-flight intents"
                 );
             }
+        }
+    })
+}
+
+/// Drains runtime traces the Hermes runner streams live and writes each into
+/// the audit chain the moment it arrives, so the task page shows the coding
+/// step-trail building in real time instead of all at once when the run ends.
+/// The matching `runtime_events` returned by the runner are empty in this mode,
+/// so the end-of-dispatch fold writes nothing (no double rows).
+pub fn spawn_runtime_event_drainer(
+    server: Server,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<covenant_runtime::StreamedTrace>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(st) = rx.recv().await {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: st.issuer.clone(),
+                kind: runtime_trace_to_audit_kind(st.intent_id, st.trace),
+            };
+            server.record_peer_event(&st.issuer, event).await;
         }
     })
 }

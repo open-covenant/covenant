@@ -57,10 +57,15 @@ async fn main() -> Result<()> {
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
     let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    // Live audit step-trail: the Hermes runner streams each tool trace through
+    // this channel; the drainer (spawned after the Server exists) writes them
+    // into the chain as they arrive.
+    let (runtime_event_tx, runtime_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let runner = covenantd::runtime_runner_composite(
         &runtime_config,
         hermes_config.as_ref(),
         subprocess_tracker.clone(),
+        Some(runtime_event_tx),
     );
     info!(
         backend = runtime_config.backend_name(),
@@ -324,6 +329,10 @@ async fn main() -> Result<()> {
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
 
+    // Fold live Hermes runtime traces into the audit chain as they stream in.
+    let runtime_event_drainer_handle =
+        covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx);
+
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
     // registry the Unix socket uses; only `/health` is open. Operator
@@ -376,6 +385,7 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     projection_tick_handle.abort();
+    runtime_event_drainer_handle.abort();
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }

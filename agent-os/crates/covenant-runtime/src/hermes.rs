@@ -47,6 +47,9 @@ pub struct HermesRunner {
     base_url: String,
     api_key: Option<String>,
     http: reqwest::Client,
+    /// When set, each runtime trace is streamed here as it arrives (for the
+    /// daemon's live audit fold) instead of only being returned in bulk.
+    event_tx: Option<crate::RuntimeEventSink>,
 }
 
 impl HermesRunner {
@@ -71,7 +74,16 @@ impl HermesRunner {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key,
             http,
+            event_tx: None,
         })
+    }
+
+    /// Stream each runtime trace to `tx` as it arrives so the daemon can write
+    /// the audit step-trail live. Without it, traces are only returned in the
+    /// `AgentResult` for the daemon to fold once the run finishes.
+    pub fn with_event_sink(mut self, tx: crate::RuntimeEventSink) -> Self {
+        self.event_tx = Some(tx);
+        self
     }
 
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
@@ -196,7 +208,13 @@ impl Runner for HermesRunner {
         // primary signal — but events that arrived before the failure
         // are preserved.
         let events = Arc::new(Mutex::new(Vec::<RuntimeTrace>::new()));
-        let sse_handle = self.spawn_event_stream(run_id.clone(), Arc::clone(&events));
+        let sse_handle = self.spawn_event_stream(
+            run_id.clone(),
+            Arc::clone(&events),
+            self.event_tx.clone(),
+            intent.id,
+            intent.issuer.clone(),
+        );
 
         let outcome = self.poll_until_terminal(&run_id, deadline, budget).await;
 
@@ -216,11 +234,20 @@ impl Runner for HermesRunner {
             }
         };
 
+        // When streaming live, the daemon wrote each trace as it arrived, so
+        // returning them again would double the audit rows — hand back an
+        // empty vec and let the live stream be the source of truth.
+        let runtime_events = if self.event_tx.is_some() {
+            Vec::new()
+        } else {
+            drained
+        };
+
         match outcome {
             Ok(RunOutcome::Completed { output }) => Ok(AgentResult {
                 text: output,
                 sources: Vec::new(),
-                runtime_events: drained,
+                runtime_events,
             }),
             Ok(RunOutcome::Failed { message }) => Err(RunnerError::Remote { status: 0, message }),
             Err(e) => Err(e),
@@ -277,6 +304,9 @@ impl HermesRunner {
         &self,
         run_id: String,
         sink: Arc<Mutex<Vec<RuntimeTrace>>>,
+        event_tx: Option<crate::RuntimeEventSink>,
+        intent_id: uuid::Uuid,
+        issuer: covenant_types::AgentId,
     ) -> JoinHandle<()> {
         let url = format!("{}/runs/{}/events", self.base_url, run_id);
         let api_key = self.api_key.clone();
@@ -321,6 +351,15 @@ impl HermesRunner {
                     };
                     buffer.drain(..advance);
                     if let Some(trace) = parse_sse_frame(&frame) {
+                        // Stream the trace to the daemon live (best-effort) so
+                        // the audit step-trail fills in as the run works.
+                        if let Some(tx) = &event_tx {
+                            let _ = tx.send(crate::StreamedTrace {
+                                intent_id,
+                                issuer: issuer.clone(),
+                                trace: trace.clone(),
+                            });
+                        }
                         match sink.lock() {
                             Ok(mut v) => v.push(trace),
                             Err(poisoned) => {

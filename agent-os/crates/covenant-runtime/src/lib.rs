@@ -56,6 +56,22 @@ pub struct AgentResult {
     pub runtime_events: Vec<RuntimeTrace>,
 }
 
+/// A [`RuntimeTrace`] streamed live during a run, tagged with the intent it
+/// belongs to (and its issuer) so the daemon can fold it into the audit chain
+/// the moment it arrives — turning the task page into a live "watch it work"
+/// view instead of dumping the whole trail when the run finishes.
+#[derive(Debug, Clone)]
+pub struct StreamedTrace {
+    pub intent_id: uuid::Uuid,
+    pub issuer: covenant_types::AgentId,
+    pub trace: RuntimeTrace,
+}
+
+/// Channel the daemon hands to the Hermes runner to receive [`StreamedTrace`]s
+/// as the run streams them. The daemon drains the receiver and writes each as
+/// an audit row.
+pub type RuntimeEventSink = tokio::sync::mpsc::UnboundedSender<StreamedTrace>;
+
 /// Mid-run signals from a runner. Distinct from `AuditKind` so the
 /// `covenant-runtime` crate stays free of an audit-log dependency; the
 /// daemon converts each variant into the matching `AuditKind` row when

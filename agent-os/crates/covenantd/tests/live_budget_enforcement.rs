@@ -101,6 +101,16 @@ budget_credits_per_hour = 1
     let mut child = Command::new(exe)
         .env("COVENANT_HOME", home.path())
         .env("COVENANT_HTTP_PORT", port.to_string())
+        // This test exercises *pre-spawn* budget admission: dispatch 1 is
+        // admitted (bucket 1 -> 0) and runs to completion, dispatch 2 is
+        // rejected at admission, resume re-rejects on the empty bucket. The
+        // budget projection tick (250ms default) is a separate hard-preempt
+        // mechanism — documented "tokens_remaining == 0 -> kill the in-flight
+        // subprocess", covered by the preempt_subprocess_pg tests — that would
+        // otherwise fire mid-dispatch and SIGKILL the first, validly-admitted
+        // run. Push its period past the test window so it doesn't race the
+        // admission path under test here.
+        .env("COVENANT_BUDGET_PROJECTION_TICK_MS", "3600000")
         .env("HOME", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

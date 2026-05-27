@@ -418,7 +418,7 @@ fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLo
             actual: bytes.len(),
         });
     }
-    Keypair::try_from(bytes.as_slice()).map_err(|e| KeypairLoadError::InvalidKeyMaterial {
+    Keypair::from_bytes(bytes.as_slice()).map_err(|e| KeypairLoadError::InvalidKeyMaterial {
         path,
         reason: e.to_string(),
     })

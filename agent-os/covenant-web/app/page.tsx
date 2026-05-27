@@ -8,6 +8,7 @@ import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
+import { Turnstile, turnstileEnabled } from "./components/Turnstile";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -51,6 +52,7 @@ export default function OverviewPage() {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastIntentId, setLastIntentId] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [verifyOk, setVerifyOk] = useState<boolean>(true);
@@ -64,7 +66,7 @@ export default function OverviewPage() {
       setLastResult(null);
       setLastIntentId(null);
       try {
-        const r = await api.submitIntent(trimmed);
+        const r = await api.submitIntent(trimmed, turnstileToken ?? undefined);
         if (r.kind === "intent_result") {
           setLastResult(r.text);
           setLastIntentId(r.intent_id);
@@ -78,9 +80,10 @@ export default function OverviewPage() {
         setLastError(e instanceof Error ? e.message : String(e));
       } finally {
         setDispatching(false);
+        if (turnstileEnabled) window.__covTurnstileReset?.();
       }
     },
-    [refresh],
+    [refresh, turnstileToken],
   );
 
   const clearReply = useCallback(() => {
@@ -189,8 +192,13 @@ export default function OverviewPage() {
             placeholder="What should your agents do?"
             rows={2}
           />
+          {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
           <div className="actions">
-            <button type="submit" className="btn primary" disabled={dispatching || !intent}>
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
+            >
               {dispatching ? "Sending" : "Send"}
             </button>
           </div>

@@ -254,10 +254,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => call<{ status: string }>("/health"),
 
-  submitIntent: (text: string) =>
+  submitIntent: (text: string, turnstileToken?: string) =>
     call<IntentResult>("/intent", {
       method: "POST",
       body: JSON.stringify({ text }),
+      headers: turnstileToken ? { "x-turnstile-token": turnstileToken } : undefined,
     }),
 
   recentMemory: (limit = 20, tier?: "working" | "episodic" | "longterm") =>

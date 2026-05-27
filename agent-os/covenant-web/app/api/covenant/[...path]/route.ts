@@ -68,6 +68,42 @@ function clientIp(request: NextRequest): string {
   return request.headers.get("x-real-ip") ?? "anon";
 }
 
+const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY?.trim();
+
+// Per-IP daily caps for expensive endpoints, on top of the per-minute limit —
+// bounds how much of the daily coding budget a single IP can consume.
+const DAILY_LIMITS: Record<string, number> = { intent: 25 };
+
+function takeDaily(key: string, perDay: number): boolean {
+  const now = Date.now();
+  let b = buckets.get(key);
+  if (!b || b.resetAt < now) {
+    b = { count: 0, resetAt: now + 86_400_000 };
+    buckets.set(key, b);
+  }
+  if (b.count >= perDay) return false;
+  b.count += 1;
+  return true;
+}
+
+// Cloudflare Turnstile human-check. Returns true (allow) when Turnstile isn't
+// configured, so the gate activates only once TURNSTILE_SECRET_KEY is set.
+async function verifyTurnstile(token: string | null, ip: string): Promise<boolean> {
+  if (!TURNSTILE_SECRET) return true;
+  if (!token) return false;
+  try {
+    const r = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret: TURNSTILE_SECRET, response: token, remoteip: ip }),
+    });
+    const j = (await r.json()) as { success?: boolean };
+    return j.success === true;
+  } catch {
+    return false;
+  }
+}
+
 async function readOperatorToken(): Promise<string | null> {
   const literal = process.env.COVENANT_OPERATOR_TOKEN?.trim();
   if (literal) return literal;
@@ -100,14 +136,30 @@ async function forward(
         { status: 403 },
       );
     }
-    const limit = RATE_LIMITS[pathKey];
-    if (limit !== undefined && request.method !== "GET" && request.method !== "HEAD") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
       const ip = clientIp(request);
-      if (!takeBucket(`${ip}:${pathKey}`, limit)) {
+      if (pathKey === "intent" && !(await verifyTurnstile(request.headers.get("x-turnstile-token"), ip))) {
+        return NextResponse.json(
+          { kind: "error", message: "Human verification failed — refresh the page and try again." },
+          { status: 403 },
+        );
+      }
+      const limit = RATE_LIMITS[pathKey];
+      if (limit !== undefined && !takeBucket(`${ip}:${pathKey}`, limit)) {
         return NextResponse.json(
           {
             kind: "error",
             message: `Rate limit hit (${limit}/min). The sandbox throttles writes to keep it healthy for everyone.`,
+          },
+          { status: 429 },
+        );
+      }
+      const daily = DAILY_LIMITS[pathKey];
+      if (daily !== undefined && !takeDaily(`${ip}:${pathKey}:day`, daily)) {
+        return NextResponse.json(
+          {
+            kind: "error",
+            message: `Daily limit reached (${daily}/day). Come back tomorrow — this keeps the free sandbox sustainable.`,
           },
           { status: 429 },
         );

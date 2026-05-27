@@ -10,3 +10,4 @@ packages:
   - services/hermes-mcp-bridge
   - services/compute-broker
   - services/telegram-bot
+  - services/fairscale-bridge

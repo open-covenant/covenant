@@ -3,6 +3,9 @@
 ## - covenant-sandbox-daemon: covenantd HTTP gateway, internal-only network.
 ## - covenant-sandbox-web: Next.js operator console, talks to the daemon
 ##   over Render's private network at http://covenant-sandbox-daemon:8421.
+## - covenant-fairscale-bridge: public read-only HTTP service that maps the
+##   daemon's audit-attested events into FairScale work_history conduct
+##   events. FairScale pulls it with a bearer token (FAIRSCALE_API_TOKEN).
 ## - covenant-sandbox-reset: 12-hour cron that restarts the daemon via the
 ##   Render REST API so the sandbox stays clean.
 ##
@@ -62,6 +65,27 @@ services:
         value: B86uVNTwuKS9cjtbLJR8NNp8WGmcYzPgvVCFx8BE8cpy
       - key: COVENANT_SAP_RPC_URL
         sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
+      - fromGroup: covenant-sandbox-shared
+
+  - type: web
+    name: covenant-fairscale-bridge
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: services/fairscale-bridge
+    buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
+    startCommand: pnpm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: COVENANT_DAEMON_URL
+        value: http://covenant-sandbox-daemon:8421
+      # bearer token FairScale presents to pull conduct events; set in
+      # dashboard or via the Render API, never committed.
+      - key: FAIRSCALE_API_TOKEN
+        sync: false
       - fromGroup: covenant-sandbox-shared
 
   - type: cron

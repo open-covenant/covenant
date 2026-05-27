@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { GatewayEvent, RunState, RunStatus, SandboxProvider } from "./types.js";
 import { selectBackend } from "./backends/index.js";
 import { LocalSandboxProvider } from "./sandbox/local.js";
+import { E2bSandboxProvider } from "./sandbox/e2b.js";
 import { config } from "./config.js";
 import { SpendLedger, modelCostUsd, sandboxCostUsd } from "./budget.js";
 
@@ -19,9 +20,12 @@ interface Run {
 const runs = new Map<string, Run>();
 const ledger = new SpendLedger();
 
-// Trusted-local provider for now; coder-07 swaps in the E2B provider so runs
-// execute in an ephemeral, egress-capped sandbox before any public exposure.
-const provider: SandboxProvider = new LocalSandboxProvider();
+// E2B (ephemeral Firecracker microVM) when E2B_API_KEY is set, else the
+// trusted-local provider for development. Egress allowlisting + custom resource
+// caps still need a hardened E2B template — see src/sandbox/e2b.ts.
+const provider: SandboxProvider = process.env.E2B_API_KEY
+  ? new E2bSandboxProvider(process.env.E2B_API_KEY)
+  : new LocalSandboxProvider();
 
 const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
 const WALL_MS = Number(process.env.CODER_WALL_MS ?? 600_000);

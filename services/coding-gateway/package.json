@@ -10,7 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.69.0"
+    "@anthropic-ai/sdk": "^0.69.0",
+    "e2b": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

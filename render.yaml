@@ -43,6 +43,8 @@ services:
         sync: false  # coding gateway + demo agent model key; set value in dashboard
       - key: OPENAI_API_KEY
         sync: false  # coding gateway (Codex backend) model key; set value in dashboard
+      - key: E2B_API_KEY
+        sync: false  # coding gateway ephemeral sandbox provider; set value in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: web

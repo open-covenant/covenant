@@ -9,6 +9,7 @@ import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
 import { Turnstile, turnstileEnabled } from "./components/Turnstile";
+import { Markdown } from "./components/Markdown";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -240,8 +241,10 @@ export default function OverviewPage() {
             <div className="reply-body">
               {dispatching && !lastResult && !lastError ? (
                 <span className="reply-pending">waiting for the agent…</span>
+              ) : lastError ? (
+                <pre>{lastError}</pre>
               ) : (
-                <pre>{lastError ?? lastResult}</pre>
+                <Markdown>{lastResult ?? ""}</Markdown>
               )}
             </div>
           </div>

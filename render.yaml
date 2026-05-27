@@ -27,6 +27,8 @@ services:
         value: "8421"
       - key: COVENANT_HTTP_BIND_ADDR
         value: "0.0.0.0"
+      - key: COVENANT_SAP_RPC_URL
+        sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: web
@@ -56,6 +58,8 @@ services:
         value: devnet
       - key: COVENANT_SAP_AGENT_PDA
         value: B86uVNTwuKS9cjtbLJR8NNp8WGmcYzPgvVCFx8BE8cpy
+      - key: COVENANT_SAP_RPC_URL
+        sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: cron

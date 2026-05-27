@@ -31,6 +31,7 @@ covenant-settlement = { path = "../covenant-settlement" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
+dotenvy = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -45,6 +45,17 @@ async fn main() -> Result<()> {
     let home = covenantd::covenant_home()?;
     std::fs::create_dir_all(&home).with_context(|| format!("create {}", home.display()))?;
 
+    // Operator secrets that must not live in the repo — the SAP RPC api-key,
+    // funding-key paths — go in `$COVENANT_HOME/sap.env`. Load it before any
+    // COVENANT_SAP_* / COVENANT_SOLANA_* config is resolved. dotenvy does not
+    // override variables already set, so an explicit shell export still wins.
+    let sap_env = home.join("sap.env");
+    match dotenvy::from_path(&sap_env) {
+        Ok(()) => info!(path = %sap_env.display(), "loaded operator env"),
+        Err(dotenvy::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(error = %e, path = %sap_env.display(), "failed to load sap.env"),
+    }
+
     let agents_dir = home.join("agents");
     let cards = covenant_router::load_agents_from_dir(&agents_dir)
         .with_context(|| format!("load agents from {}", agents_dir.display()))?;
@@ -274,7 +285,7 @@ async fn main() -> Result<()> {
         enabled = sap_config.enabled,
         cluster = sap_config.cluster.as_str(),
         program_id = %sap_config.program_id,
-        rpc_url = %sap_config.rpc_url,
+        rpc_url = %redact_url(&sap_config.rpc_url),
         "sap bridge ready"
     );
 
@@ -454,6 +465,24 @@ async fn bootstrap_operator_token(
     peers.register(entry).await?;
     info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
     Ok(())
+}
+
+/// Mask secret query params (api keys, tokens) in a URL before logging it,
+/// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
+fn redact_url(url: &str) -> String {
+    let mut out = url.to_string();
+    for key in ["api_key", "apikey", "token", "secret"] {
+        let needle = format!("{key}=");
+        if let Some(start) = out.find(&needle) {
+            let val_start = start + needle.len();
+            let val_end = out[val_start..]
+                .find('&')
+                .map(|i| val_start + i)
+                .unwrap_or(out.len());
+            out.replace_range(val_start..val_end, "***");
+        }
+    }
+    out
 }
 
 fn epoch_ms() -> u64 {

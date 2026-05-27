@@ -146,6 +146,42 @@ fn capability_keywords(cap: &str) -> &'static [&'static str] {
         ],
         "tool.summarize" => &["summarize", "summarise", "tl;dr", "brief", "summary"],
         "tool.gpu_inference" => &["generate", "render", "image", "diffusion", "infer"],
+        // Coding/build intents. Keywords are deliberately high-signal and
+        // avoid bare substrings that collide with non-coding intents: "app"
+        // is omitted because it matches "happen"/"apply", and "api" because
+        // it matches "rapid"/"capital" — "web app" and "rest api" are used
+        // instead. A greedier table would steal research and chat intents
+        // (see coder_keywords_do_not_steal_research_or_chat).
+        "tool.code" => &[
+            "build",
+            "website",
+            "web app",
+            "webapp",
+            "scaffold",
+            "component",
+            "refactor",
+            "implement",
+            "function",
+            "module",
+            "page",
+            "frontend",
+            "backend",
+            "endpoint",
+            "rest api",
+            "css",
+            "html",
+            "javascript",
+            "typescript",
+            "react",
+            "next.js",
+            "three.js",
+            "rust",
+            "python",
+            "compile",
+            "code",
+            "bug",
+            "debug",
+        ],
         "memory.write" => &["remember", "save", "note", "store", "log"],
         "memory.read" => &["recall", "what did", "previous", "earlier"],
         "intent.delegate" => &["assign", "delegate", "ask another", "route to"],
@@ -227,6 +263,10 @@ required = {caps:?}
         build_card("renderer", vec!["tool.gpu_inference"])
     }
 
+    fn coder_card() -> AgentCard {
+        build_card("coder", vec!["tool.code"])
+    }
+
     #[test]
     fn empty_router_returns_none() {
         let r = Router::new();
@@ -259,6 +299,46 @@ required = {caps:?}
     fn returns_none_when_nothing_overlaps() {
         let r = Router::from_cards(vec![research_card()]);
         assert!(r.route("zzz no keywords here").is_none());
+    }
+
+    #[test]
+    fn matches_coder_for_build_intent() {
+        // The canonical intent that returned the "no agent" default
+        // before tool.code existed. With a coder card present it must
+        // route, and score several keywords (build, website, next.js,
+        // three.js) so it beats incidental single-keyword matches.
+        let r = Router::from_cards(vec![research_card(), coder_card()]);
+        let m = r
+            .route("Build a website in Next.js with a Rubik's cube solver using three.js")
+            .expect("a build intent must route to the coder once tool.code is bridged");
+        assert_eq!(m.agent_id, "coder");
+        assert!(
+            m.score >= 3.0,
+            "expected multi-keyword score, got {}",
+            m.score
+        );
+    }
+
+    #[test]
+    fn coder_keywords_do_not_steal_research_or_chat() {
+        // tool.code must not be so greedy that it outscores the agent an
+        // intent actually belongs to. A refactor that added bare "app"
+        // or "api" (matching "happen"/"rapid") or generic verbs like
+        // "create" would flip these routes and is the regression this
+        // pins. research_card declares tool.web_search + memory.write;
+        // a demo-style card declares intent.subscribe (hello/hi/...).
+        let chat = build_card("demo", vec!["intent.subscribe"]);
+        let r = Router::from_cards(vec![research_card(), coder_card(), chat]);
+
+        let m = r
+            .route("find recent papers on agent memory")
+            .expect("research intent must still match");
+        assert_eq!(m.agent_id, "research", "coder stole a research intent");
+
+        let m = r
+            .route("hello there")
+            .expect("chat intent must still match");
+        assert_eq!(m.agent_id, "demo", "coder stole a chat intent");
     }
 
     #[test]
@@ -425,6 +505,7 @@ required = {caps:?}
             ("tool.web_search", "search"),
             ("tool.summarize", "summarize"),
             ("tool.gpu_inference", "image"),
+            ("tool.code", "build"),
             ("memory.write", "remember"),
             ("memory.read", "recall"),
             ("intent.delegate", "delegate"),

@@ -57,15 +57,17 @@ async fn main() -> Result<()> {
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
     let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
-    // Live audit step-trail: the Hermes runner streams each tool trace through
-    // this channel; the drainer (spawned after the Server exists) writes them
-    // into the chain as they arrive.
+    // Live audit step-trail (opt-in via COVENANT_LIVE_TRACE=1): the Hermes
+    // runner streams each tool trace through this channel and the drainer
+    // writes them into the chain as they arrive. Off by default — the proven
+    // path folds the runner's runtime_events into the chain when the run ends.
+    let live_trace = std::env::var("COVENANT_LIVE_TRACE").ok().as_deref() == Some("1");
     let (runtime_event_tx, runtime_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let runner = covenantd::runtime_runner_composite(
         &runtime_config,
         hermes_config.as_ref(),
         subprocess_tracker.clone(),
-        Some(runtime_event_tx),
+        live_trace.then_some(runtime_event_tx),
     );
     info!(
         backend = runtime_config.backend_name(),
@@ -329,9 +331,10 @@ async fn main() -> Result<()> {
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
 
-    // Fold live Hermes runtime traces into the audit chain as they stream in.
+    // Fold live Hermes runtime traces into the audit chain as they stream in
+    // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
     let runtime_event_drainer_handle =
-        covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx);
+        live_trace.then(|| covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx));
 
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
@@ -385,7 +388,9 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     projection_tick_handle.abort();
-    runtime_event_drainer_handle.abort();
+    if let Some(h) = runtime_event_drainer_handle {
+        h.abort();
+    }
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }

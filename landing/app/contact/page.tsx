@@ -98,16 +98,20 @@ export default function ContactPage() {
         </h1>
 
         <div className="grid gap-12 sm:grid-cols-2 sm:gap-16">
-          <div className="relative order-last aspect-[1168/784] w-full overflow-hidden border border-neutral-900 sm:order-first">
-            <Image
-              src="/contact.jpg"
-              alt=""
-              fill
-              sizes="(min-width: 640px) 40vw, 100vw"
-              className="object-cover opacity-90 grayscale"
-              priority
-            />
-          </div>
+          <div
+            aria-hidden="true"
+            className="order-last min-h-[320px] w-full self-stretch sm:order-first sm:min-h-0"
+            style={{
+              backgroundImage: "url(/contact.jpg)",
+              backgroundSize: "auto",
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "center",
+              maskImage:
+                "radial-gradient(115% 115% at 50% 50%, #000 62%, transparent 100%)",
+              WebkitMaskImage:
+                "radial-gradient(115% 115% at 50% 50%, #000 62%, transparent 100%)",
+            }}
+          />
 
           <div>
             <p className="mb-10 max-w-md text-[13px] leading-relaxed text-neutral-400 sm:text-[14px]">

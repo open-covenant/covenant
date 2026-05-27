@@ -25,6 +25,12 @@ body {
   color: var(--color-bg);
 }
 
+button:not(:disabled),
+[role="button"]:not(:disabled),
+label[for] {
+  cursor: pointer;
+}
+
 /* Documentation prose styles. Scoped via .prose-docs to avoid bleeding
    into the landing page. */
 .prose-docs {

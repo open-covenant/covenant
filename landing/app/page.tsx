@@ -13,7 +13,7 @@ export default function Page() {
         href="https://sandbox.opencovenant.org"
         target="_blank"
         rel="noopener noreferrer"
-        className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-neutral-500/40 bg-black/30 px-6 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-50/70 hover:text-neutral-50 sm:text-[12px]"
+        className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 translate-y-[calc(-50%+50px)] rounded-full border border-neutral-500/40 bg-black/30 px-6 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-50/70 hover:text-neutral-50 sm:text-[12px]"
       >
         Try the sandbox →
       </a>

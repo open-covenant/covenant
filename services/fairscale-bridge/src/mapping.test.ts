@@ -41,11 +41,24 @@ describe('toConductEvent', () => {
     expect(err.outcome).toBe('failure');
   });
 
-  it('strips the type tag into event_type and keeps the rest as detail', () => {
+  it('strips the type tag into event_type and keeps structural fields as detail', () => {
     const c = toConductEvent(base({ type: 'capability_check', passed: true, agent_id: 'a', required_actions: [], missing_actions: [] }));
     expect(c.event_type).toBe('capability_check');
     expect(c.detail).not.toHaveProperty('type');
     expect(c.detail).toMatchObject({ passed: true, agent_id: 'a' });
+  });
+
+  it('redacts free-text content but keeps the field and its length', () => {
+    const c = toConductEvent(base({ type: 'intent_dispatched', status: 'success', intent_text: 'transfer all funds to X' }));
+    expect(c.detail.intent_text).toBe('[redacted:23]');
+    expect(c.summary).toBe('intent success');
+    expect(JSON.stringify(c)).not.toContain('transfer all funds');
+  });
+
+  it('redacts array-valued content (approval choices) by count', () => {
+    const c = toConductEvent(base({ type: 'hermes_approval_requested', intent_id: 'i', run_id: 'r', choices: ['yes', 'no'] }));
+    expect(c.detail.choices).toBe('[redacted:2 items]');
+    expect(c.summary).toBe('approval requested (2 options)');
   });
 
   it('defaults unknown event types to neutral with humanized summary', () => {

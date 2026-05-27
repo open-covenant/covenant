@@ -251,10 +251,17 @@ function label32(label: string): number[] {
 }
 
 function toSdkCapability(cap: CapabilityDescriptor) {
+  // Anchor's coder camelCases IDL fields, so the Capability struct's
+  // `protocol_id` is read as `protocolId` at encode time — emitting only
+  // the snake key leaves protocolId undefined and the Option<string>
+  // layout throws "indeterminate span". Emit both casings; the coder
+  // reads the one its layout expects and ignores the other.
+  const protocolId = cap.protocolId ?? null;
   return {
     id: cap.id,
     description: cap.description ?? null,
-    protocol_id: cap.protocolId ?? null,
+    protocol_id: protocolId,
+    protocolId,
     version: cap.version ?? null,
   };
 }
@@ -536,15 +543,15 @@ export class SapBridge {
       description: acct.description ?? '',
       capabilities: (acct.capabilities ?? []).map((c) => ({
         id: c.id,
-        protocolId: c.protocol_id ?? null,
+        protocolId: c.protocolId ?? c.protocol_id ?? null,
         version: c.version ?? null,
         description: c.description ?? null,
       })),
       pricing: acct.pricing ?? [],
       protocols: acct.protocols ?? [],
-      agentId: acct.agent_id ?? null,
-      agentUri: acct.agent_uri ?? null,
-      x402Endpoint: acct.x402_endpoint ?? null,
+      agentId: acct.agentId ?? acct.agent_id ?? null,
+      agentUri: acct.agentUri ?? acct.agent_uri ?? null,
+      x402Endpoint: acct.x402Endpoint ?? acct.x402_endpoint ?? null,
       isActive: acct.isActive ?? acct.is_active ?? false,
       reputationScore: acct.reputationScore ?? null,
     };
@@ -601,12 +608,15 @@ interface RawAgentAccountFull {
   wallet: PublicKey;
   name: string;
   description?: string;
-  capabilities?: { id: string; description?: string | null; protocol_id?: string | null; version?: string | null }[];
+  capabilities?: { id: string; description?: string | null; protocol_id?: string | null; protocolId?: string | null; version?: string | null }[];
   pricing?: unknown[];
   protocols?: string[];
   agent_id?: string | null;
+  agentId?: string | null;
   agent_uri?: string | null;
+  agentUri?: string | null;
   x402_endpoint?: string | null;
+  x402Endpoint?: string | null;
   is_active?: boolean;
   isActive?: boolean;
   reputationScore?: number;

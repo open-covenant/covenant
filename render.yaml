@@ -21,6 +21,13 @@ services:
     rootDir: .
     dockerfilePath: ./deploy/Dockerfile.daemon
     dockerContext: .
+    # The daemon image only depends on the Rust workspace and the deploy
+    # scripts; without this filter every push to main (landing, fairscale,
+    # docs) triggers a ~12 min cold rebuild that supersedes the previous one.
+    buildFilter:
+      paths:
+        - agent-os/**
+        - deploy/**
     disk:
       name: covenant-sandbox-data
       mountPath: /data
@@ -34,6 +41,8 @@ services:
         sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
       - key: ANTHROPIC_API_KEY
         sync: false  # coding gateway + demo agent model key; set value in dashboard
+      - key: OPENAI_API_KEY
+        sync: false  # coding gateway (Codex backend) model key; set value in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: web

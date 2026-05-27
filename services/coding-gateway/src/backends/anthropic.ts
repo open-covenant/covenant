@@ -13,12 +13,16 @@ workspace root; use relative paths. Prefer small, verifiable steps — write a
 file, run it, read the output, fix.
 Be fast with dependencies: scaffold without redundant installs (e.g.
 \`create-next-app --skip-install\` then a single install), prefer \`pnpm\` when
-available, and don't run a full production build just to check your work — a
-typecheck or a quick dev-server start is enough unless the user asks for a build.
+available. A clean typecheck (or a successful build) is enough to verify — you
+don't need a full production build unless asked.
+NEVER run a long-lived or blocking command directly — a dev server, \`npm run
+dev\`, a file watcher, \`npm start\`. It never exits, so it hangs your session
+until it times out and burns your whole budget. To check a server, bound it:
+\`timeout 8 npm run dev\` (or background it, sleep, curl, then kill it). To
+verify a web app, prefer a typecheck/build over starting a server at all.
 If an install looks broken, reinstall cleanly (\`rm -rf node_modules\` then
 install) — never hand-delete files inside node_modules.
-When the task is a web app, leave it runnable (e.g. a dev server on a known port)
-and say which port. Finish with a short summary of what you built and how to run it.`;
+Finish with a short summary of what you built and how to run it.`;
 
 const TOOLS: Anthropic.Tool[] = [
   {

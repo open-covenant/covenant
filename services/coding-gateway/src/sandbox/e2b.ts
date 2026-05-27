@@ -68,7 +68,14 @@ export class E2bSandboxProvider implements SandboxProvider {
   constructor(private readonly apiKey: string) {}
 
   async create(spec: SandboxSpec): Promise<ISandbox> {
-    const sbx = await Sandbox.create({ apiKey: this.apiKey, timeoutMs: spec.wallMs });
+    // Opt into the prebuilt `covenant-coder` template (more memory + warm npm
+    // cache → reliable, fast heavy installs) when E2B_TEMPLATE is set; fall
+    // back to the default base sandbox otherwise.
+    const template = process.env.E2B_TEMPLATE?.trim();
+    const opts = { apiKey: this.apiKey, timeoutMs: spec.wallMs };
+    const sbx = template
+      ? await Sandbox.create(template, opts)
+      : await Sandbox.create(opts);
     return new E2bSandbox(sbx);
   }
 }

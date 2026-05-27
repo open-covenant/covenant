@@ -7,6 +7,12 @@ import { E2bSandboxProvider } from "./sandbox/e2b.js";
 import { config } from "./config.js";
 import { SpendLedger, modelCostUsd, sandboxCostUsd } from "./budget.js";
 
+interface CapturedFile {
+  path: string;
+  content: string;
+  truncated?: boolean;
+}
+
 interface Run {
   id: string;
   status: RunStatus;
@@ -15,6 +21,46 @@ interface Run {
   events: GatewayEvent[];
   subscribers: Set<ServerResponse>;
   abort: AbortController;
+  files?: CapturedFile[];
+}
+
+// The sandbox is torn down when a run ends, so the only chance to show what
+// got built is to read the workspace just before destroy. Cap aggressively —
+// this is for a UI file tree, not a backup: skip dependency/build/VCS dirs and
+// dotfiles, limit count + per-file + total bytes, and tolerate binaries.
+const MAX_FILES = 40;
+const MAX_FILE_BYTES = 64 * 1024;
+const MAX_TOTAL_BYTES = 512 * 1024;
+
+async function captureFiles(sandbox: {
+  exec: (cmd: string, opts?: { timeoutMs?: number }) => Promise<{ stdout: string }>;
+  readFile: (path: string) => Promise<string>;
+}): Promise<CapturedFile[]> {
+  const find =
+    "find . -maxdepth 5 -type f " +
+    "-not -path '*/node_modules/*' -not -path '*/.next/*' -not -path '*/.git/*' " +
+    "-not -path '*/.npm/*' -not -path '*/.cache/*' -not -path '*/.config/*' " +
+    "-not -path '*/dist/*' -not -name '.*' 2>/dev/null | head -120";
+  const listed = await sandbox.exec(find, { timeoutMs: 15_000 }).catch(() => ({ stdout: "" }));
+  const paths = listed.stdout
+    .split("\n")
+    .map((s) => s.trim().replace(/^\.\//, ""))
+    .filter(Boolean);
+  const files: CapturedFile[] = [];
+  let total = 0;
+  for (const path of paths) {
+    if (files.length >= MAX_FILES || total >= MAX_TOTAL_BYTES) break;
+    const raw = await sandbox.readFile(path).catch(() => null);
+    if (raw == null) continue;
+    // Skip apparent binaries (NUL byte) — readFile is UTF-8 only anyway.
+    if (raw.includes("\u0000")) continue;
+    const truncated = raw.length > MAX_FILE_BYTES;
+    const content = truncated ? raw.slice(0, MAX_FILE_BYTES) : raw;
+    files.push({ path, content, ...(truncated ? { truncated: true } : {}) });
+    total += content.length;
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
 }
 
 const runs = new Map<string, Run>();
@@ -107,11 +153,17 @@ function startRun(input: string, reservedMax: number): Run {
         emit: (e) => publish(run, e),
       });
       run.output = output;
+      // Snapshot the workspace BEFORE flipping status to completed, so a
+      // client that polls and immediately fetches /files never races the
+      // capture (status is the signal the run — and its artifacts — are ready).
+      run.files = await captureFiles(sandbox).catch(() => []);
       run.status = "completed";
       const seconds = (Date.now() - startedAt) / 1000;
       ledger.commit(reservedMax, modelCostUsd(config.model, usage) + sandboxCostUsd(seconds));
     } catch (e) {
       run.error = (e as Error).message;
+      // Capture partial files too — a timed-out build is still worth showing.
+      run.files = await captureFiles(sandbox).catch(() => []);
       run.status = run.abort.signal.aborted ? "cancelled" : "failed";
       publish(run, { type: "run.failed", error: run.error });
       // No usage available on failure; charge the reserved max (pessimistic,
@@ -198,6 +250,9 @@ export const server = createServer(async (req, res) => {
           output: run.output,
           error: run.error,
         } satisfies RunState);
+      }
+      if (req.method === "GET" && parts[3] === "files") {
+        return json(res, 200, { files: run.files ?? [] });
       }
       if (req.method === "GET" && parts[3] === "events") return streamEvents(run, req, res);
       if (req.method === "POST" && parts[3] === "stop") {

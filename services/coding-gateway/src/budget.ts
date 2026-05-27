@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { config, PRICING } from "./config.js";
 import type { TokenUsage } from "./types.js";
 
@@ -29,16 +30,17 @@ export interface BudgetCaps {
 export type Reservation = { ok: true; max: number } | { ok: false; reason: string };
 
 /**
- * In-memory daily + monthly USD ledger with a concurrency cap and kill-switch.
+ * Daily + monthly USD ledger with a concurrency cap and kill-switch.
  *
  * Admission reserves the per-run *maximum* up front and commits the *actual*
  * cost on completion, so a burst of concurrent runs can't collectively
  * overshoot the cap before any finishes. Counters reset on UTC day/month
  * rollover.
  *
- * NOTE: in-memory — a gateway restart resets the day's tally, so the
- * provider-dashboard caps remain the restart-safe backstop. Persisting the
- * ledger (disk/KV) is a follow-on slice.
+ * Committed spend persists to LEDGER_PATH (a mounted disk) when set, so the
+ * caps survive a restart instead of resetting the day's tally to zero; with
+ * no path it stays in-memory. Reservations and the active count are transient
+ * (in-flight runs don't survive a restart) and aren't persisted.
  */
 export class SpendLedger {
   private day = utcDay();
@@ -49,7 +51,45 @@ export class SpendLedger {
   private active = 0;
   private killed = false;
 
-  constructor(private readonly caps: BudgetCaps = config) {}
+  constructor(
+    private readonly caps: BudgetCaps = config,
+    private readonly path = process.env.LEDGER_PATH?.trim() || undefined,
+  ) {
+    this.load();
+  }
+
+  private load(): void {
+    if (!this.path) return;
+    try {
+      const s = JSON.parse(readFileSync(this.path, "utf8")) as {
+        day?: string;
+        month?: string;
+        dailyUsd?: number;
+        monthlyUsd?: number;
+      };
+      if (s.day === this.day && typeof s.dailyUsd === "number") this.dailyUsd = s.dailyUsd;
+      if (s.month === this.month && typeof s.monthlyUsd === "number") this.monthlyUsd = s.monthlyUsd;
+    } catch {
+      // first boot or unreadable — start fresh
+    }
+  }
+
+  private save(): void {
+    if (!this.path) return;
+    try {
+      writeFileSync(
+        this.path,
+        JSON.stringify({
+          day: this.day,
+          month: this.month,
+          dailyUsd: this.dailyUsd,
+          monthlyUsd: this.monthlyUsd,
+        }),
+      );
+    } catch (e) {
+      console.error("ledger persist failed:", e);
+    }
+  }
 
   private roll(): void {
     const d = utcDay();
@@ -87,10 +127,12 @@ export class SpendLedger {
     this.dailyUsd += actualUsd;
     this.monthlyUsd += actualUsd;
     this.active = Math.max(0, this.active - 1);
+    this.save();
   }
 
   kill(): void {
     this.killed = true;
+    this.save();
   }
 
   snapshot() {

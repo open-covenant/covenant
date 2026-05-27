@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SpendLedger, modelCostUsd, type BudgetCaps } from "../src/budget.js";
 
 const caps: BudgetCaps = { dailyUsd: 6, monthlyUsd: 200, perRunUsdMax: 2, maxConcurrent: 10 };
@@ -58,5 +61,24 @@ describe("SpendLedger", () => {
       cacheCreationTokens: 0,
     });
     expect(cost).toBeCloseTo(4.5);
+  });
+
+  it("persists committed spend to LEDGER_PATH so the caps survive a restart", () => {
+    const path = join(tmpdir(), `covenant-ledger-${Date.now()}.json`);
+    try {
+      const before = new SpendLedger(caps, path);
+      const r = before.reserve();
+      expect(r.ok).toBe(true);
+      if (r.ok) before.commit(r.max, 1.25);
+      expect(before.snapshot().dailyUsd).toBeCloseTo(1.25);
+      // a fresh ledger sharing the path = a restart: it reloads the committed tally
+      const after = new SpendLedger(caps, path);
+      expect(after.snapshot().dailyUsd).toBeCloseTo(1.25);
+      expect(after.snapshot().monthlyUsd).toBeCloseTo(1.25);
+      // in-flight reservations are transient and don't carry across the restart
+      expect(after.snapshot().reserved).toBe(0);
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 });

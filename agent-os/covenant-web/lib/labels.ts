@@ -429,6 +429,17 @@ export function eventLabel(event: AuditEvent): EventLabel {
         intentId: null,
       };
   }
+
+  // Fallback for a kind not in this build's typed union (e.g. a newer daemon
+  // emits an audit kind this web build predates) — render a generic label
+  // instead of returning undefined and crashing every caller.
+  const t = String((event.kind as { type?: unknown }).type ?? "");
+  return {
+    headline: t ? t.replace(/_/g, " ") : "Activity",
+    body: "",
+    tone: "neutral",
+    intentId: null,
+  };
 }
 
 function formatActionList(actions: string[]): string {

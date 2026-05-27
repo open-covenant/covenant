@@ -10,7 +10,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2");
+declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 
 #[program]
 pub mod settlement {
@@ -168,10 +168,10 @@ pub mod settlement {
 
     /// Owner-signed withdrawal of a staked position once `lock_until`
     /// has passed. Transfers the full position balance back to the
-    /// owner's COVNT account; decrements `agent.stake`; closes the
-    /// position by zeroing `amount` and flipping `active = false`.
-    /// Re-staking against the same agent allocates a fresh position
-    /// PDA via the canonical `[b"stake", agent_key, owner]` seeds.
+    /// owner's COVNT account, decrements `agent.stake`, and closes the
+    /// position account (rent returned to the owner). Closing frees the
+    /// canonical `[b"stake", agent_key, owner]` PDA so the owner can
+    /// re-stake against the same agent afterwards.
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(ctx.accounts.position.active, CovenantError::StakeInactive);
@@ -198,8 +198,6 @@ pub mod settlement {
             amount,
         )?;
 
-        ctx.accounts.position.amount = 0;
-        ctx.accounts.position.active = false;
         ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
 
         emit!(StakeWithdrawn {
@@ -390,6 +388,70 @@ pub mod settlement {
             merkle_root: batch.merkle_root,
             receipt_count: batch.receipt_count,
             created_at: batch.created_at,
+        });
+        Ok(())
+    }
+
+    /// Owner-signed reclaim of a spent position account (rent returned to
+    /// the owner). A position is spent once it is fully slashed
+    /// (`amount == 0`, `active == false`); the normal exit path closes the
+    /// position inside `unstake`. This exists so a fully-slashed owner can
+    /// reclaim rent and re-stake against the same agent.
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        require!(
+            !ctx.accounts.position.active,
+            CovenantError::StakeStillActive
+        );
+        emit!(StakePositionClosed {
+            agent_key: ctx.accounts.position.agent_key,
+            owner: ctx.accounts.position.owner,
+        });
+        Ok(())
+    }
+
+    pub fn update_authority(ctx: Context<UpdateConfig>, new_authority: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let previous = config.authority;
+        config.authority = new_authority;
+        emit!(AuthorityUpdated {
+            previous,
+            new_authority,
+        });
+        Ok(())
+    }
+
+    pub fn update_slash_authority(
+        ctx: Context<UpdateConfig>,
+        new_slash_authority: Pubkey,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let previous = config.slash_authority;
+        config.slash_authority = new_slash_authority;
+        emit!(SlashAuthorityUpdated {
+            previous,
+            new_slash_authority,
+        });
+        Ok(())
+    }
+
+    pub fn update_treasury(ctx: Context<UpdateTreasury>) -> Result<()> {
+        let previous = ctx.accounts.config.treasury;
+        ctx.accounts.config.treasury = ctx.accounts.treasury.key();
+        emit!(TreasuryUpdated {
+            previous,
+            new_treasury: ctx.accounts.treasury.key(),
+        });
+        Ok(())
+    }
+
+    pub fn set_credits_per_covnt(ctx: Context<UpdateConfig>, credits_per_covnt: u64) -> Result<()> {
+        require!(credits_per_covnt > 0, CovenantError::ZeroAmount);
+        let config = &mut ctx.accounts.config;
+        let previous = config.credits_per_covnt;
+        config.credits_per_covnt = credits_per_covnt;
+        emit!(CreditsRateUpdated {
+            previous,
+            credits_per_covnt,
         });
         Ok(())
     }
@@ -609,8 +671,10 @@ pub struct Unstake<'info> {
         seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
         bump = position.bump,
         constraint = position.owner == owner.key() @ CovenantError::Unauthorized,
+        close = owner,
     )]
     pub position: Account<'info, StakePosition>,
+    #[account(mut)]
     pub owner: Signer<'info>,
     #[account(
         mut,
@@ -879,6 +943,46 @@ pub struct AnchorReceiptBatch<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct ClosePosition<'info> {
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+        constraint = position.owner == owner.key() @ CovenantError::Unauthorized,
+        close = owner,
+    )]
+    pub position: Account<'info, StakePosition>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateTreasury<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+    #[account(constraint = treasury.mint == config.covnt_mint @ CovenantError::WrongMint)]
+    pub treasury: Account<'info, TokenAccount>,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
     pub slash_authority: Pubkey,
@@ -1103,6 +1207,36 @@ pub struct ReceiptBatchAnchored {
     pub created_at: i64,
 }
 
+#[event]
+pub struct StakePositionClosed {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+}
+
+#[event]
+pub struct AuthorityUpdated {
+    pub previous: Pubkey,
+    pub new_authority: Pubkey,
+}
+
+#[event]
+pub struct SlashAuthorityUpdated {
+    pub previous: Pubkey,
+    pub new_slash_authority: Pubkey,
+}
+
+#[event]
+pub struct TreasuryUpdated {
+    pub previous: Pubkey,
+    pub new_treasury: Pubkey,
+}
+
+#[event]
+pub struct CreditsRateUpdated {
+    pub previous: u64,
+    pub credits_per_covnt: u64,
+}
+
 #[error_code]
 pub enum CovenantError {
     #[msg("amount must be greater than zero")]
@@ -1133,4 +1267,6 @@ pub enum CovenantError {
     TaskNotExpired,
     #[msg("stake position is still locked")]
     StakeLocked,
+    #[msg("stake position is still active; unstake before closing")]
+    StakeStillActive,
 }

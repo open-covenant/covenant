@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-settlement = "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+settlement = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
 
 [programs.devnet]
-settlement = "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+settlement = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
 
 [provider]
 cluster = "Devnet"

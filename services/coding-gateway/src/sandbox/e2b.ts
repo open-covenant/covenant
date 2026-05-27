@@ -6,6 +6,12 @@ import type {
   ExecResult,
 } from "../types.js";
 
+// E2B's commands.run defaults to a 60s command timeout — far too short for a
+// cold `npm install` / `next build`, which get killed mid-flight and make the
+// agent thrash on a phantom-broken workspace. Give each command room up to a
+// few minutes; the sandbox wall-clock (spec.wallMs) is still the hard ceiling.
+const DEFAULT_CMD_TIMEOUT_MS = 300_000;
+
 /**
  * E2B sandbox: an ephemeral Firecracker microVM, isolated from the gateway host
  * and from other runs. This is the real boundary that lets untrusted code run
@@ -33,7 +39,9 @@ class E2bSandbox implements ISandbox {
 
   async exec(cmd: string, opts: { timeoutMs?: number } = {}): Promise<ExecResult> {
     try {
-      const r = await this.sbx.commands.run(cmd, { timeoutMs: opts.timeoutMs });
+      const r = await this.sbx.commands.run(cmd, {
+        timeoutMs: opts.timeoutMs ?? DEFAULT_CMD_TIMEOUT_MS,
+      });
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
     } catch (e) {
       // e2b throws on non-zero exit; surface the result fields rather than throw.

@@ -315,6 +315,7 @@ export default function OverviewPage() {
         )}
       </section>
 
+      {!DEMO_MODE && (
       <section className="metric-row">
         <article className="metric">
           <span className="eyebrow">connected agents</span>
@@ -345,6 +346,7 @@ export default function OverviewPage() {
           </span>
         </article>
       </section>
+      )}
 
       <section className="split-2">
         <div className="panel">

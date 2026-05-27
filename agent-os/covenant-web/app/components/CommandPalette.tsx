@@ -6,9 +6,9 @@ import { api } from "@/lib/api";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 const DEMO_INTENTS = [
-  "Say hi and tell me what you can do.",
-  "Summarize what just happened in the activity log.",
-  "Write a one-line haiku about agents.",
+  "Build a classic Snake game as a single self-contained index.html.",
+  "Build a Next.js app with an interactive 3D Rubik's cube using three.js.",
+  "Write a Python sudoku solver with example puzzles and run it.",
 ];
 
 type Action = {
@@ -107,16 +107,26 @@ export function CommandPalette() {
           run: () => dispatchIntent(text),
         }))
       : [];
+    const coreNav: Action[] = [
+      { id: "nav-overview", label: "Go to Overview", hint: "home", run: () => navigate("/") },
+      { id: "nav-intents", label: "Go to Tasks", hint: "what you've built", run: () => navigate("/intents") },
+      { id: "nav-audit", label: "Go to Activity log", hint: "signed events", run: () => navigate("/audit") },
+    ];
+    // Operator pages stay in the palette only outside the public demo (where
+    // the slimmed coding nav hides them).
+    const opsNav: Action[] = DEMO_MODE
+      ? []
+      : [
+          { id: "nav-queues", label: "Go to Messages", hint: "agent-to-agent", run: () => navigate("/queues") },
+          { id: "nav-peers", label: "Go to Agents", hint: "who you trust", run: () => navigate("/peers") },
+          { id: "nav-capabilities", label: "Go to Permissions", hint: "what they can do", run: () => navigate("/capabilities") },
+          { id: "nav-memory", label: "Go to Memory", hint: "what they remember", run: () => navigate("/memory") },
+          { id: "nav-settlement", label: "Go to Spending", hint: "credits used", run: () => navigate("/settlement") },
+        ];
     return [
       ...sampleIntents,
-      { id: "nav-overview", label: "Go to Overview", hint: "home", run: () => navigate("/") },
-      { id: "nav-intents", label: "Go to Tasks", hint: "what you've sent", run: () => navigate("/intents") },
-      { id: "nav-audit", label: "Go to Activity log", hint: "signed events", run: () => navigate("/audit") },
-      { id: "nav-queues", label: "Go to Messages", hint: "agent-to-agent", run: () => navigate("/queues") },
-      { id: "nav-peers", label: "Go to Agents", hint: "who you trust", run: () => navigate("/peers") },
-      { id: "nav-capabilities", label: "Go to Permissions", hint: "what they can do", run: () => navigate("/capabilities") },
-      { id: "nav-memory", label: "Go to Memory", hint: "what they remember", run: () => navigate("/memory") },
-      { id: "nav-settlement", label: "Go to Spending", hint: "credits used", run: () => navigate("/settlement") },
+      ...coreNav,
+      ...opsNav,
       { id: "verify", label: "Verify activity log", hint: "check nothing was altered", run: verifyChain },
     ];
   }, [navigate, verifyChain, dispatchIntent]);

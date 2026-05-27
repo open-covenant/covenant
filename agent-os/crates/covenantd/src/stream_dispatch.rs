@@ -622,6 +622,7 @@ mod tests {
                 tool: "terminal".into(),
                 preview: format!("preview-{seed}"),
             }],
+            files: vec![],
         }
     }
 

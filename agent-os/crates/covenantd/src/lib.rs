@@ -760,6 +760,9 @@ struct IntentOutcome {
     text: String,
     result_hash_hex: Option<String>,
     updated_ms: u64,
+    /// Workspace files captured from the run (for the UI file tree / preview).
+    /// Set via `set_files` during dispatch; `complete` leaves them untouched.
+    files: Vec<covenant_runtime::BuildFile>,
 }
 
 #[derive(Default)]
@@ -781,6 +784,7 @@ impl OutcomeStore {
                 text: String::new(),
                 result_hash_hex: None,
                 updated_ms: epoch_ms(),
+                files: Vec::new(),
             },
         );
         self.order.push_back(id);
@@ -788,6 +792,13 @@ impl OutcomeStore {
             if let Some(old) = self.order.pop_front() {
                 self.map.remove(&old);
             }
+        }
+    }
+
+    fn set_files(&mut self, id: Uuid, files: Vec<covenant_runtime::BuildFile>) {
+        if let Some(o) = self.map.get_mut(&id) {
+            o.files = files;
+            o.updated_ms = epoch_ms();
         }
     }
 
@@ -925,6 +936,7 @@ impl Server {
             "text": o.text,
             "result_hash_hex": o.result_hash_hex,
             "updated_ms": o.updated_ms,
+            "files": o.files,
         }))
     }
 
@@ -3650,7 +3662,17 @@ impl Server {
             let run_result = self.runner.run(card, &intent).await;
             self.clear_active_budget_checkpoint(intent_id).await;
             match run_result {
-                Ok(result) => (result.text, result.sources, result.runtime_events),
+                Ok(result) => {
+                    // Stash captured workspace files on the async outcome (no-op
+                    // for the synchronous path, which has no outcome entry) so
+                    // the UI can show a file tree / preview.
+                    if !result.files.is_empty() {
+                        if let Ok(mut store) = self.intent_outcomes.lock() {
+                            store.set_files(intent_id, result.files);
+                        }
+                    }
+                    (result.text, result.sources, result.runtime_events)
+                }
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
                     return Response::Error {
@@ -4555,6 +4577,7 @@ impl Server {
                     text,
                     sources,
                     runtime_events: Vec::new(),
+                    files: Vec::new(),
                 };
                 let summary = serde_json::json!({
                     "intent_id": intent_id,
@@ -4624,6 +4647,7 @@ impl Server {
                     text,
                     sources,
                     runtime_events: Vec::new(),
+                    files: Vec::new(),
                 };
                 let summary = serde_json::json!({
                     "intent_id": intent_id,

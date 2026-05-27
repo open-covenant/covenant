@@ -244,11 +244,16 @@ impl Runner for HermesRunner {
             drained
         };
 
+        // Snapshot of the workspace the gateway captured before tearing the
+        // sandbox down — for the UI's file tree / preview. Best-effort.
+        let files = self.fetch_files(&run_id).await;
+
         match outcome {
             Ok(RunOutcome::Completed { output }) => Ok(AgentResult {
                 text: output,
                 sources: Vec::new(),
                 runtime_events,
+                files,
             }),
             Ok(RunOutcome::Failed { message }) => Err(RunnerError::Remote { status: 0, message }),
             Err(e) => Err(e),
@@ -262,6 +267,30 @@ enum RunOutcome {
 }
 
 impl HermesRunner {
+    /// Fetch the run's captured workspace files from the gateway. Best-effort:
+    /// any failure yields an empty list (the trail/result still stand).
+    async fn fetch_files(&self, run_id: &str) -> Vec<crate::BuildFile> {
+        let url = format!("{}/runs/{}/files", self.base_url, run_id);
+        let resp = match self.apply_auth(self.http.get(&url)).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                warn!(%run_id, status = %r.status(), "hermes files fetch non-success");
+                return Vec::new();
+            }
+            Err(e) => {
+                warn!(%run_id, error = %e, "hermes files fetch failed");
+                return Vec::new();
+            }
+        };
+        match resp.json::<HermesFilesResponse>().await {
+            Ok(b) => b.files,
+            Err(e) => {
+                warn!(%run_id, error = %e, "hermes files parse failed");
+                Vec::new()
+            }
+        }
+    }
+
     async fn poll_until_terminal(
         &self,
         run_id: &str,
@@ -533,6 +562,12 @@ struct HermesRunStatus {
     output: Option<String>,
     #[serde(default)]
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HermesFilesResponse {
+    #[serde(default)]
+    files: Vec<crate::BuildFile>,
 }
 
 /// Subset of Hermes's advertised features that the Covenant runner

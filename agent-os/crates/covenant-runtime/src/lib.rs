@@ -54,6 +54,22 @@ pub struct AgentResult {
     /// vec into the hash-chained audit log after the dispatch returns.
     #[serde(default)]
     pub runtime_events: Vec<RuntimeTrace>,
+    /// Workspace files captured at the end of a Hermes run (the gateway
+    /// snapshots them before the ephemeral sandbox is destroyed) so the UI
+    /// can show a file tree / preview of what was built. Empty for runners
+    /// that don't build in a sandbox.
+    #[serde(default)]
+    pub files: Vec<BuildFile>,
+}
+
+/// A single workspace file captured from a finished run. `content` is UTF-8
+/// (binaries are skipped) and may be `truncated` if the file was large.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildFile {
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// A [`RuntimeTrace`] streamed live during a run, tagged with the intent it
@@ -897,6 +913,7 @@ impl MockRunner {
                 text: text.into(),
                 sources: Vec::new(),
                 runtime_events: Vec::new(),
+                files: Vec::new(),
             },
         }
     }
@@ -1019,11 +1036,12 @@ mod tests {
             text: "hi".into(),
             sources: vec![],
             runtime_events: vec![],
+            files: vec![],
         };
         let wire = serde_json::to_value(&empty).unwrap();
         assert_eq!(
             wire,
-            serde_json::json!({"text": "hi", "sources": [], "runtime_events": []}),
+            serde_json::json!({"text": "hi", "sources": [], "runtime_events": [], "files": []}),
             "empty sources must serialize as an explicit empty array; a future skip_serializing_if would silently drop the key",
         );
     }

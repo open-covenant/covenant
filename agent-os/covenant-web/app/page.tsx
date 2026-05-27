@@ -184,6 +184,25 @@ export default function OverviewPage() {
 
   const events = data?.audit.events ?? [];
   const recent = events.slice().reverse();
+  // Collapse runs of the same activity (e.g. the page's own memory-read
+  // permission checks every poll) into one row with a count, newest first,
+  // so the feed shows distinct happenings instead of the same line repeated.
+  const dedupedRecent = (() => {
+    const out: { event: (typeof recent)[number]; count: number }[] = [];
+    const idx = new Map<string, number>();
+    for (const event of recent) {
+      const label = eventLabel(event);
+      const key = `${label.headline}|${label.body}|${event.issuer.pubkey}`;
+      const at = idx.get(key);
+      if (at !== undefined) {
+        out[at].count++;
+        continue;
+      }
+      idx.set(key, out.length);
+      out.push({ event, count: 1 });
+    }
+    return out.slice(0, 8);
+  })();
   const reviewRows = (() => {
     const seen = new Set<string>();
     const out = [];
@@ -357,13 +376,14 @@ export default function OverviewPage() {
             <p className="empty">Nothing here yet. Your activity will appear as it happens.</p>
           ) : (
             <div className="records">
-              {recent.slice(0, 8).map((event) => {
+              {dedupedRecent.map(({ event, count }) => {
                 const label = eventLabel(event);
                 const RowInner = (
                   <>
                     <div className="ts">
                       {formatTimestamp(event.timestamp_ms)}
                       <em>{label.headline}</em>
+                      {count > 1 && <span className="dupe">×{count}</span>}
                     </div>
                     <div className="body">
                       <strong>{event.issuer.display}</strong>
@@ -533,6 +553,17 @@ export default function OverviewPage() {
 
         .metric-row {
           margin-bottom: 22px;
+        }
+
+        .records .dupe {
+          margin-left: 8px;
+          padding: 0 6px;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.04em;
         }
       `}</style>
     </>

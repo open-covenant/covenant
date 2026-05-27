@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { GatewayEvent, RunState, RunStatus, SandboxProvider } from "./types.js";
 import { selectBackend } from "./backends/index.js";
 import { LocalSandboxProvider } from "./sandbox/local.js";
+import { config } from "./config.js";
+import { SpendLedger, modelCostUsd, sandboxCostUsd } from "./budget.js";
 
 interface Run {
   id: string;
@@ -15,6 +17,7 @@ interface Run {
 }
 
 const runs = new Map<string, Run>();
+const ledger = new SpendLedger();
 
 // Trusted-local provider for now; coder-07 swaps in the E2B provider so runs
 // execute in an ephemeral, egress-capped sandbox before any public exposure.
@@ -29,7 +32,7 @@ function publish(run: Run, e: GatewayEvent): void {
   for (const res of run.subscribers) res.write(frame);
 }
 
-function startRun(input: string): Run {
+function startRun(input: string, reservedMax: number): Run {
   const id = randomUUID();
   const run: Run = {
     id,
@@ -41,6 +44,7 @@ function startRun(input: string): Run {
   runs.set(id, run);
 
   const wall = setTimeout(() => run.abort.abort(), WALL_MS);
+  const startedAt = Date.now();
 
   void (async () => {
     const sandbox = await provider.create({
@@ -53,7 +57,7 @@ function startRun(input: string): Run {
     });
     try {
       const backend = selectBackend("anthropic");
-      const { output } = await backend.run({
+      const { output, usage } = await backend.run({
         input,
         sandbox,
         signal: run.abort.signal,
@@ -61,10 +65,15 @@ function startRun(input: string): Run {
       });
       run.output = output;
       run.status = "completed";
+      const seconds = (Date.now() - startedAt) / 1000;
+      ledger.commit(reservedMax, modelCostUsd(config.model, usage) + sandboxCostUsd(seconds));
     } catch (e) {
       run.error = (e as Error).message;
       run.status = run.abort.signal.aborted ? "cancelled" : "failed";
       publish(run, { type: "run.failed", error: run.error });
+      // No usage available on failure; charge the reserved max (pessimistic,
+      // wallet-safe) since a partial run still spent tokens.
+      ledger.commit(reservedMax, reservedMax);
     } finally {
       clearTimeout(wall);
       await sandbox.destroy().catch(() => {});
@@ -122,12 +131,18 @@ export const server = createServer(async (req, res) => {
       });
     }
 
+    if (req.method === "GET" && url.pathname === "/v1/budget") {
+      return json(res, 200, ledger.snapshot());
+    }
+
     if (req.method === "POST" && url.pathname === "/v1/runs") {
       const body = JSON.parse((await readBody(req)) || "{}") as { input?: unknown };
       if (typeof body.input !== "string" || !body.input.trim()) {
         return json(res, 400, { error: "input is required" });
       }
-      const run = startRun(body.input);
+      const reservation = ledger.reserve();
+      if (!reservation.ok) return json(res, 429, { error: reservation.reason });
+      const run = startRun(body.input, reservation.max);
       return json(res, 200, { run_id: run.id });
     }
 
@@ -156,6 +171,6 @@ export const server = createServer(async (req, res) => {
 
 if (process.env.NODE_ENV !== "test") {
   server.listen(PORT, () => {
-    console.log(`coding-gateway listening on :${PORT}`);
+    console.log(`coding-gateway listening on :${PORT} (model=${config.model}, effort=${config.effort})`);
   });
 }

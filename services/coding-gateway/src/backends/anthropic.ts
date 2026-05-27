@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { CodingBackend, GatewayEvent, Sandbox } from "../types.js";
+import { config } from "../config.js";
+import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from "../types.js";
 
-const MODEL = "claude-opus-4-7";
 const MAX_TOKENS = 64_000;
 const MAX_TURNS = 60;
 
@@ -73,20 +73,32 @@ export class AnthropicBackend implements CodingBackend {
     sandbox: Sandbox;
     signal: AbortSignal;
     emit: (e: GatewayEvent) => void;
-  }): Promise<{ output: string }> {
+  }): Promise<{ output: string; usage: TokenUsage }> {
     const { input, sandbox, signal, emit } = opts;
     const messages: Anthropic.MessageParam[] = [{ role: "user", content: input }];
+    const usage: TokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
     let finalText = "";
+
+    // Opus 4.7 omits thinking text unless display:"summarized"; on Sonnet the
+    // default already returns summarized thinking, so only set it for opus.
+    const thinking = config.model.includes("opus")
+      ? ({ type: "adaptive", display: "summarized" } as const)
+      : ({ type: "adaptive" } as const);
 
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       if (signal.aborted) throw new Error("run aborted");
 
       const stream = this.client.messages.stream(
         {
-          model: MODEL,
+          model: config.model,
           max_tokens: MAX_TOKENS,
-          thinking: { type: "adaptive", display: "summarized" },
-          output_config: { effort: "xhigh" },
+          thinking,
+          output_config: { effort: config.effort },
           system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
           tools: TOOLS,
           messages: withTurnCache(messages),
@@ -104,6 +116,12 @@ export class AnthropicBackend implements CodingBackend {
       }
 
       const message = await stream.finalMessage();
+      const u = message.usage;
+      usage.inputTokens += u.input_tokens ?? 0;
+      usage.outputTokens += u.output_tokens ?? 0;
+      usage.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+      usage.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+
       messages.push({ role: "assistant", content: message.content });
 
       const text = message.content
@@ -119,7 +137,7 @@ export class AnthropicBackend implements CodingBackend {
       );
       if (toolUses.length === 0) {
         emit({ type: "run.completed", output: finalText });
-        return { output: finalText };
+        return { output: finalText, usage };
       }
 
       const results: Anthropic.ToolResultBlockParam[] = [];
@@ -146,7 +164,7 @@ export class AnthropicBackend implements CodingBackend {
     }
 
     emit({ type: "run.failed", error: `exceeded ${MAX_TURNS} turns` });
-    return { output: finalText };
+    return { output: finalText, usage };
   }
 }
 

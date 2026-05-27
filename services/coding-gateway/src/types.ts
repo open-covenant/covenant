@@ -67,6 +67,13 @@ export type GatewayEvent =
 
 export type BackendId = "anthropic" | "openai";
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
 export interface CodingBackend {
   readonly id: BackendId;
   run(opts: {
@@ -74,7 +81,7 @@ export interface CodingBackend {
     sandbox: Sandbox;
     signal: AbortSignal; // aborts on wall-clock budget or POST /stop
     emit: (e: GatewayEvent) => void;
-  }): Promise<{ output: string }>;
+  }): Promise<{ output: string; usage: TokenUsage }>;
 }
 
 // ── Pluggable execution substrate (the security boundary) ──────────────────

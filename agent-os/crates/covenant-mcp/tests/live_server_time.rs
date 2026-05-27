@@ -81,7 +81,10 @@ async fn live_server_time_get_current_time_returns_iso8601() {
         .call(serde_json::json!({ "timezone": "UTC" }))
         .await
         .expect("get_current_time call over real stdio");
-    assert!(!result.is_error, "get_current_time returned an error result");
+    assert!(
+        !result.is_error,
+        "get_current_time returned an error result"
+    );
 
     let payload = result
         .content

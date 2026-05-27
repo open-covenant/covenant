@@ -21,8 +21,10 @@ use covenant_settlement_program::{
     instruction as ix, CreditAccount, InitializeArgs, RegisterAgentArgs, ID,
 };
 
-const SO_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy/covenant_settlement_program.so");
+const SO_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/deploy/covenant_settlement_program.so"
+);
 
 pub const DECIMALS: u8 = 0;
 
@@ -67,7 +69,10 @@ pub fn boot() -> Env {
     let config = config_pda();
 
     let data = ix::Initialize {
-        args: InitializeArgs { slash_authority: slash_authority.pubkey(), credits_per_covnt: 10 },
+        args: InitializeArgs {
+            slash_authority: slash_authority.pubkey(),
+            credits_per_covnt: 10,
+        },
     }
     .data();
     let metas = vec![
@@ -77,10 +82,26 @@ pub fn boot() -> Env {
         AccountMeta::new_readonly(treasury, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
-    send(&mut svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
-        .expect("initialize");
+    send(
+        &mut svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("initialize");
 
-    Env { svm, payer, slash_authority, mint, config, treasury }
+    Env {
+        svm,
+        payer,
+        slash_authority,
+        mint,
+        config,
+        treasury,
+    }
 }
 
 /// Open the canonical credit account PDA for the payer.
@@ -94,8 +115,17 @@ pub fn open_credit_account(env: &mut Env) -> Pubkey {
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
-        .expect("open_credit_account");
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("open_credit_account");
     credits
 }
 
@@ -103,7 +133,13 @@ pub fn open_credit_account(env: &mut Env) -> Pubkey {
 pub fn funded_covnt(env: &mut Env, amount: u64) -> Pubkey {
     let owner = env.payer.pubkey();
     let acct = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner);
-    mint_to(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &acct, amount);
+    mint_to(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &acct,
+        amount,
+    );
     acct
 }
 
@@ -123,7 +159,16 @@ pub fn buy_credits(
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 /// Inject a program-owned, CreditAccount-shaped account at a non-canonical
@@ -132,14 +177,24 @@ pub fn buy_credits(
 pub fn plant_phantom_credit_account(env: &mut Env, owner: &Pubkey) -> Pubkey {
     let addr = Keypair::new().pubkey();
     let mut data = Vec::new();
-    CreditAccount { owner: *owner, balance: 0, bump: 255 }
-        .try_serialize(&mut data)
-        .unwrap();
+    CreditAccount {
+        owner: *owner,
+        balance: 0,
+        bump: 255,
+    }
+    .try_serialize(&mut data)
+    .unwrap();
     let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
     env.svm
         .set_account(
             addr,
-            Account { lamports, data, owner: ID, executable: false, rent_epoch: 0 },
+            Account {
+                lamports,
+                data,
+                owner: ID,
+                executable: false,
+                rent_epoch: 0,
+            },
         )
         .unwrap();
     addr
@@ -148,7 +203,9 @@ pub fn plant_phantom_credit_account(env: &mut Env, owner: &Pubkey) -> Pubkey {
 pub fn credit_balance(env: &Env, credits: &Pubkey) -> u64 {
     let acc = env.svm.get_account(credits).expect("credit account exists");
     let mut data = acc.data();
-    CreditAccount::try_deserialize(&mut data).expect("credit account").balance
+    CreditAccount::try_deserialize(&mut data)
+        .expect("credit account")
+        .balance
 }
 
 pub fn register_agent(env: &mut Env, agent_key: &[u8; 32]) -> Pubkey {
@@ -168,8 +225,17 @@ pub fn register_agent(env: &mut Env, agent_key: &[u8; 32]) -> Pubkey {
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
-        .expect("register_agent");
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("register_agent");
     agent
 }
 
@@ -179,11 +245,27 @@ pub fn stake(env: &mut Env, agent_key: &[u8; 32], amount: u64) -> (Pubkey, Pubke
     let owner = env.payer.pubkey();
     let position = stake_pda(agent_key, &owner);
 
-    let owner_covnt = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner);
-    mint_to(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner_covnt, amount);
-    let stake_vault = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &position);
+    let owner_covnt =
+        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner);
+    mint_to(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &owner_covnt,
+        amount,
+    );
+    let stake_vault = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &position,
+    );
 
-    let data = ix::Stake { amount, lock_until: 0 }.data();
+    let data = ix::Stake {
+        amount,
+        lock_until: 0,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(agent, false),
@@ -195,8 +277,17 @@ pub fn stake(env: &mut Env, agent_key: &[u8; 32], amount: u64) -> (Pubkey, Pubke
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
-        .expect("stake");
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("stake");
     (position, stake_vault)
 }
 
@@ -207,8 +298,17 @@ pub fn set_pause(env: &mut Env, paused: bool) {
         AccountMeta::new_readonly(env.payer.pubkey(), true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
-        .expect("set_pause");
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("set_pause");
 }
 
 pub fn slash_stake(
@@ -220,7 +320,11 @@ pub fn slash_stake(
     amount: u64,
 ) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
-    let data = ix::SlashStake { amount, reason_hash: [0u8; 32] }.data();
+    let data = ix::SlashStake {
+        amount,
+        reason_hash: [0u8; 32],
+    }
+    .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new_readonly(env.slash_authority.pubkey(), true),
@@ -232,12 +336,23 @@ pub fn slash_stake(
     ];
     let payer = env.payer.insecure_clone();
     let slasher = env.slash_authority.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[&slasher])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&slasher],
+    )
 }
 
 pub fn token_balance(env: &Env, account: &Pubkey) -> u64 {
     let acc = env.svm.get_account(account).expect("token account exists");
-    spl_token::state::Account::unpack(acc.data()).expect("token account").amount
+    spl_token::state::Account::unpack(acc.data())
+        .expect("token account")
+        .amount
 }
 
 pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair) -> Pubkey {
@@ -289,15 +404,9 @@ pub fn create_token_account(
 }
 
 pub fn mint_to(svm: &mut LiteSVM, payer: &Keypair, mint: &Pubkey, dest: &Pubkey, amount: u64) {
-    let ix = spl_token::instruction::mint_to(
-        &spl_token::ID,
-        mint,
-        dest,
-        &payer.pubkey(),
-        &[],
-        amount,
-    )
-    .unwrap();
+    let ix =
+        spl_token::instruction::mint_to(&spl_token::ID, mint, dest, &payer.pubkey(), &[], amount)
+            .unwrap();
     send(svm, payer, &[ix], &[]).expect("mint_to");
 }
 

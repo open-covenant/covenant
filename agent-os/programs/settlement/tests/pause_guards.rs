@@ -10,7 +10,12 @@ fn slash_stake_succeeds_when_not_paused() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let (position, stake_vault) = stake(&mut env, &AGENT, 1_000);
-    let slash_vault = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &env.payer.pubkey());
+    let slash_vault = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &env.payer.pubkey(),
+    );
 
     slash_stake(&mut env, &AGENT, &position, &stake_vault, &slash_vault, 400)
         .expect("slash should succeed while unpaused");
@@ -24,7 +29,12 @@ fn slash_stake_rejected_when_paused() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let (position, stake_vault) = stake(&mut env, &AGENT, 1_000);
-    let slash_vault = create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &env.payer.pubkey());
+    let slash_vault = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &env.payer.pubkey(),
+    );
 
     set_pause(&mut env, true);
 

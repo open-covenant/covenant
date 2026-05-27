@@ -671,6 +671,14 @@ fn scope_allows_optional_before_ms(obj: &Map<String, Value>, before_ms: Option<u
     }
 }
 
+// A `None` actual against a bound scope is accepted here, unlike the bool/
+// before_ms/duplicate_risk helpers. This is deliberate and load-bearing: the
+// chain read paths gather candidate capabilities with only the dimensions known
+// at query time and defer per-item fields (payer/resource/cluster/batch_id) to
+// chain_receipt_allowed. Flipping these to deny would drop legitimately
+// field-narrowed grants at the gather stage. Callers must therefore pass the real
+// runtime value for any dimension they intend to enforce here — e.g. covenantd
+// passes the environment mint, which receipts carry no field for.
 fn scope_allows_optional_limit(obj: &Map<String, Value>, actual: Option<usize>) -> bool {
     match obj.get("limit") {
         Some(value) => actual

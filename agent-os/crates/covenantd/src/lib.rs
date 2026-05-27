@@ -4531,12 +4531,19 @@ impl Server {
                     .into(),
             };
         }
+        // The COVNT mint is environment-level (receipts carry no mint field), so
+        // a mint-bound scope can only be enforced here at the gather stage, the
+        // way flush_receipts does it. Per-item dimensions (payer/resource/cluster/
+        // batch_id) are enforced per receipt by chain_receipt_allowed below.
+        let status = chain_status_from_env();
+        let mint = status.covnt_mint.as_deref().unwrap_or("");
         let scopes = match self
             .chain_scopes(
                 "chain.receipts",
                 peer,
                 ChainScopeRequest {
                     limit: Some(limit),
+                    mint: Some(mint),
                     ..ChainScopeRequest::default()
                 },
             )
@@ -4544,7 +4551,7 @@ impl Server {
         {
             Ok(scopes) if !scopes.is_empty() => scopes,
             Ok(_) => {
-                let reason = format!("limit {limit} exceeds capability scope");
+                let reason = format!("limit {limit} or mint does not match capability scope");
                 self.record_capability_scope_rejected(
                     peer,
                     "chain:receipts",
@@ -4722,12 +4729,17 @@ impl Server {
                     .into(),
             };
         }
+        // See recent_receipts: mint is environment-level and must be enforced at
+        // the gather stage; per-item fields are filtered by chain_receipt_allowed.
+        let status = chain_status_from_env();
+        let mint = status.covnt_mint.as_deref().unwrap_or("");
         let scopes = match self
             .chain_scopes(
                 "chain.batches",
                 peer,
                 ChainScopeRequest {
                     limit: Some(limit),
+                    mint: Some(mint),
                     ..ChainScopeRequest::default()
                 },
             )
@@ -4735,7 +4747,7 @@ impl Server {
         {
             Ok(scopes) if !scopes.is_empty() => scopes,
             Ok(_) => {
-                let reason = format!("limit {limit} exceeds capability scope");
+                let reason = format!("limit {limit} or mint does not match capability scope");
                 self.record_capability_scope_rejected(
                     peer,
                     "chain:batches",
@@ -12817,6 +12829,66 @@ required = {caps:?}
             matches!(
                 &event.kind,
                 AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.flush"
+            )
+        }));
+    }
+
+    // The COVNT mint is environment-level; receipts carry no mint field, so a
+    // mint-bound chain.receipts/chain.batches scope can only be enforced at the
+    // gather stage. With COVNT_MINT unset in tests the gathered mint is "", which
+    // cannot satisfy a concrete mint scope — so the grant is rejected rather than
+    // leaking receipts across mints (the previous unwrap_or(true) behavior).
+    #[tokio::test]
+    async fn recent_receipts_rejects_unmatched_mint_scope_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.receipts",
+            serde_json::json!({
+                "version": 1,
+                "mint": "Mint1111111111111111111111111111111111111111"
+            }),
+        )
+        .await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 5,
+                since_ms: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected mint-scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.receipts"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn receipt_batches_rejects_unmatched_mint_scope_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.batches",
+            serde_json::json!({
+                "version": 1,
+                "mint": "Mint1111111111111111111111111111111111111111"
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::ReceiptBatches { limit: 5 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected mint-scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.batches"
             )
         }));
     }

@@ -7,7 +7,13 @@ export const config = {
   // so the $200/mo budget survives public traffic. Set CODER_MODEL to
   // claude-opus-4-7 for a gated top-quality tier.
   model,
-  effort: (process.env.CODER_EFFORT ?? (model.includes("opus") ? "xhigh" : "high")) as
+  // Public (Sonnet) default is "low": on open-ended build prompts ("make a
+  // Next.js app with X") high effort burns minutes on a single upfront
+  // thinking block before the first tool call — measured ~3min — which reads
+  // as a hang. Low gets to the first action in seconds and still drives a
+  // real scaffold→install→build loop. The gated Opus tier keeps "xhigh".
+  // Override per-deploy with CODER_EFFORT.
+  effort: (process.env.CODER_EFFORT ?? (model.includes("opus") ? "xhigh" : "low")) as
     | "low"
     | "medium"
     | "high"

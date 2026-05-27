@@ -222,6 +222,18 @@ export type EventLabel = {
   intentId: string | null;
 };
 
+function friendlyTool(tool: string): string {
+  const m: Record<string, string> = {
+    write_file: "Wrote a file",
+    edit_file: "Edited a file",
+    read_file: "Read a file",
+    bash: "Ran a command",
+    terminal: "Ran a command",
+    web: "Fetched from the web",
+  };
+  return m[tool] ?? `Used ${tool}`;
+}
+
 export function eventLabel(event: AuditEvent): EventLabel {
   const kind = event.kind;
   switch (kind.type) {
@@ -234,6 +246,38 @@ export function eventLabel(event: AuditEvent): EventLabel {
           ? `“${truncate(kind.intent_text, 80)}”. ${formatHashStatus(kind.result_hash_hex, "Result")}.`
           : `“${truncate(kind.intent_text, 80)}”. No agent is set up to handle this kind of task — Covenant returned a default response.`,
         tone: kind.matched_agent ? "ok" : "warn",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_tool_invoked":
+      return {
+        headline: friendlyTool(kind.tool),
+        body: "The agent took a step.",
+        tone: "neutral",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_tool_completed":
+      return {
+        headline: `${friendlyTool(kind.tool)}${kind.error ? " — failed" : ""}`,
+        body: `${kind.error ? "Failed" : "Done"} in ${kind.duration_ms} ms.`,
+        tone: kind.error ? "danger" : "ok",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_approval_requested":
+      return {
+        headline: "Awaiting approval",
+        body: "The agent paused for a decision.",
+        tone: "warn",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_approval_resolved":
+      return {
+        headline: "Approval answered",
+        body: `Chose “${kind.choice}”.`,
+        tone: "neutral",
         intentId: kind.intent_id,
       };
 
@@ -422,6 +466,10 @@ function truncate(value: string, length: number): string {
 
 export const KIND_PILL_LABELS: Record<AuditKind["type"], string> = {
   intent_dispatched: "Task",
+  hermes_tool_invoked: "Step",
+  hermes_tool_completed: "Step",
+  hermes_approval_requested: "Approval",
+  hermes_approval_resolved: "Approval",
   capability_check: "Permission check",
   capability_granted: "Permission granted",
   intent_ignored: "Task ignored",

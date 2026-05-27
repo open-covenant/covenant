@@ -62,6 +62,34 @@ export type AuditKind =
       status: string;
     }
   | {
+      type: "hermes_tool_invoked";
+      intent_id: string;
+      run_id: string;
+      tool: string;
+      preview_hash_hex: string;
+    }
+  | {
+      type: "hermes_tool_completed";
+      intent_id: string;
+      run_id: string;
+      tool: string;
+      duration_ms: number;
+      error: boolean;
+    }
+  | {
+      type: "hermes_approval_requested";
+      intent_id: string;
+      run_id: string;
+      choices: string[];
+    }
+  | {
+      type: "hermes_approval_resolved";
+      intent_id: string;
+      run_id: string;
+      choice: string;
+      resolved: number;
+    }
+  | {
       type: "capability_check";
       agent_id: string;
       required_actions: string[];

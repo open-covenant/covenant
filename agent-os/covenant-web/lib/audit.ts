@@ -42,6 +42,14 @@ export function auditDetail(event: AuditEvent): string {
   switch (kind.type) {
     case "intent_dispatched":
       return `${kind.matched_agent ?? "(no agent matched)"} · ${truncate(kind.intent_text, 90)}`;
+    case "hermes_tool_invoked":
+      return `${kind.tool} · run ${short(kind.run_id)}`;
+    case "hermes_tool_completed":
+      return `${kind.tool} · ${kind.error ? "failed" : "done"} · ${kind.duration_ms}ms`;
+    case "hermes_approval_requested":
+      return `run ${short(kind.run_id)} · ${kind.choices.join(", ")}`;
+    case "hermes_approval_resolved":
+      return `run ${short(kind.run_id)} · ${kind.choice}`;
     case "capability_check":
       return `${kind.agent_id} · ${kind.passed ? "passed" : "missing"} · ${kind.required_actions.join(", ")}`;
     case "capability_granted":
@@ -199,6 +207,10 @@ export function relTime(fromMs: number, nowMs: number = Date.now()): string {
 
 export const AUDIT_KIND_LABELS: Record<AuditKind["type"], string> = {
   intent_dispatched: "intent dispatched",
+  hermes_tool_invoked: "tool invoked",
+  hermes_tool_completed: "tool completed",
+  hermes_approval_requested: "approval requested",
+  hermes_approval_resolved: "approval resolved",
   capability_check: "capability check",
   capability_granted: "capability granted",
   intent_ignored: "intent ignored",

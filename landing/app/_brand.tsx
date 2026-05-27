@@ -5,7 +5,7 @@
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
 export const TAGLINE = "Open infrastructure for agent-native computing";
-export const RELEASE_DATE = "ALPHA TARGET: 24.05.2026";
+export const RELEASE_DATE = "ALPHA TARGET: 27.05.2026";
 
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },

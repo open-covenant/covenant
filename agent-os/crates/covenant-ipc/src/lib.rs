@@ -6298,7 +6298,7 @@ mod tests {
             cluster: "devnet".into(),
             rpc_url: Some("https://api.devnet.solana.com".into()),
             ws_url: Some("wss://api.devnet.solana.com".into()),
-            program_id: Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2".into()),
+            program_id: Some("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into()),
             covnt_mint: Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E".into()),
             ready: true,
             missing: vec![],

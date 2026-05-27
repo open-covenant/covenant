@@ -24,6 +24,17 @@
 //!   covenant chain register-agent --program-id <BASE58> --agent-key <BASE58> --metadata-hash <HEX64> --capability-hash <HEX64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant chain stake --program-id <BASE58> --agent-key <BASE58> --owner-covnt <BASE58> --stake-vault <BASE58> --amount <U64> --lock-until <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant chain buy-credits --program-id <BASE58> --owner-covnt <BASE58> --treasury <BASE58> --amount-covnt <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain initialize --program-id <BASE58> --covnt-mint <BASE58> --treasury <BASE58> --slash-authority <BASE58> --credits-per-covnt <U64> [--min-stake-lock <U64>] [COMMON]
+//!   covenant chain open-credit-account --program-id <BASE58> [COMMON]
+//!   covenant chain unstake --program-id <BASE58> --agent-key <BASE58> --stake-vault <BASE58> --owner-covnt <BASE58> [COMMON]
+//!   covenant chain close-position --program-id <BASE58> --agent-key <BASE58> [COMMON]
+//!   covenant chain migrate-config --program-id <BASE58> --min-stake-lock <U64> [COMMON]
+//!   covenant chain set-min-stake-lock --program-id <BASE58> --value <U64> [COMMON]
+//!   covenant chain set-credits-per-covnt --program-id <BASE58> --value <U64> [COMMON]
+//!   covenant chain update-authority --program-id <BASE58> --new <BASE58> [COMMON]
+//!   covenant chain update-slash-authority --program-id <BASE58> --new <BASE58> [COMMON]
+//!   covenant chain update-treasury --program-id <BASE58> --treasury <BASE58> [COMMON]
+//!     COMMON = [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
 //!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
@@ -68,7 +79,7 @@ use covenant_types::{
 };
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSendTransactionConfig;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair::Keypair;
 use solana_sdk::signer::Signer;
@@ -947,7 +958,13 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -1222,7 +1239,13 @@ async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -1344,7 +1367,13 @@ async fn run_chain_register_agent(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -1402,6 +1431,528 @@ async fn run_chain_register_agent(args: &[String]) -> Result<()> {
     }
 
     Ok(())
+}
+
+// --- additional settlement instruction builders ---------------------------
+// These mirror the on-chain account ordering in
+// agent-os/programs/settlement/src/lib.rs. Anchor reads accounts positionally,
+// so the order is load-bearing.
+
+fn build_initialize_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    covnt_mint: &Pubkey,
+    treasury: &Pubkey,
+    slash_authority: &Pubkey,
+    credits_per_covnt: u64,
+    min_stake_lock: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator("initialize").to_vec();
+    data.extend_from_slice(slash_authority.as_ref());
+    data.extend_from_slice(&credits_per_covnt.to_le_bytes());
+    data.extend_from_slice(&min_stake_lock.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new(*authority, true),
+            AccountMeta::new_readonly(*covnt_mint, false),
+            AccountMeta::new_readonly(*treasury, false),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+fn build_open_credit_account_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (credits, _) = settlement_credits_pda(program_id, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(credits, false),
+            AccountMeta::new(*owner, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data: compute_anchor_global_discriminator("open_credit_account").to_vec(),
+    }
+}
+
+fn build_unstake_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+    agent_key: &Pubkey,
+    stake_vault: &Pubkey,
+    owner_covnt: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let (agent, _) = settlement_agent_pda(program_id, agent_key);
+    let (position, _) = settlement_stake_position_pda(program_id, agent_key, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config, false),
+            AccountMeta::new(agent, false),
+            AccountMeta::new(position, false),
+            AccountMeta::new(*owner, true),
+            AccountMeta::new(*stake_vault, false),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data: compute_anchor_global_discriminator("unstake").to_vec(),
+    }
+}
+
+fn build_close_position_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+    agent_key: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (position, _) = settlement_stake_position_pda(program_id, agent_key, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(position, false),
+            AccountMeta::new(*owner, true),
+        ],
+        data: compute_anchor_global_discriminator("close_position").to_vec(),
+    }
+}
+
+fn build_migrate_config_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    min_stake_lock: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator("migrate_config").to_vec();
+    data.extend_from_slice(&min_stake_lock.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new(*authority, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+fn build_update_config_u64_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    method: &str,
+    value: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator(method).to_vec();
+    data.extend_from_slice(&value.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data,
+    }
+}
+
+fn build_update_config_pubkey_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    method: &str,
+    new_value: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator(method).to_vec();
+    data.extend_from_slice(new_value.as_ref());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data,
+    }
+}
+
+fn build_update_treasury_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    treasury: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new_readonly(*treasury, false),
+        ],
+        data: compute_anchor_global_discriminator("update_treasury").to_vec(),
+    }
+}
+
+// Shared flag bag for the direct-RPC chain verbs added on top of the original
+// register-agent/stake/buy-credits trio. Every `--flag value` pair lands in
+// `map`; `--json` is the only valueless flag.
+struct ChainFlags {
+    map: std::collections::HashMap<String, String>,
+    json: bool,
+}
+
+fn parse_chain_flags(args: &[String]) -> Result<ChainFlags> {
+    let mut map = std::collections::HashMap::new();
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--json" {
+            json = true;
+            i += 1;
+            continue;
+        }
+        if a.starts_with("--") {
+            let v = args.get(i + 1).with_context(|| format!("{a} needs a value"))?;
+            map.insert(a.clone(), v.clone());
+            i += 2;
+        } else {
+            bail!("unexpected argument '{a}'");
+        }
+    }
+    Ok(ChainFlags { map, json })
+}
+
+impl ChainFlags {
+    fn pubkey(&self, flag: &'static str) -> Result<Pubkey> {
+        let v = self
+            .map
+            .get(flag)
+            .with_context(|| format!("{flag} is required"))?;
+        Ok(parse_pubkey_arg(flag.trim_start_matches('-'), v)?)
+    }
+
+    fn u64(&self, flag: &'static str) -> Result<u64> {
+        let v = self
+            .map
+            .get(flag)
+            .with_context(|| format!("{flag} is required"))?;
+        parse_u64_arg(flag.trim_start_matches('-'), v)
+    }
+
+    fn u64_or(&self, flag: &'static str, default: u64) -> Result<u64> {
+        match self.map.get(flag) {
+            Some(v) => parse_u64_arg(flag.trim_start_matches('-'), v),
+            None => Ok(default),
+        }
+    }
+
+    fn cluster(&self) -> String {
+        self.map
+            .get("--cluster")
+            .cloned()
+            .unwrap_or_else(|| "devnet".to_string())
+    }
+
+    fn timeout_ms(&self) -> u64 {
+        self.map
+            .get("--confirm-timeout-ms")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60_000)
+    }
+
+    fn operator_and_rpc(&self) -> Result<(Keypair, String)> {
+        let resolved = resolve_operator_keypair_path(self.map.get("--keypair").map(PathBuf::from))?;
+        check_keypair_mode(&resolved)?;
+        let keypair = load_operator_keypair(Some(resolved))?;
+        let rpc_url = resolve_solana_rpc_url(
+            Some(&self.cluster()),
+            self.map.get("--rpc-url").map(|s| s.as_str()),
+        )?;
+        Ok((keypair, rpc_url))
+    }
+}
+
+// Build + sign on a blocking thread (the blocking RpcClient builds its own
+// runtime), submit with a confirmed-commitment preflight, and emit the same
+// `covenant.chain.tx.v1` envelope shape the register-agent path uses.
+#[allow(clippy::too_many_arguments)]
+async fn submit_chain_tx(
+    verb: &'static str,
+    cluster: String,
+    rpc_url: String,
+    keypair: Keypair,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+    extra: serde_json::Map<String, serde_json::Value>,
+    build_ix: impl FnOnce(&Pubkey) -> solana_sdk::instruction::Instruction + Send + 'static,
+) -> Result<()> {
+    let operator = keypair.pubkey();
+    let url_for_prep = rpc_url.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let ix = build_ix(&operator);
+            let tx =
+                Transaction::new_signed_with_payer(&[ix], Some(&operator), &[&keypair], blockhash);
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("verb".to_string(), verb.into());
+    envelope.insert("signature".to_string(), signature_b58.clone().into());
+    envelope.insert("rpc_url".to_string(), rpc_url.clone().into());
+    envelope.insert("cluster".to_string(), cluster.clone().into());
+    for (k, v) in extra {
+        envelope.insert(k, v);
+    }
+
+    match tokio::time::timeout(Duration::from_millis(confirm_timeout_ms), submit_handle).await {
+        Err(_elapsed) => {
+            envelope.insert("kind".to_string(), "covenant.chain.tx.timeout.v1".into());
+            envelope.insert("status".to_string(), "submitted-not-confirmed".into());
+            envelope.insert("timeout_ms".to_string(), confirm_timeout_ms.into());
+            if as_json {
+                println!("{}", serde_json::to_string(&serde_json::Value::Object(envelope))?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {cluster}");
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => bail!("send_and_confirm_transaction failed: {client_err}"),
+        Ok(Ok(Ok(_confirmed))) => {
+            envelope.insert("kind".to_string(), "covenant.chain.tx.v1".into());
+            envelope.insert("status".to_string(), "confirmed".into());
+            if as_json {
+                println!("{}", serde_json::to_string(&serde_json::Value::Object(envelope))?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {cluster}");
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn run_chain_initialize(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let covnt_mint = f.pubkey("--covnt-mint")?;
+    let treasury = f.pubkey("--treasury")?;
+    let slash_authority = f.pubkey("--slash-authority")?;
+    let credits_per_covnt = f.u64("--credits-per-covnt")?;
+    let min_stake_lock = f.u64_or("--min-stake-lock", 0)?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("covnt_mint".to_string(), covnt_mint.to_string().into());
+    extra.insert("credits_per_covnt".to_string(), credits_per_covnt.into());
+    extra.insert("min_stake_lock".to_string(), min_stake_lock.into());
+    submit_chain_tx(
+        "initialize",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| {
+            build_initialize_instruction(
+                &program_id,
+                authority,
+                &covnt_mint,
+                &treasury,
+                &slash_authority,
+                credits_per_covnt,
+                min_stake_lock,
+            )
+        },
+    )
+    .await
+}
+
+async fn run_chain_open_credit_account(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    submit_chain_tx(
+        "open-credit-account",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        serde_json::Map::new(),
+        move |owner| build_open_credit_account_instruction(&program_id, owner),
+    )
+    .await
+}
+
+async fn run_chain_unstake(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let agent_key = f.pubkey("--agent-key")?;
+    let stake_vault = f.pubkey("--stake-vault")?;
+    let owner_covnt = f.pubkey("--owner-covnt")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("agent_key".to_string(), agent_key.to_string().into());
+    submit_chain_tx(
+        "unstake",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |owner| build_unstake_instruction(&program_id, owner, &agent_key, &stake_vault, &owner_covnt),
+    )
+    .await
+}
+
+async fn run_chain_close_position(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let agent_key = f.pubkey("--agent-key")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("agent_key".to_string(), agent_key.to_string().into());
+    submit_chain_tx(
+        "close-position",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |owner| build_close_position_instruction(&program_id, owner, &agent_key),
+    )
+    .await
+}
+
+async fn run_chain_migrate_config(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let min_stake_lock = f.u64("--min-stake-lock")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("min_stake_lock".to_string(), min_stake_lock.into());
+    submit_chain_tx(
+        "migrate-config",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_migrate_config_instruction(&program_id, authority, min_stake_lock),
+    )
+    .await
+}
+
+async fn run_chain_set_config_u64(args: &[String], verb: &'static str, method: &'static str) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let value = f.u64("--value")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("value".to_string(), value.into());
+    submit_chain_tx(
+        verb,
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_update_config_u64_instruction(&program_id, authority, method, value),
+    )
+    .await
+}
+
+async fn run_chain_set_config_pubkey(args: &[String], verb: &'static str, method: &'static str) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let new_value = f.pubkey("--new")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("new".to_string(), new_value.to_string().into());
+    submit_chain_tx(
+        verb,
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_update_config_pubkey_instruction(&program_id, authority, method, &new_value),
+    )
+    .await
+}
+
+async fn run_chain_update_treasury(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let treasury = f.pubkey("--treasury")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("treasury".to_string(), treasury.to_string().into());
+    submit_chain_tx(
+        "update-treasury",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_update_treasury_instruction(&program_id, authority, &treasury),
+    )
+    .await
 }
 
 async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result<()> {
@@ -1475,6 +2026,9 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant chain buy-credits --program-id BASE58 --owner-covnt BASE58 --treasury BASE58 --amount-covnt U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement buy_credits transaction with the operator keypair; --treasury MUST equal config.treasury (fetch via `chain status` if unknown)"
+    );
+    eprintln!(
+        "  covenant chain initialize|open-credit-account|unstake|close-position|migrate-config|set-min-stake-lock|set-credits-per-covnt|update-authority|update-slash-authority|update-treasury  --program-id BASE58 [verb-specific flags] [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit the matching settlement instruction with the operator keypair"
     );
     eprintln!(
         "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
@@ -3035,6 +3589,48 @@ async fn main() -> Result<()> {
                 }
                 "buy-credits" => {
                     run_chain_buy_credits(&args[2..]).await?;
+                }
+                "initialize" => {
+                    run_chain_initialize(&args[2..]).await?;
+                }
+                "open-credit-account" => {
+                    run_chain_open_credit_account(&args[2..]).await?;
+                }
+                "unstake" => {
+                    run_chain_unstake(&args[2..]).await?;
+                }
+                "close-position" => {
+                    run_chain_close_position(&args[2..]).await?;
+                }
+                "migrate-config" => {
+                    run_chain_migrate_config(&args[2..]).await?;
+                }
+                "set-min-stake-lock" => {
+                    run_chain_set_config_u64(&args[2..], "set-min-stake-lock", "set_min_stake_lock")
+                        .await?;
+                }
+                "set-credits-per-covnt" => {
+                    run_chain_set_config_u64(
+                        &args[2..],
+                        "set-credits-per-covnt",
+                        "set_credits_per_covnt",
+                    )
+                    .await?;
+                }
+                "update-authority" => {
+                    run_chain_set_config_pubkey(&args[2..], "update-authority", "update_authority")
+                        .await?;
+                }
+                "update-slash-authority" => {
+                    run_chain_set_config_pubkey(
+                        &args[2..],
+                        "update-slash-authority",
+                        "update_slash_authority",
+                    )
+                    .await?;
+                }
+                "update-treasury" => {
+                    run_chain_update_treasury(&args[2..]).await?;
                 }
                 other => bail!("unknown chain subcommand '{other}'"),
             }
@@ -8037,7 +8633,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8142,7 +8738,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8310,7 +8906,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8590,7 +9186,7 @@ mod tests {
         fn fixed_program() -> Pubkey {
             // The devnet settlement program ID pinned in
             // docs/internal/status.md row "On-chain settlement".
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9091,7 +9687,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9466,7 +10062,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9852,7 +10448,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }

@@ -27,7 +27,7 @@ export const covenantSolanaNetworks = Object.freeze({
   }),
 });
 
-export const DEFAULT_PROTOCOL_PROGRAM_ID = 'CovntSettLement1111111111111111111111111111';
+export const DEFAULT_PROTOCOL_PROGRAM_ID = 'cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y';
 
 // Synapse Agent Protocol (SAP v2) — on-chain program managed by OOBE Protocol.
 // Single mainnet+devnet deployment as of 2026-05; we keep one default and let

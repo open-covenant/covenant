@@ -30,7 +30,7 @@ cargo run
 |---|---|---|
 | `COVENANT_SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Surfaced on `/healthz`; not yet polled |
 | `COVENANT_SOLANA_CLUSTER` | `devnet` | `localnet`, `devnet`, or `mainnet` |
-| `COVENANT_PROTOCOL_PROGRAM_ID` | `CovntSettLement1111111111111111111111111111` | Covenant settlement program id |
+| `COVENANT_PROTOCOL_PROGRAM_ID` | `cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y` | Covenant settlement program id |
 | `COVENANT_SOLANA_CONFIRMATIONS` | `32` | Confirmation depth the live indexer will require once wired |
 | `INDEXER_BIND_ADDR` | `0.0.0.0:8080` | HTTP bind address |
 

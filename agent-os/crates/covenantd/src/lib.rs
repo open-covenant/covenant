@@ -13843,7 +13843,7 @@ budget_credits_per_hour = {credits}
         std::env::set_var("COVENANT_SOLANA_RPC_URL", "https://rpc.example/");
         std::env::set_var(
             "COVENANT_PROTOCOL_PROGRAM_ID",
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2",
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
         );
         std::env::set_var("COVNT_MINT", "4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E");
         let ready = chain_status_from_env();
@@ -13856,7 +13856,7 @@ budget_credits_per_hour = {credits}
         assert_eq!(ready.rpc_url.as_deref(), Some("https://rpc.example/"));
         assert_eq!(
             ready.program_id.as_deref(),
-            Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2")
+            Some("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y")
         );
         assert_eq!(
             ready.covnt_mint.as_deref(),

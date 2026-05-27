@@ -68,7 +68,7 @@ use covenant_types::{
 };
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSendTransactionConfig;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair::Keypair;
 use solana_sdk::signer::Signer;
@@ -947,7 +947,13 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -1222,7 +1228,13 @@ async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -1344,7 +1356,13 @@ async fn run_chain_register_agent(args: &[String]) -> Result<()> {
                 .send_and_confirm_transaction_with_spinner_and_config(
                     &tx_to_send,
                     CommitmentConfig::confirmed(),
-                    RpcSendTransactionConfig::default(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
                 )
                 .map_err(Box::new)
         },
@@ -8037,7 +8055,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8142,7 +8160,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8310,7 +8328,7 @@ mod tests {
         use solana_sdk::pubkey::Pubkey;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -8590,7 +8608,7 @@ mod tests {
         fn fixed_program() -> Pubkey {
             // The devnet settlement program ID pinned in
             // docs/internal/status.md row "On-chain settlement".
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9091,7 +9109,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9466,7 +9484,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }
@@ -9852,7 +9870,7 @@ mod tests {
         use solana_sdk::signer::Signer;
 
         fn fixed_program() -> Pubkey {
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2"
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
                 .parse()
                 .expect("settlement program id parses")
         }

@@ -257,6 +257,7 @@ pub mod settlement {
     }
 
     pub fn create_task(ctx: Context<CreateTask>, args: CreateTaskArgs) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
@@ -293,6 +294,7 @@ pub mod settlement {
         result_hash: [u8; 32],
         receipt_hash: [u8; 32],
     ) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
@@ -331,6 +333,7 @@ pub mod settlement {
     /// time. Pause check matches `release_task` so a paused protocol
     /// halts all escrow movement uniformly.
     pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
@@ -1365,4 +1368,6 @@ pub enum CovenantError {
     StakeStillActive,
     #[msg("lock_until is shorter than the protocol minimum stake lock")]
     LockTooShort,
+    #[msg("task escrow is disabled in this build")]
+    TasksDisabled,
 }

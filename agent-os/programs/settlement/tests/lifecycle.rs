@@ -70,6 +70,7 @@ fn full_slash_then_close_then_restake() {
     assert_eq!(agent_stake(&env, &AGENT), 250);
 }
 
+#[cfg(feature = "task-escrow")]
 #[test]
 fn task_create_and_release_pays_provider() {
     let mut env = boot();
@@ -90,6 +91,7 @@ fn task_create_and_release_pays_provider() {
     assert_eq!(task_status(&env, &tc.task), 2); // TASK_RELEASED
 }
 
+#[cfg(feature = "task-escrow")]
 #[test]
 fn task_refund_after_deadline_returns_client() {
     let mut env = boot();

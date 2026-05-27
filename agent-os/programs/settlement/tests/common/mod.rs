@@ -458,6 +458,7 @@ pub const E_TASK_NOT_EXPIRED: u32 = 6012;
 pub const E_STAKE_LOCKED: u32 = 6013;
 pub const E_STAKE_STILL_ACTIVE: u32 = 6014;
 pub const E_LOCK_TOO_SHORT: u32 = 6015;
+pub const E_TASKS_DISABLED: u32 = 6016;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0

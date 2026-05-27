@@ -65,6 +65,23 @@ fn close_active_position_rejected() {
     assert_eq!(custom_error(&err), Some(E_STAKE_STILL_ACTIVE));
 }
 
+// Default build: the escrow is compiled but hard-disabled, so create_task
+// reverts before any token movement.
+#[cfg(not(feature = "task-escrow"))]
+#[test]
+fn create_task_rejected_when_escrow_disabled() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    let task_id = [44u8; 32];
+    let provider = Keypair::new().pubkey();
+    let tc = task_setup(&mut env, &task_id, 1_000);
+    let err = create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc)
+        .expect_err("create_task must be disabled without the task-escrow feature");
+    assert_eq!(custom_error(&err), Some(E_TASKS_DISABLED));
+    assert_eq!(token_balance(&env, &tc.client_covnt), 1_000); // no funds moved
+}
+
+#[cfg(feature = "task-escrow")]
 #[test]
 fn release_after_deadline_rejected() {
     let mut env = boot();
@@ -81,6 +98,7 @@ fn release_after_deadline_rejected() {
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
 }
 
+#[cfg(feature = "task-escrow")]
 #[test]
 fn refund_before_deadline_rejected() {
     let mut env = boot();
@@ -93,6 +111,7 @@ fn refund_before_deadline_rejected() {
     assert_eq!(custom_error(&err), Some(E_TASK_NOT_EXPIRED));
 }
 
+#[cfg(feature = "task-escrow")]
 #[test]
 fn double_release_rejected() {
     let mut env = boot();

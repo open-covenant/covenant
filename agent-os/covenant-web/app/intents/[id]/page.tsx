@@ -8,6 +8,7 @@ import { formatAgentId, formatTimestamp, shortHash } from "@/lib/format";
 import { loadReply } from "@/lib/intentReplies";
 import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
+import { BuildOutput } from "../../components/BuildOutput";
 import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
 
@@ -139,6 +140,8 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           )}
         </div>
       </section>
+
+      {outcome?.files && outcome.files.length > 0 && <BuildOutput files={outcome.files} />}
 
       {isLoading ? (
         <div className="panel">

@@ -37,6 +37,12 @@ export type IntentResult =
 // Snapshot of an async (hermes) dispatch the client polls while a long
 // coding run is in flight. `status` starts "running" and flips to
 // "ok"/"error"/"ignored" once the spawned run records its outcome.
+export type BuildFile = {
+  path: string;
+  content: string;
+  truncated?: boolean;
+};
+
 export type IntentOutcome = {
   kind: "intent_outcome";
   intent_id: string;
@@ -46,6 +52,7 @@ export type IntentOutcome = {
   text: string;
   result_hash_hex: string | null;
   updated_ms: number;
+  files?: BuildFile[];
 };
 
 export type ToolSpec = {

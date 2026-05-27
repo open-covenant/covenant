@@ -146,28 +146,45 @@ fn capability_keywords(cap: &str) -> &'static [&'static str] {
         ],
         "tool.summarize" => &["summarize", "summarise", "tl;dr", "brief", "summary"],
         "tool.gpu_inference" => &["generate", "render", "image", "diffusion", "infer"],
-        // Coding/build intents. Keywords are deliberately high-signal and
-        // avoid bare substrings that collide with non-coding intents: "app"
-        // is omitted because it matches "happen"/"apply", and "api" because
-        // it matches "rapid"/"capital" — "web app" and "rest api" are used
-        // instead. A greedier table would steal research and chat intents
-        // (see coder_keywords_do_not_steal_research_or_chat).
+        // Coding/build intents. The sandbox is coding-focused, so this leans
+        // broad: file extensions and common build/coding nouns and verbs. Bare
+        // "app"/"api" are still omitted (they match "happen"/"rapid") — "web
+        // app"/"rest api" cover those. This v0 keyword table is a placeholder
+        // for an embedding/semantic router, which is the real fix for phrasings
+        // it misses; the non-greedy guard against research/chat intents is
+        // pinned by coder_keywords_do_not_steal_research_or_chat.
         "tool.code" => &[
             "build",
+            "create",
+            "make",
+            "write",
+            "implement",
+            "scaffold",
+            "refactor",
+            "fix",
+            "compile",
+            "debug",
             "website",
             "web app",
             "webapp",
-            "scaffold",
-            "component",
-            "refactor",
-            "implement",
-            "function",
-            "module",
-            "page",
             "frontend",
             "backend",
             "endpoint",
             "rest api",
+            "component",
+            "page",
+            "script",
+            "program",
+            "function",
+            "class",
+            "module",
+            "cli",
+            "algorithm",
+            "parser",
+            "command-line",
+            "regex",
+            "code",
+            "bug",
             "css",
             "html",
             "javascript",
@@ -177,10 +194,15 @@ fn capability_keywords(cap: &str) -> &'static [&'static str] {
             "three.js",
             "rust",
             "python",
-            "compile",
-            "code",
-            "bug",
-            "debug",
+            ".py",
+            ".js",
+            ".ts",
+            ".tsx",
+            ".jsx",
+            ".rs",
+            ".go",
+            ".json",
+            ".sh",
         ],
         "memory.write" => &["remember", "save", "note", "store", "log"],
         "memory.read" => &["recall", "what did", "previous", "earlier"],
@@ -339,6 +361,26 @@ required = {caps:?}
             .route("hello there")
             .expect("chat intent must still match");
         assert_eq!(m.agent_id, "demo", "coder stole a chat intent");
+    }
+
+    #[test]
+    fn coder_routes_common_coding_phrasings() {
+        // Real phrasings the first keyword table missed (found by an end-to-end
+        // run — "Create fizzbuzz.py" matched nothing). The broadened table
+        // covers file extensions and common coding nouns/verbs.
+        let r = Router::from_cards(vec![research_card(), coder_card()]);
+        for intent in [
+            "Create fizzbuzz.py and run it",
+            "write a parser in rust",
+            "make a CLI tool",
+            "implement a sorting algorithm",
+        ] {
+            assert_eq!(
+                r.route(intent).map(|m| m.agent_id),
+                Some("coder".to_string()),
+                "should route to coder: {intent}"
+            );
+        }
     }
 
     #[test]

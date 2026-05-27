@@ -69,6 +69,11 @@ export class SpendLedger {
       };
       if (s.day === this.day && typeof s.dailyUsd === "number") this.dailyUsd = s.dailyUsd;
       if (s.month === this.month && typeof s.monthlyUsd === "number") this.monthlyUsd = s.monthlyUsd;
+      if (this.dailyUsd > 0 || this.monthlyUsd > 0) {
+        console.log(
+          `ledger restored from ${this.path}: $${this.dailyUsd.toFixed(4)} today, $${this.monthlyUsd.toFixed(2)} this month`,
+        );
+      }
     } catch {
       // first boot or unreadable — start fresh
     }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { formatRelative, formatTimestamp } from "@/lib/format";
 import { saveReply } from "@/lib/intentReplies";
@@ -53,6 +53,9 @@ export default function OverviewPage() {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastIntentId, setLastIntentId] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // Set while an async (coding) run is in flight: submit returned a
+  // `running` intent and we poll its outcome until it lands.
+  const [awaiting, setAwaiting] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
@@ -69,9 +72,14 @@ export default function OverviewPage() {
       try {
         const r = await api.submitIntent(trimmed, turnstileToken ?? undefined);
         if (r.kind === "intent_result") {
-          setLastResult(r.text);
           setLastIntentId(r.intent_id);
-          saveReply(r.intent_id, r.text);
+          if (r.status === "running") {
+            // Long coding build — the outcome arrives via polling below.
+            setAwaiting(true);
+          } else {
+            setLastResult(r.text);
+            saveReply(r.intent_id, r.text);
+          }
         } else {
           setLastError(r.message);
         }
@@ -91,7 +99,35 @@ export default function OverviewPage() {
     setLastResult(null);
     setLastIntentId(null);
     setLastError(null);
+    setAwaiting(false);
   }, []);
+
+  // Poll a running coding build until it lands, then drop the reply inline.
+  useEffect(() => {
+    if (!awaiting || !lastIntentId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const o = await api.intentResult(lastIntentId);
+        if (cancelled || !o || o.status === "running") return;
+        if (o.status === "error" || o.status === "ignored") {
+          setLastError(o.text || "the run did not complete");
+        } else {
+          setLastResult(o.text);
+          saveReply(lastIntentId, o.text);
+        }
+        setAwaiting(false);
+      } catch {
+        // transient (proxy/daemon blip) — keep polling
+      }
+    };
+    tick();
+    const t = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [awaiting, lastIntentId]);
 
   const onDispatch = useCallback(
     (e: FormEvent) => {
@@ -221,14 +257,14 @@ export default function OverviewPage() {
           )}
         </form>
 
-        {(lastResult || lastError || dispatching) && (
+        {(lastResult || lastError || dispatching || awaiting) && (
           <div className={`reply ${lastError ? "error" : ""}`} aria-live="polite">
             <div className="reply-head">
               <p className="eyebrow">{lastError ? "error" : "reply"}</p>
               <div className="reply-head-actions">
                 {lastIntentId && !lastError && (
                   <Link className="btn ghost small" href={`/intents/${lastIntentId}`}>
-                    open task
+                    {awaiting ? "watch it work" : "open task"}
                   </Link>
                 )}
                 {(lastResult || lastError) && !dispatching && (
@@ -239,8 +275,12 @@ export default function OverviewPage() {
               </div>
             </div>
             <div className="reply-body">
-              {dispatching && !lastResult && !lastError ? (
-                <span className="reply-pending">waiting for the agent…</span>
+              {(dispatching || awaiting) && !lastResult && !lastError ? (
+                <span className="reply-pending">
+                  {awaiting
+                    ? "building in the sandbox — this can take a minute…"
+                    : "waiting for the agent…"}
+                </span>
               ) : lastError ? (
                 <pre>{lastError}</pre>
               ) : (

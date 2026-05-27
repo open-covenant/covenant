@@ -34,6 +34,20 @@ export type IntentResult =
     }
   | { kind: "error"; message: string };
 
+// Snapshot of an async (hermes) dispatch the client polls while a long
+// coding run is in flight. `status` starts "running" and flips to
+// "ok"/"error"/"ignored" once the spawned run records its outcome.
+export type IntentOutcome = {
+  kind: "intent_outcome";
+  intent_id: string;
+  status: string;
+  intent_text: string;
+  matched_agent: string | null;
+  text: string;
+  result_hash_hex: string | null;
+  updated_ms: number;
+};
+
 export type ToolSpec = {
   name: string;
   description: string;
@@ -366,6 +380,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ intent_id }),
     }),
+
+  // Poll an async dispatch's outcome. Returns null for ids the daemon
+  // doesn't track as async (synchronous intents, evicted, or unknown) so
+  // callers can treat "not an async run" and "still running" distinctly.
+  intentResult: async (intent_id: string): Promise<IntentOutcome | null> => {
+    try {
+      return await call<IntentOutcome>(`/intents/${encodeURIComponent(intent_id)}/result`);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("→ 404")) return null;
+      throw e;
+    }
+  },
 
   rotateOperatorToken: () =>
     call<

@@ -8,6 +8,7 @@ import { formatAgentId, formatTimestamp, shortHash } from "@/lib/format";
 import { loadReply } from "@/lib/intentReplies";
 import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
+import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
@@ -36,6 +37,7 @@ function statusWord(status: string | undefined): string {
 export default function TaskTracePage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
   const { data, error, lastSyncMs } = usePoll(loadIntent, 3000);
+  const { data: outcome } = usePoll(() => api.intentResult(id), 3000);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [reply, setReply] = useState<string | null>(null);
 
@@ -48,6 +50,14 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
   const trace = eventsForIntent(events, id);
   const dispatched = trace.find((e) => e.kind.type === "intent_dispatched");
   const dispatchKind = dispatched?.kind.type === "intent_dispatched" ? dispatched.kind : null;
+  // While an async build is in flight the audit trace is still empty (the
+  // dispatch + step rows land when the run finishes), so fall back to the
+  // polled outcome for the title, agent, status, and reply body.
+  const running = outcome?.status === "running";
+  const intentText = dispatchKind?.intent_text ?? outcome?.intent_text ?? null;
+  const matchedAgent = dispatchKind?.matched_agent ?? outcome?.matched_agent ?? null;
+  const status = outcome?.status ?? dispatchKind?.status;
+  const replyText = (outcome?.text && outcome.text.length > 0 ? outcome.text : null) ?? reply;
   const totalDurationMs =
     trace.length > 1 ? trace[trace.length - 1].timestamp_ms - trace[0].timestamp_ms : null;
   const isLoading = data === null && error === null;
@@ -65,13 +75,15 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
     <>
       <PageHeader
         eyebrow="task"
-        title={dispatchKind ? `“${dispatchKind.intent_text}”` : "Task"}
+        title={intentText ? `“${intentText}”` : "Task"}
         subhead={
-          dispatchKind
-            ? dispatchKind.matched_agent
-              ? `Ran by ${formatAgentId(dispatchKind.matched_agent)}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
-              : "No agent is set up to handle this kind of task. Covenant returned a default response."
-            : "Loading the task’s steps…"
+          running
+            ? `Building in the sandbox${matchedAgent ? ` · ${formatAgentId(matchedAgent)}` : ""}. The steps appear here when the run finishes.`
+            : dispatchKind
+              ? dispatchKind.matched_agent
+                ? `Ran by ${formatAgentId(dispatchKind.matched_agent)}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
+                : "No agent is set up to handle this kind of task. Covenant returned a default response."
+              : "Loading the task’s steps…"
         }
         syncMs={lastSyncMs}
         error={error}
@@ -93,11 +105,11 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         </article>
         <article className="meta-cell">
           <p className="eyebrow">ran by</p>
-          <strong>{formatAgentId(dispatchKind?.matched_agent)}</strong>
+          <strong>{formatAgentId(matchedAgent)}</strong>
         </article>
         <article className="meta-cell">
           <p className="eyebrow">status</p>
-          <strong>{statusWord(dispatchKind?.status)}</strong>
+          <strong>{statusWord(status)}</strong>
         </article>
       </section>
 
@@ -111,8 +123,12 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           )}
         </div>
         <div className="reply-body">
-          {reply ? (
-            <pre>{reply}</pre>
+          {running ? (
+            <p className="empty">
+              Building in the sandbox… the reply lands here when the run finishes.
+            </p>
+          ) : replyText ? (
+            <Markdown>{replyText}</Markdown>
           ) : (
             <p className="empty">
               The reply body isn&apos;t available in this tab. The activity log stores
@@ -127,6 +143,13 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
       {isLoading ? (
         <div className="panel">
           <p className="empty">Loading the task&apos;s steps…</p>
+        </div>
+      ) : running ? (
+        <div className="panel">
+          <p className="empty">
+            The build is running in the sandbox. Its steps — files written, commands
+            run — appear here as a signed trail once the run finishes.
+          </p>
         </div>
       ) : trace.length === 0 ? (
         <div className="panel">

@@ -716,6 +716,73 @@ fn a2a_entry_matches_state(
 /// distinct so a future `grep` resolves cleanly.
 const PEER_MATCH_LIMIT: usize = 16;
 
+/// Result of an async (hermes) dispatch, polled by the web client while a
+/// long coding run is in flight. Heavy builds (scaffold + npm install +
+/// compile) outlast the front-door LB's idle window, so the submit verb
+/// returns `status:"running"` immediately and the run finishes in a spawned
+/// task that writes its outcome here.
+#[derive(Clone)]
+struct IntentOutcome {
+    status: String,
+    intent_text: String,
+    matched_agent: Option<String>,
+    text: String,
+    result_hash_hex: Option<String>,
+    updated_ms: u64,
+}
+
+#[derive(Default)]
+struct OutcomeStore {
+    map: std::collections::HashMap<Uuid, IntentOutcome>,
+    order: std::collections::VecDeque<Uuid>,
+}
+
+impl OutcomeStore {
+    const CAP: usize = 512;
+
+    fn insert_running(&mut self, id: Uuid, intent_text: &str, matched_agent: Option<String>) {
+        self.map.insert(
+            id,
+            IntentOutcome {
+                status: "running".into(),
+                intent_text: intent_text.to_string(),
+                matched_agent,
+                text: String::new(),
+                result_hash_hex: None,
+                updated_ms: epoch_ms(),
+            },
+        );
+        self.order.push_back(id);
+        while self.order.len() > Self::CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+
+    fn complete(&mut self, id: Uuid, resp: &Response) {
+        let Some(o) = self.map.get_mut(&id) else {
+            return;
+        };
+        match resp {
+            Response::IntentResult { status, text, .. } => {
+                o.status = status.clone();
+                o.text = text.clone();
+                o.result_hash_hex = Some(hash_hex(text.as_bytes()));
+            }
+            Response::Error { message } => {
+                o.status = "error".into();
+                o.text = message.clone();
+            }
+            _ => {
+                o.status = "error".into();
+                o.text = "unexpected dispatch response".into();
+            }
+        }
+        o.updated_ms = epoch_ms();
+    }
+}
+
 #[derive(Clone)]
 pub struct Server {
     router: Arc<Router>,
@@ -766,6 +833,10 @@ pub struct Server {
     /// surface `BridgeDisabledError` when it's absent or
     /// `enabled = false`.
     sap_bridge: Option<SapBridge>,
+    /// Outcomes of in-flight async (hermes) dispatches, keyed by intent id.
+    /// `std::sync::Mutex` (not the tokio one used elsewhere) because the
+    /// critical section is a trivial map mutation never held across `.await`.
+    intent_outcomes: Arc<std::sync::Mutex<OutcomeStore>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -805,7 +876,25 @@ impl Server {
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
             sap_bridge: None,
+            intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
+    }
+
+    /// JSON snapshot of an async dispatch's current state, or `None` if the
+    /// id is unknown (synchronous intent, evicted, or never submitted here).
+    pub fn intent_outcome(&self, id: &Uuid) -> Option<serde_json::Value> {
+        let store = self.intent_outcomes.lock().ok()?;
+        let o = store.map.get(id)?;
+        Some(serde_json::json!({
+            "kind": "intent_outcome",
+            "intent_id": id,
+            "status": o.status,
+            "intent_text": o.intent_text,
+            "matched_agent": o.matched_agent,
+            "text": o.text,
+            "result_hash_hex": o.result_hash_hex,
+            "updated_ms": o.updated_ms,
+        }))
     }
 
     /// Returns a clone of the shared in-flight stream tracker. Tests
@@ -1534,7 +1623,7 @@ impl Server {
             Request::SubmitIntent {
                 text,
                 prefer_stream: _,
-            } => self.dispatch_intent(text, peer).await,
+            } => self.dispatch_intent(Uuid::new_v4(), text, peer, true).await,
             Request::RecentMemory {
                 tier,
                 limit,
@@ -3248,8 +3337,58 @@ impl Server {
         }
     }
 
-    async fn dispatch_intent(&self, text: String, peer: &AgentId) -> Response {
-        let intent_id = Uuid::new_v4();
+    /// Entry point for intent dispatch. Hermes runs (sandboxed coding builds)
+    /// can take minutes — far past the front door's idle window — so when the
+    /// routed agent is hermes and `allow_async` is set, the slow work is moved
+    /// to a spawned task that records its outcome in `intent_outcomes`; the
+    /// verb returns `status:"running"` immediately and the client polls
+    /// `/intents/:id/result` while the audit step-trail accrues. Every other
+    /// agent (and resume) runs synchronously. Split from `dispatch_intent_run`
+    /// so the spawned task awaits a non-recursive future that resolves `Send`.
+    async fn dispatch_intent(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        peer: &AgentId,
+        allow_async: bool,
+    ) -> Response {
+        if allow_async {
+            let hermes_agent = self
+                .router
+                .route(&text)
+                .and_then(|m| self.router.find_by_id(&m.agent_id))
+                .filter(|c| c.manifest.agent.runtime == covenant_manifest::Runtime::Hermes)
+                .map(|c| c.id.clone());
+            if let Some(agent_id) = hermes_agent {
+                if let Ok(mut store) = self.intent_outcomes.lock() {
+                    store.insert_running(intent_id, &text, Some(agent_id));
+                }
+                let me = self.clone();
+                let peer = peer.clone();
+                tokio::spawn(async move {
+                    let resp = me.dispatch_intent_run(intent_id, text, &peer).await;
+                    if let Ok(mut store) = me.intent_outcomes.lock() {
+                        store.complete(intent_id, &resp);
+                    }
+                });
+                return Response::IntentResult {
+                    intent_id,
+                    status: "running".into(),
+                    text: String::new(),
+                    sources: Vec::new(),
+                    settlement: None,
+                };
+            }
+        }
+        self.dispatch_intent_run(intent_id, text, peer).await
+    }
+
+    async fn dispatch_intent_run(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        peer: &AgentId,
+    ) -> Response {
         // Pre-allocated so the budget debit's `paired_receipt` and the
         // settlement receipt's `id` agree — joining the budget log to
         // the receipt log on this UUID matches 1:1 instead of producing
@@ -3654,7 +3793,7 @@ impl Server {
                         }
                     }
                 }
-                self.dispatch_intent(t, peer).await
+                self.dispatch_intent(Uuid::new_v4(), t, peer, false).await
             }
             None => Response::Error {
                 message: format!(
@@ -4372,7 +4511,7 @@ impl Server {
     where
         W: tokio::io::AsyncWriteExt + Unpin,
     {
-        let response = self.dispatch_intent(text, peer).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -4441,7 +4580,7 @@ impl Server {
         peer: &AgentId,
         connection_id: Uuid,
     ) -> Result<Vec<StreamEnvelope>, Response> {
-        let response = self.dispatch_intent(text, peer).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -6409,6 +6548,24 @@ required = {caps:?}
         AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
     }
 
+    fn hermes_stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {
+        let toml = format!(
+            r#"
+[agent]
+id = "{id}"
+name = "{id}"
+version = "0.0.1"
+runtime = "hermes"
+
+[capabilities]
+required = {caps:?}
+"#,
+            caps = capabilities
+        );
+        let m = Manifest::parse(&toml).unwrap();
+        AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
+    }
+
     fn server_with(cards: Vec<AgentCard>, runner_text: &str) -> Server {
         server_with_ignore(cards, runner_text, IgnoreSet::default())
     }
@@ -6862,6 +7019,66 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn hermes_intent_dispatches_async_and_records_outcome() {
+        let s = server_with(
+            vec![hermes_stub_card("coder", vec!["tool.code"])],
+            "built fizzbuzz.py and ran it",
+        );
+        grant_action(&s, "tool.code").await;
+        grant_action(&s, "memory.write").await;
+
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "create fizzbuzz.py that prints 1 to 100".into(),
+                prefer_stream: None,
+            })
+            .await;
+
+        // A hermes (coding) dispatch returns immediately with status
+        // "running" and an empty body — the build runs in a spawned task.
+        let intent_id = match resp {
+            Response::IntentResult {
+                intent_id,
+                status,
+                text,
+                ..
+            } => {
+                assert_eq!(status, "running", "hermes dispatch must be async; body was {text:?}");
+                assert!(text.is_empty(), "a running result carries no body yet");
+                intent_id
+            }
+            other => panic!("expected running IntentResult, got {other:?}"),
+        };
+
+        // The spawned run finishes and records its outcome; poll for it.
+        let mut done = None;
+        for _ in 0..300 {
+            match s.intent_outcome(&intent_id) {
+                Some(v) if v["status"] != "running" => {
+                    done = Some(v);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        let outcome = done.expect("async outcome never left running");
+        assert_eq!(outcome["status"], "ok");
+        assert_eq!(outcome["text"], "built fizzbuzz.py and ran it");
+        assert_eq!(outcome["matched_agent"], "coder");
+
+        // The same intent_id lands in the audit chain, so the task page can
+        // correlate the step trail back to the submitted intent.
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::IntentDispatched { intent_id: i, .. } if *i == intent_id
+            )),
+            "async run must still write an IntentDispatched row for the intent",
+        );
     }
 
     #[tokio::test]

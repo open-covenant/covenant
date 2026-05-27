@@ -24,7 +24,7 @@
 use crate::{sse, Server};
 use axum::{
     body::Body,
-    extract::{Extension, Query, Request as AxumRequest, State},
+    extract::{Extension, Path, Query, Request as AxumRequest, State},
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE},
         HeaderMap, HeaderValue, Method, StatusCode,
@@ -150,6 +150,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/list", get(peers_list))
         .route("/peers/revoke", post(peers_revoke))
         .route("/intents/resume", post(intents_resume))
+        .route("/intents/:id/result", get(intent_result))
         .route("/budget/debits", get(budget_debits))
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
@@ -919,6 +920,21 @@ async fn intents_resume(
             )
             .await,
     ))
+}
+
+async fn intent_result(
+    State(s): State<HttpState>,
+    Extension(_peer): Extension<AgentId>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<AxumResponse, ApiError> {
+    match s.server.intent_outcome(&id) {
+        Some(v) => Ok(Json(v).into_response()),
+        None => Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "kind": "error", "message": "unknown intent" })),
+        )
+            .into_response()),
+    }
 }
 
 async fn budget_debits(

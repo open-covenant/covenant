@@ -1,0 +1,15 @@
+{
+  "name": "@covenant/coding-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hermes /v1-compatible gateway that runs a pluggable coding agent inside an ephemeral sandbox and streams tool/file events back to covenantd.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

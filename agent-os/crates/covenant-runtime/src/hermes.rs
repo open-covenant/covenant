@@ -214,6 +214,7 @@ impl Runner for HermesRunner {
             self.event_tx.clone(),
             intent.id,
             intent.issuer.clone(),
+            budget,
         );
 
         let outcome = self.poll_until_terminal(&run_id, deadline, budget).await;
@@ -307,12 +308,17 @@ impl HermesRunner {
         event_tx: Option<crate::RuntimeEventSink>,
         intent_id: uuid::Uuid,
         issuer: covenant_types::AgentId,
+        stream_timeout: Duration,
     ) -> JoinHandle<()> {
         let url = format!("{}/runs/{}/events", self.base_url, run_id);
         let api_key = self.api_key.clone();
         let http = self.http.clone();
         tokio::spawn(async move {
-            let mut req = http.get(&url);
+            // The shared client carries a 30s request timeout for submit/poll;
+            // the SSE stream is long-lived (a whole run), so override it with
+            // the run budget — otherwise the stream is cut at 30s and every
+            // tool trace that lands later is lost.
+            let mut req = http.get(&url).timeout(stream_timeout);
             if let Some(key) = &api_key {
                 req = req.bearer_auth(key);
             }

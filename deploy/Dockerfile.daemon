@@ -3,7 +3,7 @@
 ## Final image runs covenantd as a private HTTP gateway. The companion
 ## covenant-demo-web service proxies browser traffic to it.
 
-FROM rust:1.86-slim-bookworm AS builder
+FROM rust:1.90-slim-bookworm AS builder
 ENV CARGO_TERM_COLOR=always
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

@@ -1,4 +1,4 @@
-import { Sandbox } from "e2b";
+import { Sandbox, ALL_TRAFFIC, type SandboxOpts } from "e2b";
 import type {
   Sandbox as ISandbox,
   SandboxProvider,
@@ -72,7 +72,18 @@ export class E2bSandboxProvider implements SandboxProvider {
     // cache → reliable, fast heavy installs) when E2B_TEMPLATE is set; fall
     // back to the default base sandbox otherwise.
     const template = process.env.E2B_TEMPLATE?.trim();
-    const opts = { apiKey: this.apiKey, timeoutMs: spec.wallMs };
+    const opts: SandboxOpts = { apiKey: this.apiKey, timeoutMs: spec.wallMs };
+    // Egress allowlist for untrusted public code: when E2B_EGRESS_ALLOW is set
+    // (comma-separated domains/CIDRs), deny all outbound except those hosts so a
+    // run can't be used to attack or spam arbitrary hosts. Unset = open (dev).
+    // Domain matching is HTTP:80 / TLS:443 only — package registries are HTTPS,
+    // so it covers npm/pip/git without breaking installs (verify before trusting).
+    const allow = process.env.E2B_EGRESS_ALLOW?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (allow && allow.length > 0) {
+      opts.network = { denyOut: [ALL_TRAFFIC], allowOut: allow };
+    }
     const sbx = template
       ? await Sandbox.create(template, opts)
       : await Sandbox.create(opts);

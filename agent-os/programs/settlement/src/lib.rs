@@ -27,6 +27,7 @@ pub mod settlement {
         config.credits_per_covnt = args.credits_per_covnt;
         config.paused = false;
         config.bump = ctx.bumps.config;
+        config.min_stake_lock = args.min_stake_lock;
 
         emit!(ProtocolInitialized {
             authority: config.authority,
@@ -138,6 +139,13 @@ pub mod settlement {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(amount > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+
+        let min_lock = ctx.accounts.config.min_stake_lock;
+        if min_lock > 0 {
+            let now = Clock::get()?.unix_timestamp.max(0) as u64;
+            let min_unlock = now.checked_add(min_lock).ok_or(CovenantError::Overflow)?;
+            require!(lock_until >= min_unlock, CovenantError::LockTooShort);
+        }
 
         token::transfer(ctx.accounts.stake_transfer_ctx(), amount)?;
 
@@ -453,6 +461,65 @@ pub mod settlement {
             previous,
             credits_per_covnt,
         });
+        Ok(())
+    }
+
+    pub fn set_min_stake_lock(ctx: Context<UpdateConfig>, min_stake_lock: u64) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let previous = config.min_stake_lock;
+        config.min_stake_lock = min_stake_lock;
+        emit!(MinStakeLockUpdated {
+            previous,
+            min_stake_lock,
+        });
+        Ok(())
+    }
+
+    /// One-time migration of a legacy `Config` (predates `min_stake_lock`) to
+    /// the current layout: grows the account by 8 bytes and writes the field.
+    /// Uses a raw account because the on-chain bytes cannot deserialize into
+    /// the new struct until the realloc completes. Authority is checked by
+    /// reading the on-chain `authority` field directly. Idempotent: re-running
+    /// on a current-layout config just rewrites the value.
+    pub fn migrate_config(ctx: Context<MigrateConfig>, min_stake_lock: u64) -> Result<()> {
+        let info = ctx.accounts.config.to_account_info();
+        {
+            let data = info.try_borrow_data()?;
+            require!(data.len() >= 40, CovenantError::Unauthorized);
+            let onchain_authority = Pubkey::try_from(&data[8..40])
+                .map_err(|_| error!(CovenantError::Unauthorized))?;
+            require_keys_eq!(
+                onchain_authority,
+                ctx.accounts.authority.key(),
+                CovenantError::Unauthorized
+            );
+        }
+
+        let new_len = 8 + Config::INIT_SPACE;
+        if info.data_len() < new_len {
+            let deficit = Rent::get()?
+                .minimum_balance(new_len)
+                .saturating_sub(info.lamports());
+            if deficit > 0 {
+                anchor_lang::system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        anchor_lang::system_program::Transfer {
+                            from: ctx.accounts.authority.to_account_info(),
+                            to: info.clone(),
+                        },
+                    ),
+                    deficit,
+                )?;
+            }
+            info.realloc(new_len, false)?;
+        }
+
+        let mut data = info.try_borrow_mut_data()?;
+        let off = new_len - 8;
+        data[off..new_len].copy_from_slice(&min_stake_lock.to_le_bytes());
+
+        emit!(ConfigMigrated { min_stake_lock });
         Ok(())
     }
 }
@@ -983,10 +1050,22 @@ pub struct UpdateTreasury<'info> {
     pub treasury: Account<'info, TokenAccount>,
 }
 
+#[derive(Accounts)]
+pub struct MigrateConfig<'info> {
+    /// CHECK: config PDA validated by seeds; deserialized manually because the
+    /// legacy on-chain bytes do not fit the current `Config` layout.
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
     pub slash_authority: Pubkey,
     pub credits_per_covnt: u64,
+    pub min_stake_lock: u64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1027,6 +1106,10 @@ pub struct Config {
     pub credits_per_covnt: u64,
     pub paused: bool,
     pub bump: u8,
+    /// Minimum seconds a stake must remain locked past the staking instant.
+    /// `0` disables the floor (a staker may pick any `lock_until`). Appended
+    /// last so legacy 146-byte configs migrate by realloc (see `migrate_config`).
+    pub min_stake_lock: u64,
 }
 
 #[account]
@@ -1237,6 +1320,17 @@ pub struct CreditsRateUpdated {
     pub credits_per_covnt: u64,
 }
 
+#[event]
+pub struct MinStakeLockUpdated {
+    pub previous: u64,
+    pub min_stake_lock: u64,
+}
+
+#[event]
+pub struct ConfigMigrated {
+    pub min_stake_lock: u64,
+}
+
 #[error_code]
 pub enum CovenantError {
     #[msg("amount must be greater than zero")]
@@ -1269,4 +1363,6 @@ pub enum CovenantError {
     StakeLocked,
     #[msg("stake position is still active; unstake before closing")]
     StakeStillActive,
+    #[msg("lock_until is shorter than the protocol minimum stake lock")]
+    LockTooShort,
 }

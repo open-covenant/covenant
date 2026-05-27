@@ -18,8 +18,8 @@ use solana_sdk::{
 };
 
 use covenant_settlement_program::{
-    instruction as ix, AnchorReceiptBatchArgs, CreateTaskArgs, CreditAccount, InitializeArgs,
-    RegisterAgentArgs, StakePosition, Task, ID,
+    instruction as ix, AnchorReceiptBatchArgs, Config, CreateTaskArgs, CreditAccount,
+    InitializeArgs, RegisterAgentArgs, StakePosition, Task, ID,
 };
 use solana_sdk::clock::Clock;
 
@@ -74,6 +74,7 @@ pub fn boot() -> Env {
         args: InitializeArgs {
             slash_authority: slash_authority.pubkey(),
             credits_per_covnt: 10,
+            min_stake_lock: 0,
         },
     }
     .data();
@@ -456,6 +457,7 @@ pub const E_TASK_EXPIRED: u32 = 6011;
 pub const E_TASK_NOT_EXPIRED: u32 = 6012;
 pub const E_STAKE_LOCKED: u32 = 6013;
 pub const E_STAKE_STILL_ACTIVE: u32 = 6014;
+pub const E_LOCK_TOO_SHORT: u32 = 6015;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
@@ -795,11 +797,66 @@ pub fn update_treasury(env: &mut Env, new_treasury: &Pubkey) -> Result<(), Trans
     send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
 }
 
-pub fn config_account(env: &Env) -> covenant_settlement_program::Config {
+pub fn config_account(env: &Env) -> Config {
     let acc = env.svm.get_account(&env.config).expect("config exists");
     let mut data = acc.data();
-    use anchor_lang::AccountDeserialize;
-    covenant_settlement_program::Config::try_deserialize(&mut data).expect("config")
+    Config::try_deserialize(&mut data).expect("config")
+}
+
+pub fn set_min_stake_lock(env: &mut Env, value: u64) -> Result<(), TransactionError> {
+    let authority = env.payer.pubkey();
+    let data = ix::SetMinStakeLock { min_stake_lock: value }.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new_readonly(authority, true),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+}
+
+pub fn migrate_config(env: &mut Env, value: u64) -> Result<(), TransactionError> {
+    let authority = env.payer.pubkey();
+    let data = ix::MigrateConfig { min_stake_lock: value }.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new(authority, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+}
+
+/// Overwrite the config PDA with the legacy 146-byte layout (no min_stake_lock)
+/// to model a pre-migration account. Built by serializing the current Config
+/// and dropping the trailing 8 bytes.
+pub fn plant_legacy_config(env: &mut Env) {
+    let (config, bump) = Pubkey::find_program_address(&[b"config"], &ID);
+    let cfg = Config {
+        authority: env.payer.pubkey(),
+        slash_authority: env.slash_authority.pubkey(),
+        covnt_mint: env.mint,
+        treasury: env.treasury,
+        credits_per_covnt: 10,
+        paused: false,
+        bump,
+        min_stake_lock: 0,
+    };
+    let mut full = Vec::new();
+    cfg.try_serialize(&mut full).unwrap();
+    let legacy = full[..full.len() - 8].to_vec();
+    let lamports = env.svm.minimum_balance_for_rent_exemption(legacy.len());
+    env.svm
+        .set_account(
+            config,
+            Account {
+                lamports,
+                data: legacy,
+                owner: ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
 }
 
 pub fn set_credits_per_covnt(env: &mut Env, value: u64) -> Result<(), TransactionError> {

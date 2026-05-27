@@ -153,6 +153,36 @@ fn update_authority_transfers_control() {
 }
 
 #[test]
+fn min_stake_lock_enforced_on_stake() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    set_min_stake_lock(&mut env, 3_600).expect("set min lock");
+    assert_eq!(config_account(&env).min_stake_lock, 3_600);
+
+    // litesvm clock starts at 0, so lock_until must be >= 0 + 3600.
+    let err = try_stake(&mut env, &AGENT, 500, 0).expect_err("lock_until below the floor");
+    assert_eq!(custom_error(&err), Some(E_LOCK_TOO_SHORT));
+
+    try_stake(&mut env, &AGENT, 500, 3_600).expect("lock_until at the floor is accepted");
+    assert_eq!(agent_stake(&env, &AGENT), 500);
+}
+
+// Migration: a legacy 146-byte config grows to the current layout and gains
+// min_stake_lock without losing existing fields.
+#[test]
+fn migrate_config_upgrades_legacy_layout() {
+    let mut env = boot();
+    plant_legacy_config(&mut env);
+    migrate_config(&mut env, 7_200).expect("migrate legacy config");
+
+    let cfg = config_account(&env); // only deserializes if the realloc succeeded
+    assert_eq!(cfg.min_stake_lock, 7_200);
+    assert_eq!(cfg.credits_per_covnt, 10); // preserved
+    assert_eq!(cfg.authority, env.payer.pubkey()); // preserved
+    assert!(!cfg.paused);
+}
+
+#[test]
 fn update_slash_authority_and_treasury() {
     let mut env = boot();
     let new_slash = Keypair::new();

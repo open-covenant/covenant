@@ -46,7 +46,7 @@ services:
       - key: E2B_API_KEY
         sync: false  # coding gateway ephemeral sandbox provider; set value in dashboard
       - key: HERMES_API_BASE_URL
-        value: http://covenant-coding-gateway:8642/v1  # delegates the coder agent to the gateway; entrypoint seeds it when set
+        value: http://covenant-coding-gateway:10000/v1  # gateway binds Render's $PORT=10000; delegates + seeds the coder agent
       - fromGroup: covenant-sandbox-shared
 
   - type: web
@@ -120,8 +120,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
-      - key: PORT
-        value: "8642"
+      # No PORT override — the service binds Render's $PORT (10000) and is
+      # reachable internally at covenant-coding-gateway:10000.
       - key: CODER_MODEL
         value: claude-sonnet-4-6  # public default; Opus is the gated tier
       - key: CODER_DAILY_USD

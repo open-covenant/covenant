@@ -217,7 +217,7 @@ export default function OverviewPage() {
         title="Overview"
         subhead={
           DEMO_MODE
-            ? "Send tasks to your agents, manage their permissions, and check that the activity log is intact. This is a shared public sandbox — state is visible to everyone and resets periodically."
+            ? "Describe an app or script and watch the agent write, run, and verify it in a live sandbox — every step signed and audited. Shared public sandbox; state is visible to everyone and resets periodically."
             : "Send tasks to your agents, manage their permissions, and check that the activity log is intact. Everything happens on this machine."
         }
         syncMs={lastSyncMs}
@@ -231,14 +231,6 @@ export default function OverviewPage() {
 
       {verifyMsg && (
         <pre className={`result compact ${verifyOk ? "" : "error"}`}>{verifyMsg}</pre>
-      )}
-
-      {DEMO_MODE && (
-        <p className="sandbox-intro">
-          Describe something to build — a game, a script, a small web app — and watch the
-          agent write, run, and verify real code in a live sandbox. Every step is signed and
-          audited.
-        </p>
       )}
 
       <section className="dispatch-card">

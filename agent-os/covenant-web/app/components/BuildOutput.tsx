@@ -3,6 +3,20 @@
 import { useState } from "react";
 import type { BuildFile } from "@/lib/api";
 
+// The preview iframe is sandboxed WITHOUT allow-same-origin (so untrusted code
+// can't reach this origin/cookies/storage). That gives it a null origin, where
+// localStorage/sessionStorage throw on access — and many apps read them on load
+// and crash to a blank page. Inject an in-memory shim before the app's scripts
+// so storage-using apps render; persistence is just per-view (fine for a preview).
+const STORAGE_SHIM =
+  "<script>(function(){function m(){var s={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(s,k)?s[k]:null},setItem:function(k,v){s[k]=String(v)},removeItem:function(k){delete s[k]},clear:function(){s={}},key:function(i){return Object.keys(s)[i]||null},get length(){return Object.keys(s).length}}}['localStorage','sessionStorage'].forEach(function(n){try{window[n].getItem('__p')}catch(e){try{Object.defineProperty(window,n,{value:m(),configurable:true})}catch(_){}}})})();</script>";
+
+function withStorageShim(html: string): string {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + STORAGE_SHIM);
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => m + STORAGE_SHIM);
+  return STORAGE_SHIM + html;
+}
+
 // Renders what a run built: a file tree + the selected file's contents, plus a
 // live Preview for static HTML (sandboxed iframe — untrusted code can run
 // scripts but can't reach this origin, cookies, or storage).
@@ -44,7 +58,7 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           // Untrusted output: allow scripts (the app needs them) but NOT
           // same-origin, so it can't touch this page, cookies, or storage.
           sandbox="allow-scripts allow-pointer-lock"
-          srcDoc={html.content}
+          srcDoc={withStorageShim(html.content)}
           title="build preview"
         />
       ) : (

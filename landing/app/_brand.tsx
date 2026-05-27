@@ -12,6 +12,7 @@ export const NAV_LINKS = [
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
+  { label: "contact", href: "/contact", external: false as const },
 ];
 
 export function XIcon({ className }: { className?: string }) {

@@ -127,7 +127,11 @@ export function eventIntentId(event: AuditEvent): string | null {
     kind.type === "intent_dispatched" ||
     kind.type === "intent_ignored" ||
     kind.type === "budget_exhausted" ||
-    kind.type === "budget_unseeded"
+    kind.type === "budget_unseeded" ||
+    kind.type === "hermes_tool_invoked" ||
+    kind.type === "hermes_tool_completed" ||
+    kind.type === "hermes_approval_requested" ||
+    kind.type === "hermes_approval_resolved"
   ) {
     return kind.intent_id;
   }
@@ -149,17 +153,20 @@ export function isReviewEvent(event: AuditEvent): boolean {
 }
 
 export function eventsForIntent(events: AuditEvent[], intentId: string): AuditEvent[] {
-  // capability_check events don't carry intent_id directly; correlate by
-  // walking backwards from the intent_dispatched event, collecting events
-  // from the same issuer within a small window that aren't another
-  // dispatched intent.
+  // Rows that carry the intent_id directly: dispatch, the hermes step trail
+  // (tool invoked/completed/approval), budget, ignore. These are the bulk of
+  // the timeline and stream in live during an async run — before the
+  // intent_dispatched row exists.
   const sorted = events.slice().sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+  const direct = sorted.filter((e) => eventIntentId(e) === intentId);
   const dispatchIdx = sorted.findIndex(
     (e) => e.kind.type === "intent_dispatched" && e.kind.intent_id === intentId,
   );
-  if (dispatchIdx === -1) {
-    return sorted.filter((e) => eventIntentId(e) === intentId);
-  }
+  // Run still in flight (no dispatch row yet): show whatever steps have landed.
+  if (dispatchIdx === -1) return direct;
+
+  // capability_check rows don't carry intent_id; correlate them by walking
+  // back from the dispatch row within a small same-issuer window.
   const dispatch = sorted[dispatchIdx];
   const sameIssuer = dispatch.issuer.pubkey;
   const WINDOW_MS = 5000;
@@ -169,15 +176,13 @@ export function eventsForIntent(events: AuditEvent[], intentId: string): AuditEv
     if (dispatch.timestamp_ms - event.timestamp_ms > WINDOW_MS) break;
     if (event.issuer.pubkey !== sameIssuer) continue;
     if (event.kind.type === "intent_dispatched") break;
-    if (
-      event.kind.type === "capability_check" ||
-      event.kind.type === "budget_exhausted" ||
-      event.kind.type === "budget_unseeded"
-    ) {
-      before.unshift(event);
-    }
+    if (event.kind.type === "capability_check") before.unshift(event);
   }
-  return [...before, dispatch];
+
+  const seen = new Set<string>();
+  return [...before, ...direct]
+    .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+    .sort((a, b) => a.timestamp_ms - b.timestamp_ms);
 }
 
 export function time(ms: number): string {

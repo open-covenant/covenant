@@ -103,13 +103,34 @@ export default function OverviewPage() {
   }, []);
 
   // Poll a running coding build until it lands, then drop the reply inline.
+  // Bounded: past the sandbox wall (10 min) + buffer the run is gone or stuck,
+  // so we stop and say so rather than spin "building…" forever. A null result
+  // (daemon forgot the run, e.g. after a restart) also ends after a grace.
   useEffect(() => {
     if (!awaiting || !lastIntentId) return;
     let cancelled = false;
+    const startedAt = Date.now();
+    const MAX_MS = 12 * 60 * 1000;
+    let missing = 0;
     const tick = async () => {
+      if (Date.now() - startedAt > MAX_MS) {
+        setLastError("This run didn't finish in time — it may have been interrupted. Try again.");
+        setAwaiting(false);
+        return;
+      }
       try {
         const o = await api.intentResult(lastIntentId);
-        if (cancelled || !o || o.status === "running") return;
+        if (cancelled) return;
+        if (!o) {
+          // 404: unknown to the daemon. Transient at first; after a grace it's lost.
+          if (++missing >= 8) {
+            setLastError("This run was interrupted (the sandbox reset). Try again.");
+            setAwaiting(false);
+          }
+          return;
+        }
+        missing = 0;
+        if (o.status === "running") return;
         if (o.status === "error" || o.status === "ignored") {
           setLastError(o.text || "the run did not complete");
         } else {

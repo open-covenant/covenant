@@ -13,24 +13,26 @@ import { Markdown } from "./components/Markdown";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
-// Sample prompts shown as chips beneath the dispatch box in demo mode.
-// The first entry is the default "Try a sample task" target; the env var
-// override is kept for ops who want to swap it without a code change.
+// One-click coding demos shown as chips beneath the dispatch box. These
+// showcase what the sandbox actually does — write and run real code — and are
+// ordered quick → ambitious. The first entry's env var override lets ops swap
+// the headline demo without a code change.
 const DEMO_SAMPLES: { label: string; intent: string }[] = [
   {
-    label: "Say hi",
+    label: "Snake game",
     intent:
       process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() ||
-      "Say hi and tell me what you can do.",
+      "Build a classic Snake game as a single self-contained index.html — HTML canvas, arrow-key controls, a score, and a game-over screen.",
   },
   {
-    label: "What is Covenant?",
-    intent: "Hi — explain Covenant in one short paragraph.",
-  },
-  {
-    label: "What just happened?",
+    label: "3D Rubik's cube",
     intent:
-      "Hi — walk me through what just happened when I sent this: capability check, dispatch, signing, audit log.",
+      "Build a Next.js app with an interactive 3D Rubik's cube using three.js — drag to rotate, with scramble and solve buttons.",
+  },
+  {
+    label: "Python: sudoku solver",
+    intent:
+      "Write a Python sudoku solver with a couple of example puzzles, and run it to print the solved grids.",
   },
 ];
 
@@ -233,8 +235,9 @@ export default function OverviewPage() {
 
       {DEMO_MODE && (
         <p className="sandbox-intro">
-          This is a live Covenant daemon. Dispatch a task below and watch it get signed,
-          audited, and stored — everything runs in a safe sandbox.
+          Describe something to build — a game, a script, a small web app — and watch the
+          agent write, run, and verify real code in a live sandbox. Every step is signed and
+          audited.
         </p>
       )}
 
@@ -247,7 +250,7 @@ export default function OverviewPage() {
           <textarea
             value={intent}
             onChange={(e) => setIntent(e.target.value)}
-            placeholder="What should your agents do?"
+            placeholder="Describe something to build — a game, a script, a small web app…"
             rows={2}
           />
           {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
@@ -299,7 +302,7 @@ export default function OverviewPage() {
               {(dispatching || awaiting) && !lastResult && !lastError ? (
                 <span className="reply-pending">
                   {awaiting
-                    ? "building in the sandbox — this can take a minute…"
+                    ? "writing and running code in the sandbox — this can take a minute or two…"
                     : "waiting for the agent…"}
                 </span>
               ) : lastError ? (

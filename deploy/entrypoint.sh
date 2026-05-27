@@ -30,6 +30,19 @@ if [[ ! -d "$COVENANT_HOME/agents/demo" ]]; then
   echo "entrypoint: seeded demo-agent"
 fi
 
+# The coder agent uses runtime=hermes and is only useful once a coding gateway
+# is configured. Without HERMES_API_BASE_URL it would route coding intents to a
+# HermesUnconfigured error, so seed it (and grant tool.code) only when the
+# gateway URL is set — it stays dormant until the gateway is wired.
+CODER_CAP=""
+if [[ -n "${HERMES_API_BASE_URL:-}" ]]; then
+  if [[ ! -d "$COVENANT_HOME/agents/coder" ]]; then
+    cp -R /opt/covenant/coder-agent "$COVENANT_HOME/agents/coder"
+    echo "entrypoint: seeded coder-agent (HERMES_API_BASE_URL set)"
+  fi
+  CODER_CAP="tool.code"
+fi
+
 echo "entrypoint: starting covenantd on $HTTP_HOST:$HTTP_PORT"
 covenantd &
 DAEMON_PID=$!
@@ -45,7 +58,7 @@ done
 
 # Idempotent capability seeding via the operator CLI (which reads the same
 # operator.token we just wrote). Failures are non-fatal — the daemon stays up.
-for action in memory.write intent.subscribe memory.read; do
+for action in memory.write intent.subscribe memory.read $CODER_CAP; do
   if covenant capabilities grant "$action" >/dev/null 2>&1; then
     echo "entrypoint: granted $action"
   else

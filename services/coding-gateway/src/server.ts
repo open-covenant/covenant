@@ -30,9 +30,48 @@ const provider: SandboxProvider = process.env.E2B_API_KEY
 const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
 const WALL_MS = Number(process.env.CODER_WALL_MS ?? 600_000);
 
+// Serialize a GatewayEvent as the SSE frame covenantd's HermesRunner parses:
+// it keys on `event` + `run_id` (not `type`) and reads `duration` in seconds
+// for tool.completed. message/reasoning/file/run.* carry the same shape for the
+// live UI (coder-08/09); the daemon ignores them for audit.
+function sseFrame(e: GatewayEvent, runId: string): string {
+  const r = runId;
+  let w: Record<string, unknown>;
+  switch (e.type) {
+    case "tool.started":
+      w = { event: "tool.started", run_id: r, tool: e.tool, preview: e.preview ?? "" };
+      break;
+    case "tool.completed":
+      w = { event: "tool.completed", run_id: r, tool: e.tool, duration: e.duration_s ?? 0, error: e.error ?? false };
+      break;
+    case "approval.request":
+      w = { event: "approval.request", run_id: r, choices: e.choices };
+      break;
+    case "file.written":
+      w = { event: "file.written", run_id: r, path: e.path, bytes: e.bytes };
+      break;
+    case "message.delta":
+      w = { event: "message.delta", run_id: r, text: e.text };
+      break;
+    case "reasoning.available":
+      w = { event: "reasoning.available", run_id: r, text: e.text };
+      break;
+    case "run.completed":
+      w = { event: "run.completed", run_id: r, output: e.output };
+      break;
+    case "run.failed":
+      w = { event: "run.failed", run_id: r, error: e.error };
+      break;
+    default:
+      w = { event: "unknown", run_id: r };
+      break;
+  }
+  return `data: ${JSON.stringify(w)}\n\n`;
+}
+
 function publish(run: Run, e: GatewayEvent): void {
   run.events.push(e);
-  const frame = `data: ${JSON.stringify(e)}\n\n`;
+  const frame = sseFrame(e, run.id);
   for (const res of run.subscribers) res.write(frame);
 }
 
@@ -101,7 +140,7 @@ function streamEvents(run: Run, req: IncomingMessage, res: ServerResponse): void
     connection: "keep-alive",
     "x-accel-buffering": "no",
   });
-  for (const e of run.events) res.write(`data: ${JSON.stringify(e)}\n\n`);
+  for (const e of run.events) res.write(sseFrame(e, run.id));
   if (run.status !== "running") {
     res.end();
     return;

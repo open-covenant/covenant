@@ -178,13 +178,18 @@ function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessagePar
   if (messages.length === 0) return messages;
   const out = messages.slice();
   const last = out[out.length - 1]!;
-  const content =
-    typeof last.content === "string"
-      ? [{ type: "text", text: last.content } as Anthropic.TextBlockParam]
-      : last.content.slice();
+  const content: Anthropic.ContentBlockParam[] =
+    typeof last.content === "string" ? [{ type: "text", text: last.content }] : last.content.slice();
   const lastBlock = content[content.length - 1];
   if (lastBlock) {
-    (lastBlock as { cache_control?: { type: "ephemeral" } }).cache_control = { type: "ephemeral" };
+    // Clone the block rather than mutating the shared reference — otherwise the
+    // breakpoint persists on every prior turn's block and they accumulate past
+    // the 4-cache_control limit. This moves the single breakpoint to the latest
+    // turn (system carries the other one).
+    content[content.length - 1] = {
+      ...lastBlock,
+      cache_control: { type: "ephemeral" },
+    } as Anthropic.ContentBlockParam;
   }
   out[out.length - 1] = { ...last, content };
   return out;

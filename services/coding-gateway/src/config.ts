@@ -7,7 +7,12 @@ export const config = {
   // so the $200/mo budget survives public traffic. Set CODER_MODEL to
   // claude-opus-4-7 for a gated top-quality tier.
   model,
-  effort: process.env.CODER_EFFORT ?? (model.includes("opus") ? "xhigh" : "high"),
+  effort: (process.env.CODER_EFFORT ?? (model.includes("opus") ? "xhigh" : "high")) as
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max",
 
   // Spend caps (USD). Daily is a rate limit on the monthly bucket; both hard.
   dailyUsd: Number(process.env.CODER_DAILY_USD ?? 6),

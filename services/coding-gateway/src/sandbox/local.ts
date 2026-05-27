@@ -22,7 +22,7 @@ class LocalSandbox implements Sandbox {
     return abs;
   }
 
-  readFile(p: string): Promise<string> {
+  async readFile(p: string): Promise<string> {
     return readFile(this.safe(p), "utf8");
   }
 

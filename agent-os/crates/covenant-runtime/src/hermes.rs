@@ -41,6 +41,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// runner forever. Independent from the per-intent wall-clock budget.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How many *consecutive* poll failures the run loop tolerates before
+/// giving up. A long run shouldn't die because the gateway hiccuped once
+/// mid-poll — only a terminal status, the wall-clock budget, or a
+/// sustained outage ends it.
+const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 5;
+
+/// Upper bound on the linear backoff between failed polls.
+const MAX_POLL_BACKOFF: Duration = Duration::from_secs(2);
+
 /// Driver for a Hermes gateway. One instance is shared across dispatches
 /// — the underlying `reqwest::Client` pools connections.
 pub struct HermesRunner {
@@ -255,7 +264,10 @@ impl Runner for HermesRunner {
                 runtime_events,
                 files,
             }),
-            Ok(RunOutcome::Failed { message }) => Err(RunnerError::Remote { status: 0, message }),
+            // Agent outcomes — distinct from transport faults so the daemon
+            // can tell "the run failed" from "the gateway broke".
+            Ok(RunOutcome::Failed { message }) => Err(RunnerError::RunFailed { message }),
+            Ok(RunOutcome::Cancelled) => Err(RunnerError::RunCancelled),
             Err(e) => Err(e),
         }
     }
@@ -264,6 +276,7 @@ impl Runner for HermesRunner {
 enum RunOutcome {
     Completed { output: String },
     Failed { message: String },
+    Cancelled,
 }
 
 impl HermesRunner {
@@ -297,13 +310,35 @@ impl HermesRunner {
         deadline: Instant,
         budget: Duration,
     ) -> Result<RunOutcome, RunnerError> {
+        let mut consecutive_failures: u32 = 0;
         loop {
             if Instant::now() >= deadline {
                 warn!(%run_id, ?budget, "hermes run timed out — stopping");
                 self.cancel(run_id).await;
                 return Err(RunnerError::Timeout(budget));
             }
-            let status = self.poll(run_id).await?;
+            let status = match self.poll(run_id).await {
+                Ok(status) => {
+                    consecutive_failures = 0;
+                    status
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures > MAX_CONSECUTIVE_POLL_FAILURES {
+                        warn!(%run_id, failures = consecutive_failures, error = %e, "hermes poll failed repeatedly — giving up");
+                        return Err(e);
+                    }
+                    // A single blip shouldn't kill a long run. Back off
+                    // linearly (capped) and retry; the deadline still bounds
+                    // the whole loop.
+                    let backoff = POLL_INTERVAL
+                        .saturating_mul(consecutive_failures)
+                        .min(MAX_POLL_BACKOFF);
+                    warn!(%run_id, failures = consecutive_failures, error = %e, ?backoff, "hermes poll failed — retrying");
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+            };
             match status.status.as_str() {
                 "completed" => {
                     return Ok(RunOutcome::Completed {
@@ -318,9 +353,7 @@ impl HermesRunner {
                     });
                 }
                 "cancelled" => {
-                    return Ok(RunOutcome::Failed {
-                        message: "hermes run cancelled".to_string(),
-                    });
+                    return Ok(RunOutcome::Cancelled);
                 }
                 // "queued" | "running" | "waiting_for_approval" | "stopping" → keep polling
                 _ => {
@@ -1553,5 +1586,276 @@ mod tests {
              refactor that switched to a structured feature schema \
              without updating this helper would surface here",
         );
+    }
+}
+
+#[cfg(test)]
+mod behavioral {
+    //! HTTP-level behavior of the run loop against a wiremock gateway:
+    //! submit failure, poll-loop resilience, timeout→cancel, terminal
+    //! mapping, malformed bodies, and best-effort file capture. The
+    //! parsing pins above cover bytes; these cover the loop.
+    use super::*;
+    use covenant_manifest::Manifest;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    fn hermes_card(budget_ms: u64) -> AgentCard {
+        let toml = format!(
+            r#"
+[agent]
+id = "hermes-agent"
+name = "Hermes"
+version = "0.0.1"
+runtime = "hermes"
+entry = "./noop"
+
+[resources]
+cpu_ms_per_task = {budget_ms}
+network = "off"
+"#
+        );
+        let manifest = Manifest::parse(&toml).expect("hermes manifest parses");
+        AgentCard::from_manifest_and_dir(manifest, std::path::PathBuf::from("."))
+    }
+
+    fn intent() -> Intent {
+        Intent {
+            id: uuid::Uuid::nil(),
+            text: "build a thing".into(),
+            issuer: covenant_types::AgentId::new("user@local", [0u8; 32]),
+            issued_at: 0,
+            priority: covenant_types::Priority::Normal,
+            parent: None,
+        }
+    }
+
+    fn runner(server: &MockServer) -> HermesRunner {
+        HermesRunner::new(server.uri(), None).expect("runner builds")
+    }
+
+    async fn mount_submit(server: &MockServer, run_id: &str) {
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "run_id": run_id })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    fn completed(output: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({ "status": "completed", "output": output }))
+    }
+
+    /// Fails the first `fail_times` polls with 503, then completes — a
+    /// deterministic transient blip independent of wiremock mock ordering.
+    struct FlakyThenComplete {
+        fail_times: usize,
+        calls: AtomicUsize,
+        output: String,
+    }
+    impl Respond for FlakyThenComplete {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_times {
+                ResponseTemplate::new(503)
+            } else {
+                completed(&self.output)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_non_success_maps_to_remote() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream down"))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(5_000), &intent())
+            .await
+            .expect_err("submit 503 must fail");
+        match err {
+            RunnerError::Remote { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected Remote, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_submit_body_maps_to_malformed_stdout() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/runs"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(5_000), &intent())
+            .await
+            .expect_err("malformed submit must fail");
+        assert!(matches!(err, RunnerError::MalformedStdout { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn poll_tolerates_transient_failures_then_completes() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(FlakyThenComplete {
+                fail_times: 2,
+                calls: AtomicUsize::new(0),
+                output: "all done".into(),
+            })
+            .mount(&server)
+            .await;
+
+        let result = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect("transient blips must not kill the run");
+        assert_eq!(result.text, "all done");
+    }
+
+    #[tokio::test]
+    async fn poll_gives_up_after_max_consecutive_failures() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect_err("a sustained outage must eventually fail");
+        match err {
+            RunnerError::Remote { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected Remote after max retries, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_cancels_the_run() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "status": "running" })),
+            )
+            .mount(&server)
+            .await;
+        // Drop-time verification asserts the stop was issued on timeout.
+        Mock::given(method("POST"))
+            .and(path("/runs/r1/stop"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1..)
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(300), &intent())
+            .await
+            .expect_err("budget overrun must time out");
+        assert!(matches!(err, RunnerError::Timeout(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn failed_status_maps_to_run_failed() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "status": "failed", "error": "compiler exploded" }),
+            ))
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect_err("failed run is an error");
+        match err {
+            RunnerError::RunFailed { message } => assert_eq!(message, "compiler exploded"),
+            other => panic!("expected RunFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_status_maps_to_run_cancelled() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "status": "cancelled" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect_err("cancelled run is an error");
+        assert!(matches!(err, RunnerError::RunCancelled), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn files_are_captured_on_success() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(completed("ok"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{ "path": "main.rs", "content": "fn main() {}", "truncated": false }]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect("ok");
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].path, "main.rs");
+    }
+
+    #[tokio::test]
+    async fn files_failure_is_best_effort_empty() {
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(completed("ok"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1/files"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let result = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect("ok");
+        assert!(result.files.is_empty(), "files fetch failure must not fail the run");
     }
 }

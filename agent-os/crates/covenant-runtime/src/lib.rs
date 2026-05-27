@@ -169,6 +169,14 @@ pub enum RunnerError {
     HermesUnconfigured { agent: String },
     #[error("remote runtime: status={status} message={message}")]
     Remote { status: u16, message: String },
+    /// The remote run reached a terminal `failed` state — an agent
+    /// outcome, distinct from a transport/gateway fault ([`Self::Remote`]).
+    #[error("remote run failed: {message}")]
+    RunFailed { message: String },
+    /// The remote run was cancelled (by operator stop or upstream).
+    /// An outcome, not a transport fault.
+    #[error("remote run was cancelled")]
+    RunCancelled,
 }
 
 #[async_trait]

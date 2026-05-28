@@ -32,6 +32,7 @@ pub mod capability;
 pub mod client;
 pub mod keeper;
 pub mod policy;
+pub mod risk;
 pub mod state;
 
 pub use capability::{KeeperScope, ACTION_KEEPER};

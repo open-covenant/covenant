@@ -26,5 +26,13 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 
+# The percolator-prog risk engine itself — Toly's account-local v16
+# engine, depended on directly so the keeper's recovery and lifecycle
+# logic uses HIS math, not a paraphrase. Pinned to the "Harden v16
+# engine invariants" commit so the Kani-audited surface is what we
+# compile against. `no_std`-clean; no Solana deps drag in.
+percolator = { git = "https://github.com/aeyakovenko/percolator.git", rev = "323c9f270fcd16e1e9a67f93f4df5308fcc6a245" }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+proptest = "1"

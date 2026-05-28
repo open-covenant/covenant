@@ -351,12 +351,14 @@ mod tests {
         assert_eq!(client.executed().len(), 2);
     }
 
-    /// Paused/Resolving/Closed assets are not freshened — the policy
-    /// only acts on Active assets.
+    /// Non-Active assets (Disabled/PendingActivation/DrainOnly/Retired/
+    /// Recovery) are not freshened by the normal `push_mark` path — that
+    /// path only acts on Active assets. The recovery scope is a
+    /// separate verb on the recovery lifecycle, gated independently.
     #[tokio::test]
     async fn non_active_assets_are_skipped() {
         let mut paused = asset(0, 1_000);
-        paused.lifecycle = AssetLifecycle::Paused;
+        paused.lifecycle = AssetLifecycle::Recovery;
         let (agent, client, _settlement, _budget) = build_agent(
             market(5_000, 5_000, vec![paused]), // crank not overdue either
             scope(Some(vec![0]), Some(vec![ActionLabel::PushMark, ActionLabel::Crank])),

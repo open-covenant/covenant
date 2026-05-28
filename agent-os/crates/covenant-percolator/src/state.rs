@@ -9,16 +9,23 @@ use serde::{Deserialize, Serialize};
 
 pub type AssetIndex = u16;
 
-/// Per-asset lifecycle. Mirrors `AssetStateV16Account.lifecycle`. Only
-/// `Active` assets are eligible for normal keeper actions; the other
-/// states are operator-driven recovery flows.
+/// Per-asset lifecycle. Mirrors `percolator::AssetLifecycleV16`
+/// variant-for-variant so the keeper's view aligns with the on-chain
+/// state machine and `From<AssetLifecycleV16>` is total.
+///
+/// Only `Active` assets are eligible for the normal `push_mark`/`crank`
+/// path. `Recovery` is what the keeper's recovery scope acts on;
+/// `DrainOnly`/`Retired`/`Disabled`/`PendingActivation` are
+/// admin-driven and the keeper takes no action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetLifecycle {
+    Disabled,
+    PendingActivation,
     Active,
-    Paused,
-    Resolving,
-    Closed,
+    DrainOnly,
+    Retired,
+    Recovery,
 }
 
 /// Per-asset state — what the keeper reads to decide if a fresh mark

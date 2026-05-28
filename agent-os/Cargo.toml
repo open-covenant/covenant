@@ -24,6 +24,7 @@ members = [
     "agents/demo",
     "agents/research",
     "programs/settlement",
+    "programs/stake",
 ]
 
 [workspace.package]

@@ -1365,6 +1365,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-stake-program"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "litesvm",
+ "solana-sdk",
+ "solana-security-txt",
+ "spl-associated-token-account",
+ "spl-token",
+ "spl-token-2022",
+]
+
+[[package]]
 name = "covenant-tools"
 version = "0.1.0"
 dependencies = [

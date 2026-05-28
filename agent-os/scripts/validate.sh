@@ -276,15 +276,15 @@ case "$mode" in
   scripts)
     ;;
   quick)
-    run cargo check --workspace --exclude covenant-settlement-program --locked
-    run cargo test --workspace --exclude covenant-settlement-program --locked
+    run cargo check --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
+    run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
     ;;
   full)
-    run cargo build --workspace --exclude covenant-settlement-program --locked
-    run cargo clippy --workspace --all-targets --exclude covenant-settlement-program --locked -- -D warnings
-    run cargo test --workspace --exclude covenant-settlement-program --locked
+    run cargo build --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
+    run cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- -D warnings
+    run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
     ;;
   live)
-    run cargo test --workspace --exclude covenant-settlement-program --locked -- --ignored live_
+    run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- --ignored live_
     ;;
 esac

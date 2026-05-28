@@ -97,6 +97,7 @@ impl Signer for SubprocessSigner {
 
         let mut child = Command::new(&self.program)
             .args(&self.args)
+            .env_clear()
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -460,6 +461,7 @@ mod tests {
             amount_usdc: 0.08,
             pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
             scheme: "exact".into(),
+            extra: None,
         }
     }
 

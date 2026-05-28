@@ -30,13 +30,6 @@ pub struct BuildContext {
     pub portfolio: Option<Pubkey>,
     /// Cluster slot at submission. The program rejects stale slots.
     pub now_slot: u64,
-    /// Side used by `RecoveryFinalize` — long/short, matches
-    /// `SideV16`. Operators supply per-call; the synthetic
-    /// `KeeperAction` carries it.
-    /// (Field kept on the context for cases where the upstream
-    /// decision layer does not yet thread side through; the action
-    /// variant's own field takes precedence when present.)
-    pub default_side: u8,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -145,7 +138,6 @@ mod tests {
             keeper: pk(0x02),
             portfolio: Some(pk(0x03)),
             now_slot: 1_000,
-            default_side: 0,
         }
     }
 

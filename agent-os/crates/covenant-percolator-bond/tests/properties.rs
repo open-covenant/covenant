@@ -69,7 +69,7 @@ proptest! {
             .collect();
         let action_bit = bits[action_bit_idx as usize % bits.len()];
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: (bond_slot as i64 + action_slot_delta).max(0) as u64,
             market: [market_byte; 32],
             action_bit,
@@ -109,7 +109,7 @@ proptest! {
         );
         let bond = bond_for(&scope_obj, bond_lamports, 0);
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: 1000,
             market: [action_market; 32],
             action_bit: ActionMask::PUSH_MARK,
@@ -139,7 +139,7 @@ proptest! {
         bond.scope_hash = covenant_percolator_bond::scope::ScopeHash(h);
 
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: 1000,
             market: [1u8; 32],
             action_bit: ActionMask::PUSH_MARK, // not in scope mask
@@ -195,7 +195,7 @@ proptest! {
         );
         let bond = bond_for(&scope_obj, bond_lamports, 0);
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: 1000,
             market: [1u8; 32],
             action_bit: ActionMask::PUSH_MARK,
@@ -224,7 +224,7 @@ proptest! {
         );
         let bond = bond_for(&scope_obj, bond_lamports, 0);
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: 1000,
             market: [1u8; 32],
             action_bit: ActionMask::PUSH_MARK,

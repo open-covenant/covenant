@@ -91,8 +91,14 @@ impl RpcSender {
         }
     }
 
+    /// Set the maximum number of submission attempts. Panics on `0`
+    /// rather than silently clamping — an operator who configures
+    /// "no retries" almost always means "max_attempts = 1", and
+    /// silently turning their `0` into `1` would hide a real config
+    /// mistake the next time they meant to set something larger.
     pub fn with_max_attempts(mut self, n: u32) -> Self {
-        self.max_attempts = n.max(1);
+        assert!(n > 0, "max_attempts must be >= 1 (use 1 to disable retry)");
+        self.max_attempts = n;
         self
     }
 
@@ -175,6 +181,11 @@ impl Sender for RpcSender {
                 .await
             {
                 Ok(sig) => {
+                    tracing::info!(
+                        tx_sig = %sig,
+                        attempts = attempt,
+                        "transaction confirmed"
+                    );
                     return Ok(SubmitOutcome {
                         signature: sig,
                         slot: None,
@@ -311,6 +322,18 @@ mod tests {
         let ok = s.submit(vec![ix()], &kp, &[]).await.unwrap();
         assert_eq!(ok.attempts, 1);
         assert_eq!(s.submissions().await.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_attempts must be >= 1")]
+    fn with_max_attempts_zero_panics() {
+        RpcSender::new("http://localhost:8899").with_max_attempts(0);
+    }
+
+    #[test]
+    fn with_max_attempts_one_works() {
+        // Sanity: 1 is the documented "no retry" floor; must NOT panic.
+        let _ = RpcSender::new("http://localhost:8899").with_max_attempts(1);
     }
 
     #[test]

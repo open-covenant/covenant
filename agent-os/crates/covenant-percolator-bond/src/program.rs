@@ -31,21 +31,34 @@ pub mod tag {
 }
 
 /// Synthetic accounts world for host tests. The real program reads
-/// `AccountInfo` slices; this mirrors only what the handlers
-/// actually touch so the simulation is honest.
+/// `AccountInfo` slices; this mirrors what the handlers actually
+/// touch — pubkeys + signer flags + lamports — so a passing host
+/// test transfers cleanly to a real on-chain dispatch.
+///
+/// Pubkey fields are `Option` because they're not always present
+/// (e.g. `keeper` slot is unused during `Initialize`). Signer flags
+/// gate via the corresponding pubkey: a handler that needs the
+/// operator demands `operator_signer = true` AND `operator_pubkey ==
+/// bond.operator`.
 #[derive(Debug, Clone, Default)]
 pub struct HostAccounts {
     pub bond: Option<BondAccount>,
     pub bond_lamports: u64,
-    pub operator_lamports: u64,
     pub keeper_lamports: u64,
     pub recipient_lamports: u64,
-    /// Signer keys. Handlers reject if a required signer is absent.
+    /// Pubkey of the signer claiming to be the operator, if present.
+    pub operator_pubkey: Option<[u8; 32]>,
     pub operator_signer: bool,
+    /// Pubkey of the signer claiming to be the keeper, if present.
+    pub keeper_pubkey: Option<[u8; 32]>,
     pub keeper_signer: bool,
 }
 
 /// `Initialize`: operator creates the bond on behalf of a keeper.
+/// The pubkey passed in as `operator` must match the signer the
+/// runtime placed in `acc.operator_pubkey` — preventing a hostile
+/// dispatcher from initializing a bond under a *different*
+/// operator's name.
 pub fn handle_initialize(
     acc: &mut HostAccounts,
     operator: [u8; 32],
@@ -56,6 +69,11 @@ pub fn handle_initialize(
 ) -> Result<(), &'static str> {
     if !acc.operator_signer {
         return Err("operator must sign initialize");
+    }
+    match acc.operator_pubkey {
+        Some(pk) if pk == operator => {}
+        Some(_) => return Err("operator pubkey mismatch"),
+        None => return Err("operator pubkey absent"),
     }
     if acc.bond.is_some() {
         return Err("bond already exists");
@@ -93,19 +111,40 @@ pub fn handle_deposit(acc: &mut HostAccounts, lamports: u64) -> Result<(), &'sta
     Ok(())
 }
 
-/// `SetPaused`: only the bond's operator can flip the pause flag.
-/// Withdraw requires `paused == 1`, so this is the safety interlock
-/// against a keeper running away from a pending slash.
-pub fn handle_set_paused(acc: &mut HostAccounts, paused: bool) -> Result<(), &'static str> {
+fn require_operator(acc: &HostAccounts, bond: &BondAccount) -> Result<(), &'static str> {
     if !acc.operator_signer {
-        return Err("operator must sign set_paused");
+        return Err("operator must sign");
     }
-    let bond = acc.bond.as_mut().ok_or("bond not initialized")?;
-    bond.paused = u8::from(paused);
+    match acc.operator_pubkey {
+        Some(pk) if pk == bond.operator => Ok(()),
+        Some(_) => Err("operator pubkey mismatch"),
+        None => Err("operator pubkey absent"),
+    }
+}
+
+fn require_keeper(acc: &HostAccounts, bond: &BondAccount) -> Result<(), &'static str> {
+    if !acc.keeper_signer {
+        return Err("keeper must sign");
+    }
+    match acc.keeper_pubkey {
+        Some(pk) if pk == bond.keeper => Ok(()),
+        Some(_) => Err("keeper pubkey mismatch"),
+        None => Err("keeper pubkey absent"),
+    }
+}
+
+/// `SetPaused`: bond.operator only. Withdraw requires `paused == 1`,
+/// so this is the safety interlock against a keeper running away
+/// from a pending slash.
+pub fn handle_set_paused(acc: &mut HostAccounts, paused: bool) -> Result<(), &'static str> {
+    let bond = acc.bond.as_ref().ok_or("bond not initialized")?.clone();
+    require_operator(acc, &bond)?;
+    let bond_mut = acc.bond.as_mut().unwrap();
+    bond_mut.paused = u8::from(paused);
     Ok(())
 }
 
-/// `Withdraw`: keeper-signed; only when paused, and never if slashed.
+/// `Withdraw`: bond.keeper signed; only when paused, never if slashed.
 ///
 /// Lamport ordering: validate the credit side FIRST (checked_add) so
 /// a hypothetical overflow doesn't leave the bond debited but the
@@ -113,10 +152,9 @@ pub fn handle_set_paused(acc: &mut HostAccounts, paused: bool) -> Result<(), &'s
 /// effectively impossible (total supply caps it), but the host
 /// simulation stays honest by ordering operations the same way.
 pub fn handle_withdraw(acc: &mut HostAccounts, lamports: u64) -> Result<(), &'static str> {
-    if !acc.keeper_signer {
-        return Err("keeper must sign withdraw");
-    }
-    let bond = acc.bond.as_mut().ok_or("bond not initialized")?;
+    let bond_snapshot = acc.bond.as_ref().ok_or("bond not initialized")?.clone();
+    require_keeper(acc, &bond_snapshot)?;
+    let bond = acc.bond.as_mut().unwrap();
     if bond.slashed != 0 {
         return Err("bond slashed");
     }
@@ -185,9 +223,13 @@ mod tests {
         }
     }
 
+    const OPERATOR: [u8; 32] = [8; 32];
+    const KEEPER: [u8; 32] = [9; 32];
+
     fn fresh() -> HostAccounts {
         HostAccounts {
             operator_signer: true,
+            operator_pubkey: Some(OPERATOR),
             bond_lamports: 10_000_000,
             ..Default::default()
         }
@@ -197,29 +239,80 @@ mod tests {
     fn initialize_then_deposit_then_set_paused_then_withdraw() {
         let mut acc = fresh();
         let scope = scope();
-        handle_initialize(&mut acc, [8; 32], [9; 32], scope.hash(), [7; 32], 100).unwrap();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
         assert_eq!(acc.bond.as_ref().unwrap().lamports, 10_000_000);
 
         handle_deposit(&mut acc, 500_000).unwrap();
         acc.bond_lamports = acc.bond.as_ref().unwrap().lamports;
 
-        // Withdraw before pause should fail.
+        // Withdraw before pause should fail (keeper signs but bond
+        // is unpaused).
         acc.keeper_signer = true;
+        acc.keeper_pubkey = Some(KEEPER);
         assert!(handle_withdraw(&mut acc, 1).is_err());
 
         // Operator pauses → keeper can pull funds.
-        acc.operator_signer = true;
         handle_set_paused(&mut acc, true).unwrap();
         handle_withdraw(&mut acc, 100).unwrap();
         assert_eq!(acc.bond.as_ref().unwrap().lamports, 10_500_000 - 100);
         assert_eq!(acc.keeper_lamports, 100);
     }
 
+    /// A *different* operator cannot pause someone else's bond, even
+    /// holding the signer flag. Real Solana enforces this via
+    /// AccountInfo's pubkey; the host sim now models it explicitly.
+    #[test]
+    fn set_paused_rejects_foreign_operator() {
+        let mut acc = fresh();
+        let scope = scope();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
+        // Foreign operator: signer flag set, but pubkey doesn't match
+        // bond.operator.
+        acc.operator_pubkey = Some([0xFF; 32]);
+        assert_eq!(
+            handle_set_paused(&mut acc, true).unwrap_err(),
+            "operator pubkey mismatch"
+        );
+        assert_eq!(acc.bond.as_ref().unwrap().paused, 0);
+    }
+
+    /// A different keeper cannot withdraw from someone else's bond.
+    #[test]
+    fn withdraw_rejects_foreign_keeper() {
+        let mut acc = fresh();
+        let scope = scope();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
+        handle_set_paused(&mut acc, true).unwrap();
+        acc.keeper_signer = true;
+        acc.keeper_pubkey = Some([0xFF; 32]); // wrong keeper
+        assert_eq!(
+            handle_withdraw(&mut acc, 1).unwrap_err(),
+            "keeper pubkey mismatch"
+        );
+    }
+
+    /// Initialize itself rejects a mismatched operator pubkey — a
+    /// hostile dispatcher can't create a bond under someone else's
+    /// name.
+    #[test]
+    fn initialize_rejects_foreign_operator_pubkey() {
+        let mut acc = fresh();
+        let scope = scope();
+        // Passing `operator = [0xFF; 32]` but the signer's pubkey is
+        // OPERATOR — the program must refuse to write [0xFF] into the
+        // bond.
+        assert_eq!(
+            handle_initialize(&mut acc, [0xFF; 32], KEEPER, scope.hash(), [7; 32], 100)
+                .unwrap_err(),
+            "operator pubkey mismatch"
+        );
+    }
+
     #[test]
     fn slash_drains_bond_to_recipient_and_marks_slashed() {
         let mut acc = fresh();
         let scope = scope();
-        handle_initialize(&mut acc, [8; 32], [9; 32], scope.hash(), [7; 32], 100).unwrap();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
         acc.bond.as_mut().unwrap().lamports = acc.bond_lamports;
 
         let evidence = SlashEvidence {
@@ -249,7 +342,7 @@ mod tests {
     fn slashed_bond_cannot_be_withdrawn_even_when_paused() {
         let mut acc = fresh();
         let scope = scope();
-        handle_initialize(&mut acc, [8; 32], [9; 32], scope.hash(), [7; 32], 100).unwrap();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
         acc.bond.as_mut().unwrap().lamports = acc.bond_lamports;
 
         handle_set_paused(&mut acc, true).unwrap();
@@ -266,6 +359,7 @@ mod tests {
         handle_slash(&mut acc, &evidence).unwrap();
 
         acc.keeper_signer = true;
+        acc.keeper_pubkey = Some(KEEPER);
         // Even paused, slashed=1 blocks withdraw.
         assert!(handle_withdraw(&mut acc, 1).is_err());
     }
@@ -274,7 +368,7 @@ mod tests {
     fn permitted_action_does_not_slash() {
         let mut acc = fresh();
         let scope = scope();
-        handle_initialize(&mut acc, [8; 32], [9; 32], scope.hash(), [7; 32], 100).unwrap();
+        handle_initialize(&mut acc, OPERATOR, KEEPER, scope.hash(), [7; 32], 100).unwrap();
         acc.bond.as_mut().unwrap().lamports = acc.bond_lamports;
 
         let evidence = SlashEvidence {

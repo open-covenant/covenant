@@ -73,6 +73,15 @@ pub enum SlashRejection {
     BeforeBondStart,
     /// Bond has zero lamports — nothing to slash.
     EmptyBond,
+    /// `receipt_id == [0; 16]` is reserved (the all-zeros PDA can
+    /// collide with a future canonical-zero slot scheme). Real
+    /// receipts are uuid v4, which is overwhelmingly non-zero;
+    /// rejecting explicitly closes a tiny replay-PDA exposure.
+    ZeroReceiptId,
+    /// The action mask bit isn't one of `PUSH_MARK | CRANK | RECOVER`.
+    /// Prevents a slasher from constructing fake action labels
+    /// against a scope whose unknown-bit area is unconstrained.
+    UnknownActionBit,
 }
 
 /// Pure verification. The on-chain program calls this exactly; tests
@@ -95,6 +104,20 @@ pub fn verify_slash(
     }
     if bond.lamports == 0 {
         return Err(SlashRejection::EmptyBond);
+    }
+    if evidence.action.receipt_id == [0u8; 16] {
+        return Err(SlashRejection::ZeroReceiptId);
+    }
+    // Reject mask bits the bond crate doesn't define. Defends against
+    // a slasher fabricating an "action" with bit 3+ set against a
+    // scope whose `allowed_actions` happens to also have noise in
+    // those bits — without this gate, `allows` could return true.
+    use crate::scope::ActionMask as M;
+    if evidence.action.action_bit == 0
+        || evidence.action.action_bit & !(M::PUSH_MARK | M::CRANK | M::RECOVER) != 0
+        || evidence.action.action_bit.count_ones() != 1
+    {
+        return Err(SlashRejection::UnknownActionBit);
     }
     if evidence.scope.hash() != bond.scope_hash {
         return Err(SlashRejection::ScopeHashMismatch);
@@ -275,6 +298,71 @@ mod tests {
         assert_eq!(
             verify_slash(&bond, &SlashEvidence { scope, action }),
             Err(SlashRejection::AlreadySlashed)
+        );
+    }
+
+    #[test]
+    fn zero_receipt_id_rejected() {
+        let scope = happy_scope();
+        let bond = build_bond(&scope);
+        let action = AttestedAction {
+            receipt_id: [0u8; 16],
+            executed_slot: 200,
+            market: [1u8; 32],
+            action_bit: ActionMask::PUSH_MARK,
+            asset_index: Some(7), // would be slashable absent the receipt_id rule
+        };
+        assert_eq!(
+            verify_slash(&bond, &SlashEvidence { scope, action }),
+            Err(SlashRejection::ZeroReceiptId)
+        );
+    }
+
+    #[test]
+    fn unknown_action_bit_rejected() {
+        let scope = happy_scope();
+        let bond = build_bond(&scope);
+        // Bit 3 (= 0b1000) is outside PUSH_MARK | CRANK | RECOVER.
+        // Even though it would *look* not-allowed against the scope
+        // mask, the verifier refuses to slash on a fabricated bit
+        // rather than letting the slasher manufacture verdicts.
+        let action = AttestedAction {
+            receipt_id: [0xAA; 16],
+            executed_slot: 200,
+            market: [1u8; 32],
+            action_bit: 0b1000,
+            asset_index: Some(0),
+        };
+        assert_eq!(
+            verify_slash(&bond, &SlashEvidence { scope: scope.clone(), action }),
+            Err(SlashRejection::UnknownActionBit)
+        );
+
+        // Multiple bits set is also illegal — an action represents
+        // ONE label.
+        let action = AttestedAction {
+            receipt_id: [0xAA; 16],
+            executed_slot: 200,
+            market: [1u8; 32],
+            action_bit: ActionMask::PUSH_MARK | ActionMask::CRANK,
+            asset_index: Some(0),
+        };
+        assert_eq!(
+            verify_slash(&bond, &SlashEvidence { scope: scope.clone(), action }),
+            Err(SlashRejection::UnknownActionBit)
+        );
+
+        // Zero bits set is illegal.
+        let action = AttestedAction {
+            receipt_id: [0xAA; 16],
+            executed_slot: 200,
+            market: [1u8; 32],
+            action_bit: 0,
+            asset_index: Some(0),
+        };
+        assert_eq!(
+            verify_slash(&bond, &SlashEvidence { scope, action }),
+            Err(SlashRejection::UnknownActionBit)
         );
     }
 

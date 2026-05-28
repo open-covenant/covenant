@@ -37,8 +37,12 @@ impl KeeperPolicy {
             if !matches!(asset.lifecycle, AssetLifecycle::Active) {
                 continue;
             }
+            // Consistent `>=` semantics: at exactly `max_staleness_slots`
+            // the mark is considered due. The crank-interval check
+            // below uses the same convention so an operator-set value
+            // means "act when AT LEAST this many slots have passed".
             let age = market.current_slot.saturating_sub(asset.last_mark_slot);
-            if age > self.max_staleness_slots {
+            if age >= self.max_staleness_slots {
                 // The policy doesn't price marks — it carries the last
                 // known value forward. A real keeper plugs in a fresh
                 // oracle read between decide and execute.

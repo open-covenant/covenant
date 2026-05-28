@@ -90,10 +90,20 @@ pub fn should_lead(
     let window = if window_slots == 0 { 0 } else { slot / window_slots };
     let k = action_key(action);
     let my_h = priority_hash(k, me, window);
+    // Dedup peer list. Operators sometimes pass duplicated entries
+    // (merged config files, registry overlaps); a duplicate would
+    // count twice against `me` on an equal-hash compare, flipping
+    // leadership unfairly. Bounded scan: in practice the keeper
+    // network is O(10s), not O(thousands).
+    let mut seen: Vec<KeeperId> = Vec::with_capacity(peers.len());
     for peer in peers {
         if peer == me {
             continue;
         }
+        if seen.iter().any(|s| s == peer) {
+            continue;
+        }
+        seen.push(*peer);
         let p_h = priority_hash(k, peer, window);
         if p_h < my_h {
             return false;
@@ -195,6 +205,20 @@ mod tests {
         let a = should_lead(&kid(2), &action, 1234, 50, &peers);
         let b = should_lead(&kid(2), &action, 1234, 50, &peers);
         assert_eq!(a, b);
+    }
+
+    /// Peer-list deduplication: a duplicate entry must not affect
+    /// the leader election. Without dedup, the same peer counted
+    /// twice could push `me` out of leadership on a hash tie.
+    #[test]
+    fn duplicate_peers_do_not_change_leadership() {
+        let action = KeeperAction::CrankAsset { asset_index: 1 };
+        let me = kid(2);
+        let peers_clean = vec![kid(1), kid(3)];
+        let peers_dup = vec![kid(1), kid(1), kid(3), kid(3), kid(1)];
+        let clean = should_lead(&me, &action, 100, 50, &peers_clean);
+        let dup = should_lead(&me, &action, 100, 50, &peers_dup);
+        assert_eq!(clean, dup, "duplicates must not change leadership");
     }
 
     /// Per-asset cranks have distinct action keys, so different

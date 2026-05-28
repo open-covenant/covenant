@@ -21,7 +21,6 @@ fn ctx(payer: &Keypair) -> BuildContext {
         keeper: payer.pubkey(),
         portfolio: Some(Pubkey::new_unique()),
         now_slot: 12_345,
-        default_side: 0,
     }
 }
 

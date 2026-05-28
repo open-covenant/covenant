@@ -294,7 +294,7 @@ mod tests {
             max_actions_per_tick: 1,
         };
         let action = AttestedAction {
-            receipt_id: [0; 16],
+            receipt_id: [0x42; 16],
             executed_slot: 0,
             market: [0xFF; 32], // wrong market — would trigger MarketMismatch
             action_bit: ActionMask::CRANK,

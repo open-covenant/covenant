@@ -194,11 +194,16 @@ impl<C: PercolatorClient> KeeperAgent<C> {
     }
 }
 
+/// Current wall-clock in epoch-ms, or `u64::MAX` on a clock that's
+/// gone backward. We don't silently emit `settled_at: 0` because a
+/// hard-zero timestamp on a real receipt is indistinguishable from a
+/// missing timestamp and breaks downstream batching; an extreme
+/// sentinel is loud enough that the reconciler flags it.
 fn epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or(u64::MAX)
 }
 
 fn map_client_err(e: ClientError) -> PercolatorError {

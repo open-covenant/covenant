@@ -33,6 +33,7 @@ pub mod capability;
 pub mod client;
 pub mod coordination;
 pub mod keeper;
+pub mod liquidation;
 pub mod policy;
 pub mod risk;
 pub mod state;

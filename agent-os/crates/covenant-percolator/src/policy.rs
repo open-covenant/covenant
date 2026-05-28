@@ -100,32 +100,16 @@ impl Default for RecoveryPolicy {
 }
 
 impl RecoveryPolicy {
+    /// Delegates to [`crate::liquidation::LiquidationPolicy::sequence`]
+    /// so the per-tick recovery flow inherits the §21 strict total
+    /// order (deficit DESC, address ASC). Returns just the action
+    /// list — operators wanting the full `ScheduledRecovery`
+    /// (portfolio address + budget) call the sequencer directly.
     pub fn decide(&self, portfolios: &[PortfolioSnapshot]) -> Vec<KeeperAction> {
-        let mut out = Vec::new();
-        for p in portfolios {
-            // Fail-closed on stale / invalid cert — the engine's
-            // `valid` is the freshness gate the keeper trusts. Do not
-            // second-guess.
-            if !p.health_cert.valid {
-                continue;
-            }
-            if p.health_cert.certified_liq_deficit < self.min_deficit {
-                continue;
-            }
-            let Some(asset_index) = p.asset_in_distress else {
-                continue;
-            };
-            // i128 clamp guard — engine field is u128; we cap at the
-            // signed maximum so the action's i128 field is total.
-            let b_delta_budget = p
-                .health_cert
-                .certified_liq_deficit
-                .min(i128::MAX as u128) as i128;
-            out.push(KeeperAction::RecoveryForfeitLeg {
-                asset_index,
-                b_delta_budget,
-            });
+        let seq = crate::liquidation::LiquidationPolicy {
+            min_deficit: self.min_deficit,
         }
-        out
+        .sequence(portfolios);
+        seq.into_iter().map(|s| s.action).collect()
     }
 }

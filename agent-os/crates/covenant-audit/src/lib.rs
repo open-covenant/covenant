@@ -35,7 +35,7 @@ pub enum AuditError {
     Io(#[from] std::io::Error),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
-    #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild")]
+    #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild — events > chain is the recoverable shape, rerun purge_older_than with the same cutoff to truncate the orphan events; events < chain means the chain was tampered or restored from a stale backup, rebuild from a trusted backup")]
     ChainCorruption { events: usize, chain: usize },
 }
 
@@ -572,15 +572,30 @@ async fn read_chain_entries(path: &PathBuf) -> Result<Vec<AuditChainEntry>, Audi
     }
 }
 
+/// Crash-atomic chain rewrite via tmp + rename: write the full body to a
+/// sibling `.tmp` path, flush the user-space buffer, then atomically rename it
+/// over the chain. Without this, a power loss mid-write would leave the chain
+/// file truncated at an arbitrary offset, which `read_chain_entries` would
+/// surface as a serde error. With it, observers see either the old body or
+/// the new one — never half a row.
+///
+/// Best-effort under hostile power loss: this does NOT `sync_all()` the tmp
+/// file or fsync the parent directory, matching the pre-existing events
+/// rewrite path. A crash AFTER the rename returns but BEFORE the filesystem
+/// flushes the rename + new inode can still revert to the old body on next
+/// boot. Strengthening this requires a paired upgrade of the events path —
+/// tracked separately to keep the two halves of the audit log on the same
+/// durability tier.
 async fn write_chain_entries(
     path: &PathBuf,
     entries: &[AuditChainEntry],
 ) -> Result<(), AuditError> {
+    let tmp_path = path.with_extension("jsonl.tmp");
     let mut f = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(path)
+        .open(&tmp_path)
         .await?;
     for entry in entries {
         let line = serde_json::to_string(entry)?;
@@ -588,6 +603,8 @@ async fn write_chain_entries(
         f.write_all(b"\n").await?;
     }
     f.flush().await?;
+    drop(f);
+    fs::rename(&tmp_path, path).await?;
     Ok(())
 }
 
@@ -688,9 +705,26 @@ impl AuditLog for JsonlAuditLog {
 
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
         // Read-filter-rewrite under the same lock that record uses, so a
-        // concurrent record can't race against the rewrite. Atomicity of
-        // the rewrite comes from `tempfile + rename` — readers see either
-        // the old log or the new one, never a partial rewrite.
+        // concurrent record can't race against the rewrite. Each file gets
+        // its own tmp + rename so a power-loss mid-write never leaves a
+        // half-written body on disk.
+        //
+        // Crash-atomicity ordering: write+rename CHAIN first, then
+        // write+rename EVENTS. A crash between the two renames leaves
+        // chain=K rows and events=N rows with N > K — that mismatch fails
+        // `record()`'s length check (the security-correct refusal — see
+        // record's comment on why rebuild is not safe), but it is the
+        // recoverable shape: re-running purge_older_than with the same
+        // cutoff re-derives the same K kept events, rewrites the chain to
+        // the same K rows (no-op-ish), and renames events to match. The
+        // reverse order — renaming events first — could leave events=K and
+        // chain=N (M > K), which means the chain claims an event that the
+        // events file no longer holds. That state is impossible to
+        // distinguish from chain tampering (an attacker would prefer
+        // exactly this shape so a future rebuild would accept their forged
+        // events), so the audit log must stay refused until an operator
+        // restores from a trusted backup. The chain-first ordering keeps
+        // the recoverable shape on every crash window.
         let _g = self.lock.lock().await;
         let existing = read_events(&self.path).await?;
         if existing.is_empty() {
@@ -705,6 +739,8 @@ impl AuditLog for JsonlAuditLog {
         if purged == 0 {
             return Ok(0);
         }
+        let chain_entries = build_chain_entries(&kept)?;
+        write_chain_entries(&self.chain_path(), &chain_entries).await?;
         let tmp_path = self.path.with_extension("jsonl.tmp");
         let mut f = OpenOptions::new()
             .create(true)
@@ -720,8 +756,6 @@ impl AuditLog for JsonlAuditLog {
         f.flush().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
-        let chain_entries = build_chain_entries(&kept)?;
-        write_chain_entries(&self.chain_path(), &chain_entries).await?;
         Ok(purged)
     }
 
@@ -1316,6 +1350,35 @@ mod tests {
              AND {{events}} (5) to the 'chain file has' slot would \
              still pass naive prefix/hint substring checks; this \
              inverse assertion catches the swap: {message}"
+        );
+
+        // Recovery-hint pins: audit-purge-atomicity now leaves a
+        // recoverable shape (events > chain) on a crash between the
+        // chain rename and the events rename in purge_older_than.
+        // The Display must name BOTH branches so an operator triaging
+        // ChainCorruption knows which path applies to their counts —
+        // events > chain is self-heal-via-purge; events < chain is
+        // tamper or stale-backup and requires a trusted restore.
+        // A future refactor that dropped the recovery hint under a
+        // 'less verbose' pass would silently leave operators guessing
+        // at the recovery procedure, which is exactly the
+        // diagnostic-degradation pattern this test class is here to
+        // catch.
+        assert!(
+            message.contains("rerun purge_older_than"),
+            "ChainCorruption must point at the self-heal command for the \
+             events > chain shape — operator-facing recovery hint added \
+             by audit-purge-atomicity. Dropping this phrase leaves a \
+             post-crash operator without a documented next step: \
+             {message}"
+        );
+        assert!(
+            message.contains("rebuild from a trusted backup"),
+            "ChainCorruption must point at the trusted-backup path for \
+             the events < chain shape — that shape is indistinguishable \
+             from chain tampering, so the only safe action is restore. \
+             Dropping this phrase leaves the dangerous shape with the \
+             same diagnostic as the recoverable shape: {message}"
         );
         assert!(
             !message.contains("chain file has 5"),
@@ -3638,6 +3701,160 @@ mod tests {
         let log = JsonlAuditLog::open(path.clone()).await.unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(log.purge_older_than(1_000_000).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_self_heals_chain_first_crash_window_orphan_events_shape() {
+        // Crash-simulation test for audit-purge-atomicity.
+        //
+        // purge_older_than now writes the CHAIN file first (tmp + rename)
+        // and only then writes EVENTS (tmp + rename). A power-loss between
+        // the two renames leaves the chain at K rows and events still at N
+        // rows (N > K) — the "orphan events" shape. record() refuses
+        // (ChainCorruption — the security-correct boundary so an attacker
+        // can't trick rebuild into accepting forged events), but rerunning
+        // purge_older_than with the same cutoff re-derives the same K
+        // kept events, rewrites the chain idempotently, and renames events
+        // to match.
+        //
+        // The reverse ordering (events-first) would leave events < chain on
+        // crash — a shape indistinguishable from an attacker who truncated
+        // events under a valid chain, so it would be unrecoverable without
+        // operator action. This test pins the recoverability of the
+        // chain-first shape and would fail if a future refactor swapped the
+        // order back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let chain_path = path.with_extension("chain.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // Snapshot the steady-state events file BEFORE the purge so we can
+        // restore it afterwards — the restore reproduces the on-disk shape
+        // a crash between the chain rename and the events rename would
+        // leave behind (chain at the new shorter body, events still at the
+        // old longer body).
+        let pre_purge_events = std::fs::read_to_string(&path).unwrap();
+
+        let purged = log.purge_older_than(150).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Idempotency pin: snapshot the chain bytes the original purge
+        // produced so we can assert the rerun self-heal yields BYTE-
+        // IDENTICAL chain content. A refactor that re-derived a different
+        // chain on the rerun (e.g., by changing the index column or
+        // chain-hash chaining) would silently break external verifiers
+        // that re-read the chain after a recovery.
+        let post_purge_chain = std::fs::read_to_string(&chain_path).unwrap();
+
+        // Reproduce the crash window: chain has K=2 rows (already on disk
+        // from the successful rename), events file is rewound to N=3 rows
+        // (the rename that the simulated crash prevented).
+        std::fs::write(&path, &pre_purge_events).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            3,
+            "events file restored to N=3 rows (the orphan-events crash shape)",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&chain_path)
+                .unwrap()
+                .lines()
+                .count(),
+            2,
+            "chain file remains at K=2 rows after the simulated crash",
+        );
+
+        // record() must refuse the orphan-events state — that is the
+        // security-correct boundary that this whole subsystem exists to
+        // protect, and the security-policy hint "refusing to rebuild"
+        // pinned by audit_error_chain_corruption_display_message_pins_*
+        // is the operator-facing signal that this refusal is intentional.
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        match log2.record(dated(400)).await {
+            Err(AuditError::ChainCorruption { events, chain }) => {
+                assert_eq!(events, 3, "ChainCorruption.events reports the orphan-events row count");
+                assert_eq!(chain, 2, "ChainCorruption.chain reports the post-rename chain row count");
+            }
+            other => panic!("expected ChainCorruption on orphan-events shape, got {other:?}"),
+        }
+
+        // Rerun purge with the same cutoff — the documented self-heal.
+        // It re-derives the same K=2 kept events from the read-events of
+        // the restored events file, rewrites the chain to the same body
+        // (idempotent), and renames events to match.
+        let recovered = log2.purge_older_than(150).await.unwrap();
+        assert_eq!(recovered, 1, "self-heal purges the same orphan that the original purge would have dropped");
+
+        // Idempotency assertion: the chain file after self-heal must
+        // be byte-identical to the chain file the original purge
+        // produced. If a refactor changed chain-derivation between
+        // calls (e.g., a non-deterministic field, a timestamp added,
+        // a chain-hash seed perturbed) this would catch the drift.
+        let post_heal_chain = std::fs::read_to_string(&chain_path).unwrap();
+        assert_eq!(
+            post_heal_chain, post_purge_chain,
+            "self-heal must produce the same chain bytes the original purge produced — idempotency",
+        );
+
+        // After recovery, the log is consistent and record() works again.
+        log2.record(dated(400)).await.expect("record after self-heal");
+        let report = log2.verify_integrity().await.unwrap();
+        assert!(report.valid, "verify_integrity must pass after self-heal: {report:?}");
+        assert_eq!(report.events, 3, "post-heal events: 200, 300, plus the new 400");
+        assert_eq!(report.anchors, 3, "post-heal chain matches events length");
+    }
+
+    #[tokio::test]
+    async fn jsonl_record_refuses_events_lt_chain_shape_so_events_first_ordering_would_be_unsafe() {
+        // Asymmetry pin for audit-purge-atomicity. The chain-first
+        // ordering in purge_older_than is the safe choice because the
+        // REVERSE crash shape — events file shorter than the chain file
+        // — is indistinguishable from an attacker who truncated events
+        // under a valid chain (e.g., to drop a damning row), and the
+        // safe response is operator-mediated restore from a trusted
+        // backup, not silent self-heal. This test reproduces that
+        // dangerous shape directly and verifies record() refuses with
+        // ChainCorruption — without that refusal, the events-first
+        // ordering would be silently exploitable.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let chain_path = path.with_extension("chain.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // Truncate events to 2 rows; chain remains at 3. This is the
+        // shape a hypothetical events-first ordering would leave on a
+        // crash between the events rename and the chain rewrite.
+        let events_raw = std::fs::read_to_string(&path).unwrap();
+        let mut keep_lines = events_raw.lines().take(2).collect::<Vec<_>>().join("\n");
+        keep_lines.push('\n');
+        std::fs::write(&path, keep_lines).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&chain_path)
+                .unwrap()
+                .lines()
+                .count(),
+            3,
+        );
+
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        match log2.record(dated(400)).await {
+            Err(AuditError::ChainCorruption { events, chain }) => {
+                assert_eq!(events, 2, "events count reflects the truncated body");
+                assert_eq!(chain, 3, "chain count reflects the unchanged body");
+                assert!(
+                    events < chain,
+                    "the dangerous shape — chain claims more events than the events file holds — must refuse, not self-heal",
+                );
+            }
+            other => panic!("expected ChainCorruption for events<chain, got {other:?}"),
+        }
     }
 
     fn pin_audit_variant(kind: AuditKind, slug: &str, expected_keys: &[&str]) {

@@ -273,24 +273,63 @@ this draft.
 | Wire-locked instruction builders (tags 5/43/44/45/63) | shipped (`--features solana`) | `src/instruction.rs` |
 | `KeeperAction` → `Instruction` bridge (`BuildContext`) | shipped (`--features solana`) | `src/onchain.rs` |
 | Operator-runnable binary (`covenant-percolator-keeper`) | shipped | `src/bin/keeper.rs` |
-| RPC / signer / bundler integration | **deferred** | operator-supplied (Jito, custom) |
+| Thin reference `Sender` (RpcSender / RecordingSender) | shipped (`--features solana-rpc`) | `src/sender.rs` |
+| Stake-backed slash bond + verifier | shipped | `covenant-percolator-bond` crate |
+| Mainnet wire-up (Bounty 6 program + market) | shipped | `lib.rs` constants, `examples/mainnet-bounty6.toml` |
 
 The default build pulls no Solana runtime crates. Under
 `--features solana`, the crate exposes byte-for-byte builders for the
 v16 keeper surface — discriminator bytes are pinned by golden tests
 (`*_wire_bytes_locked`) against the program's `Instruction::encode`
-in `percolator-prog/src/v16_program.rs`. The keeper hands callers an
-`Instruction` and stops there: signing and submission (RPC, Jito
-bundles, custom senders) are the operator's choice.
+in `percolator-prog/src/v16_program.rs`. Under `--features solana-rpc`,
+`Sender` lets an operator submit + confirm with linear-backoff retry
+against any RPC; `RecordingSender` is the test double. The keeper
+hands a `Sender` impl an `Instruction` bundle; Jito bundles or custom
+relays are wire-compatible drop-ins.
+
+### Stake-backed slash (`covenant-percolator-bond`)
+
+Detection-only accountability is post-hoc. The bond crate makes
+*scope violations* lamport-expensive in the same transaction:
+
+1. **Bond.** Operator opens a `BondAccount` PDA `[b"bond", keeper.as_ref()]`
+   pre-funded with SOL, storing `sha256(canonical_scope_bytes)`,
+   `slash_recipient`, and `created_slot`.
+2. **Watch.** Anyone tails the audit chain. A `SettlementReceipt`
+   recording an executed action that the bond's stored scope does not
+   permit is evidence.
+3. **Slash.** The slasher submits `SlashEvidence { scope, action }` —
+   the canonical scope bytes + the attested action — and the program
+   calls `verify_slash`. On accept, the entire bond transfers to the
+   slash recipient and the `slashed` flag is set; the same receipt
+   can't re-slash (PDA `[b"slash", bond, receipt_id]` is rent-init'd).
+
+`verify_slash` is a pure function (`evidence.rs`); the host-testable
+handler simulation (`HostAccounts`) mirrors the on-chain mutation
+surface, and 4 property tests × 128 cases each enforce the two
+strongest invariants:
+
+- **Safety:** in-scope actions are never slashable. A correct keeper
+  cannot lose its bond regardless of scope shape, asset list, mask,
+  or slot ordering.
+- **Liveness:** out-of-scope actions are *always* slashable when the
+  market matches and the receipt post-dates `created_slot`. The
+  attacker cannot avoid the slash by shaping the evidence.
+
+The SBPF entrypoint is gated by `--features program`; absent that
+feature, the same handlers run as plain Rust against a synthetic
+account world. Deploying the program (`cargo build-sbf`) is the
+last mile — the security envelope is already proved.
 
 ---
 
 ## 8. Open questions
 
-- **Stake-backed slashing surface.** The SAP-anchored agent identity is the
-  obvious trust root; the precise slashable invariant (e.g. "submitted an
-  action your scope didn't permit") and the on-chain bond mechanism are not
-  yet designed.
+- **Bond pricing model.** v1 slashes the whole bond on any confirmed
+  violation. A proportional slash (e.g. scaled by the lamports the
+  out-of-scope action could have extracted) would be more sympathetic
+  to operator mistakes but harder to reason about; the right
+  parametrization is open.
 - **Cross-protocol generalization.** PAK is shaped around Percolator's v16
   surface (push-mark, crank, recovery trio). The same governance pattern
   applies to any permissionless protocol that needs off-chain liveness
@@ -300,6 +339,12 @@ bundles, custom senders) are the operator's choice.
   delivers when M of N keepers are offline? `proptest` exercises a single
   agent's behavior; an N-keeper liveness sim that injects partitions and
   measures freshness SLA is future work.
+- **Coordination with Toly's own keeper.** Mainnet Bounty 6 already runs
+  a single keeper at `9WiMAQtdx8…` (proximity-driven, cron-based). A
+  PAK swarm joining the network without coordination races that
+  keeper unnecessarily; opt-in peer announcement (e.g. via the SAP
+  registry) lets `should_lead` include the canonical keeper without
+  forking the protocol.
 
 ---
 

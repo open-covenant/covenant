@@ -9,12 +9,13 @@ description = "Covenant-governed keeper agents for the Percolator perpetuals pro
 
 [features]
 default = []
-# Real on-chain instruction builders. Gated so the default build
-# stays light (just trait + mock + governance + tests). The `solana`
-# feature pulls in `solana-sdk` for `Instruction`/`AccountMeta`/
-# `Pubkey` and exposes byte-locked builders for the v16 keeper
-# surface (tags 5 / 43 / 44 / 45 / 63).
+# Byte-locked off-chain instruction builders for the v16 keeper
+# surface (program tags 5 / 43 / 44 / 45 / 63). Pulls in solana-sdk
+# for `Instruction`/`AccountMeta`/`Pubkey` only — no RPC client.
 solana = ["dep:solana-sdk"]
+# Thin reference Sender + `RpcSender` for submitting + confirming
+# keeper transactions against a real Solana RPC. Implies `solana`.
+solana-rpc = ["solana", "dep:solana-client", "dep:bs58"]
 
 [[bin]]
 name = "covenant-percolator-keeper"
@@ -46,6 +47,8 @@ tracing-subscriber = { workspace = true }
 # so `OnchainBuilder` can produce real `Instruction`s ready for a
 # bundler / RPC client.
 solana-sdk = { workspace = true, optional = true }
+solana-client = { workspace = true, optional = true }
+bs58 = { version = "0.5", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -41,6 +41,8 @@ pub mod state;
 pub mod instruction;
 #[cfg(feature = "solana")]
 pub mod onchain;
+#[cfg(feature = "solana-rpc")]
+pub mod sender;
 
 pub use capability::{KeeperScope, ACTION_KEEPER};
 pub use client::{ClientError, Execution, MockPercolator, PercolatorClient};

@@ -1296,6 +1296,7 @@ name = "covenant-percolator"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bs58",
  "covenant-budget",
  "covenant-settlement",
  "covenant-types",
@@ -1303,6 +1304,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "solana-client",
  "solana-sdk",
  "thiserror 1.0.69",
  "tokio",

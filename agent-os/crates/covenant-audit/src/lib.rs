@@ -835,11 +835,28 @@ impl AuditLog for InMemoryAuditLog {
     }
 }
 
+/// Lowercase 64-char SHA-256 hex of `bytes`.
+///
+/// Used as the redaction barrier for AuditKind::IntentDispatched.result_hash_hex
+/// (a stable fingerprint of an intent's textual result) and
+/// HermesToolInvoked.preview_hash_hex (a digest of a tool input that must not
+/// land in the audit chain in cleartext). The same primitive backs the chain
+/// hash (see sha256_hex / chain_hash), so a covenantd audit chain has one
+/// underlying digest function and one external-verification story.
+///
+/// Guarantees: collision resistance (2^128 work), preimage resistance for
+/// high-entropy inputs, and a deterministic 64-character lowercase hex output
+/// across Rust versions, platforms, and process restarts.
+///
+/// Does NOT guarantee: irreversibility for low-entropy inputs. A preview that
+/// is one of a small set of guessable values (a known file path, a short
+/// command name, a yes/no flag) is recoverable by hashing the candidate set.
+/// preview_hash_hex blocks accidental cleartext leakage and pins integrity; it
+/// is not a confidentiality primitive against an adversary who can guess the
+/// input distribution. A keyed-MAC layer is the correct fix when that threat
+/// applies, and is tracked separately from this primitive swap.
 pub fn hash_hex(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut h);
-    format!("{:016x}", h.finish())
+    sha256_hex(bytes)
 }
 
 #[cfg(test)]
@@ -1313,26 +1330,26 @@ mod tests {
     }
 
     #[test]
-    fn hash_hex_pins_16_char_zero_padded_lowercase_hex_and_empty_input_safety() {
-        // hash_hex populates
-        // AuditKind::IntentDispatched.result_hash_hex on every
-        // dispatched-intent audit row. Its implementation uses
-        // DefaultHasher and formats the resulting u64 with {:016x} —
-        // zero-padded to exactly 16 lowercase hex characters. The
-        // existing hash_hex_is_stable_for_same_input pin covers
-        // determinism and uniqueness but not the three implicit
-        // contract properties of the {:016x} format that audit-row
-        // consumers and operator dashboards rely on: exact 16-char
-        // width regardless of input value (a refactor to {:x} would
-        // emit 1-16 chars and break fixed-width column alignment);
-        // lowercase hex charset (a refactor to {:016X} would silently
-        // break grep workflows and string-equality checks against
-        // known-good hashes); empty-input safety (a refactor to a
-        // hasher that panicked on empty input would crash the daemon
-        // on the first empty-result intent). Mirrors the
-        // chain_hash_pins_separator_and_sha256_composition test's
-        // parallel pin of the SHA-256 chain anchor's 64-char lowercase
-        // hex output contract.
+    fn hash_hex_pins_64_char_sha256_lowercase_hex_and_empty_input_safety() {
+        // hash_hex populates AuditKind::IntentDispatched.result_hash_hex and
+        // HermesToolInvoked.preview_hash_hex. The implementation delegates to
+        // SHA-256 (sha256_hex), producing exactly 64 lowercase hex chars per
+        // call. This test pins the three contract properties consumers and
+        // operator dashboards rely on: exact 64-char width regardless of input
+        // value (a refactor to {:x} would emit variable-length hex and break
+        // fixed-width column alignment); lowercase hex charset (a refactor to
+        // {:X} or to_uppercase would silently break grep workflows and
+        // string-equality against known-good hashes); empty-input safety (a
+        // refactor to a digest that panicked on empty input would crash the
+        // daemon on the first empty-result intent). Replaces the prior
+        // 16-char-DefaultHasher pin (covenant-audit-hash-hex-output-width-
+        // and-charset-pin), which was contract-correct for the broken
+        // primitive but blocked the SHA-256 upgrade; the SHA-256 swap
+        // simultaneously closes failure modes #1 (preview reversibility for
+        // predictable inputs), #2 (no collision resistance), and #3 (Rust-
+        // version-unstable output) tracked in audit-hash-hex-cryptographic.
+        // Mirrors chain_hash_pins_separator_and_sha256_composition's parallel
+        // pin of the chain anchor's 64-char SHA-256 contract.
         for (label, input) in [
             ("empty", &b""[..]),
             ("single byte", &b"a"[..]),
@@ -1345,51 +1362,57 @@ mod tests {
             let out = hash_hex(input);
             assert_eq!(
                 out.len(),
-                16,
-                "hash_hex must produce exactly 16 hex characters for \
-                 every input including {label} — the {{:016x}} format \
-                 zero-pads low-value u64 hash outputs to 16 chars; a \
-                 refactor that dropped the 016 width (e.g., to {{:x}}) \
-                 would emit variable-length hex (1-16 chars depending \
-                 on the high bits of the DefaultHasher output) and \
+                64,
+                "hash_hex must produce exactly 64 hex characters for every \
+                 input including {label} — SHA-256 emits a 32-byte digest \
+                 hex-encoded to 64 lowercase chars; a refactor that swapped \
+                 sha256_hex for a shorter digest or truncated the hex would \
                  break operator dashboards that fixed-width-pad the \
-                 result_hash_hex column, plus any downstream tool that \
-                 parses the hash by character position; got len {} for \
-                 output {:?}",
+                 result_hash_hex column and downstream tools that parse by \
+                 character position; got len {} for output {:?}",
                 out.len(),
                 out,
             );
             assert!(
                 out.chars()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "hash_hex output must be lowercase hex only for every \
-                 input including {label}; a refactor that swapped \
-                 {{:016x}} for {{:016X}} or applied .to_uppercase() \
-                 would silently break grep workflows (e.g., grep \
-                 'result_hash_hex.*deadbeef') and string-equality \
-                 checks against known-good hashes in fixtures or \
-                 integration tests; got output {:?}",
+                "hash_hex output must be lowercase hex only for every input \
+                 including {label}; a refactor that uppercased the hex \
+                 (e.g., {{:X}} or to_uppercase) would silently break grep \
+                 workflows and string-equality checks against known-good \
+                 hashes in fixtures or integration tests; got output {:?}",
                 out,
             );
         }
 
-        // Empty-input safety as its own assertion — pinning that the
-        // call returns at all (no panic, no hang, no Empty error)
-        // even when the input byte slice is zero-length. A refactor
-        // to a hasher that required non-zero input would crash the
-        // daemon on the first dispatched intent whose result hashes
-        // to an empty byte slice (an Empty error result or an intent
-        // that produced no output) and turn the audit emit path into
-        // a denial-of-service surface that an attacker could trigger
-        // by inducing an empty result.
+        // Empty-input safety as its own assertion — pinning that the call
+        // returns at all (no panic, no hang, no Empty error) even when the
+        // input byte slice is zero-length. A refactor to a hasher that
+        // required non-zero input would crash the daemon on the first
+        // dispatched intent whose result hashes to an empty byte slice (an
+        // Empty error result or an intent that produced no output) and turn
+        // the audit emit path into a denial-of-service surface that an
+        // attacker could trigger by inducing an empty result.
         let empty = hash_hex(b"");
         assert_eq!(
             empty.len(),
-            16,
-            "hash_hex(b\"\") must succeed and produce 16 hex chars — \
-             pinning that empty-input is a normal, non-panicking input \
-             so the audit emit path stays safe when an intent's result \
-             is empty",
+            64,
+            "hash_hex(b\"\") must succeed and produce 64 hex chars — pinning \
+             that empty-input is a normal, non-panicking input so the audit \
+             emit path stays safe when an intent's result is empty",
+        );
+        // FIPS 180-4 SHA-256 of the empty string — anchors the primitive
+        // identity. A refactor that swapped SHA-256 for Blake2 / SHA-3 / a
+        // truncated variant under any "faster digest" rationale would
+        // silently invalidate every operator's on-disk audit chain because
+        // existing rows hashed under SHA-256 would no longer match
+        // independent re-verification. Mirrors
+        // sha256_hex_pins_nist_vectors_and_lowercase_output.
+        assert_eq!(
+            empty, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "hash_hex(b\"\") must equal the FIPS 180-4 SHA-256 empty-string \
+             vector — pinning that hash_hex delegates to SHA-256 and is not \
+             silently swapped for another primitive",
         );
     }
 

@@ -15,7 +15,7 @@ default = []
 solana = ["dep:solana-sdk"]
 # Thin reference Sender + `RpcSender` for submitting + confirming
 # keeper transactions against a real Solana RPC. Implies `solana`.
-solana-rpc = ["solana", "dep:solana-client", "dep:bs58"]
+solana-rpc = ["solana", "dep:solana-client", "dep:bs58", "dep:bytemuck"]
 
 [[bin]]
 name = "covenant-percolator-keeper"
@@ -49,6 +49,7 @@ tracing-subscriber = { workspace = true }
 solana-sdk = { workspace = true, optional = true }
 solana-client = { workspace = true, optional = true }
 bs58 = { version = "0.5", optional = true }
+bytemuck = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -845,23 +845,27 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
     })
 }
 
+struct StakeTxAccounts<'a> {
+    program_id: &'a Pubkey,
+    agent_key: &'a Pubkey,
+    owner_covnt: &'a Pubkey,
+    stake_vault: &'a Pubkey,
+    covnt_mint: &'a Pubkey,
+}
+
 fn sign_stake_tx(
     operator: &Keypair,
-    program_id: &Pubkey,
-    agent_key: &Pubkey,
-    owner_covnt: &Pubkey,
-    stake_vault: &Pubkey,
-    covnt_mint: &Pubkey,
+    accounts: &StakeTxAccounts<'_>,
     args: &StakeArgs,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Transaction {
     let ix = build_stake_instruction(
-        program_id,
+        accounts.program_id,
         &operator.pubkey(),
-        agent_key,
-        owner_covnt,
-        stake_vault,
-        covnt_mint,
+        accounts.agent_key,
+        accounts.owner_covnt,
+        accounts.stake_vault,
+        accounts.covnt_mint,
         args,
     );
     Transaction::new_signed_with_payer(
@@ -947,11 +951,13 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
                 .context("get_latest_blockhash from Solana RPC")?;
             let tx = sign_stake_tx(
                 &kp,
-                &program_id,
-                &agent_key,
-                &owner_covnt,
-                &stake_vault,
-                &covnt_mint,
+                &StakeTxAccounts {
+                    program_id: &program_id,
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &covnt_mint,
+                },
                 &prep_args,
                 blockhash,
             );
@@ -10133,7 +10139,7 @@ mod tests {
     }
 
     mod stake_tx_shape {
-        use super::super::{build_stake_instruction, sign_stake_tx, StakeArgs};
+        use super::super::{build_stake_instruction, sign_stake_tx, StakeArgs, StakeTxAccounts};
         use solana_sdk::hash::Hash;
         use solana_sdk::pubkey::Pubkey;
         use solana_sdk::signer::keypair::Keypair;
@@ -10163,11 +10169,13 @@ mod tests {
             let stake_vault = Pubkey::new_from_array([17u8; 32]);
             let tx = sign_stake_tx(
                 &kp,
-                &fixed_program(),
-                &agent_key,
-                &owner_covnt,
-                &stake_vault,
-                &Pubkey::new_from_array([21u8; 32]),
+                &StakeTxAccounts {
+                    program_id: &fixed_program(),
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10185,11 +10193,13 @@ mod tests {
             let stake_vault = Pubkey::new_from_array([17u8; 32]);
             let tx = sign_stake_tx(
                 &kp,
-                &fixed_program(),
-                &agent_key,
-                &owner_covnt,
-                &stake_vault,
-                &Pubkey::new_from_array([21u8; 32]),
+                &StakeTxAccounts {
+                    program_id: &fixed_program(),
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10221,11 +10231,13 @@ mod tests {
             );
             let tx = sign_stake_tx(
                 &kp,
-                &program,
-                &agent_key,
-                &owner_covnt,
-                &stake_vault,
-                &Pubkey::new_from_array([21u8; 32]),
+                &StakeTxAccounts {
+                    program_id: &program,
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
                 &args,
                 Hash::default(),
             );

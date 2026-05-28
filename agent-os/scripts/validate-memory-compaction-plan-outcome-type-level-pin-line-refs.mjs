@@ -84,7 +84,7 @@ const targets = [
     field: "expected_receipt_changes",
     selector: 'value["expected_receipt_changes"].is_object(),',
     docsRegex:
-      /- `expected_receipt_changes` \(object\): a forward-compatibility placeholder pinned by the schema test at `main\.rs:7476` \(`memory_compaction_plan_json_pins_expected_receipt_changes_schema`\)\. The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic\. Pinned as a structured object by `main\.rs:(\d+)-(\d+)` — never a string blob\./,
+      /- `expected_receipt_changes` \(object\): a forward-compatibility placeholder pinned by the schema test at `main\.rs:7482` \(`memory_compaction_plan_json_pins_expected_receipt_changes_schema`\)\. The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic\. Pinned as a structured object by `main\.rs:(\d+)-(\d+)` — never a string blob\./,
     docsLabel:
       "memory_compaction_plan.expected_receipt_changes type-level pin citation",
     docsTemplate:

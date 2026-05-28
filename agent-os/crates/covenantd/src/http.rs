@@ -990,15 +990,11 @@ fn tokio_broadcast_stream(
     rx: tokio::sync::broadcast::Receiver<StreamedTrace>,
 ) -> impl futures::Stream<Item = Option<StreamedTrace>> + Send + 'static {
     futures::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(trace) => return Some((Some(trace), rx)),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    // Slow client; skip the lagged window and keep going.
-                    return Some((None, rx));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-            }
+        match rx.recv().await {
+            Ok(trace) => Some((Some(trace), rx)),
+            // Slow client; skip the lagged window and keep going.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Some((None, rx)),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
         }
     })
 }

@@ -845,6 +845,11 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
     })
 }
 
+// 8 distinct on-chain accounts/keys are inherent to the stake instruction
+// (operator signer, program, agent PDA, owner ATA, stake vault, mint, args,
+// blockhash). Splitting would just bag them into a struct that has the same
+// arity; the function stays narrow on purpose.
+#[allow(clippy::too_many_arguments)]
 fn sign_stake_tx(
     operator: &Keypair,
     program_id: &Pubkey,

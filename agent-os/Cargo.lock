@@ -1359,7 +1359,9 @@ dependencies = [
  "anchor-spl",
  "litesvm",
  "solana-sdk",
+ "solana-security-txt",
  "spl-token",
+ "spl-token-2022",
 ]
 
 [[package]]

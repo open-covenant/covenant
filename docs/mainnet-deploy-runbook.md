@@ -19,17 +19,44 @@ $CVNT mint is a legacy SPL Token (not Token-2022). Task escrow ships disabled
 
 ## 2. Verifiable build
 
-A normal `anchor build` is not byte-reproducible, so the deployed bytecode cannot
-be checked against source. Build in the pinned container instead:
+Reproducible build via `solana-verify` against the Solana Foundation container
+(Cargo 1.86, which covers the `edition2024` deps in our workspace):
 
 ```
-cd agent-os
-anchor build --verifiable          # or: solana-verify build
-shasum -a 256 target/deploy/covenant_settlement_program.so   # record this hash
+cd <repo-root>
+solana-verify build \
+  --base-image solanafoundation/solana-verifiable-build:3.1.14 \
+  --library-name covenant_settlement_program
+solana-verify get-executable-hash agent-os/target/deploy/covenant_settlement_program.so
 ```
 
-Build without the `task-escrow` feature (the default) so the deployed program
-refuses `create_task`/`release_task`/`refund_task`.
+The mainnet program at `cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y` matches the
+verifiable hash `def75d6991eb03f36c661cf4cdf0195d67990210ef012080db50b555b387d158`
+(512,296 bytes). The verification PDA `8nHg5W1D886qpt3ffdFFsaeVq28udVauczyah9f8ckyP`
+records the source repo and commit:
+
+```
+solana-verify get-program-pda --program-id cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y \
+  --url https://api.mainnet-beta.solana.com
+```
+
+To reproduce + verify from scratch, anyone can run:
+
+```
+solana-verify verify-from-repo https://github.com/open-covenant/covenant \
+  --program-id cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y \
+  --library-name covenant_settlement_program \
+  --base-image solanafoundation/solana-verifiable-build:3.1.14 \
+  --commit-hash af96935cb809d013839004f6a15e5c52d31de795 \
+  --mount-path agent-os \
+  --url https://api.mainnet-beta.solana.com
+```
+
+Apple Silicon hosts should start colima with `--vm-type=vz --vz-rosetta` so the
+amd64 container doesn't crawl under qemu emulation. Colima only auto-mounts
+`$HOME`, so the source repo must be under `$HOME` (or extend the mount list);
+passing `--current-dir` to `solana-verify` uses the local checkout instead of
+cloning to `/tmp`.
 
 ## 3. Deploy
 

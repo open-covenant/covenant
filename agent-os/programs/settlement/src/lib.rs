@@ -8,9 +8,21 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_interface::{self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
+
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "Covenant Settlement",
+    project_url: "https://opencovenant.org",
+    contacts: "email:security@opencovenant.org",
+    policy: "https://github.com/open-covenant/covenant/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/open-covenant/covenant",
+    source_release: "v0.1.0-alpha.1",
+    auditors: "None"
+}
 
 #[program]
 pub mod settlement {
@@ -93,7 +105,11 @@ pub mod settlement {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(amount_covnt > 0, CovenantError::ZeroAmount);
 
-        token::transfer(ctx.accounts.buy_transfer_ctx(), amount_covnt)?;
+        token_interface::transfer_checked(
+            ctx.accounts.buy_transfer_ctx(),
+            amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
 
         let credits = amount_covnt
             .checked_mul(ctx.accounts.config.credits_per_covnt)
@@ -147,7 +163,11 @@ pub mod settlement {
             require!(lock_until >= min_unlock, CovenantError::LockTooShort);
         }
 
-        token::transfer(ctx.accounts.stake_transfer_ctx(), amount)?;
+        token_interface::transfer_checked(
+            ctx.accounts.stake_transfer_ctx(),
+            amount,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
 
         let position = &mut ctx.accounts.position;
         position.agent_key = ctx.accounts.agent.agent_key;
@@ -199,11 +219,12 @@ pub mod settlement {
             owner.as_ref(),
             &[ctx.accounts.position.bump],
         ];
-        token::transfer(
+        token_interface::transfer_checked(
             ctx.accounts
                 .unstake_transfer_ctx()
                 .with_signer(&[signer_seeds]),
             amount,
+            ctx.accounts.covnt_mint.decimals,
         )?;
 
         ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
@@ -234,11 +255,12 @@ pub mod settlement {
             owner.as_ref(),
             &[ctx.accounts.position.bump],
         ];
-        token::transfer(
+        token_interface::transfer_checked(
             ctx.accounts
                 .slash_transfer_ctx()
                 .with_signer(&[signer_seeds]),
             amount,
+            ctx.accounts.covnt_mint.decimals,
         )?;
 
         ctx.accounts.position.amount -= amount;
@@ -262,7 +284,11 @@ pub mod settlement {
         require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
 
-        token::transfer(ctx.accounts.task_fund_ctx(), args.amount_covnt)?;
+        token_interface::transfer_checked(
+            ctx.accounts.task_fund_ctx(),
+            args.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
 
         let task = &mut ctx.accounts.task;
         task.task_id = args.task_id;
@@ -308,9 +334,10 @@ pub mod settlement {
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
-        token::transfer(
+        token_interface::transfer_checked(
             ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
             ctx.accounts.task.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
         )?;
 
         ctx.accounts.task.status = TASK_RELEASED;
@@ -347,9 +374,10 @@ pub mod settlement {
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
-        token::transfer(
+        token_interface::transfer_checked(
             ctx.accounts.task_refund_ctx().with_signer(&[signer_seeds]),
             ctx.accounts.task.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
         )?;
 
         ctx.accounts.task.status = TASK_REFUNDED;
@@ -368,7 +396,7 @@ pub mod settlement {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(amount > 0, CovenantError::ZeroAmount);
 
-        token::burn(ctx.accounts.burn_ctx(), amount)?;
+        token_interface::burn(ctx.accounts.burn_ctx(), amount)?;
 
         emit!(CovntBurned {
             owner: ctx.accounts.owner.key(),
@@ -539,11 +567,11 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     #[account(mut)]
     pub authority: Signer<'info>,
-    pub covnt_mint: Account<'info, Mint>,
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
     #[account(
         constraint = treasury.mint == covnt_mint.key() @ CovenantError::WrongMint,
     )]
-    pub treasury: Account<'info, TokenAccount>,
+    pub treasury: InterfaceAccount<'info, TokenAccount>,
     pub system_program: Program<'info, System>,
 }
 
@@ -634,17 +662,20 @@ pub struct BuyCredits<'info> {
         constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
         constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub owner_covnt: Account<'info, TokenAccount>,
+    pub owner_covnt: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, constraint = treasury.mint == config.covnt_mint @ CovenantError::WrongMint)]
-    pub treasury: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub treasury: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> BuyCredits<'info> {
-    fn buy_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn buy_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.owner_covnt.to_account_info(),
                 to: self.treasury.to_account_info(),
                 authority: self.owner.to_account_info(),
@@ -698,22 +729,25 @@ pub struct Stake<'info> {
         constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
         constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub owner_covnt: Account<'info, TokenAccount>,
+    pub owner_covnt: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub stake_vault: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
 impl<'info> Stake<'info> {
-    fn stake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn stake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.owner_covnt.to_account_info(),
                 to: self.stake_vault.to_account_info(),
                 authority: self.owner.to_account_info(),
@@ -751,21 +785,24 @@ pub struct Unstake<'info> {
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub stake_vault: Account<'info, TokenAccount>,
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
         constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub owner_covnt: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub owner_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> Unstake<'info> {
-    fn unstake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn unstake_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.stake_vault.to_account_info(),
                 to: self.owner_covnt.to_account_info(),
                 authority: self.position.to_account_info(),
@@ -801,17 +838,20 @@ pub struct SlashStake<'info> {
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub stake_vault: Account<'info, TokenAccount>,
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint)]
-    pub slash_vault: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub slash_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> SlashStake<'info> {
-    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.stake_vault.to_account_info(),
                 to: self.slash_vault.to_account_info(),
                 authority: self.position.to_account_info(),
@@ -840,7 +880,7 @@ pub struct CreateTask<'info> {
         seeds = [b"task", args.task_id.as_ref()],
         bump,
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
     #[account(mut)]
     pub client: Signer<'info>,
     #[account(
@@ -848,22 +888,25 @@ pub struct CreateTask<'info> {
         constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
         constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub client_covnt: Account<'info, TokenAccount>,
+    pub client_covnt: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
         constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub escrow_vault: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
 impl<'info> CreateTask<'info> {
-    fn task_fund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn task_fund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.client_covnt.to_account_info(),
                 to: self.escrow_vault.to_account_info(),
                 authority: self.client.to_account_info(),
@@ -885,28 +928,31 @@ pub struct ReleaseTask<'info> {
         bump = task.bump,
         has_one = client @ CovenantError::Unauthorized,
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
     pub client: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
         constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub escrow_vault: Account<'info, TokenAccount>,
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
         constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub provider_covnt: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub provider_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> ReleaseTask<'info> {
-    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.escrow_vault.to_account_info(),
                 to: self.provider_covnt.to_account_info(),
                 authority: self.task.to_account_info(),
@@ -928,28 +974,31 @@ pub struct RefundTask<'info> {
         bump = task.bump,
         has_one = client @ CovenantError::Unauthorized,
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
     pub client: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
         constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub escrow_vault: Account<'info, TokenAccount>,
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
         constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub client_covnt: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub client_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> RefundTask<'info> {
-    fn task_refund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+    fn task_refund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
                 from: self.escrow_vault.to_account_info(),
                 to: self.client_covnt.to_account_info(),
                 authority: self.task.to_account_info(),
@@ -968,14 +1017,14 @@ pub struct BurnCovnt<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(mut, address = config.covnt_mint)]
-    pub covnt_mint: Account<'info, Mint>,
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
     #[account(
         mut,
         constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
         constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
-    pub owner_covnt: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub owner_covnt: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 impl<'info> BurnCovnt<'info> {
@@ -1050,7 +1099,7 @@ pub struct UpdateTreasury<'info> {
     pub config: Account<'info, Config>,
     pub authority: Signer<'info>,
     #[account(constraint = treasury.mint == config.covnt_mint @ CovenantError::WrongMint)]
-    pub treasury: Account<'info, TokenAccount>,
+    pub treasury: InterfaceAccount<'info, TokenAccount>,
 }
 
 #[derive(Accounts)]

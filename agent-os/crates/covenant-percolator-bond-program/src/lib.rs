@@ -24,6 +24,12 @@
 //!          action_bit, has_asset, asset_index)
 
 #![deny(unsafe_code)]
+// `solana_program::entrypoint!` expands to cfg-gated branches like
+// `cfg(feature = "custom-heap")` and `cfg(target_os = "solana")`
+// that aren't declared in OUR Cargo.toml. The SDK owns those cfgs;
+// our crate just has to allow rustc's new check-cfg lint to see
+// them without erroring on `-D warnings`.
+#![allow(unexpected_cfgs)]
 
 use solana_program::account_info::AccountInfo;
 use solana_program::entrypoint;
@@ -36,7 +42,9 @@ use solana_program::rent::Rent;
 use solana_program::system_instruction;
 use solana_program::sysvar::Sysvar;
 
-use covenant_percolator_bond::evidence::{verify_slash, AttestedAction, SlashEvidence};
+use covenant_percolator_bond::evidence::{
+    verify_slash, AttestedAction, SlashEvidence, SlashRejection,
+};
 use covenant_percolator_bond::scope::{ActionMask, BondScope, ScopeHash};
 use covenant_percolator_bond::state::{BondAccount, BOND_VERSION};
 use covenant_percolator_bond::{BOND_SEED, SLASH_SEED};
@@ -49,6 +57,41 @@ mod tag {
     pub const SET_PAUSED: u8 = 2;
     pub const WITHDRAW: u8 = 3;
     pub const SLASH: u8 = 4;
+}
+
+/// Program-specific error codes returned via `ProgramError::Custom(_)`.
+/// These are part of the on-chain ABI: block explorers, indexers, and
+/// off-chain monitors parse them to surface meaningful failures.
+/// **Do not reuse a code** when adding a new error — append.
+///
+/// 1 — DepositOnSlashedBond: caller tried to deposit into a bond
+///     whose `slashed = 1`. The bond is permanently dead; refund.
+/// 2 — WithdrawOnSlashedBond: keeper tried to withdraw from a
+///     slashed bond. Same as above.
+/// 3 — WithdrawBondNotPaused: keeper tried to withdraw while the
+///     bond was unpaused. The operator must `SetPaused(true)` first
+///     — this is the safety interlock against runaway withdraws
+///     while slash evidence is pending.
+/// 10..16 — SlashRejection variants, one per case. The on-chain
+///     mapping mirrors the `SlashRejection` enum in
+///     `covenant-percolator-bond::evidence`, so observers can
+///     distinguish "your evidence is wrong" from "bond already
+///     slashed" from "scope hash mismatch" from "zero receipt id"
+///     without needing transaction logs.
+pub mod err {
+    pub const DEPOSIT_ON_SLASHED_BOND: u32 = 1;
+    pub const WITHDRAW_ON_SLASHED_BOND: u32 = 2;
+    pub const WITHDRAW_BOND_NOT_PAUSED: u32 = 3;
+
+    // SlashRejection mapping (10..16). One code per `SlashRejection`
+    // variant — see `evidence.rs` for the definitions.
+    pub const SLASH_ALREADY_SLASHED: u32 = 10;
+    pub const SLASH_EMPTY_BOND: u32 = 11;
+    pub const SLASH_SCOPE_HASH_MISMATCH: u32 = 12;
+    pub const SLASH_BEFORE_BOND_START: u32 = 13;
+    pub const SLASH_NO_VIOLATION: u32 = 14;
+    pub const SLASH_ZERO_RECEIPT_ID: u32 = 15;
+    pub const SLASH_UNKNOWN_ACTION_BIT: u32 = 16;
 }
 
 pub fn process_instruction(
@@ -255,7 +298,7 @@ fn deposit(program_id: &Pubkey, accounts: &[AccountInfo], mut rest: &[u8]) -> Pr
         let data = bond_ai.try_borrow_data()?;
         let bond = BondAccount::decode(&data).map_err(|_| ProgramError::InvalidAccountData)?;
         if bond.slashed != 0 {
-            return Err(ProgramError::Custom(1));
+            return Err(ProgramError::Custom(err::DEPOSIT_ON_SLASHED_BOND));
         }
     }
 
@@ -299,7 +342,7 @@ fn set_paused(program_id: &Pubkey, accounts: &[AccountInfo], mut rest: &[u8]) ->
 
     let mut data = bond_ai.try_borrow_mut_data()?;
     let mut bond = BondAccount::decode(&data).map_err(|_| ProgramError::InvalidAccountData)?;
-    if &bond.operator != operator_ai.key.as_ref() {
+    if bond.operator != operator_ai.key.to_bytes() {
         return Err(ProgramError::IllegalOwner);
     }
     bond.paused = paused & 1;
@@ -328,14 +371,14 @@ fn withdraw(program_id: &Pubkey, accounts: &[AccountInfo], mut rest: &[u8]) -> P
 
     let mut data = bond_ai.try_borrow_mut_data()?;
     let mut bond = BondAccount::decode(&data).map_err(|_| ProgramError::InvalidAccountData)?;
-    if &bond.keeper != keeper_ai.key.as_ref() {
+    if bond.keeper != keeper_ai.key.to_bytes() {
         return Err(ProgramError::IllegalOwner);
     }
     if bond.slashed != 0 {
-        return Err(ProgramError::Custom(2));
+        return Err(ProgramError::Custom(err::WITHDRAW_ON_SLASHED_BOND));
     }
     if bond.paused == 0 {
-        return Err(ProgramError::Custom(3));
+        return Err(ProgramError::Custom(err::WITHDRAW_BOND_NOT_PAUSED));
     }
     if lamports > bond.lamports {
         return Err(ProgramError::InsufficientFunds);
@@ -408,13 +451,40 @@ fn slash(program_id: &Pubkey, accounts: &[AccountInfo], mut rest: &[u8]) -> Prog
     // Decode + run the verifier.
     let mut data = bond_ai.try_borrow_mut_data()?;
     let mut bond = BondAccount::decode(&data).map_err(|_| ProgramError::InvalidAccountData)?;
-    if &bond.slash_recipient != recipient_ai.key.as_ref() {
+    if bond.slash_recipient != recipient_ai.key.to_bytes() {
         return Err(ProgramError::IllegalOwner);
     }
 
+    // Map each SlashRejection variant to its own Custom code so
+    // off-chain monitors (block explorers, indexers, slashers
+    // pre-flighting evidence) can tell WHY a slash failed. Without
+    // this, every rejection looks the same and slashers can't
+    // distinguish "your evidence is malformed" from "the bond is
+    // already drained" from "the scope hash you submitted doesn't
+    // match what was stored". See `err::SLASH_*` constants above.
     let verdict = match verify_slash(&bond, &evidence) {
         Ok(v) => v,
-        Err(_) => return Err(ProgramError::Custom(4)),
+        Err(SlashRejection::AlreadySlashed) => {
+            return Err(ProgramError::Custom(err::SLASH_ALREADY_SLASHED));
+        }
+        Err(SlashRejection::EmptyBond) => {
+            return Err(ProgramError::Custom(err::SLASH_EMPTY_BOND));
+        }
+        Err(SlashRejection::ScopeHashMismatch) => {
+            return Err(ProgramError::Custom(err::SLASH_SCOPE_HASH_MISMATCH));
+        }
+        Err(SlashRejection::BeforeBondStart) => {
+            return Err(ProgramError::Custom(err::SLASH_BEFORE_BOND_START));
+        }
+        Err(SlashRejection::NoViolation) => {
+            return Err(ProgramError::Custom(err::SLASH_NO_VIOLATION));
+        }
+        Err(SlashRejection::ZeroReceiptId) => {
+            return Err(ProgramError::Custom(err::SLASH_ZERO_RECEIPT_ID));
+        }
+        Err(SlashRejection::UnknownActionBit) => {
+            return Err(ProgramError::Custom(err::SLASH_UNKNOWN_ACTION_BIT));
+        }
     };
 
     // Allocate the slash-receipt PDA — this is replay protection. If

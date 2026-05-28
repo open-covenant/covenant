@@ -31,7 +31,18 @@ pub struct BondAccount {
     /// full bytes; the program recomputes the hash to confirm
     /// authenticity.
     pub scope_hash: ScopeHash,
-    /// Lamports still in the bond.
+    /// Lamports in the bond *escrow* — what's slashable / withdrawable.
+    ///
+    /// **Invariant:** the AccountInfo's actual lamports equal
+    /// `bond.lamports + rent_reserve_for_bond_size`. Deposits raise
+    /// both equally; withdrawals and slashes lower both equally; the
+    /// rent reserve is preserved across all paths so the bond
+    /// account stays rent-exempt for its full lifecycle.
+    ///
+    /// The on-chain program reads `bond.lamports` (this field) when
+    /// deciding slash amounts and withdraw limits, never the raw
+    /// `AccountInfo::lamports()` value — the latter includes rent
+    /// and would slash the rent reserve away.
     pub lamports: u64,
     /// Slot at which the bond was created. Receipts dated before
     /// this slot can't be used as slash evidence (the keeper was

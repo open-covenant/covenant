@@ -220,7 +220,7 @@ async fn well_behaved_keeper_keeps_bond() {
 
     // Slasher claims the keeper acted on asset 0 — but that's
     // permitted by the scope. The verifier rejects with NoViolation
-    // (mapped to Custom(4)), the bond stays intact.
+    // (mapped to Custom(14) — SLASH_NO_VIOLATION), the bond stays intact.
     let evidence = covenant_percolator_bond::SlashEvidence {
         scope: scope.clone(),
         action: AttestedAction {
@@ -245,13 +245,148 @@ async fn well_behaved_keeper_keeps_bond() {
     );
     let mut tx = Transaction::new_with_payer(&[slash_ix], Some(&operator.pubkey()));
     tx.sign(&[&operator], recent_blockhash);
-    banks
+    let err = banks
         .process_transaction(tx)
         .await
         .expect_err("slash on in-scope action must fail");
+    // Lock the error-code contract: NoViolation → Custom(14). This
+    // is part of the on-chain ABI — observers parse it.
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("Custom(14)"),
+        "expected SLASH_NO_VIOLATION (Custom 14), got: {msg}"
+    );
 
     let acc = banks.get_account(bond_pda).await.unwrap().unwrap();
     let bond = BondAccount::decode(&acc.data).unwrap();
     assert_eq!(bond.slashed, 0, "well-behaved keeper bond preserved");
     assert_eq!(bond.lamports, 1_000_000_000);
+}
+
+/// Lock the slash-error-code ABI. Each `SlashRejection` variant
+/// maps to a distinct `Custom(N)`. This test exercises three
+/// representative variants (scope hash mismatch, unknown action
+/// bit, before-bond-start). Bond stays intact in all cases.
+#[tokio::test]
+async fn slash_error_codes_are_distinct_per_rejection() {
+    let program_id = Pubkey::new_unique();
+    let mut pt = ProgramTest::new(
+        "covenant_percolator_bond_program",
+        program_id,
+        processor!(process_instruction),
+    );
+    let operator = Keypair::new();
+    let keeper = Keypair::new();
+    let recipient = Pubkey::new_unique();
+    pt.add_account(
+        operator.pubkey(),
+        solana_sdk::account::Account {
+            lamports: 10_000_000_000,
+            data: vec![],
+            owner: solana_sdk::system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    let (banks, _payer, recent_blockhash) = pt.start().await;
+    let (bond_pda, _) =
+        Pubkey::find_program_address(&[BOND_SEED, keeper.pubkey().as_ref()], &program_id);
+    let scope = bond_scope();
+    let init_ix = instruction::initialize_bond(
+        program_id,
+        bond_pda,
+        operator.pubkey(),
+        keeper.pubkey(),
+        scope.hash(),
+        recipient,
+        100,
+    );
+    let mut tx = Transaction::new_with_payer(&[init_ix], Some(&operator.pubkey()));
+    tx.sign(&[&operator], recent_blockhash);
+    banks.process_transaction(tx).await.unwrap();
+    let deposit_ix = instruction::deposit(program_id, bond_pda, operator.pubkey(), 500_000_000);
+    let mut tx = Transaction::new_with_payer(&[deposit_ix], Some(&operator.pubkey()));
+    tx.sign(&[&operator], recent_blockhash);
+    banks.process_transaction(tx).await.unwrap();
+
+    // Variant 1: ScopeHashMismatch (Custom 12). Submit a DIFFERENT
+    // scope from the one the bond was initialized with.
+    let wrong_scope = covenant_percolator_bond::scope::BondScope {
+        version: 1,
+        market: [0x99; 32], // different market
+        allowed_actions: ActionMask(ActionMask::CRANK),
+        allowed_assets: Some(vec![0]),
+        max_actions_per_tick: 1,
+    };
+    let evidence = covenant_percolator_bond::SlashEvidence {
+        scope: wrong_scope,
+        action: AttestedAction {
+            receipt_id: [0xAA; 16],
+            executed_slot: 200,
+            market: [0x99; 32],
+            action_bit: ActionMask::PUSH_MARK,
+            asset_index: Some(7),
+        },
+    };
+    let (receipt_pda, _) =
+        Pubkey::find_program_address(&[SLASH_SEED, bond_pda.as_ref(), &[0xAA; 16]], &program_id);
+    let slash_ix = instruction::slash(
+        program_id, bond_pda, recipient, receipt_pda, operator.pubkey(), &evidence,
+    );
+    let mut tx = Transaction::new_with_payer(&[slash_ix], Some(&operator.pubkey()));
+    tx.sign(&[&operator], recent_blockhash);
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("Custom(12)"), "expected SLASH_SCOPE_HASH_MISMATCH: {msg}");
+
+    // Variant 2: ZeroReceiptId (Custom 15). receipt_id = [0; 16].
+    let evidence = covenant_percolator_bond::SlashEvidence {
+        scope: scope.clone(),
+        action: AttestedAction {
+            receipt_id: [0u8; 16],
+            executed_slot: 200,
+            market: scope.market,
+            action_bit: ActionMask::PUSH_MARK,
+            asset_index: Some(7),
+        },
+    };
+    let (receipt_pda, _) =
+        Pubkey::find_program_address(&[SLASH_SEED, bond_pda.as_ref(), &[0u8; 16]], &program_id);
+    let slash_ix = instruction::slash(
+        program_id, bond_pda, recipient, receipt_pda, operator.pubkey(), &evidence,
+    );
+    let mut tx = Transaction::new_with_payer(&[slash_ix], Some(&operator.pubkey()));
+    tx.sign(&[&operator], recent_blockhash);
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("Custom(15)"), "expected SLASH_ZERO_RECEIPT_ID: {msg}");
+
+    // Variant 3: UnknownActionBit (Custom 16). action_bit has a
+    // bit outside { PUSH_MARK, CRANK, RECOVER }.
+    let evidence = covenant_percolator_bond::SlashEvidence {
+        scope: scope.clone(),
+        action: AttestedAction {
+            receipt_id: [0xCC; 16],
+            executed_slot: 200,
+            market: scope.market,
+            action_bit: 0b1000, // bit 3, unknown
+            asset_index: Some(7),
+        },
+    };
+    let (receipt_pda, _) =
+        Pubkey::find_program_address(&[SLASH_SEED, bond_pda.as_ref(), &[0xCC; 16]], &program_id);
+    let slash_ix = instruction::slash(
+        program_id, bond_pda, recipient, receipt_pda, operator.pubkey(), &evidence,
+    );
+    let mut tx = Transaction::new_with_payer(&[slash_ix], Some(&operator.pubkey()));
+    tx.sign(&[&operator], recent_blockhash);
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("Custom(16)"), "expected SLASH_UNKNOWN_ACTION_BIT: {msg}");
+
+    // Bond unchanged through all attempted slashes.
+    let acc = banks.get_account(bond_pda).await.unwrap().unwrap();
+    let bond = BondAccount::decode(&acc.data).unwrap();
+    assert_eq!(bond.slashed, 0);
+    assert_eq!(bond.lamports, 500_000_000);
 }

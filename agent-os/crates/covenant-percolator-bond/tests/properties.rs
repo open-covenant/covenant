@@ -13,7 +13,7 @@ use proptest::prelude::*;
 fn scope(
     market_byte: u8,
     mask: u8,
-    assets: Vec<u16>,
+    assets: Option<Vec<u16>>,
     cap: u32,
 ) -> BondScope {
     BondScope {
@@ -58,7 +58,7 @@ proptest! {
         action_asset_idx in 0usize..8,
         action_bit_idx in 0u8..3,
     ) {
-        let scope_obj = scope(market_byte, mask, scope_assets.clone(), cap);
+        let scope_obj = scope(market_byte, mask, Some(scope_assets.clone()), cap);
         let bond = bond_for(&scope_obj, bond_lamports, bond_slot);
         // Pick an asset that IS in the scope.
         let asset_index = scope_assets[action_asset_idx % scope_assets.len()];
@@ -88,16 +88,25 @@ proptest! {
         );
     }
 
-    /// P2 — A wrong market is always rejected (MarketMismatch),
-    /// even when every other field happens to match scope.
+    /// P2 — A keeper acting on a market different from the scoped
+    /// one is always slashable. (Previous versions rejected this as
+    /// "MarketMismatch"; that was a security bug — wrong market is
+    /// the textbook out-of-scope violation. The verifier now flows
+    /// wrong-market through `BondScope::allows → false` into the
+    /// slash branch.)
     #[test]
-    fn wrong_market_is_always_rejected(
+    fn wrong_market_is_always_slashable(
         scope_market in 0u8..255,
         action_market in 0u8..255,
         bond_lamports in 1u64..1_000_000_000,
     ) {
         prop_assume!(scope_market != action_market);
-        let scope_obj = scope(scope_market, ActionMask::PUSH_MARK | ActionMask::CRANK, vec![0], 1);
+        let scope_obj = scope(
+            scope_market,
+            ActionMask::PUSH_MARK | ActionMask::CRANK,
+            Some(vec![0]),
+            1,
+        );
         let bond = bond_for(&scope_obj, bond_lamports, 0);
         let action = AttestedAction {
             receipt_id: [0; 16],
@@ -106,10 +115,8 @@ proptest! {
             action_bit: ActionMask::PUSH_MARK,
             asset_index: Some(0),
         };
-        prop_assert_eq!(
-            verify_slash(&bond, &ev(scope_obj, action)),
-            Err(SlashRejection::MarketMismatch)
-        );
+        let r = verify_slash(&bond, &ev(scope_obj, action)).unwrap();
+        prop_assert_eq!(r.slash_lamports, bond.lamports);
     }
 
     /// P3 — A scope-hash mismatch trumps everything else, no matter
@@ -118,15 +125,17 @@ proptest! {
     /// fails to permit the action.
     #[test]
     fn hash_mismatch_blocks_slash_regardless_of_violation(
-        wrong_hash_byte in 0u8..=255,
+        wrong_hash_byte in 1u8..=255,
         action_asset in 0u16..1000,
     ) {
-        let scope_obj = scope(1, ActionMask::CRANK, vec![0], 1);
+        let scope_obj = scope(1, ActionMask::CRANK, Some(vec![0]), 1);
         let mut bond = bond_for(&scope_obj, 1_000_000, 0);
-        // Corrupt one byte of the stored scope hash so it can't
-        // collide with what the slasher submits.
+        // Corrupt one byte of the stored scope hash. `wrong_hash_byte`
+        // ranges over 1..=255 so the xor is always non-zero — a zero
+        // xor would leave the hash unchanged and a real violation
+        // would slash, contradicting the property.
         let mut h = bond.scope_hash.0;
-        h[0] ^= wrong_hash_byte.wrapping_add(1);
+        h[0] ^= wrong_hash_byte;
         bond.scope_hash = covenant_percolator_bond::scope::ScopeHash(h);
 
         let action = AttestedAction {
@@ -154,7 +163,7 @@ proptest! {
         let scope_obj = scope(
             1,
             ActionMask::PUSH_MARK | ActionMask::CRANK,
-            scope_assets,
+            Some(scope_assets),
             4,
         );
         let bond = bond_for(&scope_obj, bond_lamports, 0);
@@ -164,6 +173,62 @@ proptest! {
             market: [1u8; 32],
             action_bit: ActionMask::PUSH_MARK,
             asset_index: Some(outsider_seed),
+        };
+        let r = verify_slash(&bond, &ev(scope_obj, action)).unwrap();
+        prop_assert_eq!(r.slash_lamports, bond.lamports);
+    }
+
+    /// P5 — When `allowed_assets = None` (any asset), no action with
+    /// a target asset can be slashed on the asset gate; only an
+    /// action-mask or market mismatch can. The semantic that "None
+    /// means any" must not regress to "None means deny all".
+    #[test]
+    fn allowed_assets_none_does_not_slash_on_asset_gate(
+        target_asset in 0u16..10_000,
+        bond_lamports in 1u64..1_000_000_000,
+    ) {
+        let scope_obj = scope(
+            1,
+            ActionMask::PUSH_MARK | ActionMask::CRANK,
+            None,
+            4,
+        );
+        let bond = bond_for(&scope_obj, bond_lamports, 0);
+        let action = AttestedAction {
+            receipt_id: [0; 16],
+            executed_slot: 1000,
+            market: [1u8; 32],
+            action_bit: ActionMask::PUSH_MARK,
+            asset_index: Some(target_asset),
+        };
+        prop_assert_eq!(
+            verify_slash(&bond, &ev(scope_obj, action)),
+            Err(SlashRejection::NoViolation)
+        );
+    }
+
+    /// P6 — When `allowed_assets = Some(vec![])` (deny all assets),
+    /// ANY action with a target asset is slashable. This is the
+    /// dangerous-and-correct distinction from P5 that the previous
+    /// encoding silently collapsed.
+    #[test]
+    fn allowed_assets_some_empty_slashes_any_asset_target(
+        target_asset in 0u16..10_000,
+        bond_lamports in 1u64..1_000_000_000,
+    ) {
+        let scope_obj = scope(
+            1,
+            ActionMask::PUSH_MARK | ActionMask::CRANK,
+            Some(vec![]),
+            4,
+        );
+        let bond = bond_for(&scope_obj, bond_lamports, 0);
+        let action = AttestedAction {
+            receipt_id: [0; 16],
+            executed_slot: 1000,
+            market: [1u8; 32],
+            action_bit: ActionMask::PUSH_MARK,
+            asset_index: Some(target_asset),
         };
         let r = verify_slash(&bond, &ev(scope_obj, action)).unwrap();
         prop_assert_eq!(r.slash_lamports, bond.lamports);

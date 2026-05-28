@@ -1318,6 +1318,8 @@ dependencies = [
 name = "covenant-percolator-bond"
 version = "0.0.0"
 dependencies = [
+ "bs58",
+ "covenant-percolator",
  "covenant-types",
  "proptest",
  "serde",

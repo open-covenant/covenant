@@ -61,13 +61,16 @@ pub fn build_instruction(action: &KeeperAction, ctx: &BuildContext) -> Result<In
             ctx.now_slot,
             *mark_e6,
         )),
-        KeeperAction::Crank => {
+        KeeperAction::CrankAsset { asset_index } => {
             // Refresh is the only routine path. Recovery / liquidation
             // surfaces still go through PermissionlessCrank but with
             // distinct policies; the keeper's policy layer emits
-            // those as recovery actions instead, so a plain `Crank`
-            // is always action=Refresh, asset_index=0.
-            let portfolio = ctx.portfolio.ok_or(BuildError::MissingPortfolio("Crank"))?;
+            // those as recovery actions instead, so a plain
+            // `CrankAsset` is always action=Refresh, asset_index from
+            // the variant.
+            let portfolio = ctx
+                .portfolio
+                .ok_or(BuildError::MissingPortfolio("CrankAsset"))?;
             Ok(instruction::permissionless_crank(
                 ctx.program_id,
                 ctx.market,
@@ -75,7 +78,7 @@ pub fn build_instruction(action: &KeeperAction, ctx: &BuildContext) -> Result<In
                 ctx.keeper,
                 None,
                 crank_action::REFRESH,
-                0,
+                *asset_index,
                 ctx.now_slot,
                 0,
                 0,
@@ -160,10 +163,15 @@ mod tests {
     }
 
     #[test]
-    fn crank_uses_tag_5_refresh() {
-        let ix = build_instruction(&KeeperAction::Crank, &ctx()).unwrap();
+    fn crank_asset_uses_tag_5_refresh_and_threads_asset_index() {
+        let ix =
+            build_instruction(&KeeperAction::CrankAsset { asset_index: 7 }, &ctx())
+                .unwrap();
         assert_eq!(ix.data[0], 5);
-        assert_eq!(ix.data[1], 0, "Crank synthetic action maps to Refresh");
+        assert_eq!(ix.data[1], 0, "CrankAsset maps to Refresh action");
+        // tag(1) + action(1) + asset_index_le(2) — assert the asset
+        // gets passed through, NOT hardcoded to 0.
+        assert_eq!(&ix.data[2..4], &7u16.to_le_bytes());
     }
 
     #[test]
@@ -171,8 +179,8 @@ mod tests {
         let mut c = ctx();
         c.portfolio = None;
         assert!(matches!(
-            build_instruction(&KeeperAction::Crank, &c),
-            Err(BuildError::MissingPortfolio("Crank"))
+            build_instruction(&KeeperAction::CrankAsset { asset_index: 0 }, &c),
+            Err(BuildError::MissingPortfolio("CrankAsset"))
         ));
     }
 

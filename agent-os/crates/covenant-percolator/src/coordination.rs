@@ -36,7 +36,7 @@ pub type KeeperId = [u8; 32];
 pub fn action_key(action: &KeeperAction) -> u64 {
     let kind: u64 = match action {
         KeeperAction::PushAuthMark { .. } => 1,
-        KeeperAction::Crank => 2,
+        KeeperAction::CrankAsset { .. } => 2,
         KeeperAction::RecoveryForfeitLeg { .. } => 3,
         KeeperAction::RecoveryRebalanceReduce { .. } => 4,
         KeeperAction::RecoveryFinalize { .. } => 5,
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn single_keeper_with_no_peers_always_leads() {
         let me = kid(1);
-        let action = KeeperAction::Crank;
+        let action = KeeperAction::CrankAsset { asset_index: 0 };
         assert!(should_lead(&me, &action, 100, 50, &[]));
         assert!(should_lead(&me, &action, 7_000_000, 1, &[]));
     }
@@ -169,7 +169,7 @@ mod tests {
         // a different leader. The network thus naturally parallelizes
         // across non-conflicting work in the same window.
         let peers = [kid(5), kid(6), kid(7)];
-        let crank = KeeperAction::Crank;
+        let crank = KeeperAction::CrankAsset { asset_index: 3 };
         let push = KeeperAction::PushAuthMark {
             asset_index: 3,
             mark_e6: 1,
@@ -191,9 +191,23 @@ mod tests {
     #[test]
     fn determinism_pure_function_of_public_inputs() {
         let peers = [kid(1), kid(2), kid(3)];
-        let action = KeeperAction::Crank;
+        let action = KeeperAction::CrankAsset { asset_index: 0 };
         let a = should_lead(&kid(2), &action, 1234, 50, &peers);
         let b = should_lead(&kid(2), &action, 1234, 50, &peers);
         assert_eq!(a, b);
+    }
+
+    /// Per-asset cranks have distinct action keys, so different
+    /// peers can simultaneously lead cranks on different assets in
+    /// the same window. This is the win of the per-asset crank fan-out:
+    /// the keeper network parallelizes naturally across the asset axis.
+    #[test]
+    fn per_asset_cranks_have_distinct_keys() {
+        let a0 = action_key(&KeeperAction::CrankAsset { asset_index: 0 });
+        let a1 = action_key(&KeeperAction::CrankAsset { asset_index: 1 });
+        let a2 = action_key(&KeeperAction::CrankAsset { asset_index: 2 });
+        assert_ne!(a0, a1);
+        assert_ne!(a1, a2);
+        assert_ne!(a0, a2);
     }
 }

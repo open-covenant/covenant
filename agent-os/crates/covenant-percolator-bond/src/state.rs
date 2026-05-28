@@ -1,10 +1,10 @@
 //! `BondAccount` — the on-chain bond record.
 //!
 //! Layout is hand-packed little-endian, locked by [`tests::layout_locked`].
-//! Total size 144 bytes, aligned to 8 — comfortably fits in one
-//! Solana account without padding tricks. POD-friendly (no unsafe,
-//! no bytemuck — explicit serialize/deserialize that match the
-//! on-chain program's reads exactly).
+//! Total size 160 bytes (152 body + 8B discriminator) — comfortably
+//! fits in one Solana account without padding tricks. POD-friendly
+//! (no unsafe, no bytemuck — explicit serialize/deserialize that
+//! match the on-chain program's reads exactly).
 
 use crate::scope::ScopeHash;
 

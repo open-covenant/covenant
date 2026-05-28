@@ -249,7 +249,7 @@ mod tests {
             version: 1,
             market: [0x11; 32],
             allowed_actions: ActionMask(ActionMask::CRANK),
-            allowed_assets: vec![0],
+            allowed_assets: Some(vec![0]),
             max_actions_per_tick: 1,
         };
         let action = AttestedAction {
@@ -290,7 +290,7 @@ mod tests {
             version: 1,
             market: [0x11; 32],
             allowed_actions: ActionMask(ActionMask::CRANK),
-            allowed_assets: vec![],
+            allowed_assets: None,
             max_actions_per_tick: 1,
         };
         let action = AttestedAction {

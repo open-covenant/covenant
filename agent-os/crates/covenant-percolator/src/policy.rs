@@ -48,11 +48,21 @@ impl KeeperPolicy {
                 });
             }
         }
+        // Percolator-prog cranks ONE asset per IX, so a full-market
+        // freshen is N actions — one per Active asset. The crank
+        // interval is a market-global cadence; the fan-out happens
+        // here so coordination peers can split work asset-by-asset.
         let crank_age = market
             .current_slot
             .saturating_sub(market.last_crank_slot);
         if crank_age >= self.crank_interval_slots {
-            out.push(KeeperAction::Crank);
+            for asset in &market.assets {
+                if matches!(asset.lifecycle, AssetLifecycle::Active) {
+                    out.push(KeeperAction::CrankAsset {
+                        asset_index: asset.index,
+                    });
+                }
+            }
         }
         out
     }

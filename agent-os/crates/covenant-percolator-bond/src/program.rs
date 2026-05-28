@@ -106,6 +106,12 @@ pub fn handle_set_paused(acc: &mut HostAccounts, paused: bool) -> Result<(), &'s
 }
 
 /// `Withdraw`: keeper-signed; only when paused, and never if slashed.
+///
+/// Lamport ordering: validate the credit side FIRST (checked_add) so
+/// a hypothetical overflow doesn't leave the bond debited but the
+/// destination unchanged. On real Solana lamport overflow is
+/// effectively impossible (total supply caps it), but the host
+/// simulation stays honest by ordering operations the same way.
 pub fn handle_withdraw(acc: &mut HostAccounts, lamports: u64) -> Result<(), &'static str> {
     if !acc.keeper_signer {
         return Err("keeper must sign withdraw");
@@ -120,12 +126,13 @@ pub fn handle_withdraw(acc: &mut HostAccounts, lamports: u64) -> Result<(), &'st
     if lamports > bond.lamports {
         return Err("insufficient bond");
     }
-    bond.lamports -= lamports;
-    acc.bond_lamports -= lamports;
-    acc.keeper_lamports = acc
+    let new_keeper = acc
         .keeper_lamports
         .checked_add(lamports)
         .ok_or("keeper overflow")?;
+    bond.lamports -= lamports;
+    acc.bond_lamports -= lamports;
+    acc.keeper_lamports = new_keeper;
     Ok(())
 }
 
@@ -148,14 +155,17 @@ pub fn handle_slash(
         },
         _ => BondError::NotAViolation,
     })?;
+    // Validate credit side first to keep accounting honest even
+    // under a hypothetical lamport overflow.
     let amount = verdict.slash_lamports;
-    bond.lamports -= amount;
-    bond.slashed = 1;
-    acc.bond_lamports -= amount;
-    acc.recipient_lamports = acc
+    let new_recipient = acc
         .recipient_lamports
         .checked_add(amount)
         .ok_or(BondError::Insufficient { want: 0, have: 0 })?;
+    bond.lamports -= amount;
+    bond.slashed = 1;
+    acc.bond_lamports -= amount;
+    acc.recipient_lamports = new_recipient;
     Ok(amount)
 }
 
@@ -170,7 +180,7 @@ mod tests {
             version: 1,
             market: [1u8; 32],
             allowed_actions: ActionMask(ActionMask::PUSH_MARK | ActionMask::CRANK),
-            allowed_assets: vec![0, 1],
+            allowed_assets: Some(vec![0, 1]),
             max_actions_per_tick: 4,
         }
     }

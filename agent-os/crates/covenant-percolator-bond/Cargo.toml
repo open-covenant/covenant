@@ -16,6 +16,10 @@ solana = ["dep:solana-sdk"]
 # Compile-time gate for the SBPF on-chain program. Off by default
 # so the host build stays light; turn on for `cargo build-sbf`.
 program = ["dep:solana-program"]
+# `From<&KeeperScope> for BondScope` bridge. Pulls in the keeper
+# crate; the bond crate stays scope-light by default so dependents
+# that only build slash evidence don't pay the cost.
+bridge = ["dep:covenant-percolator", "dep:bs58"]
 
 [dependencies]
 covenant-types = { path = "../covenant-types" }
@@ -25,6 +29,8 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 solana-sdk = { workspace = true, optional = true }
 solana-program = { workspace = true, optional = true }
+covenant-percolator = { path = "../covenant-percolator", optional = true }
+bs58 = { version = "0.5", optional = true }
 
 [dev-dependencies]
 proptest = "1"

@@ -251,9 +251,22 @@ async fn main() -> ExitCode {
 
     let interval = Duration::from_millis(cfg.runtime.tick_interval_ms.max(50));
     let mut tick = 0u64;
+    let starting_slot = cfg.mock_market.current_slot;
+    // Each tick advances the mock's clock by one window so a
+    // multi-tick run actually progresses: stale assets eventually
+    // become stale again, the crank interval elapses again, etc.
+    // The real RealPercolator reads cluster slot from RPC — this
+    // simulation is operator-facing for end-to-end exercise.
+    let mock_slot_per_tick = cfg
+        .policy
+        .max_staleness_slots
+        .max(cfg.policy.crank_interval_slots)
+        .max(1);
     loop {
         tick += 1;
-        match agent.tick().await {
+        client.advance_slot(starting_slot.saturating_add(mock_slot_per_tick * tick));
+        let report = agent.tick().await;
+        match report {
             Ok(report) => {
                 let remaining = budget.tokens_remaining(&payer).await.unwrap_or(0);
                 let receipts = settlement
@@ -268,11 +281,23 @@ async fn main() -> ExitCode {
                     deferred = report.coordination_deferred,
                     skipped_capability = report.skipped_capability,
                     stopped_budget = report.stopped_budget,
-                    errors = report.errors.len(),
+                    error_count = report.errors.len(),
                     budget_remaining = remaining,
                     total_receipts = receipts,
                     "tick"
                 );
+                for err in &report.errors {
+                    tracing::warn!(tick, error = %err, "tick produced error");
+                }
+                for (action, exec, rid) in &report.executions {
+                    tracing::debug!(
+                        tick,
+                        action = ?action,
+                        slot = exec.slot,
+                        receipt = %rid,
+                        "executed"
+                    );
+                }
             }
             Err(e) => {
                 tracing::error!(tick, error = %e, "tick failed");
@@ -281,7 +306,13 @@ async fn main() -> ExitCode {
         if args.once {
             break;
         }
-        tokio::time::sleep(interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!(tick, "shutdown signal received; exiting");
+                break;
+            }
+        }
     }
     ExitCode::SUCCESS
 }

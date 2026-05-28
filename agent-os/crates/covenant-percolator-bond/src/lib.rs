@@ -49,6 +49,9 @@ pub mod state;
 #[cfg(feature = "solana")]
 pub mod instruction;
 
+#[cfg(feature = "bridge")]
+pub mod bridge;
+
 // Program module hosts both the SBPF entrypoint (gated separately
 // inside) and the pure-Rust handlers + tag constants the off-chain
 // instruction builders reference. Always built; the SBPF
@@ -56,7 +59,7 @@ pub mod instruction;
 // `program` feature.
 pub mod program;
 
-pub use evidence::{verify_slash, SlashEvidence, SlashRejection, Slashable};
+pub use evidence::{verify_slash, AttestedAction, SlashEvidence, SlashRejection, Slashable};
 pub use scope::{ActionMask, BondScope, ScopeHash};
 pub use state::BondAccount;
 

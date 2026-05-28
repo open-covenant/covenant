@@ -51,7 +51,11 @@ async fn push_auth_mark_action_round_trips_through_sender() {
 #[tokio::test]
 async fn sender_propagates_non_transient_errors() {
     let payer = Keypair::new();
-    let ix = build_instruction(&KeeperAction::Crank, &ctx(&payer)).unwrap();
+    let ix = build_instruction(
+        &KeeperAction::CrankAsset { asset_index: 0 },
+        &ctx(&payer),
+    )
+    .unwrap();
     let sender = RecordingSender::new()
         .with_failures([SenderError::Rpc("InsufficientFundsForFee".into())])
         .await;

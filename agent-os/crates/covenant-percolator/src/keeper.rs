@@ -114,6 +114,7 @@ impl<C: PercolatorClient> KeeperAgent<C> {
             //    deterministic leader for `(action_key, window)`
             //    submits; non-leaders skip cleanly with no hold-and-
             //    wait. Empty peers list = solo operation, always lead.
+            //    (Comment numbering 1→2→3→4→5 matches the gate order.)
             if !self.peers.is_empty()
                 && !coordination::should_lead(
                     &self.payer.pubkey,
@@ -130,7 +131,7 @@ impl<C: PercolatorClient> KeeperAgent<C> {
 
             let receipt_id = Uuid::new_v4();
 
-            // 2. Atomic budget debit. Exhausted stops the tick (a future
+            // 3. Atomic budget debit. Exhausted stops the tick (a future
             //    tick after refill will pick up where we left off).
             match self
                 .budget
@@ -149,7 +150,7 @@ impl<C: PercolatorClient> KeeperAgent<C> {
                 }
             }
 
-            // 3. Execute on-chain.
+            // 4. Execute on-chain.
             let execution = match self.client.execute(&self.market_address, &action).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -160,7 +161,7 @@ impl<C: PercolatorClient> KeeperAgent<C> {
                 }
             };
 
-            // 4. Verifiable receipt. Ties the budget debit (paired by
+            // 5. Verifiable receipt. Ties the budget debit (paired by
             //    receipt id) to a settlement row carrying the slot + tx
             //    sig; the daemon's batching path Merkle-roots the set
             //    and anchors on-chain.
@@ -214,7 +215,7 @@ mod tests {
     use serde_json::json;
 
     const MARKET: &str = "PercoMarket1111111111111111111111111111111111";
-    const PROGRAM: &str = "2SSnp35m7FQ7cRLNKGdW5UzjYFF6RBUNq7d3m5mqNByp";
+    const PROGRAM: &str = crate::MAINNET_PROGRAM_ID;
 
     fn payer() -> AgentId {
         AgentId::new("keeper@local", [9u8; 32])
@@ -629,7 +630,10 @@ mod tests {
         .await;
         let report = agent.tick().await.unwrap();
         assert_eq!(report.executed, 1);
-        assert!(matches!(client.executed()[0], KeeperAction::Crank));
+        assert!(matches!(
+            client.executed()[0],
+            KeeperAction::CrankAsset { asset_index: 0 }
+        ));
     }
 
     /// Per-tick cap bounds how many actions a single pass can spend,

@@ -65,8 +65,6 @@ pub struct Slashable {
 pub enum SlashRejection {
     /// The supplied scope's hash does not match the bond's stored hash.
     ScopeHashMismatch,
-    /// The action's market doesn't match the scope's market.
-    MarketMismatch,
     /// The scope actually permits this action. Not a violation.
     NoViolation,
     /// Bond is already slashed.
@@ -80,6 +78,14 @@ pub enum SlashRejection {
 /// Pure verification. The on-chain program calls this exactly; tests
 /// call it directly; the slasher calls it before submission to
 /// avoid wasting a transaction.
+///
+/// **Security note:** a keeper executing on a *different market* than
+/// the scope's market is the strongest kind of violation — the scope
+/// explicitly named one market and the keeper went elsewhere.
+/// [`BondScope::allows`] returns `false` for any market mismatch, so
+/// this case flows naturally into the slash path (NOT a rejection).
+/// Earlier versions surfaced a "MarketMismatch" rejection here, which
+/// inadvertently *protected* keepers acting outside their market.
 pub fn verify_slash(
     bond: &BondAccount,
     evidence: &SlashEvidence,
@@ -96,11 +102,10 @@ pub fn verify_slash(
     if evidence.action.executed_slot < bond.created_slot {
         return Err(SlashRejection::BeforeBondStart);
     }
-    if evidence.scope.market != evidence.action.market {
-        return Err(SlashRejection::MarketMismatch);
-    }
     // The contradiction itself: scope says "this is not allowed",
-    // yet a settled receipt says the keeper did it.
+    // yet a settled receipt says the keeper did it. `allows` covers
+    // market mismatch, action mask, AND asset list in one check —
+    // any of those failing means the action was outside scope.
     if evidence
         .scope
         .allows(&evidence.action.market, evidence.action.action_bit, evidence.action.asset_index)
@@ -134,7 +139,7 @@ mod tests {
             version: 1,
             market: [1u8; 32],
             allowed_actions: ActionMask(ActionMask::PUSH_MARK | ActionMask::CRANK),
-            allowed_assets: vec![0, 1],
+            allowed_assets: Some(vec![0, 1]),
             max_actions_per_tick: 4,
         }
     }
@@ -179,6 +184,12 @@ mod tests {
         assert_eq!(r.slash_lamports, bond.lamports);
     }
 
+    /// A keeper executing on a market other than the one the scope
+    /// names is the textbook scope violation — slashable. (Earlier
+    /// versions rejected this as `MarketMismatch`, which had the
+    /// inverse effect of *protecting* the keeper. The verifier now
+    /// flows market-mismatch through `BondScope::allows → false`,
+    /// landing in the slash branch.)
     #[test]
     fn unscoped_market_is_slashable() {
         let scope = happy_scope();
@@ -190,13 +201,9 @@ mod tests {
             action_bit: ActionMask::PUSH_MARK,
             asset_index: Some(0),
         };
-        // Market mismatch is a discrete rejection (it's a violation
-        // category but the verifier surfaces it explicitly so a
-        // misclassified evidence doesn't drain a bond).
-        assert_eq!(
-            verify_slash(&bond, &SlashEvidence { scope, action }),
-            Err(SlashRejection::MarketMismatch)
-        );
+        let r = verify_slash(&bond, &SlashEvidence { scope, action }).unwrap();
+        assert_eq!(r.slash_lamports, bond.lamports);
+        assert_eq!(r.recipient, bond.slash_recipient);
     }
 
     #[test]

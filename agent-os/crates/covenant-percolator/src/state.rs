@@ -71,7 +71,15 @@ pub enum KeeperAction {
         asset_index: AssetIndex,
         mark_e6: u64,
     },
-    Crank,
+    /// `PermissionlessCrank` for a single asset. Percolator-prog's
+    /// crank operates on one `asset_index` per IX, so a full-market
+    /// freshen is N actions, one per asset. The decision layer fans
+    /// the policy's crank-interval check out per-asset; the
+    /// coordination key includes the asset so different keepers can
+    /// crank different assets in the same window.
+    CrankAsset {
+        asset_index: AssetIndex,
+    },
     RecoveryForfeitLeg {
         asset_index: AssetIndex,
         b_delta_budget: i128,
@@ -93,7 +101,7 @@ impl KeeperAction {
     pub fn action_label(&self) -> ActionLabel {
         match self {
             KeeperAction::PushAuthMark { .. } => ActionLabel::PushMark,
-            KeeperAction::Crank => ActionLabel::Crank,
+            KeeperAction::CrankAsset { .. } => ActionLabel::Crank,
             KeeperAction::RecoveryForfeitLeg { .. }
             | KeeperAction::RecoveryRebalanceReduce { .. }
             | KeeperAction::RecoveryFinalize { .. } => ActionLabel::Recover,
@@ -103,10 +111,10 @@ impl KeeperAction {
     pub fn target_asset(&self) -> Option<AssetIndex> {
         match self {
             KeeperAction::PushAuthMark { asset_index, .. }
+            | KeeperAction::CrankAsset { asset_index }
             | KeeperAction::RecoveryForfeitLeg { asset_index, .. }
             | KeeperAction::RecoveryRebalanceReduce { asset_index, .. }
             | KeeperAction::RecoveryFinalize { asset_index, .. } => Some(*asset_index),
-            KeeperAction::Crank => None,
         }
     }
 }

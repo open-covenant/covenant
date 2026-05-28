@@ -32,7 +32,7 @@ use covenant_types::{AgentId, SettlementReceipt};
 use proptest::prelude::*;
 
 const MARKET: &str = "PercoMarket1111111111111111111111111111111111";
-const PROGRAM: &str = "2SSnp35m7FQ7cRLNKGdW5UzjYFF6RBUNq7d3m5mqNByp";
+const PROGRAM: &str = covenant_percolator::MAINNET_PROGRAM_ID;
 
 fn payer() -> AgentId {
     AgentId::new("keeper@local", [42u8; 32])

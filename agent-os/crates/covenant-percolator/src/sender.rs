@@ -32,8 +32,6 @@ use solana_sdk::transaction::Transaction;
 pub enum SenderError {
     #[error("rpc: {0}")]
     Rpc(String),
-    #[error("transaction simulation failed: {0}")]
-    Simulation(String),
     #[error("blockhash fetch failed: {0}")]
     Blockhash(String),
     #[error("exhausted {attempts} attempts; last error: {last}")]
@@ -142,11 +140,24 @@ impl Sender for RpcSender {
         let payer = signer.pubkey();
         let mut last_err: Option<String> = None;
         for attempt in 1..=self.max_attempts {
-            let blockhash = self
-                .rpc
-                .get_latest_blockhash()
-                .await
-                .map_err(|e| SenderError::Blockhash(e.to_string()))?;
+            // Blockhash fetch is part of the retry loop — a flaky
+            // RPC during blockhash fetch is exactly as transient as
+            // a flaky RPC during send_and_confirm, and a one-shot
+            // failure here used to kill the whole submission.
+            let blockhash = match self.rpc.get_latest_blockhash().await {
+                Ok(h) => h,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if !classify_transient(&msg) {
+                        return Err(SenderError::Blockhash(msg));
+                    }
+                    last_err = Some(format!("blockhash: {msg}"));
+                    if attempt < self.max_attempts {
+                        tokio::time::sleep(self.backoff * attempt).await;
+                    }
+                    continue;
+                }
+            };
 
             let mut signers: Vec<&Keypair> = Vec::with_capacity(1 + extra_signers.len());
             signers.push(signer);

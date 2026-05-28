@@ -53,7 +53,7 @@ peers_hex = []
 coordination_window_slots = 50
 
 [mock_market]
-program_id = "2SSnp35m7FQ7cRLNKGdW5UzjYFF6RBUNq7d3m5mqNByp"
+program_id = "4m3ipBQDYX6JQ9YSmUXDjESDHMtGWtiXforkWr9Qoxdi"
 current_slot = 10_000
 # Two slow-cranking ticks behind the freshness window so a single
 # `--once` invocation produces a Crank + per-asset PushAuthMarks.

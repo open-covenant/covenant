@@ -124,7 +124,10 @@ impl PercolatorClient for MockPercolator {
                 asset.last_mark_slot = slot;
                 asset.last_mark_e6 = *mark_e6;
             }
-            KeeperAction::Crank => {
+            KeeperAction::CrankAsset { .. } => {
+                // The mock advances the market's `last_crank_slot` on
+                // any CrankAsset; a real client cranks only the named
+                // asset's per-asset state on-chain.
                 s.last_crank_slot = slot;
             }
             KeeperAction::RecoveryForfeitLeg { .. }

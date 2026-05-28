@@ -33,6 +33,31 @@ at this gateway via `HERMES_API_BASE_URL`.
 See `src/types.ts` for the full contract and the `CodingBackend` /
 `SandboxProvider` interfaces.
 
+## Operator controls
+
+Per-run admission is gated by a USD spend ledger with hard daily and monthly
+caps and a global concurrency cap. The ledger reserves the per-run maximum at
+admission and commits the actual cost on completion, so concurrent bursts can't
+overshoot the cap.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `CODER_DAILY_USD` | `6` | Hard daily spend cap. |
+| `CODER_MONTHLY_USD` | `200` | Hard monthly spend cap. |
+| `CODER_PER_RUN_USD_MAX` | `2` | Per-run reservation ceiling. |
+| `CODER_MAX_CONCURRENT` | `2` | Concurrent run cap. |
+| `LEDGER_PATH` | _(none)_ | If set, committed spend persists to this file so caps survive a restart. |
+
+`GET /v1/budget` returns the live snapshot: `dailyUsd`, `monthlyUsd`,
+`reserved`, `active`, `killed`, the configured caps, and `outcomes` counters
+(`completed`, `failed`, `cancelled`).
+
+**Kill-switch.** Sending `SIGUSR1` to the gateway process (`kill -USR1 <pid>`)
+refuses every new reservation and aborts every in-flight run's
+`AbortController`, tearing down sandboxes so spend stops immediately. The
+switch is idempotent and has no HTTP surface, so there is no auth path to get
+wrong.
+
 ## Status
 
 Design + interface stubs (coder-03). Implementation slices: gateway core +

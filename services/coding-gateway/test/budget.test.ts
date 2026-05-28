@@ -52,6 +52,67 @@ describe("SpendLedger", () => {
     if (!r.ok) expect(r.reason).toMatch(/kill/);
   });
 
+  it("kill-switch aborts every in-flight run's AbortController (failure mode #3)", () => {
+    const l = new SpendLedger(caps);
+    const a = new AbortController();
+    const b = new AbortController();
+    const r1 = l.reserve();
+    const r2 = l.reserve();
+    expect(r1.ok && r2.ok).toBe(true);
+    l.onKill(() => a.abort());
+    l.onKill(() => b.abort());
+    l.kill();
+    expect(a.signal.aborted).toBe(true);
+    expect(b.signal.aborted).toBe(true);
+    // Idempotent: a second kill on already-aborted controllers must not throw.
+    expect(() => l.kill()).not.toThrow();
+  });
+
+  it("kill-switch keeps tearing down even when a handler throws", () => {
+    const l = new SpendLedger(caps);
+    const survivor = new AbortController();
+    l.onKill(() => {
+      throw new Error("flaky handler");
+    });
+    l.onKill(() => survivor.abort());
+    expect(() => l.kill()).not.toThrow();
+    expect(survivor.signal.aborted).toBe(true);
+  });
+
+  it("onKill after kill fires the handler immediately (no missed teardown race)", () => {
+    const l = new SpendLedger(caps);
+    l.kill();
+    let fired = false;
+    l.onKill(() => {
+      fired = true;
+    });
+    expect(fired).toBe(true);
+  });
+
+  it("unsubscribe stops a kill from invoking a finished run's handler", () => {
+    const l = new SpendLedger(caps);
+    let fired = false;
+    const off = l.onKill(() => {
+      fired = true;
+    });
+    off();
+    l.kill();
+    expect(fired).toBe(false);
+  });
+
+  it("records run outcomes in the snapshot for observability", () => {
+    const l = new SpendLedger(caps);
+    const r1 = l.reserve();
+    const r2 = l.reserve();
+    const r3 = l.reserve();
+    expect(r1.ok && r2.ok && r3.ok).toBe(true);
+    if (r1.ok) l.commit(r1.max, 0.5, "completed");
+    if (r2.ok) l.commit(r2.max, 0.5, "failed");
+    if (r3.ok) l.commit(r3.max, 0.5, "cancelled");
+    const snap = l.snapshot();
+    expect(snap.outcomes).toEqual({ completed: 1, failed: 1, cancelled: 1 });
+  });
+
   it("prices a run from token usage", () => {
     // Sonnet 4.6: $3/M in, $15/M out → 1M in + 100k out = $3 + $1.5 = $4.50
     const cost = modelCostUsd("claude-sonnet-4-6", {
@@ -63,18 +124,20 @@ describe("SpendLedger", () => {
     expect(cost).toBeCloseTo(4.5);
   });
 
-  it("persists committed spend to LEDGER_PATH so the caps survive a restart", () => {
+  it("persists committed spend and today's outcomes to LEDGER_PATH", () => {
     const path = join(tmpdir(), `covenant-ledger-${Date.now()}.json`);
     try {
       const before = new SpendLedger(caps, path);
-      const r = before.reserve();
-      expect(r.ok).toBe(true);
-      if (r.ok) before.commit(r.max, 1.25);
-      expect(before.snapshot().dailyUsd).toBeCloseTo(1.25);
-      // a fresh ledger sharing the path = a restart: it reloads the committed tally
+      const r1 = before.reserve();
+      const r2 = before.reserve();
+      expect(r1.ok && r2.ok).toBe(true);
+      if (r1.ok) before.commit(r1.max, 1.25, "completed");
+      if (r2.ok) before.commit(r2.max, 0.5, "failed");
+      // a fresh ledger sharing the path = a restart: it reloads spend + outcomes
       const after = new SpendLedger(caps, path);
-      expect(after.snapshot().dailyUsd).toBeCloseTo(1.25);
-      expect(after.snapshot().monthlyUsd).toBeCloseTo(1.25);
+      expect(after.snapshot().dailyUsd).toBeCloseTo(1.75);
+      expect(after.snapshot().monthlyUsd).toBeCloseTo(1.75);
+      expect(after.snapshot().outcomes).toEqual({ completed: 1, failed: 1, cancelled: 0 });
       // in-flight reservations are transient and don't carry across the restart
       expect(after.snapshot().reserved).toBe(0);
     } finally {

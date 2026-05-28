@@ -2,6 +2,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { config, PRICING } from "./config.js";
 import type { TokenUsage } from "./types.js";
 
+export type RunOutcome = "completed" | "failed" | "cancelled";
+
 export function modelCostUsd(model: string, u: TokenUsage): number {
   const p = PRICING[model] ?? PRICING["claude-sonnet-4-6"]!;
   return (
@@ -50,6 +52,8 @@ export class SpendLedger {
   private reserved = 0;
   private active = 0;
   private killed = false;
+  private outcomes: Record<RunOutcome, number> = { completed: 0, failed: 0, cancelled: 0 };
+  private killHandlers = new Set<() => void>();
 
   constructor(
     private readonly caps: BudgetCaps = config,
@@ -66,9 +70,17 @@ export class SpendLedger {
         month?: string;
         dailyUsd?: number;
         monthlyUsd?: number;
+        outcomes?: Partial<Record<RunOutcome, number>>;
       };
       if (s.day === this.day && typeof s.dailyUsd === "number") this.dailyUsd = s.dailyUsd;
       if (s.month === this.month && typeof s.monthlyUsd === "number") this.monthlyUsd = s.monthlyUsd;
+      // Outcomes are daily counters — only restore when the persisted day
+      // still matches today, so the dashboard reflects today's run mix.
+      if (s.day === this.day && s.outcomes) {
+        for (const k of ["completed", "failed", "cancelled"] as RunOutcome[]) {
+          if (typeof s.outcomes[k] === "number") this.outcomes[k] = s.outcomes[k] as number;
+        }
+      }
       if (this.dailyUsd > 0 || this.monthlyUsd > 0) {
         console.log(
           `ledger restored from ${this.path}: $${this.dailyUsd.toFixed(4)} today, $${this.monthlyUsd.toFixed(2)} this month`,
@@ -89,6 +101,7 @@ export class SpendLedger {
           month: this.month,
           dailyUsd: this.dailyUsd,
           monthlyUsd: this.monthlyUsd,
+          outcomes: this.outcomes,
         }),
       );
     } catch (e) {
@@ -102,6 +115,7 @@ export class SpendLedger {
     if (d !== this.day) {
       this.day = d;
       this.dailyUsd = 0;
+      this.outcomes = { completed: 0, failed: 0, cancelled: 0 };
     }
     if (m !== this.month) {
       this.month = m;
@@ -126,17 +140,47 @@ export class SpendLedger {
     return { ok: true, max: maxUsd };
   }
 
-  commit(reservedMax: number, actualUsd: number): void {
+  commit(reservedMax: number, actualUsd: number, outcome: RunOutcome = "completed"): void {
     this.roll();
     this.reserved = Math.max(0, this.reserved - reservedMax);
     this.dailyUsd += actualUsd;
     this.monthlyUsd += actualUsd;
     this.active = Math.max(0, this.active - 1);
+    if (outcome in this.outcomes) this.outcomes[outcome] += 1;
     this.save();
   }
 
+  /**
+   * Register a teardown handler invoked when the kill-switch is engaged. The
+   * server uses this to abort the in-flight run's AbortController so wall-clock
+   * spend stops immediately instead of running to completion. Returns an
+   * unsubscribe to call when the run finishes normally.
+   */
+  onKill(handler: () => void): () => void {
+    if (this.killed) {
+      handler();
+      return () => {};
+    }
+    this.killHandlers.add(handler);
+    return () => this.killHandlers.delete(handler);
+  }
+
+  /**
+   * Engage the kill-switch: refuse new reservations and tear down in-flight
+   * runs by signalling every registered teardown handler. Idempotent.
+   */
   kill(): void {
+    if (this.killed) return;
     this.killed = true;
+    const handlers = [...this.killHandlers];
+    this.killHandlers.clear();
+    for (const h of handlers) {
+      try {
+        h();
+      } catch (e) {
+        console.error("ledger kill handler failed:", e);
+      }
+    }
     this.save();
   }
 
@@ -150,6 +194,7 @@ export class SpendLedger {
       killed: this.killed,
       dailyCap: this.caps.dailyUsd,
       monthlyCap: this.caps.monthlyUsd,
+      outcomes: { ...this.outcomes },
     };
   }
 }

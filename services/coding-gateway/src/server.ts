@@ -134,17 +134,23 @@ function startRun(input: string, reservedMax: number): Run {
 
   const wall = setTimeout(() => run.abort.abort(), WALL_MS);
   const startedAt = Date.now();
+  const unsubscribeKill = ledger.onKill(() => run.abort.abort());
 
   void (async () => {
-    const sandbox = await provider.create({
-      runId: id,
-      egressAllowlist: ["registry.npmjs.org", "api.anthropic.com", "api.openai.com"],
-      cpuMs: WALL_MS,
-      memoryMb: 2048,
-      diskMb: 5120,
-      wallMs: WALL_MS,
-    });
+    let sandbox: Awaited<ReturnType<SandboxProvider["create"]>> | undefined;
     try {
+      // provider.create() is INSIDE the try: an E2B / network failure here must
+      // still release the reservation, free the concurrency slot, and
+      // unsubscribe the kill handler — otherwise repeated provider failures
+      // silently wedge the gateway at its caps with zero actual spend.
+      sandbox = await provider.create({
+        runId: id,
+        egressAllowlist: ["registry.npmjs.org", "api.anthropic.com", "api.openai.com"],
+        cpuMs: WALL_MS,
+        memoryMb: 2048,
+        diskMb: 5120,
+        wallMs: WALL_MS,
+      });
       const backend = selectBackend("anthropic");
       const { output, usage } = await backend.run({
         input,
@@ -159,19 +165,28 @@ function startRun(input: string, reservedMax: number): Run {
       run.files = await captureFiles(sandbox).catch(() => []);
       run.status = "completed";
       const seconds = (Date.now() - startedAt) / 1000;
-      ledger.commit(reservedMax, modelCostUsd(config.model, usage) + sandboxCostUsd(seconds));
+      ledger.commit(reservedMax, modelCostUsd(config.model, usage) + sandboxCostUsd(seconds), "completed");
     } catch (e) {
       run.error = (e as Error).message;
-      // Capture partial files too — a timed-out build is still worth showing.
-      run.files = await captureFiles(sandbox).catch(() => []);
+      // After abort (kill or stop) skip the file snapshot: it would exec
+      // inside the still-alive sandbox for up to 15s, accruing spend the
+      // operator just signalled they want to stop.
+      run.files =
+        sandbox && !run.abort.signal.aborted ? await captureFiles(sandbox).catch(() => []) : [];
       run.status = run.abort.signal.aborted ? "cancelled" : "failed";
       publish(run, { type: "run.failed", error: run.error });
       // No usage available on failure; charge the reserved max (pessimistic,
-      // wallet-safe) since a partial run still spent tokens.
-      ledger.commit(reservedMax, reservedMax);
+      // wallet-safe) since a partial run still spent tokens. Provider failures
+      // before the sandbox exists charge $0.
+      ledger.commit(
+        reservedMax,
+        sandbox ? reservedMax : 0,
+        run.status === "cancelled" ? "cancelled" : "failed",
+      );
     } finally {
       clearTimeout(wall);
-      await sandbox.destroy().catch(() => {});
+      unsubscribeKill();
+      if (sandbox) await sandbox.destroy().catch(() => {});
       for (const res of run.subscribers) res.end();
       run.subscribers.clear();
     }
@@ -268,6 +283,12 @@ export const server = createServer(async (req, res) => {
 });
 
 if (process.env.NODE_ENV !== "test") {
+  // Operator kill-switch: `kill -USR1 <pid>` refuses new runs and aborts every
+  // in-flight one. No HTTP surface, so no auth to get wrong. Idempotent.
+  process.on("SIGUSR1", () => {
+    console.warn(`SIGUSR1 received — engaging kill-switch (active=${ledger.snapshot().active})`);
+    ledger.kill();
+  });
   server.listen(PORT, () => {
     console.log(`coding-gateway listening on :${PORT} (model=${config.model}, effort=${config.effort})`);
   });

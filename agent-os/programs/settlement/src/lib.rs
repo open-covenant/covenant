@@ -12,6 +12,18 @@ use anchor_spl::token_interface::{self, Burn, Mint, TokenAccount, TokenInterface
 
 declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "Covenant Settlement",
+    project_url: "https://opencovenant.org",
+    contacts: "email:security@opencovenant.org",
+    policy: "https://github.com/open-covenant/covenant/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/open-covenant/covenant",
+    source_release: "v0.1.0-alpha.1",
+    auditors: "None"
+}
+
 #[program]
 pub mod settlement {
     use super::*;

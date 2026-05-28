@@ -23,6 +23,7 @@ task-escrow = []
 [dependencies]
 anchor-lang = "0.31.1"
 anchor-spl = { version = "0.31.1", features = ["token_2022"] }
+solana-security-txt = "1.1"
 
 [dev-dependencies]
 litesvm = "0.6"

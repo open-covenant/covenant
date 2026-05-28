@@ -1,0 +1,82 @@
+# Example operator config for `covenant-percolator-keeper`.
+#
+# This config drives the keeper binary end-to-end against the
+# in-memory `MockPercolator` — the same path the on-chain binary
+# will take once the `solana` feature lands. Operators tune scope,
+# policy, and budget here; the runtime exposes nothing else.
+#
+# Run:
+#   cargo run --bin covenant-percolator-keeper -- --config \
+#     agent-os/crates/covenant-percolator/examples/keeper.toml --once
+
+[runtime]
+agent_display = "perco-keeper-eu-1"
+# 32-byte agent pubkey, hex. (Mock; replace with real keeper pubkey.)
+agent_pubkey_hex = "0101010101010101010101010101010101010101010101010101010101010101"
+tick_interval_ms = 800
+
+[scope]
+market = "MarketAAA1111111111111111111111111111111111"
+# Empty (or omitted) `allowed_assets` = any asset; for production a
+# narrow whitelist is the recommended default.
+allowed_assets = [0, 1]
+# Empty (or omitted) `allowed_actions` = any action label. Recovery
+# is off here — operator hasn't opted into recovery scope.
+allowed_actions = ["push_mark", "crank"]
+max_actions_per_tick = 8
+
+[policy]
+# Freshen any Active asset whose last mark is older than this.
+max_staleness_slots = 150
+# Crank at least every N slots independent of mark cadence.
+crank_interval_slots = 300
+
+# [recovery]
+# # Uncomment to enable recovery. The keeper will then call
+# # `list_portfolios` each tick and act on engine-issued
+# # `HealthCertV16`s whose `certified_liq_deficit >= min_deficit`.
+# min_deficit = 1_000
+
+[budget]
+# Hourly refill capacity (covenant-budget token-bucket).
+capacity = 1_000_000
+# Per-action charge — the budget gate is the hard cap, this is the
+# unit billed inside it.
+credits_per_action = 100
+
+[network]
+# Empty `peers_hex` = solo operation (no coordination). Add other
+# keepers' 32-byte pubkeys (hex) here to opt into deterministic
+# leader election; `coordination_window_slots` defines the rotation
+# cadence (50 ≈ 20s at 400ms slots).
+peers_hex = []
+coordination_window_slots = 50
+
+[mock_market]
+program_id = "2SSnp35m7FQ7cRLNKGdW5UzjYFF6RBUNq7d3m5mqNByp"
+current_slot = 10_000
+# Two slow-cranking ticks behind the freshness window so a single
+# `--once` invocation produces a Crank + per-asset PushHyperpMarks.
+last_crank_slot = 9_600
+
+[[mock_market.assets]]
+index = 0
+label = "SOL-PERP"
+lifecycle = "active"
+last_mark_slot = 9_700
+last_mark_e6 = 145_320_000
+
+[[mock_market.assets]]
+index = 1
+label = "ETH-PERP"
+lifecycle = "active"
+last_mark_slot = 9_720
+last_mark_e6 = 3_410_000_000
+
+# Disabled asset — the keeper must NOT touch this even if scope allows.
+[[mock_market.assets]]
+index = 2
+label = "DOGE-PERP"
+lifecycle = "disabled"
+last_mark_slot = 0
+last_mark_e6 = 0

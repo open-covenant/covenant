@@ -22,5 +22,11 @@ covenant-percolator-bond = { path = "../covenant-percolator-bond" }
 [dev-dependencies]
 solana-program-test = { workspace = true }
 solana-sdk = { workspace = true }
+solana-client = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 covenant-percolator-bond = { path = "../covenant-percolator-bond", features = ["solana"] }
+anyhow = "1"
+
+[[example]]
+name = "devnet_smoke"
+path = "examples/devnet_smoke.rs"

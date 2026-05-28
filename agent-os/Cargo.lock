@@ -1407,7 +1407,9 @@ dependencies = [
 name = "covenant-percolator-bond-program"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "covenant-percolator-bond",
+ "solana-client",
  "solana-program",
  "solana-program-test",
  "solana-sdk",

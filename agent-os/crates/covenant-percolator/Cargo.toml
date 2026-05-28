@@ -54,3 +54,4 @@ bytemuck = { version = "1", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 proptest = "1"
+solana-program-test = { workspace = true }

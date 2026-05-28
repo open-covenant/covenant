@@ -37,7 +37,7 @@ use axum::{
 use covenant_ipc::{protocol_info, Request, Response};
 use covenant_peer_auth::PeerToken;
 use covenant_runtime::StreamedTrace;
-use covenant_types::{AgentId, MemoryTier};
+use covenant_types::{AgentEvent, AgentId, MemoryTier};
 use futures::stream::StreamExt;
 use serde::Deserialize;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -945,12 +945,15 @@ async fn intent_result(
     }
 }
 
-/// Live `RuntimeTrace` stream for one intent, framed as text/event-stream.
+/// Live [`AgentEvent`] stream for one intent, framed as
+/// `text/event-stream`.
 ///
 /// Subscribes to the daemon's broadcast fan-out and emits one SSE frame
-/// per matching trace as it lands. Clients use this to replace polling
-/// `/intents/:id/result` every few seconds with a push connection that
-/// shows tool calls and file writes the moment Hermes emits them.
+/// per matching trace as it lands. Each frame carries a public
+/// [`AgentEvent`] JSON object (`tool_call`, `tool_result`, `file_write`,
+/// or the reserved `reasoning` slot) projected from the runner-side
+/// `RuntimeTrace`, so browser clients render the live trail without
+/// reaching into runner-specific vocabulary.
 ///
 /// Audience model mirrors [`intent_result`]: any authenticated peer can
 /// stream any intent. Tighten with an intent-owner check before exposing
@@ -967,19 +970,27 @@ async fn intent_events(
     let rx = s.live_traces_tx.subscribe();
     let stream = tokio_broadcast_stream(rx).filter_map(move |trace| async move {
         let trace = trace?;
-        if trace.intent_id != id {
-            return None;
-        }
-        let payload = serde_json::to_string(&trace.trace).ok()?;
-        Some(Ok::<_, std::io::Error>(
-            format!("data: {payload}\n\n").into_bytes(),
-        ))
+        agent_event_sse_frame(&trace, id).map(Ok::<_, std::io::Error>)
     });
     let mut response = AxumResponse::new(Body::from_stream(stream));
     for (name, value) in sse::sse_response_headers() {
         response.headers_mut().insert(name, value);
     }
     response
+}
+
+/// Build the SSE frame bytes for one trace. Returns `None` when the
+/// trace belongs to a different intent (handler skips it) or the
+/// projected event fails to serialize (best-effort — the audit chain
+/// is the durable record). Factored out of `intent_events` so the wire
+/// shape is testable without spinning up a router.
+fn agent_event_sse_frame(trace: &StreamedTrace, id: uuid::Uuid) -> Option<Vec<u8>> {
+    if trace.intent_id != id {
+        return None;
+    }
+    let event = AgentEvent::from(&trace.trace);
+    let payload = serde_json::to_string(&event).ok()?;
+    Some(format!("data: {payload}\n\n").into_bytes())
 }
 
 /// Bridge a `tokio::sync::broadcast::Receiver<StreamedTrace>` into a
@@ -1159,6 +1170,107 @@ impl From<anyhow::Error> for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_event_sse_frame_pins_public_taxonomy_wire_form_and_intent_filter() {
+        // `agent_event_sse_frame` is the wire-form seam for
+        // `/intents/:id/events`. The composition of
+        // `From<&RuntimeTrace> for AgentEvent` (pinned in covenant-runtime)
+        // and the `AgentEvent` serde shape (pinned in covenant-types) is
+        // not enough on its own — a refactor that "simplified" the
+        // handler by reverting to `serde_json::to_string(&trace.trace)`
+        // would silently re-emit the internal `RuntimeTrace` shape and
+        // break every browser client destructuring on the public
+        // `tool_call` / `tool_result` / `file_write` slugs. Pin the
+        // exact framed bytes so that regression class fails here.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+        use covenant_types::AgentId as CovAgentId;
+
+        let intent_id = uuid::Uuid::from_u128(0xc0_ffee);
+        let other_id = uuid::Uuid::from_u128(0xdead_beef);
+        let issuer = CovAgentId::new("operator@local", [7u8; 32]);
+
+        let tool_invoked = StreamedTrace {
+            intent_id,
+            issuer: issuer.clone(),
+            trace: RuntimeTrace::HermesToolInvoked {
+                run_id: "run-1".into(),
+                tool: "terminal".into(),
+                preview: "ls -la".into(),
+            },
+        };
+        let frame = agent_event_sse_frame(&tool_invoked, intent_id).expect(
+            "intent-matching frame must be emitted; None here means the \
+             intent filter incorrectly rejected a matching trace",
+        );
+        let text = String::from_utf8(frame).expect("frame must be utf8");
+        assert_eq!(
+            text, "data: {\"type\":\"tool_call\",\"run_id\":\"run-1\",\"tool\":\"terminal\",\"preview\":\"ls -la\"}\n\n",
+            "SSE frame must carry the public AgentEvent taxonomy with \
+             snake_case type discriminator and trailing double-newline \
+             boundary. A refactor that reverted to RuntimeTrace JSON \
+             would emit type=\"hermes_tool_invoked\" here and break the \
+             browser client wire contract",
+        );
+
+        // Intent filter: a trace for a different intent must NOT emit.
+        // Without this guard, every authenticated SSE subscriber would
+        // see traces for every in-flight intent on the daemon — a
+        // separate slice can tighten audience further but the
+        // intent-id filter must remain.
+        assert!(
+            agent_event_sse_frame(&tool_invoked, other_id).is_none(),
+            "frame must be None when the trace's intent_id does not \
+             match the path id; a regression here would leak traces \
+             across intent boundaries",
+        );
+
+        // file_write end-to-end — also pins that bytes serializes as a
+        // JSON number, not a string, so size-based client logic does
+        // not silently break.
+        let file_written = StreamedTrace {
+            intent_id,
+            issuer: issuer.clone(),
+            trace: RuntimeTrace::HermesFileWritten {
+                run_id: "run-2".into(),
+                path: "src/main.rs".into(),
+                bytes: 4_096,
+            },
+        };
+        let text = String::from_utf8(
+            agent_event_sse_frame(&file_written, intent_id).expect("frame emitted"),
+        )
+        .unwrap();
+        assert_eq!(
+            text,
+            "data: {\"type\":\"file_write\",\"run_id\":\"run-2\",\"path\":\"src/main.rs\",\"bytes\":4096}\n\n",
+        );
+
+        // Approval-as-tool: the lossy projection (choice/resolved
+        // dropped, duration_ms=0, error=false) is part of the public
+        // contract. Pin the wire form so a refactor that surfaced
+        // choice/resolved on the wire would have to update this test.
+        let responded = StreamedTrace {
+            intent_id,
+            issuer,
+            trace: RuntimeTrace::HermesApprovalResponded {
+                run_id: "run-3".into(),
+                choice: "approve".into(),
+                resolved: 1,
+            },
+        };
+        let text =
+            String::from_utf8(agent_event_sse_frame(&responded, intent_id).expect("frame emitted"))
+                .unwrap();
+        assert_eq!(
+            text,
+            "data: {\"type\":\"tool_result\",\"run_id\":\"run-3\",\"tool\":\"approval\",\"duration_ms\":0,\"error\":false}\n\n",
+            "approval-responded must surface as a tool_result with \
+             tool=\"approval\"; the audit chain keeps the durable \
+             HermesApprovalResolved row with the choice and resolved \
+             count, so dropping them on the wire is intentional",
+        );
+    }
 
     #[test]
     fn http_parse_status_pins_accepted_spellings_and_permissive_fallback() {

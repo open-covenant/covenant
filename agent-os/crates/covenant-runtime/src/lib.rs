@@ -27,7 +27,7 @@
 use async_trait::async_trait;
 use covenant_manifest::{FilesystemPolicy, NetworkPolicy, Runtime as RuntimeKind, SandboxBackend};
 use covenant_router::AgentCard;
-use covenant_types::Intent;
+use covenant_types::{AgentEvent, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -139,6 +139,70 @@ pub enum RuntimeTrace {
         path: String,
         bytes: u64,
     },
+}
+
+/// Project a `RuntimeTrace` into the public [`AgentEvent`] taxonomy
+/// served on the SSE stream. The mapping folds runner-specific frames
+/// (Hermes tool / approval / file events) into the user-facing
+/// categories so the wire form stays stable when the runner is swapped.
+///
+/// Approval frames are surfaced as tool calls with `tool = "approval"`
+/// so the live UI shows the pause point without leaking runner-specific
+/// vocabulary; the durable approval record stays on the audit chain via
+/// the existing `HermesApprovalRequested` / `HermesApprovalResolved`
+/// `AuditKind` rows.
+impl From<&RuntimeTrace> for AgentEvent {
+    fn from(trace: &RuntimeTrace) -> Self {
+        match trace {
+            RuntimeTrace::HermesToolInvoked {
+                run_id,
+                tool,
+                preview,
+            } => AgentEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool: tool.clone(),
+                preview: preview.clone(),
+            },
+            RuntimeTrace::HermesToolCompleted {
+                run_id,
+                tool,
+                duration_ms,
+                error,
+            } => AgentEvent::ToolResult {
+                run_id: run_id.clone(),
+                tool: tool.clone(),
+                duration_ms: *duration_ms,
+                error: *error,
+            },
+            RuntimeTrace::HermesApprovalRequested { run_id, choices } => AgentEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool: "approval".to_string(),
+                preview: choices.join(", "),
+            },
+            // `choice` and `resolved` are dropped here: the public
+            // taxonomy keeps tool_result to four fields and the audit
+            // chain still has the full HermesApprovalResolved row.
+            RuntimeTrace::HermesApprovalResponded {
+                run_id,
+                choice: _,
+                resolved: _,
+            } => AgentEvent::ToolResult {
+                run_id: run_id.clone(),
+                tool: "approval".to_string(),
+                duration_ms: 0,
+                error: false,
+            },
+            RuntimeTrace::HermesFileWritten {
+                run_id,
+                path,
+                bytes,
+            } => AgentEvent::FileWrite {
+                run_id: run_id.clone(),
+                path: path.clone(),
+                bytes: *bytes,
+            },
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1237,6 +1301,86 @@ mod tests {
              rename_all = snake_case stays a whitelist. A dropped or flipped \
              rename_all attribute would let this decode and the daemon would \
              ingest events with the wrong variant identity",
+        );
+    }
+
+    #[test]
+    fn runtime_trace_projects_into_public_agent_event_taxonomy() {
+        // `From<&RuntimeTrace> for AgentEvent` is the seam that keeps the
+        // public SSE wire form stable while the runner-side trace shape
+        // stays free to evolve. Pin the mapping per-variant so a future
+        // refactor of either enum surfaces here before it silently bends
+        // the live stream contract that browser clients destructure on.
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesToolInvoked {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            }),
+            AgentEvent::ToolCall {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesToolCompleted {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                duration_ms: 42,
+                error: true,
+            }),
+            AgentEvent::ToolResult {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                duration_ms: 42,
+                error: true,
+            },
+        );
+
+        // Approval frames surface as tool calls with tool="approval" so
+        // the live UI shows the pause point without leaking Hermes
+        // vocabulary; the audit chain keeps the HermesApprovalRequested
+        // / HermesApprovalResolved rows separately for durable record.
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesApprovalRequested {
+                run_id: "r1".into(),
+                choices: vec!["approve".into(), "deny".into()],
+            }),
+            AgentEvent::ToolCall {
+                run_id: "r1".into(),
+                tool: "approval".into(),
+                preview: "approve, deny".into(),
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesApprovalResponded {
+                run_id: "r1".into(),
+                choice: "approve".into(),
+                resolved: 3,
+            }),
+            AgentEvent::ToolResult {
+                run_id: "r1".into(),
+                tool: "approval".into(),
+                duration_ms: 0,
+                error: false,
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesFileWritten {
+                run_id: "r1".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            }),
+            AgentEvent::FileWrite {
+                run_id: "r1".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            },
         );
     }
 

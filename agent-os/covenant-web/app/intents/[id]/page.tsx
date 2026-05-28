@@ -2,21 +2,23 @@
 
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, type AuditEvent } from "@/lib/api";
 import { eventsForIntent } from "@/lib/audit";
 import { formatAgentId, formatTimestamp, shortHash } from "@/lib/format";
 import { loadReply } from "@/lib/intentReplies";
-import { KIND_PILL_LABELS, eventLabel } from "@/lib/labels";
+import {
+  AGENT_EVENT_PILL_LABELS,
+  KIND_PILL_LABELS,
+  agentEventLabel,
+  eventLabel,
+} from "@/lib/labels";
+import { useIntentEventStream, type LiveAgentEvent } from "@/lib/useIntentEventStream";
 import { usePoll } from "@/lib/usePoll";
 import { BuildOutput } from "../../components/BuildOutput";
 import { Markdown } from "../../components/Markdown";
 import { PageHeader } from "../../components/PageHeader";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
-
-async function loadIntent() {
-  return api.recentAudit(200);
-}
 
 function statusWord(status: string | undefined): string {
   switch (status) {
@@ -35,33 +37,105 @@ function statusWord(status: string | undefined): string {
   }
 }
 
+// Discriminated union for the unified trace timeline. Audit rows are the
+// durable hash-chained record; live rows are SSE-pushed AgentEvents that
+// have not yet been persisted (or won't be — reasoning is a wire-only
+// slot today). Sort key is `timestampMs` so both sources interleave
+// chronologically without dedupe — see useIntentEventStream for why a
+// 1:1 audit/live dedupe is intentionally out of scope for this slice.
+type TraceItem =
+  | { source: "audit"; key: string; timestampMs: number; event: AuditEvent }
+  | { source: "live"; key: string; timestampMs: number; event: LiveAgentEvent };
+
 export default function TaskTracePage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
-  const { data, error, lastSyncMs } = usePoll(loadIntent, 3000);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditSyncMs, setAuditSyncMs] = useState<number | null>(null);
   const { data: outcome } = usePoll(() => api.intentResult(id), 3000);
+  const liveStream = useIntentEventStream(id);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [reply, setReply] = useState<string | null>(null);
+
+  // Audit fetch: durable historical context for events that landed
+  // before this tab opened, plus the dispatch row (with its signed
+  // result hash) that lands when an async run completes. Re-runs on
+  // intent navigation (`id` change, since Next.js client-side nav does
+  // not remount the page) and once the polled outcome flips into a
+  // terminal status — without that second fetch, fresh runs would
+  // never surface the `intent_dispatched` row and the signed-hash
+  // badge would stay hidden until manual reload.
+  const outcomeStatus = outcome?.status;
+  const outcomeTerminal =
+    outcomeStatus === "ok" ||
+    outcomeStatus === "error" ||
+    outcomeStatus === "completed" ||
+    outcomeStatus === "failed" ||
+    outcomeStatus === "ignored";
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .recentAudit(200)
+      .then((data) => {
+        if (cancelled) return;
+        setAuditEvents(data.events);
+        setAuditSyncMs(Date.now());
+        setAuditError(null);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : String(e);
+        setAuditError(
+          message.includes("Failed to fetch")
+            ? "daemon unavailable at 127.0.0.1:8421"
+            : message,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, outcomeTerminal]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReply(loadReply(id));
   }, [id]);
 
-  const events = data?.events ?? [];
-  const trace = eventsForIntent(events, id);
-  const dispatched = trace.find((e) => e.kind.type === "intent_dispatched");
+  const error = auditError ?? liveStream.error;
+  const lastSyncMs = auditSyncMs;
+  const auditTrace = eventsForIntent(auditEvents ?? [], id);
+  const dispatched = auditTrace.find((e) => e.kind.type === "intent_dispatched");
   const dispatchKind = dispatched?.kind.type === "intent_dispatched" ? dispatched.kind : null;
+
+  const traceItems: TraceItem[] = [
+    ...auditTrace.map<TraceItem>((event) => ({
+      source: "audit",
+      key: `audit:${event.id}`,
+      timestampMs: event.timestamp_ms,
+      event,
+    })),
+    ...liveStream.events.map<TraceItem>((event) => ({
+      source: "live",
+      key: `live:${event.seq}`,
+      timestampMs: event.receivedMs,
+      event,
+    })),
+  ].sort((a, b) => a.timestampMs - b.timestampMs);
   // While an async build is in flight the audit trace is still empty (the
-  // dispatch + step rows land when the run finishes), so fall back to the
-  // polled outcome for the title, agent, status, and reply body.
+  // dispatch row lands when the run finishes), so fall back to the polled
+  // outcome for the title, agent, status, and reply body. The live SSE
+  // stream fills in steps as they happen even before the dispatch row
+  // commits.
   const running = outcome?.status === "running";
   const intentText = dispatchKind?.intent_text ?? outcome?.intent_text ?? null;
   const matchedAgent = dispatchKind?.matched_agent ?? outcome?.matched_agent ?? null;
   const status = outcome?.status ?? dispatchKind?.status;
   const replyText = (outcome?.text && outcome.text.length > 0 ? outcome.text : null) ?? reply;
   const totalDurationMs =
-    trace.length > 1 ? trace[trace.length - 1].timestamp_ms - trace[0].timestamp_ms : null;
-  const isLoading = data === null && error === null;
+    traceItems.length > 1
+      ? traceItems[traceItems.length - 1].timestampMs - traceItems[0].timestampMs
+      : null;
+  const isLoading = auditEvents === null && auditError === null;
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -98,7 +172,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
       <section className="trace-meta">
         <article className="meta-cell">
           <p className="eyebrow">steps</p>
-          <strong>{trace.length}</strong>
+          <strong>{traceItems.length}</strong>
         </article>
         <article className="meta-cell">
           <p className="eyebrow">took</p>
@@ -154,7 +228,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
             run — appear here as a signed trail once the run finishes.
           </p>
         </div>
-      ) : trace.length === 0 ? (
+      ) : traceItems.length === 0 ? (
         <div className="panel">
           <p className="empty">
             {DEMO_MODE
@@ -164,24 +238,34 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         </div>
       ) : (
         <div className="trace">
-          {trace.map((event, idx) => {
-            const isLast = idx === trace.length - 1;
-            const isExpanded = expanded.has(event.id);
-            const label = eventLabel(event);
+          {traceItems.map((item, idx) => {
+            const isLast = idx === traceItems.length - 1;
+            const isExpanded = expanded.has(item.key);
+            const label =
+              item.source === "audit"
+                ? eventLabel(item.event)
+                : agentEventLabel(item.event);
+            const pill =
+              item.source === "audit"
+                ? KIND_PILL_LABELS[item.event.kind.type]
+                : AGENT_EVENT_PILL_LABELS[item.event.type];
             return (
-              <article key={event.id} className={`trace-step tone-${label.tone}`}>
+              <article key={item.key} className={`trace-step tone-${label.tone}`}>
                 <div className="rail">
                   <span className="dot" />
                   {!isLast && <span className="line" />}
                 </div>
                 <div className="step-card">
                   <div className="step-head">
-                    <span className="ts">{formatTimestamp(event.timestamp_ms, { withSeconds: true })}</span>
-                    <span className="kind">{KIND_PILL_LABELS[event.kind.type]}</span>
+                    <span className="ts">
+                      {formatTimestamp(item.timestampMs, { withSeconds: true })}
+                    </span>
+                    <span className="kind">{pill}</span>
+                    {item.source === "live" && <span className="live">live</span>}
                     <button
                       type="button"
                       className="btn link"
-                      onClick={() => toggle(event.id)}
+                      onClick={() => toggle(item.key)}
                     >
                       {isExpanded ? "hide raw" : "raw json"}
                     </button>
@@ -189,7 +273,9 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
                   <p className="headline">{label.headline}</p>
                   <p className="summary">{label.body}</p>
                   {isExpanded && (
-                    <pre className="result compact">{JSON.stringify(event, null, 2)}</pre>
+                    <pre className="result compact">
+                      {JSON.stringify(item.event, null, 2)}
+                    </pre>
                   )}
                 </div>
               </article>
@@ -361,6 +447,17 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           color: var(--fg);
           font-size: 11.5px;
           letter-spacing: 0.02em;
+        }
+
+        .step-head .live {
+          color: var(--accent, #c9c9c9);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          border: 1px solid var(--border-soft);
+          border-radius: 3px;
+          padding: 1px 6px;
         }
 
         .headline {

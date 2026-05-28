@@ -206,9 +206,26 @@ async function forward(
     );
   }
 
+  const passthrough = upstream.headers.get("content-type");
+  // SSE endpoints (e.g. /intents/:id/events) hold the response open for
+  // the lifetime of the run; awaiting upstream.text() would buffer the
+  // whole stream until the daemon closed it and turn the live view into
+  // a single post-run dump. Stream the body through verbatim instead so
+  // each `data:` frame reaches the browser the moment the daemon flushes
+  // it. Cache-Control and X-Accel-Buffering passthrough matches the
+  // daemon's `sse_response_headers` so intermediate proxies (the Next.js
+  // dev server, deployment edges) do not re-buffer.
+  if (passthrough?.startsWith("text/event-stream") && upstream.body) {
+    const headers: Record<string, string> = { "content-type": passthrough };
+    const cacheControl = upstream.headers.get("cache-control");
+    if (cacheControl) headers["cache-control"] = cacheControl;
+    const accelBuffering = upstream.headers.get("x-accel-buffering");
+    if (accelBuffering) headers["x-accel-buffering"] = accelBuffering;
+    return new NextResponse(upstream.body, { status: upstream.status, headers });
+  }
+
   const body = await upstream.text();
   const response = new NextResponse(body, { status: upstream.status });
-  const passthrough = upstream.headers.get("content-type");
   if (passthrough) response.headers.set("content-type", passthrough);
   return response;
 }

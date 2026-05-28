@@ -9,7 +9,7 @@
 // expand on each row, plus the Developer mode toggle in the sidebar which
 // re-surfaces technical names beside the friendly labels.
 
-import type { AuditEvent, AuditKind } from "./api";
+import type { AgentEvent, AuditEvent, AuditKind } from "./api";
 import { formatAgentId, formatHashStatus, formatPeerName, shortHash } from "./format";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -230,6 +230,7 @@ function friendlyTool(tool: string): string {
     bash: "Ran a command",
     terminal: "Ran a command",
     web: "Fetched from the web",
+    approval: "Awaiting approval",
   };
   return m[tool] ?? `Used ${tool}`;
 }
@@ -471,6 +472,58 @@ function truncate(value: string, length: number): string {
   if (value.length <= length) return value;
   return `${value.slice(0, length - 1)}…`;
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AgentEvent (live SSE) label vocabulary. Mirrors `eventLabel` for audit
+// events so the trace timeline can render an in-flight step the same way
+// it later renders the persisted audit row, with no jarring transition
+// when the SSE-pushed preview is replaced by the audit-chain redaction.
+
+export function agentEventLabel(event: AgentEvent): EventLabel {
+  switch (event.type) {
+    case "reasoning":
+      return {
+        headline: "Thinking",
+        body: event.summary ? truncate(event.summary, 160) : "The agent is reasoning.",
+        tone: "neutral",
+        intentId: null,
+      };
+    case "tool_call":
+      return {
+        headline: friendlyTool(event.tool),
+        body: event.preview ? truncate(event.preview, 120) : "The agent took a step.",
+        tone: "neutral",
+        intentId: null,
+      };
+    case "tool_result":
+      return {
+        headline:
+          event.tool === "approval"
+            ? "Approval resolved"
+            : `${friendlyTool(event.tool)}${event.error ? " — failed" : ""}`,
+        body:
+          event.tool === "approval"
+            ? "The agent received an answer and continued."
+            : `${event.error ? "Failed" : "Done"} in ${event.duration_ms} ms.`,
+        tone: event.error ? "danger" : "ok",
+        intentId: null,
+      };
+    case "file_write":
+      return {
+        headline: "Wrote a file",
+        body: `${event.path} · ${event.bytes} bytes.`,
+        tone: "ok",
+        intentId: null,
+      };
+  }
+}
+
+export const AGENT_EVENT_PILL_LABELS: Record<AgentEvent["type"], string> = {
+  reasoning: "Thinking",
+  tool_call: "Step",
+  tool_result: "Step",
+  file_write: "File",
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Audit kind → short pill label used in feed columns.

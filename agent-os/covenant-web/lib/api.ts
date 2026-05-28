@@ -219,6 +219,22 @@ export type AuditEvent = {
   kind: AuditKind;
 };
 
+// Public agent event taxonomy broadcast over /intents/:id/events as SSE
+// frames. Each frame is one of these JSON objects (no envelope; the
+// intent_id is in the URL). Mirrors the `AgentEvent` enum in
+// covenant-types — keep field names in lockstep.
+export type AgentEvent =
+  | { type: "reasoning"; run_id: string; summary: string }
+  | { type: "tool_call"; run_id: string; tool: string; preview: string }
+  | {
+      type: "tool_result";
+      run_id: string;
+      tool: string;
+      duration_ms: number;
+      error: boolean;
+    }
+  | { type: "file_write"; run_id: string; path: string; bytes: number };
+
 export type AuditIntegrityReport = {
   anchors: number;
   events: number;
@@ -387,6 +403,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ intent_id }),
     }),
+
+  // URL for the SSE stream of live AgentEvents on one intent. Browsers
+  // open an EventSource against this URL; the proxy at /api/covenant
+  // forwards the stream verbatim. Each frame is one AgentEvent JSON.
+  intentEventsUrl: (intent_id: string): string =>
+    `${BASE}/intents/${encodeURIComponent(intent_id)}/events`,
 
   // Poll an async dispatch's outcome. Returns null for ids the daemon
   // doesn't track as async (synchronous intents, evicted, or unknown) so

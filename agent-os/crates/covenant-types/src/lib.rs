@@ -41,6 +41,59 @@ pub enum ResourceKind {
     Registration,
 }
 
+/// Public, stable taxonomy of agent runtime events. The daemon broadcasts
+/// one of these per SSE frame on `/intents/:id/events` so clients render a
+/// live trail of what the agent is doing without polling the audit log.
+///
+/// Variants are user-facing categories — a UI shows a "tool call", not an
+/// implementation-specific Hermes `tool.started` frame. Runner-side
+/// `RuntimeTrace` rows are projected into this taxonomy at the SSE
+/// boundary, which keeps the wire form stable even when the runner is
+/// swapped out.
+///
+/// Serde shape: `#[serde(tag = "type", rename_all = "snake_case")]`. The
+/// `type` tag is load-bearing — every browser and CLI client destructures
+/// on it; a rename would silently fork the wire form. Each variant
+/// carries `run_id` so a client multiplexing several runs can route the
+/// frame without an envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// Model reasoning surfaced for the operator. Reserved slot in the
+    /// public taxonomy: the current Hermes adapter drops reasoning frames
+    /// at the SSE seam because they are too high-volume to audit, so no
+    /// runner emits this variant today. The slot is wire-compatible so a
+    /// future runtime can stream condensed reasoning summaries (one frame
+    /// per turn, not token-by-token) without breaking older clients.
+    Reasoning { run_id: String, summary: String },
+    /// The agent invoked a tool. `preview` is a short label (e.g. `"ls"`);
+    /// downstream audit hashing redacts it before persistence, but the
+    /// live wire form keeps the readable preview so the UI can show what
+    /// the agent is doing in flight.
+    ToolCall {
+        run_id: String,
+        tool: String,
+        preview: String,
+    },
+    /// A tool invocation finished. `error` is `true` when the tool itself
+    /// raised — the surrounding agent loop may still recover and emit
+    /// later events.
+    ToolResult {
+        run_id: String,
+        tool: String,
+        duration_ms: u64,
+        error: bool,
+    },
+    /// The agent wrote a workspace file. `bytes` is the file size as
+    /// reported by the runner; kept `u64` so a multi-GB write does not
+    /// silently truncate at the wire boundary.
+    FileWrite {
+        run_id: String,
+        path: String,
+        bytes: u64,
+    },
+}
+
 /// Identifier for any actor (human, agent, tool, service).
 ///
 /// `display` is the human-readable `name@host` form (CLI, logs, UI).
@@ -1017,6 +1070,112 @@ mod tests {
         assert_eq!(back.credits_consumed, 42);
         assert_eq!(back.chain.as_deref(), Some("solana"));
         assert_eq!(back.tx_sig.as_deref(), Some("sig"));
+    }
+
+    #[test]
+    fn agent_event_serde_pins_snake_case_type_tag_and_per_variant_fields() {
+        // AgentEvent is the public wire taxonomy broadcast over the
+        // /intents/:id/events SSE stream. Browser and CLI clients
+        // destructure on the snake_case `type` discriminator; renaming
+        // the tag or any variant slug would fork the wire form and break
+        // every live consumer at the next deploy.
+
+        let cases: Vec<(AgentEvent, serde_json::Value)> = vec![
+            (
+                AgentEvent::Reasoning {
+                    run_id: "r1".into(),
+                    summary: "considering options".into(),
+                },
+                serde_json::json!({
+                    "type": "reasoning",
+                    "run_id": "r1",
+                    "summary": "considering options",
+                }),
+            ),
+            (
+                AgentEvent::ToolCall {
+                    run_id: "r2".into(),
+                    tool: "terminal".into(),
+                    preview: "ls -la".into(),
+                },
+                serde_json::json!({
+                    "type": "tool_call",
+                    "run_id": "r2",
+                    "tool": "terminal",
+                    "preview": "ls -la",
+                }),
+            ),
+            (
+                AgentEvent::ToolResult {
+                    run_id: "r3".into(),
+                    tool: "terminal".into(),
+                    duration_ms: 123,
+                    error: false,
+                },
+                serde_json::json!({
+                    "type": "tool_result",
+                    "run_id": "r3",
+                    "tool": "terminal",
+                    "duration_ms": 123,
+                    "error": false,
+                }),
+            ),
+            (
+                AgentEvent::FileWrite {
+                    run_id: "r4".into(),
+                    path: "src/main.rs".into(),
+                    bytes: 4096,
+                },
+                serde_json::json!({
+                    "type": "file_write",
+                    "run_id": "r4",
+                    "path": "src/main.rs",
+                    "bytes": 4096,
+                }),
+            ),
+        ];
+
+        for (event, wire) in cases {
+            assert_eq!(
+                serde_json::to_value(&event).unwrap(),
+                wire,
+                "AgentEvent must serialize to the documented wire form; \
+                 a refactor that dropped #[serde(tag = \"type\")] or \
+                 #[serde(rename_all = \"snake_case\")] would silently \
+                 fork the wire form across browser and CLI clients"
+            );
+            let back: AgentEvent = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                back, event,
+                "AgentEvent must round-trip through serde_json verbatim \
+                 — the Eq derive is the contract every SSE consumer leans on"
+            );
+        }
+
+        // Tag rename guard: the serde default tag is "type"; the rename_all
+        // default is the variant name verbatim (TitleCase). Both regressions
+        // must fail loud at decode.
+        assert!(
+            serde_json::from_value::<AgentEvent>(serde_json::json!({
+                "kind": "tool_call",
+                "run_id": "r",
+                "tool": "t",
+                "preview": "p",
+            }))
+            .is_err(),
+            "wrong discriminator key ('kind' instead of 'type') must be rejected",
+        );
+        assert!(
+            serde_json::from_value::<AgentEvent>(serde_json::json!({
+                "type": "ToolCall",
+                "run_id": "r",
+                "tool": "t",
+                "preview": "p",
+            }))
+            .is_err(),
+            "TitleCase slug ('ToolCall') must be rejected — the public \
+             taxonomy is snake_case only",
+        );
     }
 
     #[test]

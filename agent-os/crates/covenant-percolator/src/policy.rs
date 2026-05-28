@@ -4,7 +4,7 @@
 //! returned action through the capability + budget gates before
 //! executing.
 
-use crate::state::{AssetLifecycle, KeeperAction, MarketState};
+use crate::state::{AssetLifecycle, KeeperAction, MarketState, PortfolioSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub struct KeeperPolicy {
@@ -53,6 +53,64 @@ impl KeeperPolicy {
             .saturating_sub(market.last_crank_slot);
         if crank_age >= self.crank_interval_slots {
             out.push(KeeperAction::Crank);
+        }
+        out
+    }
+}
+
+/// Recovery policy: when a portfolio's engine-issued health certificate
+/// indicates a non-zero `certified_liq_deficit`, emit the first leg of
+/// the permissionless-recovery sequence (`ForfeitRecoveryLeg`). The
+/// keeper does NOT compute health — it consults the engine's cert. The
+/// subsequent `RebalanceReduce` / `FinalizeResetSide` legs are driven
+/// on the next tick after the program advances the close ledger.
+///
+/// Fail-closed on stale certs (spec §16 "stale backing fails closed"):
+/// `valid=false` is treated as "do nothing", deferring to engine
+/// freshness rather than the keeper second-guessing.
+///
+/// `b_delta_budget` is bounded by `certified_liq_deficit`, so the
+/// keeper cannot ask the program for more recovery than the engine
+/// already certified as needed.
+#[derive(Debug, Clone, Copy)]
+pub struct RecoveryPolicy {
+    /// Minimum deficit (in engine raw units) before the keeper acts.
+    /// Default `1` — any non-zero deficit is actionable.
+    pub min_deficit: u128,
+}
+
+impl Default for RecoveryPolicy {
+    fn default() -> Self {
+        Self { min_deficit: 1 }
+    }
+}
+
+impl RecoveryPolicy {
+    pub fn decide(&self, portfolios: &[PortfolioSnapshot]) -> Vec<KeeperAction> {
+        let mut out = Vec::new();
+        for p in portfolios {
+            // Fail-closed on stale / invalid cert — the engine's
+            // `valid` is the freshness gate the keeper trusts. Do not
+            // second-guess.
+            if !p.health_cert.valid {
+                continue;
+            }
+            if p.health_cert.certified_liq_deficit < self.min_deficit {
+                continue;
+            }
+            let Some(asset_index) = p.asset_in_distress else {
+                continue;
+            };
+            // i128 clamp guard — engine field is u128; we cap at the
+            // signed maximum so the action's i128 field is total.
+            let b_delta_budget = p
+                .health_cert
+                .certified_liq_deficit
+                .min(i128::MAX as u128) as i128;
+            out.push(KeeperAction::RecoveryForfeitLeg {
+                asset_index,
+                b_delta_budget,
+            });
         }
         out
     }

@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use std::sync::Mutex;
 
-use crate::state::{KeeperAction, MarketState};
+use crate::state::{KeeperAction, MarketState, PortfolioSnapshot};
 
 #[async_trait]
 pub trait PercolatorClient: Send + Sync {
@@ -21,6 +21,16 @@ pub trait PercolatorClient: Send + Sync {
         market_address: &str,
         action: &KeeperAction,
     ) -> Result<Execution, ClientError>;
+
+    /// Portfolios warranting the keeper's attention — typically those
+    /// with non-zero `certified_liq_deficit` or distressed close
+    /// state. Bounded enumeration: this MUST NOT scan all accounts
+    /// (cf. spec §34 "no full-market atomic work"); the real client
+    /// would query an indexer or operate on operator-supplied hints.
+    async fn list_portfolios(
+        &self,
+        market_address: &str,
+    ) -> Result<Vec<PortfolioSnapshot>, ClientError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +59,7 @@ pub enum ClientError {
 pub struct MockPercolator {
     state: Mutex<MarketState>,
     log: Mutex<Vec<KeeperAction>>,
+    portfolios: Mutex<Vec<PortfolioSnapshot>>,
 }
 
 impl MockPercolator {
@@ -56,7 +67,15 @@ impl MockPercolator {
         Self {
             state: Mutex::new(state),
             log: Mutex::new(Vec::new()),
+            portfolios: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Seed the mock with portfolio snapshots the recovery-policy path
+    /// will consult.
+    pub fn with_portfolios(self, portfolios: Vec<PortfolioSnapshot>) -> Self {
+        *self.portfolios.lock().unwrap() = portfolios;
+        self
     }
 
     pub fn executed(&self) -> Vec<KeeperAction> {
@@ -120,5 +139,16 @@ impl PercolatorClient for MockPercolator {
             tx_signature: None,
             slot,
         })
+    }
+
+    async fn list_portfolios(
+        &self,
+        market_address: &str,
+    ) -> Result<Vec<PortfolioSnapshot>, ClientError> {
+        let s = self.state.lock().unwrap();
+        if s.market_address != market_address {
+            return Err(ClientError::NotFound(market_address.to_string()));
+        }
+        Ok(self.portfolios.lock().unwrap().clone())
     }
 }

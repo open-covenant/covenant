@@ -38,9 +38,10 @@ pub mod state;
 pub use capability::{KeeperScope, ACTION_KEEPER};
 pub use client::{ClientError, Execution, MockPercolator, PercolatorClient};
 pub use keeper::{KeeperAgent, TickReport};
-pub use policy::KeeperPolicy;
+pub use policy::{KeeperPolicy, RecoveryPolicy};
 pub use state::{
     ActionLabel, AssetIndex, AssetLifecycle, AssetState, KeeperAction, MarketState,
+    PortfolioSnapshot,
 };
 
 /// Default percolator program id (from `percolator-cli.json`). Live

@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::risk::HealthCertV16;
+
 pub type AssetIndex = u16;
 
 /// Per-asset lifecycle. Mirrors `percolator::AssetLifecycleV16`
@@ -113,4 +115,16 @@ pub enum ActionLabel {
     PushMark,
     Crank,
     Recover,
+}
+
+/// Read-only view of one portfolio account, as the keeper consults it.
+/// The `health_cert` is the engine's own `HealthCertV16` — the keeper
+/// *reads* it to decide, it does not recompute it. `asset_in_distress`
+/// is the asset slot the program's close-progress ledger surfaces; the
+/// real client derives it from portfolio state, the mock supplies it.
+#[derive(Debug, Clone)]
+pub struct PortfolioSnapshot {
+    pub portfolio_address: String,
+    pub health_cert: HealthCertV16,
+    pub asset_in_distress: Option<AssetIndex>,
 }

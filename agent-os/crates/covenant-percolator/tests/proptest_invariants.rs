@@ -72,6 +72,7 @@ async fn run_tick(
         market_address: MARKET.into(),
         scope,
         policy: KeeperPolicy::default(),
+        recovery_policy: None,
         credits_per_action,
     };
     let report = agent.tick().await.expect("tick");

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::capability::KeeperScope;
 use crate::client::{ClientError, Execution, PercolatorClient};
-use crate::policy::KeeperPolicy;
+use crate::policy::{KeeperPolicy, RecoveryPolicy};
 use crate::state::KeeperAction;
 use crate::PercolatorError;
 
@@ -29,6 +29,12 @@ pub struct KeeperAgent<C: PercolatorClient> {
     pub market_address: String,
     pub scope: KeeperScope,
     pub policy: KeeperPolicy,
+    /// Optional recovery policy. When `Some`, the keeper calls
+    /// `list_portfolios` each tick and decides recovery actions from
+    /// each portfolio's engine-issued `HealthCertV16`. When `None`,
+    /// the keeper restricts itself to mark/crank actions and does not
+    /// even query portfolios.
+    pub recovery_policy: Option<RecoveryPolicy>,
     /// Credits charged per executed keeper action. The budget ledger
     /// caps the *total* spend per refill window; this is the per-action
     /// unit charged inside it.
@@ -57,7 +63,15 @@ impl<C: PercolatorClient> KeeperAgent<C> {
             .read_market(&self.market_address)
             .await
             .map_err(map_client_err)?;
-        let decisions = self.policy.decide(&market);
+        let mut decisions = self.policy.decide(&market);
+        if let Some(rp) = self.recovery_policy {
+            let portfolios = self
+                .client
+                .list_portfolios(&self.market_address)
+                .await
+                .map_err(map_client_err)?;
+            decisions.extend(rp.decide(&portfolios));
+        }
         let mut report = TickReport {
             decided: decisions.len(),
             ..Default::default()
@@ -226,9 +240,196 @@ mod tests {
             market_address: MARKET.into(),
             scope: sc,
             policy: KeeperPolicy::default(),
+            recovery_policy: None,
             credits_per_action,
         };
         (agent, client, settlement, budget)
+    }
+
+    // Builder variant that wires a `RecoveryPolicy` and seeds the mock
+    // with portfolios. Used by the recovery tests below.
+    async fn build_recovery_agent(
+        market_state: MarketState,
+        portfolios: Vec<crate::state::PortfolioSnapshot>,
+        sc: KeeperScope,
+        recovery_policy: Option<RecoveryPolicy>,
+        capacity: u64,
+        credits_per_action: u64,
+    ) -> (
+        KeeperAgent<MockPercolator>,
+        Arc<MockPercolator>,
+        Arc<InMemorySettlement>,
+        Arc<InMemoryLedger>,
+    ) {
+        let client = Arc::new(MockPercolator::new(market_state).with_portfolios(portfolios));
+        let settlement = Arc::new(InMemorySettlement::new());
+        let budget = Arc::new(InMemoryLedger::new());
+        let p = payer();
+        budget.set_capacity(&p, capacity).await.unwrap();
+        let agent = KeeperAgent {
+            client: client.clone(),
+            settlement: settlement.clone(),
+            budget: budget.clone(),
+            payer: p,
+            market_address: MARKET.into(),
+            scope: sc,
+            policy: KeeperPolicy::default(),
+            recovery_policy,
+            credits_per_action,
+        };
+        (agent, client, settlement, budget)
+    }
+
+    fn distressed_portfolio(asset_index: AssetIndex, deficit: u128) -> crate::state::PortfolioSnapshot {
+        use crate::risk::HealthCertV16;
+        crate::state::PortfolioSnapshot {
+            portfolio_address: format!("Port{asset_index}"),
+            health_cert: HealthCertV16 {
+                valid: true,
+                certified_liq_deficit: deficit,
+                ..HealthCertV16::default()
+            },
+            asset_in_distress: Some(asset_index),
+        }
+    }
+
+    fn fresh_market_no_actions() -> MarketState {
+        // current=2_000, crank at 1_950 (within default 300-interval),
+        // one asset freshened at 1_950 (within default 150-staleness)
+        // — `KeeperPolicy::decide` returns no mark/crank actions, so
+        // any executed action is necessarily a recovery action.
+        market(2_000, 1_950, vec![asset(3, 1_950)])
+    }
+
+    /// Recovery path engages `HealthCertV16` directly: a portfolio
+    /// with `valid=true` and a non-zero `certified_liq_deficit` emits
+    /// exactly one `ForfeitRecoveryLeg` carrying the engine-bounded
+    /// `b_delta_budget`.
+    #[tokio::test]
+    async fn recovery_triggers_on_liq_deficit_with_valid_cert() {
+        let (agent, client, settlement, _budget) = build_recovery_agent(
+            fresh_market_no_actions(),
+            vec![distressed_portfolio(3, 1_000_000)],
+            KeeperScope {
+                version: 1,
+                market: MARKET.into(),
+                allowed_assets: Some(vec![3]),
+                allowed_actions: Some(vec![ActionLabel::Recover]),
+                max_actions_per_tick: None,
+            },
+            Some(RecoveryPolicy::default()),
+            1_000,
+            10,
+        )
+        .await;
+        let report = agent.tick().await.unwrap();
+        assert_eq!(report.executed, 1);
+        let executed = client.executed();
+        match &executed[0] {
+            KeeperAction::RecoveryForfeitLeg { asset_index, b_delta_budget } => {
+                assert_eq!(*asset_index, 3);
+                assert_eq!(*b_delta_budget, 1_000_000);
+            }
+            other => panic!("expected RecoveryForfeitLeg, got {other:?}"),
+        }
+        // The receipt is paired with the debit by id.
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].id, report.executions[0].2);
+    }
+
+    /// Fail-closed (spec §16): a stale / invalid cert produces no
+    /// recovery action — the keeper trusts the engine's freshness gate
+    /// and does not second-guess.
+    #[tokio::test]
+    async fn recovery_fails_closed_on_stale_cert() {
+        use crate::risk::HealthCertV16;
+        let stale = crate::state::PortfolioSnapshot {
+            portfolio_address: "Port1".into(),
+            health_cert: HealthCertV16 {
+                valid: false,                 // stale / invalid
+                certified_liq_deficit: 5_000, // tempting, but ignored
+                ..HealthCertV16::default()
+            },
+            asset_in_distress: Some(3),
+        };
+        let (agent, client, _settlement, _budget) = build_recovery_agent(
+            fresh_market_no_actions(),
+            vec![stale],
+            KeeperScope {
+                version: 1,
+                market: MARKET.into(),
+                allowed_assets: Some(vec![3]),
+                allowed_actions: Some(vec![ActionLabel::Recover]),
+                max_actions_per_tick: None,
+            },
+            Some(RecoveryPolicy::default()),
+            1_000,
+            10,
+        )
+        .await;
+        let report = agent.tick().await.unwrap();
+        assert_eq!(report.executed, 0);
+        assert!(client.executed().is_empty());
+    }
+
+    /// Healthy portfolio: `certified_liq_deficit==0` → no action.
+    #[tokio::test]
+    async fn recovery_skips_when_no_deficit() {
+        use crate::risk::HealthCertV16;
+        let healthy = crate::state::PortfolioSnapshot {
+            portfolio_address: "Port1".into(),
+            health_cert: HealthCertV16 {
+                valid: true,
+                certified_liq_deficit: 0,
+                ..HealthCertV16::default()
+            },
+            asset_in_distress: Some(3),
+        };
+        let (agent, client, _settlement, _budget) = build_recovery_agent(
+            fresh_market_no_actions(),
+            vec![healthy],
+            KeeperScope {
+                version: 1,
+                market: MARKET.into(),
+                allowed_assets: Some(vec![3]),
+                allowed_actions: Some(vec![ActionLabel::Recover]),
+                max_actions_per_tick: None,
+            },
+            Some(RecoveryPolicy::default()),
+            1_000,
+            10,
+        )
+        .await;
+        let report = agent.tick().await.unwrap();
+        assert_eq!(report.executed, 0);
+        assert!(client.executed().is_empty());
+    }
+
+    /// Capability is independent of policy: a recovery-needing
+    /// portfolio with a scope that does NOT grant the `recover` verb
+    /// → no execution, scope rejection counted.
+    #[tokio::test]
+    async fn recovery_blocked_when_scope_lacks_recover_verb() {
+        let (agent, client, _settlement, _budget) = build_recovery_agent(
+            fresh_market_no_actions(),
+            vec![distressed_portfolio(3, 1_000_000)],
+            KeeperScope {
+                version: 1,
+                market: MARKET.into(),
+                allowed_assets: Some(vec![3]),
+                allowed_actions: Some(vec![ActionLabel::PushMark, ActionLabel::Crank]), // no Recover
+                max_actions_per_tick: None,
+            },
+            Some(RecoveryPolicy::default()),
+            1_000,
+            10,
+        )
+        .await;
+        let report = agent.tick().await.unwrap();
+        assert_eq!(report.executed, 0);
+        assert!(report.skipped_capability >= 1);
+        assert!(client.executed().is_empty());
     }
 
     /// The headline path: an asset is stale, the scope permits it, the

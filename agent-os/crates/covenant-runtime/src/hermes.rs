@@ -552,6 +552,15 @@ fn map_hermes_event(value: &Value) -> Option<RuntimeTrace> {
                 .to_string(),
             resolved: value.get("resolved").and_then(|v| v.as_u64()).unwrap_or(0),
         }),
+        "file.written" => Some(RuntimeTrace::HermesFileWritten {
+            run_id,
+            path: value
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            bytes: value.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0),
+        }),
         // message.delta / reasoning.available / run.completed / run.failed
         // are observed elsewhere (status poll for terminal states; deltas
         // are too high-volume to audit).
@@ -795,6 +804,38 @@ mod tests {
         // mapping would silently 0-fill the runtime_events buffer.
         let frame = b"data: {\"event\":\"message.delta\",\"run_id\":\"r4\",\"delta\":\"hello\"}";
         assert!(parse_sse_frame(frame).is_none());
+    }
+
+    #[test]
+    fn parse_sse_frame_maps_file_written_with_path_and_byte_count() {
+        // file.written is a low-volume structural event the gateway
+        // emits when the coding agent writes a workspace file. The
+        // runner lifts it into HermesFileWritten so the daemon can fold
+        // a workspace-write audit row alongside the existing tool rows.
+        // A refactor that dropped the arm would silently lose file
+        // writes from the audit chain even though the gateway keeps
+        // emitting them.
+        let frame =
+            b"data: {\"event\":\"file.written\",\"run_id\":\"r5\",\"path\":\"src/main.rs\",\"bytes\":1024}";
+        match parse_sse_frame(frame).expect("file.written must parse") {
+            RuntimeTrace::HermesFileWritten {
+                run_id,
+                path,
+                bytes,
+            } => {
+                assert_eq!(run_id, "r5");
+                assert_eq!(
+                    path, "src/main.rs",
+                    "path must round-trip verbatim; the operator file tree keys on it",
+                );
+                assert_eq!(
+                    bytes, 1024,
+                    "bytes must round-trip as u64; a narrowing here would silently \
+                     truncate any write above 4 GiB",
+                );
+            }
+            other => panic!("expected HermesFileWritten, got {other:?}"),
+        }
     }
 
     #[test]

@@ -385,6 +385,16 @@ fn runtime_trace_to_audit_kind(
             choice,
             resolved,
         },
+        T::HermesFileWritten {
+            run_id,
+            path,
+            bytes,
+        } => AuditKind::HermesFileWritten {
+            intent_id,
+            run_id,
+            path,
+            bytes,
+        },
     }
 }
 
@@ -6765,6 +6775,44 @@ required = {caps:?}
             }
             other => panic!(
                 "HermesApprovalResponded trace must map to AuditKind::HermesApprovalResolved (note the rename: Responded → Resolved), got {other:?}. A refactor that 'aligned' the variant names by renaming AuditKind::HermesApprovalResolved back to HermesApprovalResponded would break every operator dashboard joining on the documented Resolved name",
+            ),
+        }
+
+        // HermesFileWritten → AuditKind::HermesFileWritten passes path
+        // and bytes through verbatim — workspace writes are structural
+        // and the path is not redacted (unlike preview, which carries
+        // user input). A refactor that hashed `path` under a 'mirror the
+        // preview redaction' rationale would strand the operator file
+        // tree from its audit-row identity; this pin documents that
+        // path stays plain.
+        let file_written = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesFileWritten {
+                run_id: "run-5".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            },
+        );
+        match file_written {
+            AuditKind::HermesFileWritten {
+                intent_id: stamped,
+                run_id,
+                path,
+                bytes,
+            } => {
+                assert_eq!(stamped, intent_id);
+                assert_eq!(run_id, "run-5");
+                assert_eq!(
+                    path, "src/main.rs",
+                    "HermesFileWritten path must pass through verbatim — operator file-tree views key on it, and a redaction would break the join from audit row to the rendered file path",
+                );
+                assert_eq!(
+                    bytes, 1_024,
+                    "HermesFileWritten bytes must pass through verbatim as u64 — covenant_runtime::RuntimeTrace::HermesFileWritten::bytes documents the u64 width invariant; a refactor that narrowed to u32 here would silently truncate any write above 4 GiB",
+                );
+            }
+            other => panic!(
+                "HermesFileWritten trace must map to AuditKind::HermesFileWritten, got {other:?}",
             ),
         }
     }

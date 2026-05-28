@@ -112,6 +112,19 @@ pub enum AuditKind {
         choice: String,
         resolved: u64,
     },
+    /// A Hermes run wrote a file inside its sandbox workspace. Recorded
+    /// because workspace writes are the structural side-effect of a
+    /// coding run — message and reasoning deltas are intentionally
+    /// excluded from the chain (too high-volume; see the comment at
+    /// `covenant-runtime/src/hermes.rs::map_hermes_event`). `path` is
+    /// the sandbox-relative path; `bytes` is the file size and is
+    /// `u64` so multi-GB writes can never silently truncate.
+    HermesFileWritten {
+        intent_id: Uuid,
+        run_id: String,
+        path: String,
+        bytes: u64,
+    },
     CapabilityCheck {
         agent_id: String,
         required_actions: Vec<String>,
@@ -3686,6 +3699,20 @@ mod tests {
             },
             "hermes_approval_resolved",
             &["choice", "intent_id", "resolved", "run_id"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_file_written_serde_pins_four_field_variant() {
+        pin_audit_variant(
+            AuditKind::HermesFileWritten {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024u64,
+            },
+            "hermes_file_written",
+            &["bytes", "intent_id", "path", "run_id"],
         );
     }
 

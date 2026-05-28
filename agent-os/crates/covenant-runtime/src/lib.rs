@@ -127,6 +127,18 @@ pub enum RuntimeTrace {
         choice: String,
         resolved: u64,
     },
+    /// Hermes wrote a file inside the sandbox workspace. Low-volume
+    /// and structural (distinct from `message.delta` / `reasoning.available`
+    /// which the runtime intentionally drops at the SSE seam in
+    /// `hermes::map_hermes_event` because they are too high-volume to
+    /// audit). `path` is the sandbox-relative path; `bytes` is the file
+    /// size as reported by the gateway, kept `u64` so a multi-GB write
+    /// never silently truncates.
+    HermesFileWritten {
+        run_id: String,
+        path: String,
+        bytes: u64,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1183,6 +1195,30 @@ mod tests {
              with truncation would surface here; a refactor that renamed the \
              field to 'count' under a 'clearer name' rationale would also \
              surface",
+        );
+
+        let file_written = RuntimeTrace::HermesFileWritten {
+            run_id: "r1".into(),
+            path: "src/main.rs".into(),
+            bytes: 1_024,
+        };
+        let file_written_wire = serde_json::to_value(&file_written).unwrap();
+        assert_eq!(
+            file_written_wire,
+            serde_json::json!({
+                "type": "hermes_file_written",
+                "run_id": "r1",
+                "path": "src/main.rs",
+                "bytes": 1_024,
+            }),
+            "HermesFileWritten slug + field names must match the SSE decoder; \
+             a rename of bytes to size or a narrowing of bytes from u64 would \
+             surface here before it silently truncated a real audit row",
+        );
+        assert_eq!(
+            serde_json::from_value::<RuntimeTrace>(file_written_wire).unwrap(),
+            file_written,
+            "HermesFileWritten round-trip must reconstruct the original variant",
         );
 
         // Negative slug rejection: a camelCase tag must NOT decode.

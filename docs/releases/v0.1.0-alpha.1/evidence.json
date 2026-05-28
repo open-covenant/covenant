@@ -1,14 +1,14 @@
 {
   "schema": "covenant.alpha-release-evidence.v1",
   "kind": "alpha_release_evidence",
-  "generated_at": "2026-05-27T22:58:38.433Z",
-  "commit": "a13a3481834a76e7868e85fac88ce2e618365a6a",
-  "commit_short": "a13a3481",
+  "generated_at": "2026-05-28T08:41:32.418Z",
+  "commit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+  "commit_short": "94e7af53",
   "branch": "main",
   "dirty_files": 0,
   "readiness": {
     "kind": "alpha_release_readiness",
-    "generated_at": "2026-05-27T22:58:51.814Z",
+    "generated_at": "2026-05-28T08:41:45.698Z",
     "ready": true,
     "blockers": [],
     "checks": [

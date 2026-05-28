@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::capability::KeeperScope;
 use crate::client::{ClientError, Execution, PercolatorClient};
+use crate::coordination::{self, KeeperId};
 use crate::policy::{KeeperPolicy, RecoveryPolicy};
 use crate::state::KeeperAction;
 use crate::PercolatorError;
@@ -35,6 +36,20 @@ pub struct KeeperAgent<C: PercolatorClient> {
     /// the keeper restricts itself to mark/crank actions and does not
     /// even query portfolios.
     pub recovery_policy: Option<RecoveryPolicy>,
+    /// Other accountable keepers this agent knows about. Empty = solo
+    /// operation, coordination is skipped entirely. Non-empty enables
+    /// deterministic leader election per `(action_key, slot_window)`:
+    /// every keeper in the network computes the same priority and
+    /// only the leader submits, eliminating the "all N keepers race
+    /// to crank the same state" waste without any inter-keeper
+    /// communication.
+    pub peers: Vec<KeeperId>,
+    /// Slot window over which leadership rotates. `50` is a
+    /// reasonable default at 400ms slots (~20s windows). `0` means
+    /// "one window forever" — useful in tests; in production set a
+    /// positive value so the leader rotates and no keeper is
+    /// permanently in front of the queue.
+    pub coordination_window_slots: u64,
     /// Credits charged per executed keeper action. The budget ledger
     /// caps the *total* spend per refill window; this is the per-action
     /// unit charged inside it.
@@ -48,6 +63,10 @@ pub struct TickReport {
     pub decided: usize,
     pub executed: usize,
     pub skipped_capability: usize,
+    /// Actions the agent declined to submit because deterministic
+    /// leader election put another peer in front. Non-leaders never
+    /// block on the leader (no hold-and-wait); they simply skip.
+    pub coordination_deferred: usize,
     pub stopped_budget: bool,
     pub errors: Vec<String>,
     /// (action, on-chain execution metadata, paired receipt id) per
@@ -88,6 +107,24 @@ impl<C: PercolatorClient> KeeperAgent<C> {
             if !self.scope.allows(&self.market_address, &action) {
                 debug!(?action, "keeper action rejected by capability scope");
                 report.skipped_capability += 1;
+                continue;
+            }
+
+            // 2. Coordination gate. When peers are known, only the
+            //    deterministic leader for `(action_key, window)`
+            //    submits; non-leaders skip cleanly with no hold-and-
+            //    wait. Empty peers list = solo operation, always lead.
+            if !self.peers.is_empty()
+                && !coordination::should_lead(
+                    &self.payer.pubkey,
+                    &action,
+                    market.current_slot,
+                    self.coordination_window_slots,
+                    &self.peers,
+                )
+            {
+                debug!(?action, "keeper deferred to peer leader");
+                report.coordination_deferred += 1;
                 continue;
             }
 
@@ -240,6 +277,8 @@ mod tests {
             market_address: MARKET.into(),
             scope: sc,
             policy: KeeperPolicy::default(),
+            peers: Vec::new(),
+            coordination_window_slots: 0,
             recovery_policy: None,
             credits_per_action,
         };
@@ -274,6 +313,8 @@ mod tests {
             market_address: MARKET.into(),
             scope: sc,
             policy: KeeperPolicy::default(),
+            peers: Vec::new(),
+            coordination_window_slots: 0,
             recovery_policy,
             credits_per_action,
         };
@@ -404,6 +445,67 @@ mod tests {
         let report = agent.tick().await.unwrap();
         assert_eq!(report.executed, 0);
         assert!(client.executed().is_empty());
+    }
+
+    /// Three independent keepers see the same stale asset in the same
+    /// slot window. With coordination wired, *exactly one* (the
+    /// deterministic leader) executes the action; the other two
+    /// report `coordination_deferred = 1` and spend nothing. No
+    /// hold-and-wait, no inter-keeper communication required — the
+    /// leader election is a pure function of public state + peer ids.
+    #[tokio::test]
+    async fn three_keepers_only_one_executes_others_defer() {
+        use crate::coordination::KeeperId;
+        let kids: [KeeperId; 3] = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let peers: Vec<KeeperId> = kids.to_vec();
+
+        let mut executed = Vec::new();
+        let mut deferred = Vec::new();
+
+        for &kid_bytes in &kids {
+            let client = Arc::new(MockPercolator::new(market(
+                2_000,
+                1_900,
+                vec![asset(7, 1_000)],
+            )));
+            let settlement = Arc::new(InMemorySettlement::new());
+            let budget = Arc::new(InMemoryLedger::new());
+            let p = AgentId::new("keeper@local", kid_bytes);
+            budget.set_capacity(&p, 1_000).await.unwrap();
+            let agent = KeeperAgent {
+                client: client.clone(),
+                settlement: settlement.clone(),
+                budget: budget.clone(),
+                payer: p,
+                market_address: MARKET.into(),
+                scope: KeeperScope {
+                    version: 1,
+                    market: MARKET.into(),
+                    allowed_assets: Some(vec![7]),
+                    allowed_actions: Some(vec![ActionLabel::PushMark, ActionLabel::Crank]),
+                    max_actions_per_tick: None,
+                },
+                policy: KeeperPolicy::default(),
+                peers: peers.clone(),
+                coordination_window_slots: 50,
+                recovery_policy: None,
+                credits_per_action: 5,
+            };
+            let report = agent.tick().await.unwrap();
+            executed.push(report.executed);
+            deferred.push(report.coordination_deferred);
+        }
+
+        assert_eq!(
+            executed.iter().filter(|&&n| n > 0).count(),
+            1,
+            "exactly one keeper executes (executed counts: {executed:?})"
+        );
+        assert_eq!(
+            deferred.iter().filter(|&&n| n > 0).count(),
+            2,
+            "the other two defer (deferred counts: {deferred:?})"
+        );
     }
 
     /// Capability is independent of policy: a recovery-needing

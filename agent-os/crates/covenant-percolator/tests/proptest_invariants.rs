@@ -72,6 +72,8 @@ async fn run_tick(
         market_address: MARKET.into(),
         scope,
         policy: KeeperPolicy::default(),
+        peers: Vec::new(),
+        coordination_window_slots: 0,
         recovery_policy: None,
         credits_per_action,
     };

@@ -47,6 +47,14 @@ type TraceItem =
   | { source: "audit"; key: string; timestampMs: number; event: AuditEvent }
   | { source: "live"; key: string; timestampMs: number; event: LiveAgentEvent };
 
+// Cap on rendered trace items per page. Long-running coding runs can
+// emit hundreds of tool events; rendering them all without bound freezes
+// the React reconciler on slow machines. Showing the most recent N keeps
+// the page interactive — operators expand to the full list when they
+// want to audit a finished run. Pick 200 because that matches the audit
+// fetch `limit=200`; lifting the cap should also widen the audit fetch.
+const RENDER_LIMIT_DEFAULT = 200;
+
 export default function TaskTracePage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null);
@@ -55,6 +63,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
   const { data: outcome } = usePoll(() => api.intentResult(id), 3000);
   const liveStream = useIntentEventStream(id);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showAllSteps, setShowAllSteps] = useState(false);
   const [reply, setReply] = useState<string | null>(null);
 
   // Audit fetch: durable historical context for events that landed
@@ -121,6 +130,15 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
       event,
     })),
   ].sort((a, b) => a.timestampMs - b.timestampMs);
+  // Cap the render set so a 1000-step run does not freeze the page;
+  // operators expand on demand. Take from the tail so the user sees what
+  // is happening NOW (the same window a `tail -f` would surface), not
+  // the first 200 events that may be ancient by the time they look.
+  const overflow = Math.max(0, traceItems.length - RENDER_LIMIT_DEFAULT);
+  const visibleTraceItems =
+    !showAllSteps && overflow > 0
+      ? traceItems.slice(traceItems.length - RENDER_LIMIT_DEFAULT)
+      : traceItems;
   // While an async build is in flight the audit trace is still empty (the
   // dispatch row lands when the run finishes), so fall back to the polled
   // outcome for the title, agent, status, and reply body. The live SSE
@@ -204,6 +222,17 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
             </p>
           ) : replyText ? (
             <Markdown>{replyText}</Markdown>
+          ) : outcome === null ? (
+            // Shared link to an evicted or unknown intent: the daemon
+            // does not track this id (404 on /intents/:id/result) and we
+            // have no per-tab fallback to show. Be explicit so a shared
+            // URL does not look broken.
+            <p className="empty">
+              This task is no longer cached on the server. The full reply
+              is only retained for a short retention window. The activity
+              log keeps the signed result hash so the run can still be
+              verified.
+            </p>
           ) : (
             <p className="empty">
               The reply body isn&apos;t available in this tab. The activity log stores
@@ -238,8 +267,23 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         </div>
       ) : (
         <div className="trace">
-          {traceItems.map((item, idx) => {
-            const isLast = idx === traceItems.length - 1;
+          {overflow > 0 && (
+            <article className="trace-overflow">
+              <p>
+                Showing the most recent {RENDER_LIMIT_DEFAULT} of{" "}
+                {traceItems.length} steps.{" "}
+                <button
+                  type="button"
+                  className="btn link"
+                  onClick={() => setShowAllSteps((v) => !v)}
+                >
+                  {showAllSteps ? "collapse" : `show all ${traceItems.length}`}
+                </button>
+              </p>
+            </article>
+          )}
+          {visibleTraceItems.map((item, idx) => {
+            const isLast = idx === visibleTraceItems.length - 1;
             const isExpanded = expanded.has(item.key);
             const label =
               item.source === "audit"
@@ -427,6 +471,20 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           border: 1px solid var(--border-soft);
           border-radius: 8px;
           background: var(--panel);
+        }
+
+        .trace-overflow {
+          margin-bottom: 12px;
+          padding: 10px 14px;
+          border: 1px dashed var(--border);
+          border-radius: 6px;
+          background: #0a0a0a;
+        }
+
+        .trace-overflow p {
+          margin: 0;
+          color: var(--muted);
+          font-size: 12px;
         }
 
         .step-head {

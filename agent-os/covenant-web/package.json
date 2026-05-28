@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "highlight.js": "^11.11.1",
     "next": "15.0.3",
     "react": "19.2.5",
     "react-dom": "19.2.5",

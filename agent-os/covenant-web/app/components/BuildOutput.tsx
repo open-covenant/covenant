@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { BuildFile } from "@/lib/api";
+import { highlightCode, languageForPath } from "@/lib/highlight";
 
 // The preview iframe is sandboxed WITHOUT allow-same-origin (so untrusted code
 // can't reach this origin/cookies/storage). That gives it a null origin, where
@@ -25,8 +26,20 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
   const [sel, setSel] = useState(0);
   const [tab, setTab] = useState<"files" | "preview">(html ? "preview" : "files");
 
-  if (files.length === 0) return null;
-  const active = files[Math.min(sel, files.length - 1)];
+  // useMemo MUST run on every render — hooks cannot be called after an
+  // early return. Fall back to an empty active row when the file list is
+  // empty; the empty-files check below the hook still bails out before
+  // anything is rendered.
+  const active = files.length > 0 ? files[Math.min(sel, files.length - 1)] : null;
+  const activeLang = useMemo(
+    () => (active ? languageForPath(active.path) : null),
+    [active],
+  );
+  const activeHtml = useMemo(
+    () => (active ? highlightCode(active.content, activeLang) : ""),
+    [active, activeLang],
+  );
+  if (!active) return null;
 
   return (
     <section className="build-output">
@@ -88,10 +101,14 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           <div className="bo-file">
             <div className="bo-file-head">
               <span className="path">{active.path}</span>
+              {activeLang && <span className="lang">{activeLang}</span>}
               {active.truncated && <span className="trunc">truncated</span>}
             </div>
             <pre>
-              <code>{active.content}</code>
+              <code
+                className={activeLang ? `hljs language-${activeLang}` : "hljs"}
+                dangerouslySetInnerHTML={{ __html: activeHtml }}
+              />
             </pre>
           </div>
         </div>
@@ -209,6 +226,64 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           font-size: 12px;
           line-height: 1.5;
           white-space: pre;
+        }
+        .bo-file-head .lang {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+        }
+      `}</style>
+      <style jsx global>{`
+        .bo-file .hljs-comment,
+        .bo-file .hljs-quote {
+          color: #6b6b6b;
+          font-style: italic;
+        }
+        .bo-file .hljs-keyword,
+        .bo-file .hljs-selector-tag,
+        .bo-file .hljs-meta-keyword,
+        .bo-file .hljs-doctag {
+          color: #e0e0e0;
+          font-weight: 600;
+        }
+        .bo-file .hljs-string,
+        .bo-file .hljs-attr,
+        .bo-file .hljs-symbol,
+        .bo-file .hljs-bullet,
+        .bo-file .hljs-addition {
+          color: #c9c9c9;
+        }
+        .bo-file .hljs-number,
+        .bo-file .hljs-literal,
+        .bo-file .hljs-meta {
+          color: #b8b8b8;
+        }
+        .bo-file .hljs-title,
+        .bo-file .hljs-section,
+        .bo-file .hljs-name,
+        .bo-file .hljs-built_in,
+        .bo-file .hljs-class .hljs-title {
+          color: #fafafa;
+        }
+        .bo-file .hljs-variable,
+        .bo-file .hljs-template-variable {
+          color: #d4d4d4;
+        }
+        .bo-file .hljs-type,
+        .bo-file .hljs-params {
+          color: #d4d4d4;
+        }
+        .bo-file .hljs-tag,
+        .bo-file .hljs-deletion {
+          color: #a3a3a3;
+        }
+        .bo-file .hljs-emphasis {
+          font-style: italic;
+        }
+        .bo-file .hljs-strong {
+          font-weight: 600;
         }
         @media (max-width: 720px) {
           .bo-body {

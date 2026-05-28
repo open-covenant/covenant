@@ -1661,7 +1661,9 @@ fn parse_chain_flags(args: &[String]) -> Result<ChainFlags> {
             continue;
         }
         if a.starts_with("--") {
-            let v = args.get(i + 1).with_context(|| format!("{a} needs a value"))?;
+            let v = args
+                .get(i + 1)
+                .with_context(|| format!("{a} needs a value"))?;
             map.insert(a.clone(), v.clone());
             i += 2;
         } else {
@@ -1790,7 +1792,10 @@ async fn submit_chain_tx(
             envelope.insert("status".to_string(), "submitted-not-confirmed".into());
             envelope.insert("timeout_ms".to_string(), confirm_timeout_ms.into());
             if as_json {
-                println!("{}", serde_json::to_string(&serde_json::Value::Object(envelope))?);
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::Value::Object(envelope))?
+                );
             } else {
                 println!("status: submitted-not-confirmed");
                 println!("signature: {signature_b58}");
@@ -1805,7 +1810,10 @@ async fn submit_chain_tx(
             envelope.insert("kind".to_string(), "covenant.chain.tx.v1".into());
             envelope.insert("status".to_string(), "confirmed".into());
             if as_json {
-                println!("{}", serde_json::to_string(&serde_json::Value::Object(envelope))?);
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::Value::Object(envelope))?
+                );
             } else {
                 println!("status: confirmed");
                 println!("signature: {signature_b58}");
@@ -1888,7 +1896,16 @@ async fn run_chain_unstake(args: &[String]) -> Result<()> {
         f.timeout_ms(),
         f.json,
         extra,
-        move |owner| build_unstake_instruction(&program_id, owner, &agent_key, &stake_vault, &owner_covnt, &covnt_mint),
+        move |owner| {
+            build_unstake_instruction(
+                &program_id,
+                owner,
+                &agent_key,
+                &stake_vault,
+                &owner_covnt,
+                &covnt_mint,
+            )
+        },
     )
     .await
 }
@@ -1933,7 +1950,11 @@ async fn run_chain_migrate_config(args: &[String]) -> Result<()> {
     .await
 }
 
-async fn run_chain_set_config_u64(args: &[String], verb: &'static str, method: &'static str) -> Result<()> {
+async fn run_chain_set_config_u64(
+    args: &[String],
+    verb: &'static str,
+    method: &'static str,
+) -> Result<()> {
     let f = parse_chain_flags(args)?;
     let program_id = f.pubkey("--program-id")?;
     let value = f.u64("--value")?;
@@ -1953,7 +1974,11 @@ async fn run_chain_set_config_u64(args: &[String], verb: &'static str, method: &
     .await
 }
 
-async fn run_chain_set_config_pubkey(args: &[String], verb: &'static str, method: &'static str) -> Result<()> {
+async fn run_chain_set_config_pubkey(
+    args: &[String],
+    verb: &'static str,
+    method: &'static str,
+) -> Result<()> {
     let f = parse_chain_flags(args)?;
     let program_id = f.pubkey("--program-id")?;
     let new_value = f.pubkey("--new")?;
@@ -1968,7 +1993,9 @@ async fn run_chain_set_config_pubkey(args: &[String], verb: &'static str, method
         f.timeout_ms(),
         f.json,
         extra,
-        move |authority| build_update_config_pubkey_instruction(&program_id, authority, method, &new_value),
+        move |authority| {
+            build_update_config_pubkey_instruction(&program_id, authority, method, &new_value)
+        },
     )
     .await
 }
@@ -3644,8 +3671,12 @@ async fn main() -> Result<()> {
                     run_chain_migrate_config(&args[2..]).await?;
                 }
                 "set-min-stake-lock" => {
-                    run_chain_set_config_u64(&args[2..], "set-min-stake-lock", "set_min_stake_lock")
-                        .await?;
+                    run_chain_set_config_u64(
+                        &args[2..],
+                        "set-min-stake-lock",
+                        "set_min_stake_lock",
+                    )
+                    .await?;
                 }
                 "set-credits-per-covnt" => {
                     run_chain_set_config_u64(

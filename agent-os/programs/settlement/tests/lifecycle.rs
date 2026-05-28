@@ -35,7 +35,10 @@ fn stake_unstake_then_restake_succeeds() {
     unstake(&mut env, &AGENT, &position, &stake_vault, &owner_covnt).expect("unstake");
     assert_eq!(token_balance(&env, &owner_covnt), 1_000); // funds returned
     assert_eq!(agent_stake(&env, &AGENT), 0);
-    assert!(!position_exists(&env, &position), "position must be closed on unstake");
+    assert!(
+        !position_exists(&env, &position),
+        "position must be closed on unstake"
+    );
 
     // The PDA is free again, so re-staking against the same agent works.
     let (position2, vault2, _) = stake_locked(&mut env, &AGENT, 400, 0);
@@ -56,9 +59,20 @@ fn full_slash_then_close_then_restake() {
         &env.payer.pubkey(),
     );
 
-    slash_stake(&mut env, &AGENT, &position, &stake_vault, &slash_vault, 1_000).expect("full slash");
+    slash_stake(
+        &mut env,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &slash_vault,
+        1_000,
+    )
+    .expect("full slash");
     assert_eq!(token_balance(&env, &slash_vault), 1_000);
-    assert!(!stake_position(&env, &position).active, "fully slashed position is inactive");
+    assert!(
+        !stake_position(&env, &position).active,
+        "fully slashed position is inactive"
+    );
     assert_eq!(agent_stake(&env, &AGENT), 0);
 
     // Slash does not close the position; the owner reclaims rent + frees the PDA.
@@ -77,8 +91,12 @@ fn task_create_and_release_pays_provider() {
     register_agent(&mut env, &AGENT);
     let task_id = [21u8; 32];
     let provider = Keypair::new().pubkey();
-    let provider_covnt =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &provider);
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider,
+    );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
     create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create_task");

@@ -1700,7 +1700,10 @@ network = "off"
             .run(&hermes_card(5_000), &intent())
             .await
             .expect_err("malformed submit must fail");
-        assert!(matches!(err, RunnerError::MalformedStdout { .. }), "got {err:?}");
+        assert!(
+            matches!(err, RunnerError::MalformedStdout { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -1751,7 +1754,8 @@ network = "off"
         Mock::given(method("GET"))
             .and(path("/runs/r1"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "status": "running" })),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "status": "running" })),
             )
             .mount(&server)
             .await;
@@ -1856,6 +1860,9 @@ network = "off"
             .run(&hermes_card(30_000), &intent())
             .await
             .expect("ok");
-        assert!(result.files.is_empty(), "files fetch failure must not fail the run");
+        assert!(
+            result.files.is_empty(),
+            "files fetch failure must not fail the run"
+        );
     }
 }

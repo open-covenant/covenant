@@ -505,8 +505,12 @@ pub fn stake_locked(
         &owner_covnt,
         amount,
     );
-    let stake_vault =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &position);
+    let stake_vault = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &position,
+    );
 
     let data = ix::Stake { amount, lock_until }.data();
     let metas = vec![
@@ -524,7 +528,11 @@ pub fn stake_locked(
     send(
         &mut env.svm,
         &payer,
-        &[Instruction { program_id: ID, accounts: metas, data }],
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
         &[],
     )
     .expect("stake_locked");
@@ -544,9 +552,19 @@ pub fn try_stake(
     let position = stake_pda(agent_key, &owner);
     let owner_covnt =
         create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner);
-    mint_to(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &owner_covnt, amount.max(1));
-    let stake_vault =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &position);
+    mint_to(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &owner_covnt,
+        amount.max(1),
+    );
+    let stake_vault = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &position,
+    );
     let data = ix::Stake { amount, lock_until }.data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
@@ -560,7 +578,16 @@ pub fn try_stake(
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn unstake(
@@ -584,7 +611,16 @@ pub fn unstake(
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn close_position(env: &mut Env, position: &Pubkey) -> Result<(), TransactionError> {
@@ -595,7 +631,16 @@ pub fn close_position(env: &mut Env, position: &Pubkey) -> Result<(), Transactio
         AccountMeta::new(owner, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn consume_credits(
@@ -604,14 +649,27 @@ pub fn consume_credits(
     amount: u64,
 ) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
-    let data = ix::ConsumeCredits { amount, receipt_hash: [9u8; 32] }.data();
+    let data = ix::ConsumeCredits {
+        amount,
+        receipt_hash: [9u8; 32],
+    }
+    .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(*credits, false),
         AccountMeta::new_readonly(owner, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn set_agent_active(
@@ -628,7 +686,16 @@ pub fn set_agent_active(
         AccountMeta::new(agent, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn burn_covnt(
@@ -637,7 +704,11 @@ pub fn burn_covnt(
     amount: u64,
 ) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
-    let data = ix::BurnCovnt { amount, reason_hash: [3u8; 32] }.data();
+    let data = ix::BurnCovnt {
+        amount,
+        reason_hash: [3u8; 32],
+    }
+    .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(owner, true),
@@ -646,7 +717,16 @@ pub fn burn_covnt(
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn anchor_receipt_batch(
@@ -671,7 +751,16 @@ pub fn anchor_receipt_batch(
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub struct TaskCtx {
@@ -687,8 +776,12 @@ pub fn task_setup(env: &mut Env, task_id: &[u8; 32], fund_client: u64) -> TaskCt
     let client = env.payer.pubkey();
     let escrow_vault =
         create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &task);
-    let client_covnt =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &client);
+    let client_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &client,
+    );
     mint_to(
         &mut env.svm,
         &env.payer.insecure_clone(),
@@ -696,7 +789,11 @@ pub fn task_setup(env: &mut Env, task_id: &[u8; 32], fund_client: u64) -> TaskCt
         &client_covnt,
         fund_client,
     );
-    TaskCtx { task, escrow_vault, client_covnt }
+    TaskCtx {
+        task,
+        escrow_vault,
+        client_covnt,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -734,7 +831,16 @@ pub fn create_task(
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn release_task(
@@ -743,7 +849,11 @@ pub fn release_task(
     provider_covnt: &Pubkey,
 ) -> Result<(), TransactionError> {
     let client = env.payer.pubkey();
-    let data = ix::ReleaseTask { result_hash: [6u8; 32], receipt_hash: [7u8; 32] }.data();
+    let data = ix::ReleaseTask {
+        result_hash: [6u8; 32],
+        receipt_hash: [7u8; 32],
+    }
+    .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(tc.task, false),
@@ -754,7 +864,16 @@ pub fn release_task(
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> {
@@ -770,29 +889,62 @@ pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> 
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn update_authority(env: &mut Env, new_authority: &Pubkey) -> Result<(), TransactionError> {
     let authority = env.payer.pubkey();
-    let data = ix::UpdateAuthority { new_authority: *new_authority }.data();
+    let data = ix::UpdateAuthority {
+        new_authority: *new_authority,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new_readonly(authority, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn update_slash_authority(env: &mut Env, new: &Pubkey) -> Result<(), TransactionError> {
     let authority = env.payer.pubkey();
-    let data = ix::UpdateSlashAuthority { new_slash_authority: *new }.data();
+    let data = ix::UpdateSlashAuthority {
+        new_slash_authority: *new,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new_readonly(authority, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn update_treasury(env: &mut Env, new_treasury: &Pubkey) -> Result<(), TransactionError> {
@@ -804,7 +956,16 @@ pub fn update_treasury(env: &mut Env, new_treasury: &Pubkey) -> Result<(), Trans
         AccountMeta::new_readonly(*new_treasury, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn config_account(env: &Env) -> Config {
@@ -815,25 +976,49 @@ pub fn config_account(env: &Env) -> Config {
 
 pub fn set_min_stake_lock(env: &mut Env, value: u64) -> Result<(), TransactionError> {
     let authority = env.payer.pubkey();
-    let data = ix::SetMinStakeLock { min_stake_lock: value }.data();
+    let data = ix::SetMinStakeLock {
+        min_stake_lock: value,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new_readonly(authority, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn migrate_config(env: &mut Env, value: u64) -> Result<(), TransactionError> {
     let authority = env.payer.pubkey();
-    let data = ix::MigrateConfig { min_stake_lock: value }.data();
+    let data = ix::MigrateConfig {
+        min_stake_lock: value,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new(authority, true),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 /// Overwrite the config PDA with the legacy 146-byte layout (no min_stake_lock)
@@ -871,17 +1056,32 @@ pub fn plant_legacy_config(env: &mut Env) {
 
 pub fn set_credits_per_covnt(env: &mut Env, value: u64) -> Result<(), TransactionError> {
     let authority = env.payer.pubkey();
-    let data = ix::SetCreditsPerCovnt { credits_per_covnt: value }.data();
+    let data = ix::SetCreditsPerCovnt {
+        credits_per_covnt: value,
+    }
+    .data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new_readonly(authority, true),
     ];
     let payer = env.payer.insecure_clone();
-    send(&mut env.svm, &payer, &[Instruction { program_id: ID, accounts: metas, data }], &[])
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
 }
 
 pub fn agent_stake(env: &Env, agent_key: &[u8; 32]) -> u64 {
-    let acc = env.svm.get_account(&agent_pda(agent_key)).expect("agent exists");
+    let acc = env
+        .svm
+        .get_account(&agent_pda(agent_key))
+        .expect("agent exists");
     let mut data = acc.data();
     use anchor_lang::AccountDeserialize;
     covenant_settlement_program::Agent::try_deserialize(&mut data)
@@ -890,7 +1090,10 @@ pub fn agent_stake(env: &Env, agent_key: &[u8; 32]) -> u64 {
 }
 
 pub fn position_exists(env: &Env, position: &Pubkey) -> bool {
-    env.svm.get_account(position).map(|a| !a.data.is_empty()).unwrap_or(false)
+    env.svm
+        .get_account(position)
+        .map(|a| !a.data.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn task_status(env: &Env, task: &Pubkey) -> u8 {

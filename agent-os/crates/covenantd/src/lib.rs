@@ -3426,12 +3426,7 @@ impl Server {
         self.dispatch_intent_run(intent_id, text, peer).await
     }
 
-    async fn dispatch_intent_run(
-        &self,
-        intent_id: Uuid,
-        text: String,
-        peer: &AgentId,
-    ) -> Response {
+    async fn dispatch_intent_run(&self, intent_id: Uuid, text: String, peer: &AgentId) -> Response {
         // Pre-allocated so the budget debit's `paired_receipt` and the
         // settlement receipt's `id` agree — joining the budget log to
         // the receipt log on this UUID matches 1:1 instead of producing
@@ -7101,7 +7096,10 @@ required = {caps:?}
                 text,
                 ..
             } => {
-                assert_eq!(status, "running", "hermes dispatch must be async; body was {text:?}");
+                assert_eq!(
+                    status, "running",
+                    "hermes dispatch must be async; body was {text:?}"
+                );
                 assert!(text.is_empty(), "a running result carries no body yet");
                 intent_id
             }

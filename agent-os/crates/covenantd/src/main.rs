@@ -344,8 +344,8 @@ async fn main() -> Result<()> {
 
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
-    let runtime_event_drainer_handle =
-        live_trace.then(|| covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx));
+    let runtime_event_drainer_handle = live_trace
+        .then(|| covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx));
 
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer

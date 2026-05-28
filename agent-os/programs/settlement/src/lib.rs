@@ -8,7 +8,9 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked};
+use anchor_spl::token_interface::{
+    self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked,
+};
 
 declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 
@@ -517,8 +519,8 @@ pub mod settlement {
         {
             let data = info.try_borrow_data()?;
             require!(data.len() >= 40, CovenantError::Unauthorized);
-            let onchain_authority = Pubkey::try_from(&data[8..40])
-                .map_err(|_| error!(CovenantError::Unauthorized))?;
+            let onchain_authority =
+                Pubkey::try_from(&data[8..40]).map_err(|_| error!(CovenantError::Unauthorized))?;
             require_keys_eq!(
                 onchain_authority,
                 ctx.accounts.authority.key(),

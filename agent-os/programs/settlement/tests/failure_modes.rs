@@ -88,8 +88,12 @@ fn release_after_deadline_rejected() {
     register_agent(&mut env, &AGENT);
     let task_id = [41u8; 32];
     let provider = Keypair::new().pubkey();
-    let provider_covnt =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &provider);
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider,
+    );
     let tc = task_setup(&mut env, &task_id, 1_000);
     create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, &tc).expect("create");
     warp_unix(&mut env, 6_000);
@@ -118,8 +122,12 @@ fn double_release_rejected() {
     register_agent(&mut env, &AGENT);
     let task_id = [43u8; 32];
     let provider = Keypair::new().pubkey();
-    let provider_covnt =
-        create_token_account(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &provider);
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider,
+    );
     let tc = task_setup(&mut env, &task_id, 1_000);
     create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create");
     release_task(&mut env, &tc, &provider_covnt).expect("first release");
@@ -145,7 +153,11 @@ fn update_authority_by_stranger_rejected() {
     let err = send(
         &mut env.svm,
         &payer,
-        &[Instruction { program_id: ID, accounts: metas, data: data.data() }],
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data: data.data(),
+        }],
         &[&stranger],
     )
     .expect_err("stranger cannot rotate authority");

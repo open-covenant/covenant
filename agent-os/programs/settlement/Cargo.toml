@@ -22,9 +22,10 @@ task-escrow = []
 
 [dependencies]
 anchor-lang = "0.31.1"
-anchor-spl = "0.31.1"
+anchor-spl = { version = "0.31.1", features = ["token_2022"] }
 
 [dev-dependencies]
 litesvm = "0.6"
 solana-sdk = "2.2"
 spl-token = "7.0"
+spl-token-2022 = "6.0"

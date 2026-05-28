@@ -159,6 +159,7 @@ pub fn buy_credits(
         AccountMeta::new(env.payer.pubkey(), true),
         AccountMeta::new(*owner_covnt, false),
         AccountMeta::new(env.treasury, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
@@ -276,6 +277,7 @@ pub fn stake(env: &mut Env, agent_key: &[u8; 32], amount: u64) -> (Pubkey, Pubke
         AccountMeta::new(owner, true),
         AccountMeta::new(owner_covnt, false),
         AccountMeta::new(stake_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
@@ -335,6 +337,7 @@ pub fn slash_stake(
         AccountMeta::new(*position, false),
         AccountMeta::new(*stake_vault, false),
         AccountMeta::new(*slash_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
@@ -513,6 +516,7 @@ pub fn stake_locked(
         AccountMeta::new(owner, true),
         AccountMeta::new(owner_covnt, false),
         AccountMeta::new(stake_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
@@ -551,6 +555,7 @@ pub fn try_stake(
         AccountMeta::new(owner, true),
         AccountMeta::new(owner_covnt, false),
         AccountMeta::new(stake_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
@@ -575,6 +580,7 @@ pub fn unstake(
         AccountMeta::new(owner, true),
         AccountMeta::new(*stake_vault, false),
         AccountMeta::new(*owner_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
@@ -723,6 +729,7 @@ pub fn create_task(
         AccountMeta::new(client, true),
         AccountMeta::new(tc.client_covnt, false),
         AccountMeta::new(tc.escrow_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
@@ -743,6 +750,7 @@ pub fn release_task(
         AccountMeta::new_readonly(client, true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(*provider_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
@@ -758,6 +766,7 @@ pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> 
         AccountMeta::new_readonly(client, true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(tc.client_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();

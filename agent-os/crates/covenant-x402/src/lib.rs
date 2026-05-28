@@ -36,8 +36,13 @@ pub use client::Client;
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};
-pub use types::{Capability, PaymentRequirements};
+pub use types::{Capability, PaymentExtra, PaymentRequirements};
 
+#[cfg(feature = "solana")]
+pub mod payai;
+
+#[cfg(feature = "solana")]
+pub use payai::PayaiSolanaSigner;
 #[cfg(feature = "solana")]
 pub use solana::SolanaSigner;
 

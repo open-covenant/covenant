@@ -327,6 +327,7 @@ mod tests {
             amount_usdc: 0.08,
             pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
             scheme: "exact".into(),
+            extra: None,
         }
     }
 
@@ -346,12 +347,15 @@ mod tests {
 
     #[test]
     fn from_keypair_file_errors_on_missing_path() {
-        let err = SolanaSigner::from_keypair_file(
+        let result = SolanaSigner::from_keypair_file(
             "/nonexistent/path/funding.json",
             "https://rpc.example/",
-        )
-        .expect_err("missing file");
-        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("read funding keypair")));
+        );
+        match result {
+            Ok(_) => panic!("expected error for missing file"),
+            Err(X402Error::Sign(msg)) => assert!(msg.contains("read funding keypair"), "got: {msg}"),
+            Err(e) => panic!("expected Sign error, got: {e:?}"),
+        }
     }
 
     #[test]

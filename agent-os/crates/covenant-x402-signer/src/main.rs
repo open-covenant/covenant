@@ -11,6 +11,13 @@
 //! - stdout: the `x-payment` header value (one line) on success.
 //! - exit 0 on success; non-zero with a message on stderr otherwise.
 //!
+//! Dispatch is by inspecting `requirements.extra.feePayer`:
+//! - present → sponsored flow (`PayaiSolanaSigner`): builds a v0
+//!   `VersionedTransaction` whose payer slot is the sponsor's pubkey
+//!   and partial-signs as funder; the facilitator co-signs at settle.
+//! - absent → self-paid flow (`SolanaSigner`): builds a legacy
+//!   `Transaction` and full-signs, with the funder paying SOL gas.
+//!
 //! Configuration (env):
 //! - `COVENANT_X402_FUNDING_KEYPAIR` — path to the Solana keypair JSON
 //!   that funds payments. Required.
@@ -19,7 +26,7 @@
 
 use std::process::ExitCode;
 
-use covenant_x402::{PaymentRequirements, Signer, SolanaSigner};
+use covenant_x402::{PayaiSolanaSigner, PaymentRequirements, Signer, SolanaSigner};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -63,7 +70,17 @@ async fn run() -> Result<String, Box<dyn std::error::Error>> {
     let requirement: PaymentRequirements = serde_json::from_str(input.trim())
         .map_err(|e| format!("decode PaymentRequirements from stdin: {e}"))?;
 
-    let signer = SolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
-    let header = signer.build_payment(&requirement).await?;
-    Ok(header)
+    let sponsored = requirement
+        .extra
+        .as_ref()
+        .and_then(|e| e.fee_payer.as_ref())
+        .is_some();
+
+    if sponsored {
+        let signer = PayaiSolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
+        Ok(signer.build_payment(&requirement).await?)
+    } else {
+        let signer = SolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
+        Ok(signer.build_payment(&requirement).await?)
+    }
 }

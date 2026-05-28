@@ -37,6 +37,26 @@ pub struct PaymentRequirements {
     /// exactly; forward-defined schemes (e.g. `"upto"`) are opaque
     /// strings until the client grows explicit support.
     pub scheme: String,
+    /// Provider-specific extension fields off the 402 option's `extra`
+    /// block. Currently used to carry PayAI's sponsored-gas `feePayer`
+    /// so the signer can set the v0 message's payer slot. Optional and
+    /// `skip_serializing_if = "Option::is_none"` so the xona payload
+    /// shape on the wire stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<PaymentExtra>,
+}
+
+/// Provider-specific extension fields lifted off the 402 option's
+/// `extra` block. Only the fields the signer needs are typed; anything
+/// else upstream sends is dropped silently.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaymentExtra {
+    /// Sponsor's fee-payer pubkey for sponsored-gas Solana flows
+    /// (currently PayAI). When set, the signer builds a v0
+    /// VersionedTransaction whose payer slot is this pubkey and
+    /// partial-signs as the funder only.
+    #[serde(rename = "feePayer", default, skip_serializing_if = "Option::is_none")]
+    pub fee_payer: Option<String>,
 }
 
 /// A daemon-issued authorization to call paid endpoints.

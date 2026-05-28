@@ -60,6 +60,7 @@ mod tests {
             amount_usdc: 0.08,
             pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
             scheme: "exact".into(),
+            extra: None,
         };
         let header = signer.build_payment(&req).await.expect("sign");
         assert_eq!(

@@ -15,6 +15,7 @@ default = []
 # the Solana dep-tree cost.
 solana = [
     "dep:solana-sdk",
+    "dep:solana-compute-budget-interface",
     "dep:spl-token",
     "dep:spl-associated-token-account",
     "dep:base64",
@@ -33,6 +34,7 @@ url = "2"
 
 # Solana signer + demo binary — optional, gated by the `solana` feature.
 solana-sdk = { version = "4", optional = true }
+solana-compute-budget-interface = { version = "3", optional = true }
 spl-token = { version = "9", optional = true }
 spl-associated-token-account = { version = "8", optional = true }
 base64 = { version = "0.22", optional = true }

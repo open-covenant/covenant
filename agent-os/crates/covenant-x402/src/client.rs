@@ -131,6 +131,7 @@ mod tests {
             amount_usdc: 0.0,
             pay_to: "AnyPubkey".into(),
             scheme: "exact".into(),
+            extra: None,
         }
     }
 

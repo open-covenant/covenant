@@ -216,7 +216,7 @@ proptest! {
             .collect();
         let outcome = block_on(run_tick(market, scope, capacity, cost));
         for action in &outcome.executed {
-            if let KeeperAction::PushHyperpMark { asset_index, .. } = action {
+            if let KeeperAction::PushAuthMark { asset_index, .. } = action {
                 prop_assert!(
                     active.get(asset_index).copied().unwrap_or(false),
                     "push_mark on non-Active asset {asset_index}"
@@ -371,7 +371,7 @@ async fn stress_scope_confines_hostile_policy() {
     assert_eq!(outcome.report.executed, 1);
     assert!(matches!(
         outcome.executed[0],
-        KeeperAction::PushHyperpMark { asset_index: 7, .. }
+        KeeperAction::PushAuthMark { asset_index: 7, .. }
     ));
     // Other 15 push_marks + the crank get refused at the scope gate.
     assert!(outcome.report.skipped_capability >= 15);

@@ -22,9 +22,10 @@
 //!   pipeline. Behavior is auditable end-to-end.
 //!
 //! The default build is the trait, the in-memory mock, and the
-//! governance loop — fully tested. The real on-chain client lives
-//! behind the `solana` feature once `percolator-prog`'s IDL is
-//! in-tree.
+//! governance loop — fully tested. The `solana` feature adds
+//! byte-locked on-chain `Instruction` builders for the v16 keeper
+//! surface (program tags 5 / 43 / 44 / 45 / 63), plus the synthetic
+//! `KeeperAction` → `Instruction` bridge in [`onchain`].
 
 #![deny(unsafe_code)]
 
@@ -35,6 +36,11 @@ pub mod keeper;
 pub mod policy;
 pub mod risk;
 pub mod state;
+
+#[cfg(feature = "solana")]
+pub mod instruction;
+#[cfg(feature = "solana")]
+pub mod onchain;
 
 pub use capability::{KeeperScope, ACTION_KEEPER};
 pub use client::{ClientError, Execution, MockPercolator, PercolatorClient};

@@ -112,7 +112,7 @@ impl PercolatorClient for MockPercolator {
         }
         let slot = s.current_slot;
         match action {
-            KeeperAction::PushHyperpMark {
+            KeeperAction::PushAuthMark {
                 asset_index,
                 mark_e6,
             } => {

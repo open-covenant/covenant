@@ -1,9 +1,11 @@
 //! Types mirroring the minimum slice of percolator-prog v16 that a
 //! keeper agent needs to reason about and act on. Field names follow
 //! the v16 wire shape (`AssetStateV16Account`, `PermissionlessCrank`,
-//! `PushHyperpMark`, `ForfeitRecoveryLeg`, `RebalanceReduce`,
+//! `PushAuthMark`, `ForfeitRecoveryLeg`, `RebalanceReduce`,
 //! `FinalizeResetSide`) so an `IDL`-driven `RealPercolator` can map
-//! onto them without renames.
+//! onto them without renames. `PushAuthMark` is the post-migration
+//! manual-mark path (program tag 63); the retired `PushHyperpMark`
+//! (tag 36) is intentionally absent.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +42,7 @@ pub struct AssetState {
     pub label: String,
     pub lifecycle: AssetLifecycle,
     pub last_mark_slot: u64,
-    pub last_mark_e6: i64,
+    pub last_mark_e6: u64,
 }
 
 /// Aggregate view of a percolator market the keeper operates on.
@@ -65,9 +67,9 @@ impl MarketState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KeeperAction {
-    PushHyperpMark {
+    PushAuthMark {
         asset_index: AssetIndex,
-        mark_e6: i64,
+        mark_e6: u64,
     },
     Crank,
     RecoveryForfeitLeg {
@@ -90,7 +92,7 @@ impl KeeperAction {
     /// recovery sub-instructions.
     pub fn action_label(&self) -> ActionLabel {
         match self {
-            KeeperAction::PushHyperpMark { .. } => ActionLabel::PushMark,
+            KeeperAction::PushAuthMark { .. } => ActionLabel::PushMark,
             KeeperAction::Crank => ActionLabel::Crank,
             KeeperAction::RecoveryForfeitLeg { .. }
             | KeeperAction::RecoveryRebalanceReduce { .. }
@@ -100,7 +102,7 @@ impl KeeperAction {
 
     pub fn target_asset(&self) -> Option<AssetIndex> {
         match self {
-            KeeperAction::PushHyperpMark { asset_index, .. }
+            KeeperAction::PushAuthMark { asset_index, .. }
             | KeeperAction::RecoveryForfeitLeg { asset_index, .. }
             | KeeperAction::RecoveryRebalanceReduce { asset_index, .. }
             | KeeperAction::RecoveryFinalize { asset_index, .. } => Some(*asset_index),

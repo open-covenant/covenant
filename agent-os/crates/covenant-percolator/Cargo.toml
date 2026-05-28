@@ -9,10 +9,12 @@ description = "Covenant-governed keeper agents for the Percolator perpetuals pro
 
 [features]
 default = []
-# Real on-chain client wires up once percolator-prog's IDL is in-tree.
-# The default build is trait + mock + governance + tests, so the
-# workspace stays light and the testable surface is what's shipped.
-solana = []
+# Real on-chain instruction builders. Gated so the default build
+# stays light (just trait + mock + governance + tests). The `solana`
+# feature pulls in `solana-sdk` for `Instruction`/`AccountMeta`/
+# `Pubkey` and exposes byte-locked builders for the v16 keeper
+# surface (tags 5 / 43 / 44 / 45 / 63).
+solana = ["dep:solana-sdk"]
 
 [[bin]]
 name = "covenant-percolator-keeper"
@@ -38,6 +40,12 @@ tokio = { workspace = true }
 percolator = { git = "https://github.com/aeyakovenko/percolator.git", rev = "323c9f270fcd16e1e9a67f93f4df5308fcc6a245" }
 toml = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# Off-chain instruction builders behind the `solana` feature. The
+# default build stays light; `--features solana` pulls in the SDK
+# so `OnchainBuilder` can produce real `Instruction`s ready for a
+# bundler / RPC client.
+solana-sdk = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

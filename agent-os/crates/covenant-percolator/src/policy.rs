@@ -42,7 +42,7 @@ impl KeeperPolicy {
                 // The policy doesn't price marks — it carries the last
                 // known value forward. A real keeper plugs in a fresh
                 // oracle read between decide and execute.
-                out.push(KeeperAction::PushHyperpMark {
+                out.push(KeeperAction::PushAuthMark {
                     asset_index: asset.index,
                     mark_e6: asset.last_mark_e6,
                 });

@@ -35,7 +35,7 @@ pub type KeeperId = [u8; 32];
 /// without communicating.
 pub fn action_key(action: &KeeperAction) -> u64 {
     let kind: u64 = match action {
-        KeeperAction::PushHyperpMark { .. } => 1,
+        KeeperAction::PushAuthMark { .. } => 1,
         KeeperAction::Crank => 2,
         KeeperAction::RecoveryForfeitLeg { .. } => 3,
         KeeperAction::RecoveryRebalanceReduce { .. } => 4,
@@ -126,7 +126,7 @@ mod tests {
     fn three_keepers_exactly_one_is_leader_in_any_window() {
         // Sweep multiple windows; uniqueness must hold in every one.
         let peers = [kid(1), kid(2), kid(3)];
-        let action = KeeperAction::PushHyperpMark {
+        let action = KeeperAction::PushAuthMark {
             asset_index: 7,
             mark_e6: 1_000_000,
         };
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn leadership_rotates_across_windows() {
         let peers = [kid(11), kid(22), kid(33)];
-        let action = KeeperAction::PushHyperpMark {
+        let action = KeeperAction::PushAuthMark {
             asset_index: 0,
             mark_e6: 1,
         };
@@ -170,7 +170,7 @@ mod tests {
         // across non-conflicting work in the same window.
         let peers = [kid(5), kid(6), kid(7)];
         let crank = KeeperAction::Crank;
-        let push = KeeperAction::PushHyperpMark {
+        let push = KeeperAction::PushAuthMark {
             asset_index: 3,
             mark_e6: 1,
         };

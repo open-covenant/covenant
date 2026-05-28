@@ -199,8 +199,9 @@ upstream style (`percolator/Cargo.toml` dev-dep is `proptest = "1.4"`).
   `total_credits_consumed == executed_count × cost` exactly.
 - **I2 Scope confinement.** Every action submitted satisfies
   `KeeperScope::allows(market, action) == true`.
-- **I3 Lifecycle gating.** `PushHyperpMark` is submitted only for assets
-  whose `AssetLifecycleV16` projection in the read snapshot is `Active`.
+- **I3 Lifecycle gating.** `PushAuthMark` (the post-migration manual-mark
+  path, program tag 63) is submitted only for assets whose
+  `AssetLifecycleV16` projection in the read snapshot is `Active`.
 - **I4 Receipt/debit pairing.** For every executed action there is exactly
   one settlement receipt whose id equals the paired debit id.
 - **I5 Per-tick cap.** When `scope.max_actions_per_tick = Some(k)`,
@@ -269,12 +270,18 @@ this draft.
 | Coordination (`should_lead`, action_key, FNV-1a) | shipped | `src/coordination.rs` |
 | Risk-engine dep (pinned commit `323c9f27`) | shipped | `Cargo.toml` |
 | Property + stress tests (5 props × 64 + 3 stress + unit) | shipped | `tests/`, `src/*::tests` |
-| Real on-chain client (instruction builders) | **deferred** | `src/solana.rs` (planned, `solana` feature) |
-| Operator-runnable binary | **deferred** | `bin/keeper.rs` (planned) |
+| Wire-locked instruction builders (tags 5/43/44/45/63) | shipped (`--features solana`) | `src/instruction.rs` |
+| `KeeperAction` → `Instruction` bridge (`BuildContext`) | shipped (`--features solana`) | `src/onchain.rs` |
+| Operator-runnable binary (`covenant-percolator-keeper`) | shipped | `src/bin/keeper.rs` |
+| RPC / signer / bundler integration | **deferred** | operator-supplied (Jito, custom) |
 
-The default build pulls no Solana runtime crates; the `solana` feature
-(future) wires the real instruction builders against `percolator-prog`'s
-v16 program id.
+The default build pulls no Solana runtime crates. Under
+`--features solana`, the crate exposes byte-for-byte builders for the
+v16 keeper surface — discriminator bytes are pinned by golden tests
+(`*_wire_bytes_locked`) against the program's `Instruction::encode`
+in `percolator-prog/src/v16_program.rs`. The keeper hands callers an
+`Instruction` and stops there: signing and submission (RPC, Jito
+bundles, custom senders) are the operator's choice.
 
 ---
 

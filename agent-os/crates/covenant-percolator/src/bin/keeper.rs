@@ -99,7 +99,7 @@ struct MockAssetCfg {
     label: String,
     lifecycle: AssetLifecycle,
     last_mark_slot: u64,
-    last_mark_e6: i64,
+    last_mark_e6: u64,
 }
 
 fn decode_32(hex: &str) -> Result<[u8; 32], String> {

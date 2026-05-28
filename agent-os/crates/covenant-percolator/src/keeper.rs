@@ -556,7 +556,7 @@ mod tests {
         let executed = client.executed();
         assert!(matches!(
             executed[0],
-            KeeperAction::PushHyperpMark { asset_index: 7, .. }
+            KeeperAction::PushAuthMark { asset_index: 7, .. }
         ));
         let receipts = settlement.recent(10).await.unwrap();
         assert_eq!(receipts.len(), report.executed);

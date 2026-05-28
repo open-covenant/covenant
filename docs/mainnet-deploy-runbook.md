@@ -19,17 +19,35 @@ $CVNT mint is a legacy SPL Token (not Token-2022). Task escrow ships disabled
 
 ## 2. Verifiable build
 
-A normal `anchor build` is not byte-reproducible, so the deployed bytecode cannot
-be checked against source. Build in the pinned container instead:
+**Containerized verifiable build is currently blocked** — both `anchor build --verifiable`
+(Cargo 1.79) and `solana-verify build` (Cargo 1.84.1) fail because our workspace
+transitively requires `edition2024` (Cargo 1.85+) via `sha2 0.11` (in `covenant-audit`)
+and `blake3 1.8.5` (via `litesvm` dev-dep). Both are upstream caret-version pins;
+patches can't downgrade. Re-attempt once `solana-verifiable-build` updates its
+container's Cargo. Until then, the launch build is reproduced by pinning the local
+toolchain:
 
 ```
+rustc 1.94.1 (e408947bf 2026-03-25)
+solana-cli 3.1.13 (Agave)
+anchor-cli 0.31.1
 cd agent-os
-anchor build --verifiable          # or: solana-verify build
-shasum -a 256 target/deploy/covenant_settlement_program.so   # record this hash
+anchor build                                                 # default, no --features
+solana-verify get-executable-hash target/deploy/covenant_settlement_program.so
 ```
 
-Build without the `task-escrow` feature (the default) so the deployed program
-refuses `create_task`/`release_task`/`refund_task`.
+Recorded launch (escrow-off) hashes from the tooling above:
+- raw sha256: `cc742d22cd572cd7ac0fd12b145829eeb93d0f572d644b88d525f506e6ecfed8`
+- normalized (on-chain comparable): `265f2561d93c133bd17925a239f2a7e552b3576dafaf4ee50f1bc02ce0a4232e`
+- size: 512,304 bytes
+
+Recorded `--features task-escrow` hashes (for when escrow is re-enabled later):
+- raw sha256: `767920ecce8ef46a79615e32fc9e86110ebe2b39df0457b68304f0b8ae5bc4ab`
+- normalized: `dbbce952c471bfb2eb605e3c070015bd1cafefb370108548ca8d5bbc82ee4c5b`
+- size: 526,616 bytes
+
+Submit to the verified-programs registry as a follow-up once `solana-verify build`
+works against this workspace.
 
 ## 3. Deploy
 

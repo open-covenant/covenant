@@ -19,35 +19,44 @@ $CVNT mint is a legacy SPL Token (not Token-2022). Task escrow ships disabled
 
 ## 2. Verifiable build
 
-**Containerized verifiable build is currently blocked** — both `anchor build --verifiable`
-(Cargo 1.79) and `solana-verify build` (Cargo 1.84.1) fail because our workspace
-transitively requires `edition2024` (Cargo 1.85+) via `sha2 0.11` (in `covenant-audit`)
-and `blake3 1.8.5` (via `litesvm` dev-dep). Both are upstream caret-version pins;
-patches can't downgrade. Re-attempt once `solana-verifiable-build` updates its
-container's Cargo. Until then, the launch build is reproduced by pinning the local
-toolchain:
+Reproducible build via `solana-verify` against the Solana Foundation container
+(Cargo 1.86, which covers the `edition2024` deps in our workspace):
 
 ```
-rustc 1.94.1 (e408947bf 2026-03-25)
-solana-cli 3.1.13 (Agave)
-anchor-cli 0.31.1
-cd agent-os
-anchor build                                                 # default, no --features
-solana-verify get-executable-hash target/deploy/covenant_settlement_program.so
+cd <repo-root>
+solana-verify build \
+  --base-image solanafoundation/solana-verifiable-build:3.1.14 \
+  --library-name covenant_settlement_program
+solana-verify get-executable-hash agent-os/target/deploy/covenant_settlement_program.so
 ```
 
-Recorded launch (escrow-off) hashes from the tooling above:
-- raw sha256: `cc742d22cd572cd7ac0fd12b145829eeb93d0f572d644b88d525f506e6ecfed8`
-- normalized (on-chain comparable): `265f2561d93c133bd17925a239f2a7e552b3576dafaf4ee50f1bc02ce0a4232e`
-- size: 512,304 bytes
+The mainnet program at `cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y` matches the
+verifiable hash `def75d6991eb03f36c661cf4cdf0195d67990210ef012080db50b555b387d158`
+(512,296 bytes). The verification PDA `8nHg5W1D886qpt3ffdFFsaeVq28udVauczyah9f8ckyP`
+records the source repo and commit:
 
-Recorded `--features task-escrow` hashes (for when escrow is re-enabled later):
-- raw sha256: `767920ecce8ef46a79615e32fc9e86110ebe2b39df0457b68304f0b8ae5bc4ab`
-- normalized: `dbbce952c471bfb2eb605e3c070015bd1cafefb370108548ca8d5bbc82ee4c5b`
-- size: 526,616 bytes
+```
+solana-verify get-program-pda --program-id cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y \
+  --url https://api.mainnet-beta.solana.com
+```
 
-Submit to the verified-programs registry as a follow-up once `solana-verify build`
-works against this workspace.
+To reproduce + verify from scratch, anyone can run:
+
+```
+solana-verify verify-from-repo https://github.com/open-covenant/covenant \
+  --program-id cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y \
+  --library-name covenant_settlement_program \
+  --base-image solanafoundation/solana-verifiable-build:3.1.14 \
+  --commit-hash af96935cb809d013839004f6a15e5c52d31de795 \
+  --mount-path agent-os \
+  --url https://api.mainnet-beta.solana.com
+```
+
+Apple Silicon hosts should start colima with `--vm-type=vz --vz-rosetta` so the
+amd64 container doesn't crawl under qemu emulation. Colima only auto-mounts
+`$HOME`, so the source repo must be under `$HOME` (or extend the mount list);
+passing `--current-dir` to `solana-verify` uses the local checkout instead of
+cloning to `/tmp`.
 
 ## 3. Deploy
 

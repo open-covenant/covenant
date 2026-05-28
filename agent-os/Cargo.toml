@@ -19,6 +19,7 @@ members = [
     "crates/covenant-budget",
     "crates/covenant-percolator",
     "crates/covenant-percolator-bond",
+    "crates/covenant-percolator-bond-program",
     "crates/covenant-sap-bridge",
     "crates/covenantd",
     "crates/covenant",
@@ -64,5 +65,6 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 solana-sdk = "2"
 solana-client = "2"
 solana-program = "2"
+solana-program-test = "2"
 sha2 = "0.10"
 borsh = { version = "1", features = ["derive"] }

@@ -22,11 +22,14 @@ program = ["dep:solana-program"]
 bridge = ["dep:covenant-percolator", "dep:bs58"]
 
 [dependencies]
-covenant-types = { path = "../covenant-types" }
-serde = { workspace = true }
+# Note: deliberately no `uuid`, `getrandom`, or other randomness-pulling
+# transitive deps — this crate compiles to SBPF target via the
+# `program` feature, where getrandom v0.4 breaks. AttestedAction's
+# receipt_id is a raw [u8; 16] (the caller fills it from an off-chain
+# uuid); bond state has no UUID.
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-uuid = { workspace = true }
+serde = { workspace = true }
 solana-sdk = { workspace = true, optional = true }
 solana-program = { workspace = true, optional = true }
 covenant-percolator = { path = "../covenant-percolator", optional = true }

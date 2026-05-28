@@ -1,0 +1,26 @@
+[package]
+name = "covenant-percolator-bond-program"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "SBPF on-chain program for the Covenant percolator-keeper bond. Builds with `cargo build-sbf`; the resulting .so is the deployable artifact that enforces scope-violation slashing on-chain. Dispatch logic lives here; state + verifier are shared with the off-chain crate via `covenant-percolator-bond`."
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+# No-std on the SBPF build path (BPF VM has no std). On the host
+# (tests / cargo build), std is available; we toggle via target_arch.
+
+[dependencies]
+solana-program = { workspace = true }
+covenant-percolator-bond = { path = "../covenant-percolator-bond" }
+
+[dev-dependencies]
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+covenant-percolator-bond = { path = "../covenant-percolator-bond", features = ["solana"] }

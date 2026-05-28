@@ -46,11 +46,16 @@ overshoot the cap.
 | `CODER_MONTHLY_USD` | `200` | Hard monthly spend cap. |
 | `CODER_PER_RUN_USD_MAX` | `2` | Per-run reservation ceiling. |
 | `CODER_MAX_CONCURRENT` | `2` | Concurrent run cap. |
+| `CODER_IP_MAX_PER_IP` | `1` | Per-IP in-flight admission cap. Stops a single anonymous client from occupying every concurrency slot. Set to `0` to disable (only safe behind an upstream rate limiter). |
+| `CODER_IP_REFILL_MS` | `60000` | Minimum delay between one IP's release and its next admission. Rate-limits a rapid-cycle client that drains the daily cap with cheap no-op runs. |
+| `TRUSTED_PROXY_HOPS` | `0` | Trust the right-most N entries of `X-Forwarded-For` as proxy hops the operator controls; everything left is treated as client-supplied. **Picking too large** lets a client rotate IPs via the header — set it to the exact number of trusted proxies between the gateway and the public internet (1 for a single Cloudflare/Fly/Render edge; 2 for an edge plus an internal load balancer). Default `0` uses the socket peer, which is safe for any deployment but collapses every visitor behind shared NAT or a single edge to one address. |
 | `LEDGER_PATH` | _(none)_ | If set, committed spend persists to this file so caps survive a restart. Must point at **persistent** storage (not `tmpfs` / a container volume that resets on reboot) or the cap silently restarts at $0. |
 
 `GET /v1/budget` returns the live snapshot: `dailyUsd`, `monthlyUsd`,
-`reserved`, `active`, `killed`, the configured caps, and `outcomes` counters
-(`completed`, `failed`, `cancelled`).
+`reserved`, `active`, `killed`, the configured caps, `outcomes` counters
+(`completed`, `failed`, `cancelled`), and an `ipBucket` block with the live
+per-IP gate state (`active`, `inflight`, `rejected`, configured `maxPerIp` /
+`refillMs`) so operators can see abuse volume from one snapshot.
 
 **Kill-switch.** Sending `SIGUSR1` to the gateway process (`kill -USR1 <pid>`)
 refuses every new reservation and aborts every in-flight run's

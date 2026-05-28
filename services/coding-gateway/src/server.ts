@@ -6,6 +6,9 @@ import { LocalSandboxProvider } from "./sandbox/local.js";
 import { E2bSandboxProvider } from "./sandbox/e2b.js";
 import { config } from "./config.js";
 import { SpendLedger, modelCostUsd, sandboxCostUsd } from "./budget.js";
+import { IpBucket } from "./ip-bucket.js";
+import { sourceIp } from "./source-ip.js";
+import { admitRun } from "./admit.js";
 
 interface CapturedFile {
   path: string;
@@ -65,6 +68,10 @@ async function captureFiles(sandbox: {
 
 const runs = new Map<string, Run>();
 const ledger = new SpendLedger();
+const ipBucket = new IpBucket({
+  maxPerIp: config.ipMaxPerIp,
+  refillMs: config.ipRefillMs,
+});
 
 // E2B (ephemeral Firecracker microVM) when E2B_API_KEY is set, else the
 // trusted-local provider for development. Egress allowlisting + custom resource
@@ -121,7 +128,7 @@ function publish(run: Run, e: GatewayEvent): void {
   for (const res of run.subscribers) res.write(frame);
 }
 
-function startRun(input: string, reservedMax: number): Run {
+function startRun(input: string, reservedMax: number, sourceIpStr: string): Run {
   const id = randomUUID();
   const run: Run = {
     id,
@@ -192,6 +199,10 @@ function startRun(input: string, reservedMax: number): Run {
     } finally {
       clearTimeout(wall);
       unsubscribeKill();
+      // Release the per-IP slot on every terminal outcome (success,
+      // failure, cancel). A leak here would pin the bucket against a
+      // legit client until the next service restart.
+      ipBucket.release(sourceIpStr);
       if (sandbox) await sandbox.destroy().catch(() => {});
       for (const res of run.subscribers) res.end();
       run.subscribers.clear();
@@ -248,7 +259,7 @@ export const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/budget") {
-      return json(res, 200, ledger.snapshot());
+      return json(res, 200, { ...ledger.snapshot(), ipBucket: ipBucket.snapshot() });
     }
 
     if (req.method === "POST" && url.pathname === "/v1/runs") {
@@ -256,9 +267,20 @@ export const server = createServer(async (req, res) => {
       if (typeof body.input !== "string" || !body.input.trim()) {
         return json(res, 400, { error: "input is required" });
       }
-      const reservation = ledger.reserve();
-      if (!reservation.ok) return json(res, 429, { error: reservation.reason });
-      const run = startRun(body.input, reservation.max);
+      const ip = sourceIp(req, config.trustedProxyHops);
+      const outcome = admitRun({
+        ip,
+        ipBucket,
+        ledger,
+        ipMaxPerIp: config.ipMaxPerIp,
+      });
+      if (!outcome.ok) {
+        if (outcome.retryAfterMs !== undefined) {
+          res.setHeader("retry-after", Math.ceil(outcome.retryAfterMs / 1000));
+        }
+        return json(res, 429, { error: outcome.reason });
+      }
+      const run = startRun(body.input, outcome.reservedMax, ip);
       return json(res, 200, { run_id: run.id });
     }
 

@@ -29,7 +29,42 @@ export const config = {
 
   // Rough E2B sandbox rate; tune once coder-07 reports real sandbox-seconds.
   sandboxUsdPerSec: Number(process.env.CODER_SANDBOX_USD_PER_SEC ?? 0.0001),
+
+  // Per-IP admission gate. With CODER_MAX_CONCURRENT=2 a single anonymous
+  // client can otherwise occupy both slots and burn the entire daily cap
+  // alone before Turnstile / edge gates land — one in-flight per IP is
+  // the cheapest stop-gap. Set CODER_IP_MAX_PER_IP=0 to disable
+  // explicitly (typos like `=true` would otherwise silently disable
+  // through Number() → NaN → NaN > 0 false).
+  ipMaxPerIp: nonNegativeInt(process.env.CODER_IP_MAX_PER_IP, 1, "CODER_IP_MAX_PER_IP"),
+  ipRefillMs: nonNegativeInt(process.env.CODER_IP_REFILL_MS, 60_000, "CODER_IP_REFILL_MS"),
+  // How many trusted proxies sit between the gateway and the public
+  // internet. The right-most TRUSTED_PROXY_HOPS entries of
+  // X-Forwarded-For are honored; everything left is treated as client-
+  // controlled and ignored. Default 0 (use the socket peer) — safe for
+  // any deployment but collapses every visitor behind shared NAT to one
+  // address. Picking too large lets a client rotate IPs via the header.
+  trustedProxyHops: nonNegativeInt(process.env.TRUSTED_PROXY_HOPS, 0, "TRUSTED_PROXY_HOPS"),
 } as const;
+
+/**
+ * Parse a non-negative integer env value, falling back to `fallback` on
+ * an absent value but **refusing** garbage (negative, NaN, fractional)
+ * — a silent `Number()` cast would let a typo like
+ * `CODER_IP_MAX_PER_IP=true` (→ NaN → `NaN > 0` false) bypass the
+ * per-IP gate without any visible signal. Loud-fail at boot is the
+ * cheaper failure mode for a security-sensitive control.
+ */
+function nonNegativeInt(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+    throw new Error(
+      `${name}=${JSON.stringify(raw)} is not a non-negative integer — refusing to boot with a silently-disabled control. Set ${name}=0 to opt out explicitly.`,
+    );
+  }
+  return n;
+}
 
 /** USD per 1M tokens, by model. cacheRead ~0.1x input, cacheWrite ~1.25x input. */
 export const PRICING: Record<

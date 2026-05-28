@@ -514,9 +514,17 @@ pub fn spawn_projection_tick_driver(
 /// step-trail building in real time instead of all at once when the run ends.
 /// The matching `runtime_events` returned by the runner are empty in this mode,
 /// so the end-of-dispatch fold writes nothing (no double rows).
+///
+/// Each trace is also published to `broadcast_tx`, a fan-out channel any
+/// number of HTTP subscribers (the `/intents/:id/events` SSE endpoint, the
+/// operator UI) can join via `subscribe()` to receive a live copy without
+/// re-polling the audit log. `broadcast.send` returns `Err` only when there
+/// are no receivers — that's the steady state when nobody is watching, and
+/// it must be tolerated, not logged.
 pub fn spawn_runtime_event_drainer(
     server: Server,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<covenant_runtime::StreamedTrace>,
+    broadcast_tx: tokio::sync::broadcast::Sender<covenant_runtime::StreamedTrace>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(st) = rx.recv().await {
@@ -524,9 +532,12 @@ pub fn spawn_runtime_event_drainer(
                 id: Uuid::new_v4(),
                 timestamp_ms: epoch_ms(),
                 issuer: st.issuer.clone(),
-                kind: runtime_trace_to_audit_kind(st.intent_id, st.trace),
+                kind: runtime_trace_to_audit_kind(st.intent_id, st.trace.clone()),
             };
             server.record_peer_event(&st.issuer, event).await;
+            // Best-effort live broadcast: subscribers (the SSE endpoint)
+            // get a copy; no subscribers = no-op.
+            let _ = broadcast_tx.send(st);
         }
     })
 }
@@ -6814,6 +6825,53 @@ required = {caps:?}
             other => panic!(
                 "HermesFileWritten trace must map to AuditKind::HermesFileWritten, got {other:?}",
             ),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_runtime_event_drainer_publishes_each_trace_to_broadcast_subscribers() {
+        // The /intents/:id/events SSE handler subscribes to the broadcast
+        // sender owned by HttpState; the drainer publishes every trace it
+        // writes to audit, so a live subscriber sees the same events as the
+        // audit chain. A refactor that dropped the broadcast.send call would
+        // silently leave the SSE endpoint emitting nothing while audit kept
+        // working — this pin catches that regression.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+
+        let server = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<StreamedTrace>();
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<StreamedTrace>(16);
+        let mut subscriber = broadcast_tx.subscribe();
+        let _drainer = spawn_runtime_event_drainer(server, rx, broadcast_tx);
+
+        let trace = StreamedTrace {
+            intent_id: Uuid::new_v4(),
+            issuer: AgentId::new("agent@local", [0u8; 32]),
+            trace: RuntimeTrace::HermesFileWritten {
+                run_id: "run-bcast".into(),
+                path: "src/lib.rs".into(),
+                bytes: 4_096,
+            },
+        };
+        tx.send(trace.clone()).expect("send to drainer");
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+            .await
+            .expect("broadcast subscriber must receive a trace within 2s")
+            .expect("broadcast subscriber must not see a closed channel");
+        assert_eq!(received.intent_id, trace.intent_id);
+        assert_eq!(received.issuer, trace.issuer);
+        match received.trace {
+            RuntimeTrace::HermesFileWritten {
+                run_id,
+                path,
+                bytes,
+            } => {
+                assert_eq!(run_id, "run-bcast");
+                assert_eq!(path, "src/lib.rs");
+                assert_eq!(bytes, 4_096);
+            }
+            other => panic!("expected HermesFileWritten on the broadcast, got {other:?}"),
         }
     }
 

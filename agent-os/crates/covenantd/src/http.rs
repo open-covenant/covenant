@@ -36,13 +36,20 @@ use axum::{
 };
 use covenant_ipc::{protocol_info, Request, Response};
 use covenant_peer_auth::PeerToken;
+use covenant_runtime::StreamedTrace;
 use covenant_types::{AgentId, MemoryTier};
+use futures::stream::StreamExt;
 use serde::Deserialize;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[derive(Clone)]
 pub struct HttpState {
     pub server: Server,
+    /// Live runtime-trace fan-out sender. `spawn_runtime_event_drainer`
+    /// publishes one `StreamedTrace` here per Hermes event when
+    /// `COVENANT_LIVE_TRACE=1`. The `/intents/:id/events` handler
+    /// subscribes per-request and filters by intent_id.
+    pub live_traces_tx: tokio::sync::broadcast::Sender<StreamedTrace>,
 }
 
 /// Default CORS origin when `COVENANT_HTTP_ORIGINS` is unset. Matches
@@ -151,6 +158,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/revoke", post(peers_revoke))
         .route("/intents/resume", post(intents_resume))
         .route("/intents/:id/result", get(intent_result))
+        .route("/intents/:id/events", get(intent_events))
         .route("/budget/debits", get(budget_debits))
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
@@ -935,6 +943,64 @@ async fn intent_result(
         )
             .into_response()),
     }
+}
+
+/// Live `RuntimeTrace` stream for one intent, framed as text/event-stream.
+///
+/// Subscribes to the daemon's broadcast fan-out and emits one SSE frame
+/// per matching trace as it lands. Clients use this to replace polling
+/// `/intents/:id/result` every few seconds with a push connection that
+/// shows tool calls and file writes the moment Hermes emits them.
+///
+/// Audience model mirrors [`intent_result`]: any authenticated peer can
+/// stream any intent. Tighten with an intent-owner check before exposing
+/// to multi-tenant deployments.
+///
+/// Lagged subscribers (slow clients that fall behind by more than the
+/// channel capacity) drop the missed traces and keep streaming; the live
+/// view is best-effort, the audit chain is the durable record.
+async fn intent_events(
+    State(s): State<HttpState>,
+    Extension(_peer): Extension<AgentId>,
+    Path(id): Path<uuid::Uuid>,
+) -> AxumResponse {
+    let rx = s.live_traces_tx.subscribe();
+    let stream = tokio_broadcast_stream(rx).filter_map(move |trace| async move {
+        let trace = trace?;
+        if trace.intent_id != id {
+            return None;
+        }
+        let payload = serde_json::to_string(&trace.trace).ok()?;
+        Some(Ok::<_, std::io::Error>(
+            format!("data: {payload}\n\n").into_bytes(),
+        ))
+    });
+    let mut response = AxumResponse::new(Body::from_stream(stream));
+    for (name, value) in sse::sse_response_headers() {
+        response.headers_mut().insert(name, value);
+    }
+    response
+}
+
+/// Bridge a `tokio::sync::broadcast::Receiver<StreamedTrace>` into a
+/// `Stream` of `Option<StreamedTrace>` (None on lag — handler drops it).
+/// Avoids a `tokio-stream` dep by hand-rolling the loop with
+/// `futures::stream::unfold`.
+fn tokio_broadcast_stream(
+    rx: tokio::sync::broadcast::Receiver<StreamedTrace>,
+) -> impl futures::Stream<Item = Option<StreamedTrace>> + Send + 'static {
+    futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(trace) => return Some((Some(trace), rx)),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Slow client; skip the lagged window and keep going.
+                    return Some((None, rx));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
 }
 
 async fn budget_debits(

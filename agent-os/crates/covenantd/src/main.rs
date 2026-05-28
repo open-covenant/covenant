@@ -344,8 +344,20 @@ async fn main() -> Result<()> {
 
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
-    let runtime_event_drainer_handle = live_trace
-        .then(|| covenantd::spawn_runtime_event_drainer(server.clone(), runtime_event_rx));
+    // Even when the drainer is off, the broadcast channel is created so the
+    // /intents/:id/events SSE handler in `covenantd::http` can still subscribe
+    // without an Option<> dance; it just receives nothing until live trace is
+    // enabled. Capacity is sized for a noisy run (Hermes can emit dozens of
+    // tool-completed events per second) without back-pressuring the drainer.
+    let (live_traces_tx, _) =
+        tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(1024);
+    let runtime_event_drainer_handle = live_trace.then(|| {
+        covenantd::spawn_runtime_event_drainer(
+            server.clone(),
+            runtime_event_rx,
+            live_traces_tx.clone(),
+        )
+    });
 
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
@@ -362,6 +374,7 @@ async fn main() -> Result<()> {
     let http_addr = std::net::SocketAddr::new(http_bind, http_port);
     let http_state = covenantd::http::HttpState {
         server: server.clone(),
+        live_traces_tx: live_traces_tx.clone(),
     };
     let http_router = covenantd::http::router(http_state);
     let http_listener = tokio::net::TcpListener::bind(http_addr)

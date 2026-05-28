@@ -9,5 +9,6 @@ packages:
   - services/mcp-bridge
   - services/hermes-mcp-bridge
   - services/compute-broker
+  - services/coding-gateway
   - services/telegram-bot
   - services/fairscale-bridge

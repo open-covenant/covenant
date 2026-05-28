@@ -143,6 +143,11 @@ function startRun(input: string, reservedMax: number): Run {
       // still release the reservation, free the concurrency slot, and
       // unsubscribe the kill handler — otherwise repeated provider failures
       // silently wedge the gateway at its caps with zero actual spend.
+      //
+      // Bracket the create() with abort checks so a kill that fires before the
+      // microVM provisions skips it entirely (no spend), and a kill mid-create
+      // tears the microVM down in `finally` without running a backend turn.
+      if (run.abort.signal.aborted) throw new Error("aborted before sandbox create");
       sandbox = await provider.create({
         runId: id,
         egressAllowlist: ["registry.npmjs.org", "api.anthropic.com", "api.openai.com"],
@@ -151,6 +156,7 @@ function startRun(input: string, reservedMax: number): Run {
         diskMb: 5120,
         wallMs: WALL_MS,
       });
+      if (run.abort.signal.aborted) throw new Error("aborted during sandbox create");
       const backend = selectBackend("anthropic");
       const { output, usage } = await backend.run({
         input,

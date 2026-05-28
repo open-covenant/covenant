@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { rmSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpendLedger, modelCostUsd, type BudgetCaps } from "../src/budget.js";
@@ -122,6 +122,33 @@ describe("SpendLedger", () => {
       cacheCreationTokens: 0,
     });
     expect(cost).toBeCloseTo(4.5);
+  });
+
+  it("first-boot ENOENT loads silently — missing path is normal", () => {
+    const path = join(tmpdir(), `covenant-ledger-missing-${Date.now()}.json`);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const l = new SpendLedger(caps, path);
+      expect(l.snapshot().dailyUsd).toBe(0);
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("malformed ledger file logs a parse error and starts fresh", () => {
+    const path = join(tmpdir(), `covenant-ledger-bad-${Date.now()}.json`);
+    writeFileSync(path, "{ not valid json");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const l = new SpendLedger(caps, path);
+      expect(l.snapshot().dailyUsd).toBe(0);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]![0]).toMatch(/ledger parse failed/);
+    } finally {
+      err.mockRestore();
+      rmSync(path, { force: true });
+    }
   });
 
   it("persists committed spend and today's outcomes to LEDGER_PATH", () => {

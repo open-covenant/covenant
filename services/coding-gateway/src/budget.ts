@@ -64,8 +64,23 @@ export class SpendLedger {
 
   private load(): void {
     if (!this.path) return;
+    let raw: string;
     try {
-      const s = JSON.parse(readFileSync(this.path, "utf8")) as {
+      raw = readFileSync(this.path, "utf8");
+    } catch (e) {
+      // First boot is the normal ENOENT path; anything else (EACCES, EIO, a
+      // tmpfs that vanished on reboot) is operator misconfiguration that
+      // silently resets the daily cap — surface it instead of swallowing.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.error(
+          `ledger load failed (${this.path}, code=${code ?? "unknown"}): ${(e as Error).message} — starting fresh; check LEDGER_PATH points at persistent storage`,
+        );
+      }
+      return;
+    }
+    try {
+      const s = JSON.parse(raw) as {
         day?: string;
         month?: string;
         dailyUsd?: number;
@@ -86,8 +101,10 @@ export class SpendLedger {
           `ledger restored from ${this.path}: $${this.dailyUsd.toFixed(4)} today, $${this.monthlyUsd.toFixed(2)} this month`,
         );
       }
-    } catch {
-      // first boot or unreadable — start fresh
+    } catch (e) {
+      console.error(
+        `ledger parse failed (${this.path}): ${(e as Error).message} — starting fresh; the file may be truncated`,
+      );
     }
   }
 

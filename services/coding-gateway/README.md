@@ -46,7 +46,7 @@ overshoot the cap.
 | `CODER_MONTHLY_USD` | `200` | Hard monthly spend cap. |
 | `CODER_PER_RUN_USD_MAX` | `2` | Per-run reservation ceiling. |
 | `CODER_MAX_CONCURRENT` | `2` | Concurrent run cap. |
-| `LEDGER_PATH` | _(none)_ | If set, committed spend persists to this file so caps survive a restart. |
+| `LEDGER_PATH` | _(none)_ | If set, committed spend persists to this file so caps survive a restart. Must point at **persistent** storage (not `tmpfs` / a container volume that resets on reboot) or the cap silently restarts at $0. |
 
 `GET /v1/budget` returns the live snapshot: `dailyUsd`, `monthlyUsd`,
 `reserved`, `active`, `killed`, the configured caps, and `outcomes` counters
@@ -57,6 +57,12 @@ refuses every new reservation and aborts every in-flight run's
 `AbortController`, tearing down sandboxes so spend stops immediately. The
 switch is idempotent and has no HTTP surface, so there is no auth path to get
 wrong.
+
+For a clean shutdown, send `SIGUSR1` first and wait for `GET /v1/budget` to
+report `active: 0` before sending `SIGTERM`. Each in-flight run still has to
+finish its `sandbox.destroy()` round-trip after the abort lands; `SIGTERM`
+during that window can orphan a microVM until its own wall-clock budget
+self-destructs at the provider.
 
 ## Status
 

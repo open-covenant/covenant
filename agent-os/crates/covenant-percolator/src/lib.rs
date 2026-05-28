@@ -51,10 +51,20 @@ pub use state::{
     PortfolioSnapshot,
 };
 
-/// Default percolator program id (from `percolator-cli.json`). Live
-/// markets pin their own program id per deployment — operators set
-/// the program they actually trust.
-pub const DEFAULT_PROGRAM_ID: &str = "2SSnp35m7FQ7cRLNKGdW5UzjYFF6RBUNq7d3m5mqNByp";
+/// Mainnet program id for the live Percolator v16 deployment
+/// ("Bounty 6"), verified on-chain on 2026-05-27 (executable=true,
+/// owner=BPFLoaderUpgradeable). Source:
+/// `aeyakovenko/percolator-cli/README.md`. Operators in other
+/// deployments override this through config.
+pub const MAINNET_PROGRAM_ID: &str = "4m3ipBQDYX6JQ9YSmUXDjESDHMtGWtiXforkWr9Qoxdi";
+
+/// Bounty-6 market group (USD/SOL · STOXX50/SOL · BTC/SOL, 20× lev,
+/// wSOL-collateralized). Verified live on 2026-05-27.
+pub const MAINNET_BOUNTY6_MARKET: &str = "BhkMic5gHLjj5Uxkg6rBBXofUzeTZVwmV4uFzfhwtgQw";
+
+/// Default program id used when an operator doesn't pin one in
+/// config — points at the live mainnet deployment.
+pub const DEFAULT_PROGRAM_ID: &str = MAINNET_PROGRAM_ID;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PercolatorError {

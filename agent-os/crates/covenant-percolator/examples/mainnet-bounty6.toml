@@ -1,0 +1,78 @@
+# Live-mainnet operator config for `covenant-percolator-keeper`.
+#
+# Points at Toly's live Percolator v16 "Bounty 6" deployment
+# (program 4m3ipBQDYX… , market BhkMic5g… , 3 inverted contracts at
+# 20× lev, wSOL-collateralized; verified on-chain 2026-05-27).
+#
+# WARNING: This config is a starting template, NOT a turnkey live
+# keeper. Before running with `--features solana-rpc`:
+#   1. Replace `agent_pubkey_hex` with your real keeper pubkey.
+#   2. Replace `peers_hex` with the public keys of any other
+#      accountable keepers you've coordinated with — leaving it
+#      empty means solo operation (you'll race Toly's keeper at
+#      `9WiMAQtdx8…`).
+#   3. Confirm scope is what you actually want to authorize —
+#      `recovery` here would let your keeper push ForfeitRecoveryLeg.
+#   4. Hold real wSOL collateral + post a bond before slashing
+#      goes live (see covenant-percolator-bond).
+
+[runtime]
+agent_display = "covenant-keeper-mainnet-1"
+agent_pubkey_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+tick_interval_ms = 60_000
+
+[scope]
+market = "BhkMic5gHLjj5Uxkg6rBBXofUzeTZVwmV4uFzfhwtgQw"
+allowed_assets = [0, 1, 2]
+allowed_actions = ["push_mark", "crank"]
+max_actions_per_tick = 4
+
+[policy]
+# Bounty 6 sets max-staleness at 600s ≈ 1500 slots (400ms slots).
+# Freshen well before the hard window so we never trip an admin reset.
+max_staleness_slots = 900
+crank_interval_slots = 2_400
+
+# [recovery]
+# # Off by default. Enable only with an explicit operator-signed
+# # scope authorizing the `recover` label.
+# min_deficit = 1_000_000
+
+[budget]
+capacity = 10_000_000
+credits_per_action = 1_000
+
+[network]
+peers_hex = []
+coordination_window_slots = 50
+
+# mock_market is required by the binary even when targeting live
+# mainnet, because the v1 binary still routes through MockPercolator
+# (the on-chain RpcSender wraps the *outgoing* path, not the read
+# path). For live reads, point covenantd's read layer at mainnet
+# RPC and seed this section from the live snapshot.
+[mock_market]
+program_id = "4m3ipBQDYX6JQ9YSmUXDjESDHMtGWtiXforkWr9Qoxdi"
+current_slot = 0
+last_crank_slot = 0
+
+[[mock_market.assets]]
+index = 0
+label = "USD/SOL"
+lifecycle = "active"
+last_mark_slot = 0
+last_mark_e6 = 0
+
+[[mock_market.assets]]
+index = 1
+label = "STOXX50/SOL"
+lifecycle = "active"
+last_mark_slot = 0
+last_mark_e6 = 0
+
+[[mock_market.assets]]
+index = 2
+label = "BTC/SOL"
+lifecycle = "active"
+last_mark_slot = 0
+last_mark_e6 = 0

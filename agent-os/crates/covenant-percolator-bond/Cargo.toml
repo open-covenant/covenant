@@ -1,0 +1,33 @@
+[package]
+name = "covenant-percolator-bond"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Stake-backed slash bond for Covenant-governed Percolator keepers. A keeper posts SOL into a bond PDA; anyone can submit signed evidence that the keeper executed an action outside its operator-signed scope and the bond is slashed atomically. Off-chain verifier + on-chain program source."
+
+[features]
+default = []
+# Off-chain instruction builders against the bond program. Mirrors
+# the `solana` feature on the keeper crate so dependents pick up
+# both with a single switch.
+solana = ["dep:solana-sdk"]
+# Compile-time gate for the SBPF on-chain program. Off by default
+# so the host build stays light; turn on for `cargo build-sbf`.
+program = ["dep:solana-program"]
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+solana-sdk = { workspace = true, optional = true }
+solana-program = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[lib]
+crate-type = ["rlib"]

@@ -1313,6 +1313,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-percolator-bond"
+version = "0.0.0"
+dependencies = [
+ "covenant-types",
+ "proptest",
+ "serde",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-sdk",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
 name = "covenant-permissions"
 version = "0.1.0"
 dependencies = [

@@ -48,8 +48,10 @@ overshoot the cap.
 | `CODER_MAX_CONCURRENT` | `2` | Concurrent run cap. |
 | `CODER_IP_MAX_PER_IP` | `1` | Per-IP in-flight admission cap. Stops a single anonymous client from occupying every concurrency slot. Set to `0` to disable (only safe behind an upstream rate limiter). |
 | `CODER_IP_REFILL_MS` | `60000` | Minimum delay between one IP's release and its next admission. Rate-limits a rapid-cycle client that drains the daily cap with cheap no-op runs. |
+| `CODER_WALL_MS` | `600000` | Per-run wall-clock ceiling. The gateway aborts at this deadline and passes the same value to the sandbox as its self-destruct backstop, so a crashed gateway still has a hard end to leftover microVM spend. Also the deadline horizon `LEDGER_PATH` uses for warm-recovery reservations. |
 | `TRUSTED_PROXY_HOPS` | `0` | Trust the right-most N entries of `X-Forwarded-For` as proxy hops the operator controls; everything left is treated as client-supplied. **Picking too large** lets a client rotate IPs via the header — set it to the exact number of trusted proxies between the gateway and the public internet (1 for a single Cloudflare/Fly/Render edge; 2 for an edge plus an internal load balancer). Default `0` uses the socket peer, which is safe for any deployment but collapses every visitor behind shared NAT or a single edge to one address. |
-| `LEDGER_PATH` | _(none)_ | If set, committed spend persists to this file so caps survive a restart. Must point at **persistent** storage (not `tmpfs` / a container volume that resets on reboot) or the cap silently restarts at $0. |
+| `LEDGER_PATH` | _(none)_ | If set, committed spend AND in-flight reservations persist to this file so caps survive a restart. Must point at **persistent** storage (not `tmpfs` / a container volume that resets on reboot) or the cap silently restarts at $0. |
+| `CODER_LEDGER_RESET_PENDING` | _(unset)_ | One-shot operator override: when set to `1` at boot, the ledger drops every persisted pending reservation instead of reinstating it. Use only when a crash-loop has wedged admission with stale markers (see "Warm recovery" below); unset it after the next clean boot or every subsequent restart loses real in-flight reservations. |
 
 `GET /v1/budget` returns the live snapshot: `dailyUsd`, `monthlyUsd`,
 `reserved`, `active`, `killed`, the configured caps, `outcomes` counters
@@ -68,6 +70,18 @@ report `active: 0` before sending `SIGTERM`. Each in-flight run still has to
 finish its `sandbox.destroy()` round-trip after the abort lands; `SIGTERM`
 during that window can orphan a microVM until its own wall-clock budget
 self-destructs at the provider.
+
+**Warm recovery.** A reservation appended to `LEDGER_PATH` at admission time
+carries the wall-clock deadline (`now + CODER_WALL_MS`). On boot the gateway
+treats every unexpired entry as a live reservation against the daily cap and
+concurrency slot, so a crash-restart cannot admit a fresh max-spend wave on
+top of microVMs that are still burning wallet until their own self-destruct.
+Expired entries are pruned from disk at load; `commit` removes the entry the
+caller's run owned, so the file size stays proportional to live runs, not
+lifetime runs. If a crash-loop wedges admission with stale markers — say a
+process aborts before the sandbox actually starts but after the marker is
+written — boot once with `CODER_LEDGER_RESET_PENDING=1` to drop every
+pending entry, then unset it before normal operation resumes.
 
 ## Status
 

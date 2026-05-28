@@ -3,7 +3,13 @@ import { admitRun } from "../src/admit.js";
 import { IpBucket } from "../src/ip-bucket.js";
 import { SpendLedger, type BudgetCaps } from "../src/budget.js";
 
-const caps: BudgetCaps = { dailyUsd: 6, monthlyUsd: 200, perRunUsdMax: 2, maxConcurrent: 10 };
+const caps: BudgetCaps = {
+  dailyUsd: 6,
+  monthlyUsd: 200,
+  perRunUsdMax: 2,
+  maxConcurrent: 10,
+  wallMs: 600_000,
+};
 
 describe("admitRun", () => {
   it("admits when both the per-IP bucket and the ledger accept", () => {
@@ -12,7 +18,11 @@ describe("admitRun", () => {
 
     const result = admitRun({ ip: "1.1.1.1", ipBucket, ledger, ipMaxPerIp: 1 });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.reservedMax).toBe(caps.perRunUsdMax);
+    if (result.ok) {
+      expect(result.reservedMax).toBe(caps.perRunUsdMax);
+      expect(typeof result.reservationId).toBe("string");
+      expect(result.reservationId.length).toBeGreaterThan(0);
+    }
     expect(ipBucket.snapshot().inflight).toBe(1);
   });
 

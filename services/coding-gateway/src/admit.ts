@@ -2,7 +2,7 @@ import type { IpBucket } from "./ip-bucket.js";
 import type { SpendLedger } from "./budget.js";
 
 export type AdmitOutcome =
-  | { ok: true; reservedMax: number }
+  | { ok: true; reservedMax: number; reservationId: string }
   | { ok: false; reason: string; retryAfterMs?: number };
 
 export interface AdmitInputs {
@@ -41,5 +41,5 @@ export function admitRun({ ip, ipBucket, ledger, ipMaxPerIp }: AdmitInputs): Adm
     if (ipMaxPerIp > 0) ipBucket.release(ip);
     return { ok: false, reason: reservation.reason };
   }
-  return { ok: true, reservedMax: reservation.max };
+  return { ok: true, reservedMax: reservation.max, reservationId: reservation.id };
 }

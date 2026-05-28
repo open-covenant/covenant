@@ -27,6 +27,12 @@ export const config = {
 
   maxConcurrent: Number(process.env.CODER_MAX_CONCURRENT ?? 2),
 
+  // Per-run wall-clock ceiling. The gateway aborts a run after this many ms;
+  // the E2B microVM uses the same value as its self-destruct backstop, so a
+  // gateway crash mid-run still has a hard end. Also the reservation horizon
+  // the spend ledger persists for warm recovery on restart.
+  wallMs: Number(process.env.CODER_WALL_MS ?? 600_000),
+
   // Rough E2B sandbox rate; tune once coder-07 reports real sandbox-seconds.
   sandboxUsdPerSec: Number(process.env.CODER_SANDBOX_USD_PER_SEC ?? 0.0001),
 

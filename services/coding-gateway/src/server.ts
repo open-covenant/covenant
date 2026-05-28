@@ -81,7 +81,6 @@ const provider: SandboxProvider = process.env.E2B_API_KEY
   : new LocalSandboxProvider();
 
 const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
-const WALL_MS = Number(process.env.CODER_WALL_MS ?? 600_000);
 
 // Serialize a GatewayEvent as the SSE frame covenantd's HermesRunner parses:
 // it keys on `event` + `run_id` (not `type`) and reads `duration` in seconds
@@ -128,7 +127,12 @@ function publish(run: Run, e: GatewayEvent): void {
   for (const res of run.subscribers) res.write(frame);
 }
 
-function startRun(input: string, reservedMax: number, sourceIpStr: string): Run {
+function startRun(
+  input: string,
+  reservedMax: number,
+  reservationId: string,
+  sourceIpStr: string,
+): Run {
   const id = randomUUID();
   const run: Run = {
     id,
@@ -139,7 +143,7 @@ function startRun(input: string, reservedMax: number, sourceIpStr: string): Run 
   };
   runs.set(id, run);
 
-  const wall = setTimeout(() => run.abort.abort(), WALL_MS);
+  const wall = setTimeout(() => run.abort.abort(), config.wallMs);
   const startedAt = Date.now();
   const unsubscribeKill = ledger.onKill(() => run.abort.abort());
 
@@ -158,10 +162,10 @@ function startRun(input: string, reservedMax: number, sourceIpStr: string): Run 
       sandbox = await provider.create({
         runId: id,
         egressAllowlist: ["registry.npmjs.org", "api.anthropic.com", "api.openai.com"],
-        cpuMs: WALL_MS,
+        cpuMs: config.wallMs,
         memoryMb: 2048,
         diskMb: 5120,
-        wallMs: WALL_MS,
+        wallMs: config.wallMs,
       });
       if (run.abort.signal.aborted) throw new Error("aborted during sandbox create");
       const backend = selectBackend("anthropic");
@@ -178,7 +182,12 @@ function startRun(input: string, reservedMax: number, sourceIpStr: string): Run 
       run.files = await captureFiles(sandbox).catch(() => []);
       run.status = "completed";
       const seconds = (Date.now() - startedAt) / 1000;
-      ledger.commit(reservedMax, modelCostUsd(config.model, usage) + sandboxCostUsd(seconds), "completed");
+      ledger.commit(
+        reservationId,
+        reservedMax,
+        modelCostUsd(config.model, usage) + sandboxCostUsd(seconds),
+        "completed",
+      );
     } catch (e) {
       run.error = (e as Error).message;
       // After abort (kill or stop) skip the file snapshot: it would exec
@@ -192,6 +201,7 @@ function startRun(input: string, reservedMax: number, sourceIpStr: string): Run 
       // wallet-safe) since a partial run still spent tokens. Provider failures
       // before the sandbox exists charge $0.
       ledger.commit(
+        reservationId,
         reservedMax,
         sandbox ? reservedMax : 0,
         run.status === "cancelled" ? "cancelled" : "failed",
@@ -280,7 +290,7 @@ export const server = createServer(async (req, res) => {
         }
         return json(res, 429, { error: outcome.reason });
       }
-      const run = startRun(body.input, outcome.reservedMax, ip);
+      const run = startRun(body.input, outcome.reservedMax, outcome.reservationId, ip);
       return json(res, 200, { run_id: run.id });
     }
 

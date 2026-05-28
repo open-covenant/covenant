@@ -5,3 +5,4 @@ export * from './domain/task.js';
 export * from './solana/accounts.js';
 export * from './solana/instructions.js';
 export * from './solana/network.js';
+export * from './solana/stake.js';

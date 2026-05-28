@@ -19,7 +19,7 @@ export interface PreparedSolanaInstruction {
   programId: SolanaAddress;
   instruction: string;
   accounts: PreparedAccountMeta[];
-  data: Record<string, string | number | boolean>;
+  data: Record<string, string | number | boolean | null>;
 }
 
 export interface PreparedSolanaBundle {

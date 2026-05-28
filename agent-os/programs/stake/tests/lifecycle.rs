@@ -22,7 +22,7 @@ fn boot_initializes_config_and_fee_router() {
     assert_eq!(fr.authority, env.fee_router_keypair.pubkey());
     assert_eq!(fr.max_deposit_lamports, MAX_DEPOSIT_LAMPORTS);
     assert_eq!(fr.rate_limit_secs, RATE_LIMIT_SECS);
-    assert_eq!(fr.last_deposit_ts, 0);
+    assert_eq!(fr.last_deposit_ts, i64::MIN);
 
     assert_eq!(token_balance(&env, &env.locked_cvnt_vault), 0);
     assert_eq!(token_balance(&env, &env.buylock_cvnt_vault), 0);

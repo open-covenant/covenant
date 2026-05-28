@@ -508,6 +508,7 @@ pub fn send(
     ixs: &[Instruction],
     extra_signers: &[&Keypair],
 ) -> Result<(), TransactionError> {
+    svm.expire_blockhash();
     let mut signers: Vec<&Keypair> = vec![payer];
     signers.extend_from_slice(extra_signers);
     let tx = Transaction::new_signed_with_payer(

@@ -128,7 +128,7 @@ pub mod stake {
         } else {
             args.fee_router_rate_limit_secs
         };
-        fee_router.last_deposit_ts = 0;
+        fee_router.last_deposit_ts = i64::MIN;
         fee_router.bump = ctx.bumps.fee_router;
 
         emit!(ProgramInitialized {
@@ -456,8 +456,7 @@ pub mod stake {
             CovenantStakeError::DepositAmountExceeded
         );
         require!(
-            fee_router.last_deposit_ts == 0
-                || now.saturating_sub(fee_router.last_deposit_ts) >= fee_router.rate_limit_secs,
+            now.saturating_sub(fee_router.last_deposit_ts) >= fee_router.rate_limit_secs,
             CovenantStakeError::RateLimited
         );
 
@@ -971,8 +970,8 @@ pub struct DepositBuyLockCvnt<'info> {
     pub buylock_cvnt_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
-        associated_token::mint = covnt_mint,
-        associated_token::authority = depositor,
+        token::mint = covnt_mint,
+        token::authority = depositor,
     )]
     pub depositor_cvnt_ata: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]

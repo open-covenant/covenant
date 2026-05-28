@@ -1,0 +1,30 @@
+[package]
+name = "covenant-percolator"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Covenant-governed keeper agents for the Percolator perpetuals protocol — capability-scoped, budget-bounded, audit-logged. Permissionless liveness with verifiable behavior."
+
+[features]
+default = []
+# Real on-chain client wires up once percolator-prog's IDL is in-tree.
+# The default build is trait + mock + governance + tests, so the
+# workspace stays light and the testable surface is what's shipped.
+solana = []
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+covenant-settlement = { path = "../covenant-settlement" }
+covenant-budget = { path = "../covenant-budget" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

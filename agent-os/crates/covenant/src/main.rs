@@ -330,6 +330,7 @@ fn build_stake_instruction(
     agent_key: &Pubkey,
     owner_covnt: &Pubkey,
     stake_vault: &Pubkey,
+    covnt_mint: &Pubkey,
     args: &StakeArgs,
 ) -> solana_sdk::instruction::Instruction {
     use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -351,6 +352,7 @@ fn build_stake_instruction(
             AccountMeta::new(*operator, true),
             AccountMeta::new(*owner_covnt, false),
             AccountMeta::new(*stake_vault, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
             AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
         ],
@@ -375,6 +377,7 @@ fn build_buy_credits_instruction(
     operator: &Pubkey,
     owner_covnt: &Pubkey,
     treasury: &Pubkey,
+    covnt_mint: &Pubkey,
     args: &BuyCreditsArgs,
 ) -> solana_sdk::instruction::Instruction {
     use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -394,6 +397,7 @@ fn build_buy_credits_instruction(
             AccountMeta::new(*operator, true),
             AccountMeta::new(*owner_covnt, false),
             AccountMeta::new(*treasury, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
         ],
         data,
@@ -717,6 +721,7 @@ struct StakeCliArgs {
     agent_key: Pubkey,
     owner_covnt: Pubkey,
     stake_vault: Pubkey,
+    covnt_mint: Pubkey,
     amount: u64,
     lock_until: u64,
     confirm_timeout_ms: u64,
@@ -737,6 +742,7 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
     let mut agent_key: Option<Pubkey> = None;
     let mut owner_covnt: Option<Pubkey> = None;
     let mut stake_vault: Option<Pubkey> = None;
+    let mut covnt_mint: Option<Pubkey> = None;
     let mut amount: Option<u64> = None;
     let mut lock_until: Option<u64> = None;
     let mut confirm_timeout_ms: u64 = 60_000;
@@ -779,6 +785,11 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
                 let v = args.get(i).context("--stake-vault needs a value")?;
                 stake_vault = Some(parse_pubkey_arg("stake-vault", v)?);
             }
+            "--covnt-mint" => {
+                i += 1;
+                let v = args.get(i).context("--covnt-mint needs a value")?;
+                covnt_mint = Some(parse_pubkey_arg("covnt-mint", v)?);
+            }
             "--amount" => {
                 i += 1;
                 let v = args.get(i).context("--amount needs a value")?;
@@ -815,6 +826,7 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
     let agent_key = agent_key.context("--agent-key is required")?;
     let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
     let stake_vault = stake_vault.context("--stake-vault is required")?;
+    let covnt_mint = covnt_mint.context("--covnt-mint is required")?;
     let amount = amount.context("--amount is required")?;
     let lock_until = lock_until.context("--lock-until is required")?;
     Ok(StakeCliArgs {
@@ -825,6 +837,7 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
         agent_key,
         owner_covnt,
         stake_vault,
+        covnt_mint,
         amount,
         lock_until,
         confirm_timeout_ms,
@@ -838,6 +851,7 @@ fn sign_stake_tx(
     agent_key: &Pubkey,
     owner_covnt: &Pubkey,
     stake_vault: &Pubkey,
+    covnt_mint: &Pubkey,
     args: &StakeArgs,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Transaction {
@@ -847,6 +861,7 @@ fn sign_stake_tx(
         agent_key,
         owner_covnt,
         stake_vault,
+        covnt_mint,
         args,
     );
     Transaction::new_signed_with_payer(
@@ -918,6 +933,7 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
     let agent_key = parsed.agent_key;
     let owner_covnt = parsed.owner_covnt;
     let stake_vault = parsed.stake_vault;
+    let covnt_mint = parsed.covnt_mint;
     let agent_key_b58 = agent_key.to_string();
 
     let url_for_prep = rpc_url.clone();
@@ -935,6 +951,7 @@ async fn run_chain_stake(args: &[String]) -> Result<()> {
                 &agent_key,
                 &owner_covnt,
                 &stake_vault,
+                &covnt_mint,
                 &prep_args,
                 blockhash,
             );
@@ -1036,6 +1053,7 @@ struct BuyCreditsCliArgs {
     program_id: Pubkey,
     owner_covnt: Pubkey,
     treasury: Pubkey,
+    covnt_mint: Pubkey,
     amount_covnt: u64,
     confirm_timeout_ms: u64,
     as_json: bool,
@@ -1048,6 +1066,7 @@ fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
     let mut program_id: Option<Pubkey> = None;
     let mut owner_covnt: Option<Pubkey> = None;
     let mut treasury: Option<Pubkey> = None;
+    let mut covnt_mint: Option<Pubkey> = None;
     let mut amount_covnt: Option<u64> = None;
     let mut confirm_timeout_ms: u64 = 60_000;
     let mut as_json = false;
@@ -1084,6 +1103,11 @@ fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
                 let v = args.get(i).context("--treasury needs a value")?;
                 treasury = Some(parse_pubkey_arg("treasury", v)?);
             }
+            "--covnt-mint" => {
+                i += 1;
+                let v = args.get(i).context("--covnt-mint needs a value")?;
+                covnt_mint = Some(parse_pubkey_arg("covnt-mint", v)?);
+            }
             "--amount-covnt" => {
                 i += 1;
                 let v = args.get(i).context("--amount-covnt needs a value")?;
@@ -1113,6 +1137,7 @@ fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
     let program_id = program_id.context("--program-id is required")?;
     let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
     let treasury = treasury.context("--treasury is required")?;
+    let covnt_mint = covnt_mint.context("--covnt-mint is required")?;
     let amount_covnt = amount_covnt.context("--amount-covnt is required")?;
     Ok(BuyCreditsCliArgs {
         keypair_path,
@@ -1121,6 +1146,7 @@ fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
         program_id,
         owner_covnt,
         treasury,
+        covnt_mint,
         amount_covnt,
         confirm_timeout_ms,
         as_json,
@@ -1132,11 +1158,18 @@ fn sign_buy_credits_tx(
     program_id: &Pubkey,
     owner_covnt: &Pubkey,
     treasury: &Pubkey,
+    covnt_mint: &Pubkey,
     args: &BuyCreditsArgs,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Transaction {
-    let ix =
-        build_buy_credits_instruction(program_id, &operator.pubkey(), owner_covnt, treasury, args);
+    let ix = build_buy_credits_instruction(
+        program_id,
+        &operator.pubkey(),
+        owner_covnt,
+        treasury,
+        covnt_mint,
+        args,
+    );
     Transaction::new_signed_with_payer(
         &[ix],
         Some(&operator.pubkey()),
@@ -1200,6 +1233,7 @@ async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
     let program_id = parsed.program_id;
     let owner_covnt = parsed.owner_covnt;
     let treasury = parsed.treasury;
+    let covnt_mint = parsed.covnt_mint;
     let owner_b58 = kp.pubkey().to_string();
 
     let url_for_prep = rpc_url.clone();
@@ -1216,6 +1250,7 @@ async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
                 &program_id,
                 &owner_covnt,
                 &treasury,
+                &covnt_mint,
                 &prep_args,
                 blockhash,
             );
@@ -1489,6 +1524,7 @@ fn build_unstake_instruction(
     agent_key: &Pubkey,
     stake_vault: &Pubkey,
     owner_covnt: &Pubkey,
+    covnt_mint: &Pubkey,
 ) -> solana_sdk::instruction::Instruction {
     use solana_sdk::instruction::{AccountMeta, Instruction};
     let (config, _) = settlement_config_pda(program_id);
@@ -1503,6 +1539,7 @@ fn build_unstake_instruction(
             AccountMeta::new(*owner, true),
             AccountMeta::new(*stake_vault, false),
             AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
         ],
         data: compute_anchor_global_discriminator("unstake").to_vec(),
@@ -1839,6 +1876,7 @@ async fn run_chain_unstake(args: &[String]) -> Result<()> {
     let agent_key = f.pubkey("--agent-key")?;
     let stake_vault = f.pubkey("--stake-vault")?;
     let owner_covnt = f.pubkey("--owner-covnt")?;
+    let covnt_mint = f.pubkey("--covnt-mint")?;
     let (keypair, rpc_url) = f.operator_and_rpc()?;
     let mut extra = serde_json::Map::new();
     extra.insert("agent_key".to_string(), agent_key.to_string().into());
@@ -1850,7 +1888,7 @@ async fn run_chain_unstake(args: &[String]) -> Result<()> {
         f.timeout_ms(),
         f.json,
         extra,
-        move |owner| build_unstake_instruction(&program_id, owner, &agent_key, &stake_vault, &owner_covnt),
+        move |owner| build_unstake_instruction(&program_id, owner, &agent_key, &stake_vault, &owner_covnt, &covnt_mint),
     )
     .await
 }
@@ -8773,6 +8811,7 @@ mod tests {
                 &fixed_agent_key(),
                 &fixed_owner_covnt(),
                 &fixed_stake_vault(),
+                &Pubkey::new_from_array([21u8; 32]),
                 &fixture_args(),
             )
         }
@@ -8822,7 +8861,7 @@ mod tests {
             let agent_key = fixed_agent_key();
             let ix = build_fixture_ix();
 
-            assert_eq!(ix.accounts.len(), 8);
+            assert_eq!(ix.accounts.len(), 9);
             assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
             assert_eq!(
                 ix.accounts[1].pubkey,
@@ -8835,8 +8874,9 @@ mod tests {
             assert_eq!(ix.accounts[3].pubkey, operator);
             assert_eq!(ix.accounts[4].pubkey, fixed_owner_covnt());
             assert_eq!(ix.accounts[5].pubkey, fixed_stake_vault());
-            assert_eq!(ix.accounts[6].pubkey, SPL_TOKEN_PROGRAM_ID);
-            assert_eq!(ix.accounts[7].pubkey, solana_sdk::system_program::id());
+            assert_eq!(ix.accounts[6].pubkey, Pubkey::new_from_array([21u8; 32]));
+            assert_eq!(ix.accounts[7].pubkey, SPL_TOKEN_PROGRAM_ID);
+            assert_eq!(ix.accounts[8].pubkey, solana_sdk::system_program::id());
         }
 
         #[test]
@@ -8891,6 +8931,7 @@ mod tests {
                 &fixed_agent_key(),
                 &fixed_owner_covnt(),
                 &fixed_stake_vault(),
+                &Pubkey::new_from_array([21u8; 32]),
                 &fixture_args(),
             );
             assert_eq!(ix.program_id, program);
@@ -8935,6 +8976,7 @@ mod tests {
                 &fixed_operator(),
                 &fixed_owner_covnt(),
                 &fixed_treasury(),
+                &Pubkey::new_from_array([22u8; 32]),
                 &fixture_args(),
             )
         }
@@ -8985,7 +9027,7 @@ mod tests {
             let operator = fixed_operator();
             let ix = build_fixture_ix();
 
-            assert_eq!(ix.accounts.len(), 6);
+            assert_eq!(ix.accounts.len(), 7);
             assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
             assert_eq!(
                 ix.accounts[1].pubkey,
@@ -8994,7 +9036,8 @@ mod tests {
             assert_eq!(ix.accounts[2].pubkey, operator);
             assert_eq!(ix.accounts[3].pubkey, fixed_owner_covnt());
             assert_eq!(ix.accounts[4].pubkey, fixed_treasury());
-            assert_eq!(ix.accounts[5].pubkey, SPL_TOKEN_PROGRAM_ID);
+            assert_eq!(ix.accounts[5].pubkey, Pubkey::new_from_array([22u8; 32]));
+            assert_eq!(ix.accounts[6].pubkey, SPL_TOKEN_PROGRAM_ID);
         }
 
         #[test]
@@ -9039,6 +9082,7 @@ mod tests {
                 &fixed_operator(),
                 &fixed_owner_covnt(),
                 &fixed_treasury(),
+                &Pubkey::new_from_array([22u8; 32]),
                 &fixture_args(),
             );
             assert_eq!(ix.program_id, program);
@@ -9931,6 +9975,8 @@ mod tests {
                 "--owner-covnt".into(),
                 pk.clone(),
                 "--stake-vault".into(),
+                pk.clone(),
+                "--covnt-mint".into(),
                 pk,
                 "--amount".into(),
                 "1000".into(),
@@ -10014,6 +10060,7 @@ mod tests {
                 "--agent-key",
                 "--owner-covnt",
                 "--stake-vault",
+                "--covnt-mint",
                 "--amount",
                 "--lock-until",
             ];
@@ -10089,6 +10136,7 @@ mod tests {
                 &agent_key,
                 &owner_covnt,
                 &stake_vault,
+                &Pubkey::new_from_array([21u8; 32]),
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10110,6 +10158,7 @@ mod tests {
                 &agent_key,
                 &owner_covnt,
                 &stake_vault,
+                &Pubkey::new_from_array([21u8; 32]),
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10136,6 +10185,7 @@ mod tests {
                 &agent_key,
                 &owner_covnt,
                 &stake_vault,
+                &Pubkey::new_from_array([21u8; 32]),
                 &args,
             );
             let tx = sign_stake_tx(
@@ -10144,6 +10194,7 @@ mod tests {
                 &agent_key,
                 &owner_covnt,
                 &stake_vault,
+                &Pubkey::new_from_array([21u8; 32]),
                 &args,
                 Hash::default(),
             );
@@ -10351,6 +10402,8 @@ mod tests {
                 "--owner-covnt".into(),
                 pk.clone(),
                 "--treasury".into(),
+                pk.clone(),
+                "--covnt-mint".into(),
                 pk,
                 "--amount-covnt".into(),
                 "5000".into(),
@@ -10406,6 +10459,7 @@ mod tests {
                 "--program-id",
                 "--owner-covnt",
                 "--treasury",
+                "--covnt-mint",
                 "--amount-covnt",
             ];
             for flag in required {
@@ -10469,6 +10523,7 @@ mod tests {
                 &fixed_program(),
                 &owner_covnt,
                 &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10485,6 +10540,7 @@ mod tests {
                 &fixed_program(),
                 &owner_covnt,
                 &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
                 &fixed_args(),
                 Hash::default(),
             );
@@ -10504,6 +10560,7 @@ mod tests {
                 &kp.pubkey(),
                 &owner_covnt,
                 &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
                 &args,
             );
             let tx = sign_buy_credits_tx(
@@ -10511,6 +10568,7 @@ mod tests {
                 &program,
                 &owner_covnt,
                 &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
                 &args,
                 Hash::default(),
             );

@@ -1360,6 +1360,7 @@ dependencies = [
  "litesvm",
  "solana-sdk",
  "spl-token",
+ "spl-token-2022",
 ]
 
 [[package]]

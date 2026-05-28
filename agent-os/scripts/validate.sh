@@ -52,6 +52,7 @@ if [ "$mode" != "scripts" ]; then
 fi
 
 run node ./scripts/provenance.mjs verify-all
+run node ./scripts/metrics.mjs
 run node ./scripts/validate-cli-envelope-docs.mjs
 run node ./scripts/validate-chain-cli-envelope-fields.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs

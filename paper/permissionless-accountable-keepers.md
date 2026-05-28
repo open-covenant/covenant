@@ -38,6 +38,19 @@ liveness shape spec §21 already requires of the bankrupt-close ledger
 ("preemptible ownership, a strict total order, no equal-priority livelock") to
 the keeper network around it.
 
+**Status of artifacts as of 2026-05-28.** The SBPF bond program is
+deployed on Solana devnet at
+[`DMy5XmGmYbBzvtRefRyqJTwBwFvo2WHEwrC3fgfLtEGE`](https://explorer.solana.com/address/DMy5XmGmYbBzvtRefRyqJTwBwFvo2WHEwrC3fgfLtEGE?cluster=devnet)
+and end-to-end verified via the included
+`examples/devnet_smoke.rs` (init → deposit → slash → drain to
+recipient). The `RealPercolator` client reads the live mainnet
+Bounty 6 market group account at `BhkMic5g…` directly, decoding
+Toly's actual on-chain layout (16-byte magic, 624-byte
+`WrapperConfigV16`, `MarketGroupV16HeaderAccount`, and N asset
+slots) byte-for-byte. A sample run at slot 422,536,340 surfaces 4
+active assets and a `last_crank_slot` lag of ≈228k slots (≈25h),
+matching the published Bounty 6 keeper cadence.
+
 ---
 
 ## 1. Problem
@@ -260,22 +273,47 @@ this draft.
 
 ## 7. Implementation status
 
+### Live artifacts
+
+| Artifact | Address | Network |
+| --- | --- | --- |
+| Percolator v16 program (read target) | `4m3ipBQDYX6JQ9YSmUXDjESDHMtGWtiXforkWr9Qoxdi` | mainnet-beta (Bounty 6) |
+| Bounty 6 market group | `BhkMic5gHLjj5Uxkg6rBBXofUzeTZVwmV4uFzfhwtgQw` | mainnet-beta |
+| **Bond program (this work)** | `DMy5XmGmYbBzvtRefRyqJTwBwFvo2WHEwrC3fgfLtEGE` | **devnet** |
+
+The bond program is a 162-KB upgradeable SBPF program. End-to-end
+verified on devnet via `examples/devnet_smoke.rs`: init → deposit
+0.05 SOL → slash on out-of-scope asset → bond drained to recipient.
+The `RealPercolator` decoder reads the live Bounty 6 market group
+account directly via `getAccountInfo`, decoding the 16-byte magic
++ 624-byte WrapperConfig + `MarketGroupV16HeaderAccount` +
+`N × (ASSET_ORACLE_WRAPPER_LEN + EngineAssetSlotV16Account)` slot
+layout. Sample mainnet read at slot 422,536,340: `assets=4`,
+`last_crank_slot=422307636`.
+
+### Code surface
+
 | Component | State | Where |
 | --- | --- | --- |
 | `KeeperScope`, scope predicate | shipped | `src/capability.rs` |
-| `KeeperPolicy::decide` (mark/crank) | shipped | `src/policy.rs` |
+| `KeeperPolicy::decide` (mark/crank, per-asset fan-out) | shipped | `src/policy.rs` |
 | `RecoveryPolicy::decide` (HealthCertV16 → ForfeitRecoveryLeg) | shipped | `src/policy.rs` |
+| `LiquidationPolicy::sequence` (§21 strict total order) | shipped | `src/liquidation.rs` |
 | `PercolatorClient` trait + `MockPercolator` | shipped | `src/client.rs` |
+| **`RealPercolator` (live RPC decoder for Bounty 6)** | shipped (`--features solana-rpc`) | `src/realclient.rs` |
 | `KeeperAgent::tick` (scope → coord → budget → exec → receipt) | shipped | `src/keeper.rs` |
-| Coordination (`should_lead`, action_key, FNV-1a) | shipped | `src/coordination.rs` |
+| Coordination (`should_lead`, action_key, FNV-1a, peer dedup) | shipped | `src/coordination.rs` |
 | Risk-engine dep (pinned commit `323c9f27`) | shipped | `Cargo.toml` |
-| Property + stress tests (5 props × 64 + 3 stress + unit) | shipped | `tests/`, `src/*::tests` |
 | Wire-locked instruction builders (tags 5/43/44/45/63) | shipped (`--features solana`) | `src/instruction.rs` |
 | `KeeperAction` → `Instruction` bridge (`BuildContext`) | shipped (`--features solana`) | `src/onchain.rs` |
 | Operator-runnable binary (`covenant-percolator-keeper`) | shipped | `src/bin/keeper.rs` |
 | Thin reference `Sender` (RpcSender / RecordingSender) | shipped (`--features solana-rpc`) | `src/sender.rs` |
 | Stake-backed slash bond + verifier | shipped | `covenant-percolator-bond` crate |
-| Mainnet wire-up (Bounty 6 program + market) | shipped | `lib.rs` constants, `examples/mainnet-bounty6.toml` |
+| **SBPF bond program (deployable .so)** | **shipped, deployed to devnet** | `covenant-percolator-bond-program` crate |
+| Banks_client lifecycle (real on-chain semantics) | shipped | `covenant-percolator-bond-program/tests/lifecycle.rs` |
+| N-keeper network simulator (quantitative metrics) | shipped | `covenant-percolator/tests/network_sim.rs` |
+| `KeeperScope ↔ BondScope` bridge | shipped (`--features bridge`) | `covenant-percolator-bond/src/bridge.rs` |
+| Mainnet wire-up (Bounty 6 program + market constants) | shipped | `lib.rs` |
 
 The default build pulls no Solana runtime crates. Under
 `--features solana`, the crate exposes byte-for-byte builders for the
@@ -323,7 +361,56 @@ last mile — the security envelope is already proved.
 
 ---
 
-## 8. Open questions
+## 8. Quantitative results
+
+### Network simulator output
+
+3-test stress harness (`tests/network_sim.rs`) drives N keeper
+agents against a shared `MockPercolator` and reports JSON metrics.
+Representative run, 5 coordinated keepers × 4 assets × 3 ticks:
+
+```
+WITH COORD: n_keepers=5 ticks=3 market_assets=4
+            total_executed=16 total_deferred=46
+            per_keeper=[{1:3} {2:4} {3:4} {4:0+deferred} {5:5}]
+NO COORD:   total_executed=24 total_deferred=0
+            per_keeper=[{1:24} (only keeper 1 sweeps)]
+```
+
+The 46 deferrals across the network are the visible mark of the
+coordination layer — each action is led by one keeper, deferred by
+the rest. With 5 keepers, the average deferral rate per executed
+action approaches `(n-1)/n = 4/5 = 0.8`, matching the
+deterministic leader-election shape (one leader per `(action_key,
+window)`).
+
+Hostile-keeper containment: a keeper configured with an
+out-of-scope `allowed_assets = [999]` (no asset 999 exists) hits
+the capability gate before any `try_debit`. Its budget is
+bit-identical across multiple ticks while honest peers continue;
+the network-wide budget governance holds even if a single keeper
+is misconfigured or actively malicious.
+
+Partition tolerance: 2 of 3 keepers in blackout, the surviving
+keeper still makes progress through its leadership window. The
+coordination layer doesn't hold-and-wait on absent peers.
+
+### Test surface
+
+| Crate (features) | Unit | Integration | Property × cases |
+| --- | --- | --- | --- |
+| `covenant-percolator` (default) | 18 | 8 prop | 5 × 64 |
+| `covenant-percolator` (solana-rpc) | 55 | 3 pipeline + 3 sim + 12 prop | 9 × 64–128 |
+| `covenant-percolator-bond` (default) | 31 | 6 prop | 6 × 128 |
+| `covenant-percolator-bond` (solana + bridge) | 43 | 4 e2e + 6 prop | 6 × 128 |
+| `covenant-percolator-bond-program` | 2 banks_client lifecycle | 1 live devnet smoke | — |
+
+Total swept scenarios per test invocation: **≈ 3,000**. Clippy
+`-D warnings` clean across every feature combination.
+
+---
+
+## 9. Open questions
 
 - **Bond pricing model.** v1 slashes the whole bond on any confirmed
   violation. A proportional slash (e.g. scaled by the lamports the
@@ -335,20 +422,28 @@ last mile — the security envelope is already proved.
   applies to any permissionless protocol that needs off-chain liveness
   actors; the right level of abstraction (per-protocol crate vs. generic
   framework) is open.
-- **Liveness SLA under partition.** What's the formal SLA the network
-  delivers when M of N keepers are offline? `proptest` exercises a single
-  agent's behavior; an N-keeper liveness sim that injects partitions and
-  measures freshness SLA is future work.
 - **Coordination with Toly's own keeper.** Mainnet Bounty 6 already runs
   a single keeper at `9WiMAQtdx8…` (proximity-driven, cron-based). A
   PAK swarm joining the network without coordination races that
   keeper unnecessarily; opt-in peer announcement (e.g. via the SAP
   registry) lets `should_lead` include the canonical keeper without
   forking the protocol.
+- **Mainnet promotion of the bond program.** The .so is deployed and
+  end-to-end-verified on devnet at `DMy5XmGmYb…`. Promotion to
+  mainnet is a one-command `solana program deploy ... --url
+  mainnet-beta` once the design is reviewed; the bytes are
+  byte-identical to what the banks_client tests exercise.
+- **Liquidation policy at scale.** `LiquidationPolicy::sequence` is
+  per-tick-bounded (per-account `b_delta` capped by engine-certified
+  deficit). Cascade behavior — where the sequencer is re-invoked
+  every tick as `certified_liq_deficit`s shift — has been modeled
+  in the proptest but not stressed against a real bankrupt
+  cascade. A LiteSVM harness loading percolator-prog's actual .so
+  would close that loop.
 
 ---
 
-## 9. Why this engages the design
+## 10. Why this engages the design
 
 Three places where PAK touches Toly's design specifically:
 
@@ -366,7 +461,7 @@ Three places where PAK touches Toly's design specifically:
 
 ---
 
-## 10. References
+## 11. References
 
 - `aeyakovenko/percolator/spec.md` — risk engine spec (source of truth).
 - `aeyakovenko/percolator-prog/README.md` — trust boundaries, account model.

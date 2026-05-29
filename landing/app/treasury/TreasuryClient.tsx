@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getReadConnection } from "../../lib/stake/env";
+import Link from "next/link";
+import { ConnectButton } from "../stake/ConnectButton";
 import {
   fetchConfig,
   fetchRewardVaultLamports,
@@ -13,8 +14,12 @@ import {
   deriveAta,
   lockedVaultAuthorityPda,
 } from "../../lib/stake/pdas";
-import { getClusterConfig } from "../../lib/stake/env";
-import { formatCvnt, formatSol } from "../../lib/stake/format";
+import { getClusterConfig, getReadConnection } from "../../lib/stake/env";
+import {
+  formatCvnt,
+  formatSol,
+  formatWithGrouping,
+} from "../../lib/stake/format";
 
 interface TreasuryState {
   config: ConfigState;
@@ -64,102 +69,244 @@ export function TreasuryClient() {
     };
   }, [connection, cluster.cvntMint, cluster.tokenProgramId]);
 
-  if (!state) {
-    return (
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
-          Treasury
-        </h1>
-        <p className="mt-6 text-sm text-neutral-500">loading…</p>
-      </div>
-    );
-  }
-
-  const { config, rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt } = state;
-
   return (
-    <div className="mx-auto max-w-3xl">
-      <h1 className="text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
-        Treasury
-      </h1>
-      <p className="mt-3 text-sm leading-relaxed text-neutral-400">
-        Public read-only view of the staking program state. All values fetched
-        directly from chain.
-      </p>
+    <div className="mx-auto w-full">
+      <PageHeader />
 
-      <div className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Stat
-          label="cumulative SOL distributed"
-          value={`${formatSol(config.cumulativeSolDistributed, { maxFrac: 4 })} SOL`}
-        />
-        <Stat
-          label="reward vault balance"
-          value={`${formatSol(rewardVaultLamports, { maxFrac: 4 })} SOL`}
-        />
-        <Stat
-          label="active positions"
-          value={`${config.activeLockCount} / ${config.maxActiveLocks}`}
-        />
-        <Stat
-          label="locked principal"
-          value={`${formatCvnt(lockedVaultCvnt, { maxFrac: 0 })} CVNT`}
-        />
-        <Stat
-          label="bought + locked (buyback vault)"
-          value={`${formatCvnt(buylockVaultCvnt, { maxFrac: 0 })} CVNT`}
-          help="protocol revenue auto-buys $CVNT and locks it here — no withdraw path in v1"
-        />
-        <Stat
-          label="pending pre-accrual"
-          value={`${formatSol(config.pendingSolLamports, { maxFrac: 4 })} SOL`}
-        />
-        <Stat
-          label="total weight"
-          value={config.totalWeight.toString()}
-          help="sum of amount × tier_multiplier across active positions"
-        />
-        <Stat
-          label="protocol status"
-          value={config.paused ? "paused" : "active"}
-          tone={config.paused ? "warn" : "ok"}
-        />
-      </div>
+      {!state && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="h-32 animate-pulse rounded-md border border-neutral-900 bg-neutral-950/40"
+            />
+          ))}
+        </div>
+      )}
 
-      <p className="mt-8 text-[11px] leading-relaxed text-neutral-500">
-        This is real yield, not inflation. Revenue is sourced from pump.fun
-        creator fees on the post-graduation $CVNT pool, swept by the keeper
-        on a fixed cadence. 25% of each sweep flows to stakers, 25% to a
-        buy-and-lock vault, 30% to treasury, 20% to operator subsidy. The
-        program emits zero $CVNT.
-      </p>
+      {state && <Dashboard state={state} />}
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
-  help,
-  tone,
-}: {
-  label: string;
-  value: string;
-  help?: string;
-  tone?: "ok" | "warn";
-}) {
-  const accent =
-    tone === "warn"
-      ? "text-amber-300"
-      : tone === "ok"
-        ? "text-emerald-300"
-        : "text-neutral-50";
+function Dashboard({ state }: { state: TreasuryState }) {
+  const { config, rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt } = state;
+  const lockUtilization =
+    config.maxActiveLocks > 0
+      ? Math.round((config.activeLockCount / config.maxActiveLocks) * 100)
+      : 0;
+
   return (
-    <div className="rounded-md border border-neutral-800 bg-neutral-950/60 p-5">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-        {label}
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="Lifetime SOL distributed"
+          value={formatSol(config.cumulativeSolDistributed, { maxFrac: 4 })}
+          unit="SOL"
+        />
+        <KpiCard
+          label="Locked principal"
+          value={formatCvnt(lockedVaultCvnt, { maxFrac: 0 })}
+          unit="CVNT"
+        />
+        <KpiCard
+          label="Buyback vault"
+          value={formatCvnt(buylockVaultCvnt, { maxFrac: 0 })}
+          unit="CVNT"
+        />
+        <KpiCard
+          label="Active positions"
+          value={`${config.activeLockCount} / ${config.maxActiveLocks}`}
+          unit={`${lockUtilization}% utilized`}
+        />
       </div>
-      <div className={`mt-2 font-mono text-xl ${accent}`}>{value}</div>
-      {help && <div className="mt-2 text-[11px] text-neutral-500">{help}</div>}
+
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <Panel>
+          <PanelEyebrow>Distribution mechanics</PanelEyebrow>
+          <h2 className="mt-4 text-xl font-extralight tracking-tight text-neutral-50 sm:text-2xl">
+            Real protocol revenue, allocated by weight
+          </h2>
+          <p className="mt-4 text-[13px] leading-relaxed text-neutral-400">
+            Each protocol revenue tick is split four ways at the keeper layer.
+            The locker share is then folded into a per-weight accumulator,
+            ensuring every open position earns a strictly pro-rata share of
+            every distribution since it was opened.
+          </p>
+
+          <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <SplitCard label="Lockers" value="25%" detail="Distributed as SOL, claimable continuously." />
+            <SplitCard label="Buy and lock" value="25%" detail="Swapped to CVNT and routed into the buyback vault." />
+            <SplitCard label="Treasury" value="30%" detail="Funds protocol operations and reserves." />
+            <SplitCard label="Operator subsidy" value="20%" detail="Covers infrastructure and operational costs." />
+          </div>
+
+          <div className="mt-8 border-t border-neutral-900 pt-6">
+            <PanelEyebrow>Accumulator</PanelEyebrow>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <DetailRow
+                label="Total weight"
+                value={formatWithGrouping(config.totalWeight)}
+              />
+              <DetailRow
+                label="Pending pre-accrual"
+                value={`${formatSol(config.pendingSolLamports, { maxFrac: 4 })} SOL`}
+              />
+              <DetailRow
+                label="Reward vault balance"
+                value={`${formatSol(rewardVaultLamports, { maxFrac: 4 })} SOL`}
+              />
+              <DetailRow
+                label="Minimum position"
+                value={`${formatCvnt(config.minLockAmount, { maxFrac: 0 })} CVNT`}
+              />
+            </div>
+          </div>
+        </Panel>
+
+        <div className="flex flex-col gap-6">
+          <Panel>
+            <PanelEyebrow>Status</PanelEyebrow>
+            <div className="mt-6 flex items-center justify-between">
+              <span className="text-[12px] uppercase tracking-[0.22em] text-neutral-500">
+                Protocol state
+              </span>
+              <StatusPill ok={!config.paused} label={config.paused ? "Paused" : "Active"} />
+            </div>
+            <p className="mt-4 text-[12px] leading-relaxed text-neutral-500">
+              When paused, new positions and reward claims are blocked. Principal
+              withdrawal after lock expiry remains available regardless of pause
+              state.
+            </p>
+          </Panel>
+
+          <Panel>
+            <PanelEyebrow>Lock tiers</PanelEyebrow>
+            <div className="mt-6 grid grid-cols-1 gap-2">
+              <TierLine days={30} multiplier="1.0×" />
+              <TierLine days={90} multiplier="1.5×" />
+              <TierLine days={180} multiplier="2.0×" />
+              <TierLine days={365} multiplier="3.0×" />
+            </div>
+            <p className="mt-6 text-[11px] leading-relaxed text-neutral-500">
+              A position&apos;s weight equals its principal multiplied by the
+              tier coefficient. Distribution shares are computed from weight,
+              not principal.
+            </p>
+            <div className="mt-6 border-t border-neutral-900 pt-4">
+              <Link
+                href="/stake"
+                className="block rounded-sm bg-neutral-50 px-6 py-2.5 text-center text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white"
+              >
+                Open a position
+              </Link>
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <Panel>
+          <PanelEyebrow>Disclosures</PanelEyebrow>
+          <ul className="mt-6 grid grid-cols-1 gap-4 text-[12px] leading-relaxed text-neutral-500 sm:grid-cols-2">
+            <li>All values on this page are read directly from the program&apos;s on-chain state at the most recent confirmed slot.</li>
+            <li>Distribution amounts reflect actual protocol revenue and are not guaranteed. Past distributions do not predict future amounts.</li>
+            <li>Locked principal is non-transferable. Positions cannot be withdrawn before their lock period elapses.</li>
+            <li>The buyback vault holds CVNT acquired with protocol revenue. It has no withdraw path in the current program version.</li>
+          </ul>
+        </Panel>
+      </div>
+    </>
+  );
+}
+
+function PageHeader() {
+  return (
+    <div className="mb-10 flex items-end justify-between gap-6 border-b border-neutral-900 pb-6">
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
+        <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
+          Treasury
+        </h1>
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-400">
+          A public, real-time view of the staking program&apos;s on-chain state. All
+          numbers sourced from chain at the latest confirmed slot.
+        </p>
+      </div>
+      <div className="block">
+        <ConnectButton />
+      </div>
+    </div>
+  );
+}
+
+function Panel({ children }: { children: React.ReactNode }) {
+  return (
+    <section className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6 backdrop-blur-sm sm:p-8">
+      {children}
+    </section>
+  );
+}
+
+function PanelEyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-500">{children}</div>
+  );
+}
+
+function KpiCard({ label, value, unit }: { label: string; value: string; unit: string }) {
+  return (
+    <div className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6">
+      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{label}</div>
+      <div className="mt-4 flex items-baseline gap-2">
+        <span className="font-mono text-2xl font-light tracking-tight text-neutral-50 sm:text-3xl">{value}</span>
+        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+function SplitCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-sm border border-neutral-900 p-4">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-400">{label}</span>
+        <span className="font-mono text-lg text-neutral-50">{value}</span>
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">{detail}</p>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">{label}</div>
+      <div className="mt-1 font-mono text-sm text-neutral-100">{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${
+        ok
+          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+      }`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-emerald-400" : "bg-amber-400"}`} />
+      {label}
+    </span>
+  );
+}
+
+function TierLine({ days, multiplier }: { days: number; multiplier: string }) {
+  return (
+    <div className="flex items-baseline justify-between border-b border-neutral-900 pb-2 last:border-0 last:pb-0">
+      <span className="text-[12px] text-neutral-300">{days} days</span>
+      <span className="font-mono text-[13px] text-neutral-50">{multiplier}</span>
     </div>
   );
 }

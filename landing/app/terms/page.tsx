@@ -282,13 +282,12 @@ const SECTIONS: Section[] = [
     title: "Governing law",
     body: (
       <p className={paragraph}>
-        These Terms are governed by the laws of the European Union and, supplementally, by the
-        laws of the European Union member state in which the operator is established (the
-        &ldquo;Operating Jurisdiction&rdquo;), without regard to conflict-of-laws principles. The
+        These Terms are governed by the laws of the Kingdom of Denmark and, where applicable,
+        directly effective European Union law, without regard to conflict-of-laws principles. The
         exclusive venue for any dispute arising from or relating to the Services or these Terms
-        shall be the competent courts of the Operating Jurisdiction. Nothing in this section
-        deprives consumers (where applicable) of the protection of mandatory provisions of the
-        law of their country of habitual residence.
+        shall be the competent courts of Copenhagen, Denmark. Nothing in this section deprives
+        consumers (where applicable) of the protection of mandatory provisions of the law of
+        their country of habitual residence.
       </p>
     ),
   },

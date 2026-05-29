@@ -2458,12 +2458,66 @@ fn print_memory_compaction_plan_response(response: Response, as_json: bool) -> R
     Ok(())
 }
 
+/// `chain` subcommands that talk only to the Solana RPC and never use
+/// the daemon socket. Routing these through `UnixStream::connect` would
+/// fail with a misleading "is covenantd running?" on a daemon-less
+/// signing machine, masking real argument or RPC errors. Keep this set
+/// in sync with the inline arms in [`main`]'s `"chain" =>` block.
+fn chain_verb_needs_daemon(verb: &str) -> bool {
+    matches!(verb, "status" | "flush-receipts" | "receipt-batches")
+}
+
+/// Dispatch the daemon-free `chain` subcommand family. Mirrors the
+/// non-IPC arms inside [`main`]'s `"chain" =>` block but reached BEFORE
+/// `UnixStream::connect` so a signing machine never needs covenantd.
+/// Returns `bail!` on any unrecognised subcommand so a typo still gets
+/// the same error as the daemon-attached path.
+async fn dispatch_daemon_free_chain(args: &[String]) -> Result<()> {
+    let sub = args.get(1).map(String::as_str).unwrap_or("");
+    let rest = &args[2..];
+    match sub {
+        "register-agent" => run_chain_register_agent(rest).await,
+        "stake" => run_chain_stake(rest).await,
+        "buy-credits" => run_chain_buy_credits(rest).await,
+        "initialize" => run_chain_initialize(rest).await,
+        "open-credit-account" => run_chain_open_credit_account(rest).await,
+        "unstake" => run_chain_unstake(rest).await,
+        "close-position" => run_chain_close_position(rest).await,
+        "migrate-config" => run_chain_migrate_config(rest).await,
+        "set-min-stake-lock" => {
+            run_chain_set_config_u64(rest, "set-min-stake-lock", "set_min_stake_lock").await
+        }
+        "set-credits-per-covnt" => {
+            run_chain_set_config_u64(rest, "set-credits-per-covnt", "set_credits_per_covnt").await
+        }
+        "update-authority" => {
+            run_chain_set_config_pubkey(rest, "update-authority", "update_authority").await
+        }
+        "update-slash-authority" => {
+            run_chain_set_config_pubkey(rest, "update-slash-authority", "update_slash_authority")
+                .await
+        }
+        "update-treasury" => run_chain_update_treasury(rest).await,
+        other => bail!("unknown chain subcommand '{other}'"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         print_usage();
         std::process::exit(2);
+    }
+
+    // Daemon-free chain TX dispatch: register-agent / stake / buy-credits
+    // / initialize / open-credit-account / unstake / close-position /
+    // migrate-config / set-* / update-* all sign via a local keypair and
+    // submit through the Solana RPC. Routing them through the daemon
+    // socket fails on signing machines without covenantd and hides real
+    // errors behind a connect timeout.
+    if args[0] == "chain" && args.len() >= 2 && !chain_verb_needs_daemon(&args[1]) {
+        return dispatch_daemon_free_chain(&args).await;
     }
 
     let home = covenant_home()?;
@@ -3652,61 +3706,13 @@ async fn main() -> Result<()> {
                         other => bail!("unexpected response: {other:?}"),
                     }
                 }
-                "register-agent" => {
-                    run_chain_register_agent(&args[2..]).await?;
-                }
-                "stake" => {
-                    run_chain_stake(&args[2..]).await?;
-                }
-                "buy-credits" => {
-                    run_chain_buy_credits(&args[2..]).await?;
-                }
-                "initialize" => {
-                    run_chain_initialize(&args[2..]).await?;
-                }
-                "open-credit-account" => {
-                    run_chain_open_credit_account(&args[2..]).await?;
-                }
-                "unstake" => {
-                    run_chain_unstake(&args[2..]).await?;
-                }
-                "close-position" => {
-                    run_chain_close_position(&args[2..]).await?;
-                }
-                "migrate-config" => {
-                    run_chain_migrate_config(&args[2..]).await?;
-                }
-                "set-min-stake-lock" => {
-                    run_chain_set_config_u64(
-                        &args[2..],
-                        "set-min-stake-lock",
-                        "set_min_stake_lock",
-                    )
-                    .await?;
-                }
-                "set-credits-per-covnt" => {
-                    run_chain_set_config_u64(
-                        &args[2..],
-                        "set-credits-per-covnt",
-                        "set_credits_per_covnt",
-                    )
-                    .await?;
-                }
-                "update-authority" => {
-                    run_chain_set_config_pubkey(&args[2..], "update-authority", "update_authority")
-                        .await?;
-                }
-                "update-slash-authority" => {
-                    run_chain_set_config_pubkey(
-                        &args[2..],
-                        "update-slash-authority",
-                        "update_slash_authority",
-                    )
-                    .await?;
-                }
-                "update-treasury" => {
-                    run_chain_update_treasury(&args[2..]).await?;
-                }
+                // Daemon-free chain TX subcommands (register-agent /
+                // stake / buy-credits / initialize / open-credit-account
+                // / unstake / close-position / migrate-config / set-* /
+                // update-*) are dispatched by `dispatch_daemon_free_chain`
+                // before the daemon connect, so this match never sees
+                // them. The catch-all preserves the same error message
+                // for typos against the daemon-required arms.
                 other => bail!("unknown chain subcommand '{other}'"),
             }
         }
@@ -5511,6 +5517,43 @@ mod tests {
     use super::*;
     use covenant_a2a::{A2ATask, A2ATaskQueueState};
     use covenant_types::{AgentId, Capability};
+
+    #[test]
+    fn chain_verb_needs_daemon_classifies_ipc_and_signing_paths() {
+        // Daemon-required (use UnixStream): chain status / receipt batches.
+        assert!(chain_verb_needs_daemon("status"));
+        assert!(chain_verb_needs_daemon("flush-receipts"));
+        assert!(chain_verb_needs_daemon("receipt-batches"));
+        // Daemon-free (sign locally + submit through Solana RPC). If a
+        // new chain TX verb lands and isn't added to
+        // `dispatch_daemon_free_chain`, it lands here and surfaces as
+        // an early "unknown chain subcommand" — still a better failure
+        // than a misleading "is covenantd running?".
+        for tx in [
+            "register-agent",
+            "stake",
+            "buy-credits",
+            "initialize",
+            "open-credit-account",
+            "unstake",
+            "close-position",
+            "migrate-config",
+            "set-min-stake-lock",
+            "set-credits-per-covnt",
+            "update-authority",
+            "update-slash-authority",
+            "update-treasury",
+        ] {
+            assert!(
+                !chain_verb_needs_daemon(tx),
+                "{tx} must dispatch through the daemon-free path",
+            );
+        }
+        // Unknown subcommands fall to the daemon-free path so the user
+        // gets the consistent "unknown chain subcommand" message
+        // instead of a connect timeout.
+        assert!(!chain_verb_needs_daemon("not-a-real-verb"));
+    }
 
     fn make_peer(seed: u8, display: &str, revoked: bool) -> PeerSummary {
         let mut pk = [0u8; 32];

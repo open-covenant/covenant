@@ -33,6 +33,20 @@ use tokio::sync::mpsc;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// Left-truncates `home_str` so it fits within `keep` chars, prefixing
+/// with `…` when truncation occurs. Width is measured in chars, not
+/// bytes, so a non-ASCII path can never panic inside a draw closure and
+/// strand the terminal in raw mode.
+fn truncate_home_display(home_str: &str, keep: usize) -> String {
+    let char_count = home_str.chars().count();
+    if char_count <= keep {
+        return home_str.to_string();
+    }
+    let skip = char_count - keep;
+    let tail: String = home_str.chars().skip(skip).collect();
+    format!("…{tail}")
+}
+
 /// Renders the bottom status bar. Shows the current mode discriminant
 /// (via `Mode::name()`, never `{:?}`) and the resolved COVENANT_HOME
 /// truncated from the left with a `…` prefix so the trailing path
@@ -48,10 +62,10 @@ fn render_status_bar(
     let suffix = "  ? for help";
     let width = rect.width as usize;
     let fixed_overhead = mode.len() + 2 + suffix.len() + 2; // "<mode>  <home><suffix>"
-    let home_display = if width > fixed_overhead && home_str.len() > width - fixed_overhead {
+    let home_char_count = home_str.chars().count();
+    let home_display = if width > fixed_overhead && home_char_count > width - fixed_overhead {
         let keep = width.saturating_sub(fixed_overhead + 1);
-        let start = home_str.len().saturating_sub(keep);
-        format!("…{}", &home_str[start..])
+        truncate_home_display(&home_str, keep)
     } else {
         home_str
     };
@@ -731,5 +745,41 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App, home: &std::path::Path) {
             };
             frame.render_widget(body, layout[1]);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_home_display;
+
+    #[test]
+    fn truncate_home_display_returns_input_when_within_budget() {
+        assert_eq!(truncate_home_display("/Users/op/cov", 32), "/Users/op/cov");
+    }
+
+    #[test]
+    fn truncate_home_display_left_truncates_ascii_with_ellipsis_prefix() {
+        let out = truncate_home_display("/Users/operator/covenant", 8);
+        assert_eq!(out, "…covenant");
+        // `keep` characters retained, plus the leading `…`.
+        assert_eq!(out.chars().count(), 9);
+    }
+
+    #[test]
+    fn truncate_home_display_handles_non_ascii_without_panicking() {
+        // Reproduces the original byte-slice panic ("not a char boundary")
+        // — the multi-byte glyph straddles a byte index that the old
+        // `home_str[start..]` would split in half.
+        let path = "/Users/Mizüki/projects/cov";
+        let out = truncate_home_display(path, 10);
+        assert!(out.starts_with('…'));
+        assert_eq!(out.chars().count(), 11);
+        assert!(path.ends_with(out.trim_start_matches('…')));
+    }
+
+    #[test]
+    fn truncate_home_display_keeps_zero_when_keep_is_zero() {
+        let out = truncate_home_display("/anything", 0);
+        assert_eq!(out, "…");
     }
 }

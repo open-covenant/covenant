@@ -12,6 +12,8 @@
 //!   `pending_sol_lamports` into the per-weight accumulator. Belt-and-suspenders
 //!   because `deposit_sol_fees` already folds inline; this catches missed folds.
 
+pub mod jupiter;
+
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -32,6 +34,8 @@ use solana_sdk::system_instruction;
 use solana_sdk::transaction::Transaction;
 use tracing::{info, warn};
 
+use crate::jupiter::{sign_and_send_jupiter_tx, JupiterClient};
+
 pub const COVENANT_STAKE_PROGRAM_ID_STR: &str = "CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED";
 
 pub const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 60 * 60;
@@ -47,6 +51,20 @@ pub const TREASURY_RECIPIENT: &str = "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTK
 
 /// Hardcoded subsidy recipient. Same rationale as TREASURY_RECIPIENT.
 pub const SUBSIDY_RECIPIENT: &str = "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
+
+/// Mainnet $CVNT mint (Token-2022). Hardcoded so the keeper cannot be
+/// pointed at a wrong-mint via env tampering.
+pub const CVNT_MINT: &str = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
+
+/// Token-2022 program — required for the $CVNT mint.
+pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/// Default Jupiter slippage tolerance (200 bps = 2%).
+pub const DEFAULT_JUPITER_SLIPPAGE_BPS: u16 = 200;
+
+/// Below this lamport amount, defer the buylock leg to the next sweep —
+/// dust swaps lose more to fees + slippage than they buy back.
+pub const DEFAULT_MIN_BUYLOCK_LAMPORTS: u64 = 50_000_000;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct KeeperConfig {
@@ -70,6 +88,10 @@ pub struct KeeperConfig {
     pub reserve_lamports: u64,
     #[serde(default = "default_min_accrue")]
     pub min_accrue_lamports: u64,
+    #[serde(default = "default_jupiter_slippage")]
+    pub jupiter_slippage_bps: u16,
+    #[serde(default = "default_min_buylock")]
+    pub min_buylock_lamports: u64,
     #[serde(default)]
     pub dry_run: bool,
 }
@@ -101,6 +123,12 @@ fn default_reserve() -> u64 {
 fn default_min_accrue() -> u64 {
     DEFAULT_MIN_ACCRUE_LAMPORTS
 }
+fn default_jupiter_slippage() -> u16 {
+    DEFAULT_JUPITER_SLIPPAGE_BPS
+}
+fn default_min_buylock() -> u64 {
+    DEFAULT_MIN_BUYLOCK_LAMPORTS
+}
 
 impl KeeperConfig {
     pub fn from_env() -> Result<Self> {
@@ -125,6 +153,10 @@ impl KeeperConfig {
             .unwrap_or(DEFAULT_RESERVE_LAMPORTS);
         let min_accrue_lamports = optional_env_u64("COVENANT_STAKE_KEEPER_MIN_ACCRUE_LAMPORTS")?
             .unwrap_or(DEFAULT_MIN_ACCRUE_LAMPORTS);
+        let jupiter_slippage_bps = optional_env_u16("COVENANT_STAKE_KEEPER_JUPITER_SLIPPAGE_BPS")?
+            .unwrap_or(DEFAULT_JUPITER_SLIPPAGE_BPS);
+        let min_buylock_lamports = optional_env_u64("COVENANT_STAKE_KEEPER_MIN_BUYLOCK_LAMPORTS")?
+            .unwrap_or(DEFAULT_MIN_BUYLOCK_LAMPORTS);
         let dry_run = std::env::var("COVENANT_STAKE_KEEPER_DRY_RUN")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
@@ -141,6 +173,8 @@ impl KeeperConfig {
             min_sweep_lamports,
             reserve_lamports,
             min_accrue_lamports,
+            jupiter_slippage_bps,
+            min_buylock_lamports,
             dry_run,
         };
         cfg.validate()?;
@@ -172,10 +206,14 @@ pub struct Keeper {
     config_pda: Pubkey,
     fee_router_pda: Pubkey,
     reward_vault_pda: Pubkey,
+    buylock_vault_authority_pda: Pubkey,
     creator: Arc<Keypair>,
     rpc: Arc<RpcClient>,
     treasury: Pubkey,
     subsidy: Pubkey,
+    cvnt_mint: Pubkey,
+    token_program: Pubkey,
+    jupiter: JupiterClient,
 }
 
 impl Keeper {
@@ -189,18 +227,26 @@ impl Keeper {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stake_config"], &program_id);
         let (fee_router_pda, _) = Pubkey::find_program_address(&[b"fee_router"], &program_id);
         let (reward_vault_pda, _) = Pubkey::find_program_address(&[b"reward_vault"], &program_id);
+        let (buylock_vault_authority_pda, _) =
+            Pubkey::find_program_address(&[b"buylock_auth"], &program_id);
         let treasury = Pubkey::from_str(TREASURY_RECIPIENT)?;
         let subsidy = Pubkey::from_str(SUBSIDY_RECIPIENT)?;
+        let cvnt_mint = Pubkey::from_str(CVNT_MINT)?;
+        let token_program = Pubkey::from_str(TOKEN_2022_PROGRAM_ID)?;
         Ok(Self {
             cfg,
             program_id,
             config_pda,
             fee_router_pda,
             reward_vault_pda,
+            buylock_vault_authority_pda,
             creator,
             rpc,
             treasury,
             subsidy,
+            cvnt_mint,
+            token_program,
+            jupiter: JupiterClient::new(),
         })
     }
 
@@ -296,12 +342,120 @@ impl Keeper {
             }
         }
         if split.buylock > 0 {
-            warn!(
-                lamports = split.buylock,
-                "buylock leg requires Jupiter SOL→CVNT swap + deposit_buylock_cvnt — not implemented in v1, lamports left in creator wallet for the next sweep cycle"
-            );
+            if split.buylock < self.cfg.min_buylock_lamports {
+                info!(
+                    lamports = split.buylock,
+                    min = self.cfg.min_buylock_lamports,
+                    "buylock leg below min — deferred to next sweep"
+                );
+            } else {
+                match self.run_buylock_leg(split.buylock).await {
+                    Ok(BuylockResult { swap_sig, deposit_sig, cvnt_received }) => info!(
+                        swap_sig = %swap_sig,
+                        deposit_sig = %deposit_sig,
+                        sol_in = split.buylock,
+                        cvnt_out = cvnt_received,
+                        "buylock leg complete"
+                    ),
+                    Err(e) => warn!(
+                        error = %e,
+                        lamports = split.buylock,
+                        "buylock leg failed; deferring to next sweep"
+                    ),
+                }
+            }
         }
         Ok(())
+    }
+
+    async fn run_buylock_leg(&self, lamports: u64) -> Result<BuylockResult> {
+        let sol_mint = Pubkey::from_str(crate::jupiter::SOL_MINT)?;
+        let pre_swap_cvnt = self.read_creator_cvnt_balance().await?;
+
+        let (quote, raw) = self
+            .jupiter
+            .quote(
+                &sol_mint,
+                &self.cvnt_mint,
+                lamports,
+                self.cfg.jupiter_slippage_bps,
+            )
+            .await
+            .context("jupiter quote")?;
+        let estimated_out = quote.out_amount_u64().unwrap_or(0);
+        if estimated_out == 0 {
+            return Err(anyhow!("jupiter returned zero out_amount"));
+        }
+        info!(
+            sol_in = lamports,
+            cvnt_out_estimate = estimated_out,
+            slippage_bps = self.cfg.jupiter_slippage_bps,
+            "jupiter quote received"
+        );
+
+        let tx = self
+            .jupiter
+            .swap(&raw, &self.creator.pubkey())
+            .await
+            .context("jupiter swap build")?;
+        let swap_sig = sign_and_send_jupiter_tx(&self.rpc, tx, self.creator.as_ref())
+            .await
+            .context("sign+send jupiter swap")?;
+
+        let post_swap_cvnt = self.read_creator_cvnt_balance().await?;
+        let cvnt_received = post_swap_cvnt.saturating_sub(pre_swap_cvnt);
+        if cvnt_received == 0 {
+            return Err(anyhow!(
+                "post-swap CVNT delta is 0; swap may not have settled"
+            ));
+        }
+
+        let deposit_sig = self
+            .send_deposit_buylock_cvnt(cvnt_received)
+            .await
+            .context("deposit_buylock_cvnt")?;
+        Ok(BuylockResult {
+            swap_sig,
+            deposit_sig,
+            cvnt_received,
+        })
+    }
+
+    async fn read_creator_cvnt_balance(&self) -> Result<u64> {
+        let ata = derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
+        let acc = match self.rpc.get_account(&ata).await {
+            Ok(a) => a,
+            Err(_) => return Ok(0),
+        };
+        if acc.data.len() < 72 {
+            return Ok(0);
+        }
+        let mut amount = [0u8; 8];
+        amount.copy_from_slice(&acc.data[64..72]);
+        Ok(u64::from_le_bytes(amount))
+    }
+
+    async fn send_deposit_buylock_cvnt(&self, amount: u64) -> Result<String> {
+        let depositor_ata = derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
+        let buylock_vault =
+            derive_ata(&self.buylock_vault_authority_pda, &self.cvnt_mint, &self.token_program);
+        let mut data = anchor_discriminator("deposit_buylock_cvnt").to_vec();
+        amount.serialize(&mut data)?;
+        let ix = Instruction {
+            program_id: self.program_id,
+            accounts: vec![
+                AccountMeta::new(self.config_pda, false),
+                AccountMeta::new_readonly(self.fee_router_pda, false),
+                AccountMeta::new_readonly(self.cvnt_mint, false),
+                AccountMeta::new_readonly(self.buylock_vault_authority_pda, false),
+                AccountMeta::new(buylock_vault, false),
+                AccountMeta::new(depositor_ata, false),
+                AccountMeta::new(self.creator.pubkey(), true),
+                AccountMeta::new_readonly(self.token_program, false),
+            ],
+            data,
+        };
+        self.send_ix(ix).await
     }
 
     pub async fn accrue_once(&self) -> Result<()> {
@@ -421,6 +575,24 @@ impl SweepSplit {
     }
 }
 
+#[derive(Debug, Clone)]
+struct BuylockResult {
+    swap_sig: String,
+    deposit_sig: String,
+    cvnt_received: u64,
+}
+
+const ASSOCIATED_TOKEN_PROGRAM_ID_STR: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+fn derive_ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+    let ata_program = Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM_ID_STR).expect("valid pubkey");
+    Pubkey::find_program_address(
+        &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+        &ata_program,
+    )
+    .0
+}
+
 pub fn anchor_discriminator(method: &str) -> [u8; 8] {
     let mut hasher = Sha256::new();
     hasher.update(b"global:");
@@ -477,6 +649,8 @@ mod tests {
             min_sweep_lamports: 10_000_000,
             reserve_lamports: 50_000_000,
             min_accrue_lamports: 1_000_000,
+            jupiter_slippage_bps: 200,
+            min_buylock_lamports: 50_000_000,
             dry_run: false,
         }
     }

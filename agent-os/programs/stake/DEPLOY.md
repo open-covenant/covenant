@@ -3,6 +3,45 @@
 Program ID: `CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED`
 Keypair: `~/.config/solana/covenant-stake-program.json`
 
+## Mainnet status — LIVE
+
+Deployed and initialized on mainnet 2026-05-29.
+
+| Artifact | Address |
+|---|---|
+| Program | `CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED` |
+| Config PDA | `CNrBUGqrdj5WDTqfBPwyzURBmVThTfWTejqxSqme8EyC` |
+| FeeRouter PDA | `x5dMA3DariqtYRc9XMkGhPTMWiXQRjAFZTS9QZLif33` |
+| RewardVault PDA | `Bh3YKatgy4Sug1g24uFMHrgTQJ8tPFNqKQUqp4sPd4pn` |
+| locked_vault_authority PDA | `BfKVwAzAGpQnwWe5vTkHDnYUKsnjWR4F7CpZcUbgeFrz` |
+| buylock_vault_authority PDA | `D9ceemTHkfha5QPgnLjxnaTCtdNLvuPo3fP5g6kZTJK5` |
+| $CVNT mint (Token-2022) | `2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump` |
+| Locked-CVNT vault | `BbsG4c5kjLcBtfC5p1YUtrrkGwPorBYft72n2eFfmubN` |
+| Buy-and-lock vault | `3DjpSv7BttfCdtEq7P6N1w5FrNLXWNPohce3WHbqw8zf` |
+| Authority + pause_authority | `8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM` |
+| FeeRouter authority (creator wallet) | `2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb` |
+| Genesis position PDA | `GxCf7jACvmJBrBwrvnrdQMtx46jma79CUc9yRysqkCm6` |
+
+Mainnet launch transactions:
+- Program deploy: `2iv1S1JoEGLQk9DtgwTLx9MsyoMbyzvAv6wfx3dXfxrJsTTiC9bgYAvKfUBSKEyiEFWYBYNLdycLHWbrZwxjLUyQ`
+- Locked vault ATA: `5ApQzkck6SA2j9tkCoQHxbp8DiX1sGe5cBs2NMQQ3RAHWFuxhnXW9h4undiakbfVsJn4bexR3FKfhdKwLnBYj22g`
+- Buylock vault ATA: `G3AtteXtHJXJuuxLJDore6PW4ZmABmpWwrmCDDGiNg7TjbjzhFnMKtopkweynKa7FjPmvfghtc7q2kbwPzhK9eG`
+- Initialize: `ZjifAeeL3C21ztDm6pP4FHV4aoQTNL9KnqW24R3v8bP6xzet3iZUacbA4vS73XTUCFsPmgUmM8Ez6WthR1piy4T`
+- CVNT seed (10k from creator to deployer): `43QxVz67SRRDxxdpVB33Tz1cbsmVid8ZdMgrtb9HTXZSMHt1YAzJG2ZVXg55mGn59i6gk9zdkbSfat3ati71cdv5`
+- Genesis position (10k CVNT @ 30d): `38SHMY8cCekN1YMb8uCVGre2QCL8uNAwPrPHB99uutA2H45fLiwLwrzZeA9huCCRWn7PPx8wpSoUwuub1f1eXvTt`
+
+Configured parameters (per audit recommendations):
+- `min_lock_amount` = 10,000 CVNT
+- `fee_router_max_deposit_lamports` = 0.5 SOL
+- `fee_router_rate_limit_secs` = 60s
+- `max_active_locks` = 500
+
+Verify on-chain anytime:
+```bash
+solana program show CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED
+solana account CNrBUGqrdj5WDTqfBPwyzURBmVThTfWTejqxSqme8EyC
+```
+
 ## Devnet status — LIVE
 
 Deployed and initialized on devnet 2026-05-29. End-to-end smoke confirms the

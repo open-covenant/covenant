@@ -758,8 +758,7 @@ async fn protected_route_rejects_body_above_ipc_max_frame() {
 struct FailingPeerRegistry;
 
 fn outage_err() -> covenant_peer_auth::PeerError {
-    covenant_peer_auth::PeerError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    covenant_peer_auth::PeerError::Io(std::io::Error::other(
         "registry storage outage (test fixture)",
     ))
 }

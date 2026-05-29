@@ -76,4 +76,63 @@ describe("admitRun", () => {
     expect(second.ok).toBe(true);
     expect(ipBucket.snapshot().rejected).toBe(0);
   });
+
+  it("admits an exempt IP past the daily spend cap and reports exempt=true", () => {
+    // Operator-allowlisted IPs (CODER_EXEMPT_IPS) bypass the per-IP
+    // bucket and the daily/monthly caps so diagnostic traffic from the
+    // people maintaining the deployment isn't blocked by the
+    // intentionally-tight public cap. Concurrency and kill-switch still
+    // apply (covered by other tests).
+    const exhausted = new SpendLedger({ ...caps, dailyUsd: 0 });
+    const ipBucket = new IpBucket({ maxPerIp: 1, refillMs: 60_000 });
+
+    const blocked = admitRun({ ip: "9.9.9.9", ipBucket, ledger: exhausted, ipMaxPerIp: 1 });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.reason).toMatch(/daily/i);
+
+    const exempt = admitRun({
+      ip: "9.9.9.9",
+      ipBucket,
+      ledger: exhausted,
+      ipMaxPerIp: 1,
+      exemptIps: new Set(["9.9.9.9"]),
+    });
+    expect(exempt.ok).toBe(true);
+    if (exempt.ok) expect(exempt.exempt).toBe(true);
+    // The exempt path must not touch the per-IP bucket: a busy operator
+    // could otherwise queue behind their own bucket slot from a stale
+    // diagnostic run.
+    expect(ipBucket.snapshot().inflight).toBe(0);
+  });
+
+  it("still honors the kill-switch and the concurrency cap for an exempt IP", () => {
+    // The exemption only opens the daily/monthly caps and the per-IP
+    // bucket — it explicitly does NOT bypass the kill-switch or the
+    // concurrency cap. Operators expect SIGUSR1 to stop *every* run,
+    // not every run except theirs.
+    const killed = new SpendLedger(caps);
+    killed.kill();
+    const ipBucket = new IpBucket({ maxPerIp: 1, refillMs: 60_000 });
+
+    const result = admitRun({
+      ip: "9.9.9.9",
+      ipBucket,
+      ledger: killed,
+      ipMaxPerIp: 1,
+      exemptIps: new Set(["9.9.9.9"]),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/kill-switch/i);
+
+    const oversubscribed = new SpendLedger({ ...caps, maxConcurrent: 0 });
+    const result2 = admitRun({
+      ip: "9.9.9.9",
+      ipBucket,
+      ledger: oversubscribed,
+      ipMaxPerIp: 1,
+      exemptIps: new Set(["9.9.9.9"]),
+    });
+    expect(result2.ok).toBe(false);
+    if (!result2.ok) expect(result2.reason).toMatch(/capacity/i);
+  });
 });

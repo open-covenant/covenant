@@ -294,7 +294,7 @@ export function StakeClient() {
             <div className="mt-6 grid grid-cols-1 gap-4">
               <StatRow
                 label="Total weight locked"
-                value={config ? formatWithGrouping(config.totalWeight) : "—"}
+                value={config ? `${formatCvnt(config.totalWeight, { maxFrac: 0 })} CVNT-weighted` : "—"}
               />
               <StatRow
                 label="Lifetime SOL distributed"

@@ -146,7 +146,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <DetailRow
                 label="Total weight"
-                value={formatWithGrouping(config.totalWeight)}
+                value={`${formatCvnt(config.totalWeight, { maxFrac: 0 })} CVNT-weighted`}
               />
               <DetailRow
                 label="Pending pre-accrual"

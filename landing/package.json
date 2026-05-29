@@ -16,7 +16,15 @@
     "clsx": "^2.1.1",
     "tailwind-merge": "^3.6.0",
     "class-variance-authority": "^0.7.1",
-    "lucide-react": "^0.460.0"
+    "lucide-react": "^0.460.0",
+    "@solana/web3.js": "^1.95.5",
+    "@solana/wallet-adapter-base": "^0.9.27",
+    "@solana/wallet-adapter-react": "^0.15.39",
+    "@solana/wallet-adapter-wallets": "^0.19.37",
+    "@reown/appkit": "1.8.20",
+    "@reown/appkit-adapter-solana": "1.8.20",
+    "@noble/hashes": "^1.5.0",
+    "bs58": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^25",

@@ -8,6 +8,7 @@ export const TAGLINE = "Open infrastructure for agent-native computing";
 export const RELEASE_STATUS = "ALPHA LIVE";
 
 export const NAV_LINKS = [
+  { label: "stake", href: "/stake", external: false as const },
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },

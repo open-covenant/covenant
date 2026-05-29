@@ -35,3 +35,7 @@ spl-associated-token-account = "6.0"
 [[example]]
 name = "devnet_smoke"
 path = "examples/devnet_smoke.rs"
+
+[[example]]
+name = "mainnet_bootstrap"
+path = "examples/mainnet_bootstrap.rs"

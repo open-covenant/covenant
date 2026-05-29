@@ -144,18 +144,124 @@ covenant-stake-keeper run
 
 After verifying the dry-run logs print the expected split, set `COVENANT_STAKE_KEEPER_DRY_RUN=0` and let it run. The first real sweep moves SOL on chain.
 
-## Mainnet path (gated)
+## Mainnet path (live solo, no external audit gating)
 
-Mainnet locks-open MUST wait for:
+Audit fixes already applied (B1/B2/B3 blockers + H1/H3/H4 + M4/M8) — see commit `3de4711f`. The remaining gate is operational, not security: run a tight deploy sequence so the program is initialized, the genesis position is open, and the keeper is observing before any production SOL flows.
 
-1. External audit pass on the `covenant-stake-program` `.so` and matching commit SHA.
-2. Squads 3-of-5 multisig holding the program upgrade authority and the `Config.authority` field (call `update_authority` to hand off after `initialize`).
-3. Treasury recipient = a Squads vault, not a hot wallet.
-4. Legal opinion signed (Howey/MiCA framing per spec §5).
-5. Cloudflare geofence + ToS click-through wired on the frontend per spec §3.7.
-6. Real-yield inflow observable: pump.fun creator-fee inflow OR sandbox metered-tier USDC swap path producing > $50/week into the creator wallet (otherwise locks-open ships against zero distribution).
+### Pre-flight (5 min)
 
-Once those gates clear, the mainnet deploy is the same `solana program deploy` against `https://api.mainnet-beta.solana.com` with the Squads multisig as upgrade authority. The first mainnet `initialize` MUST be queued through Squads — the program's `Config.authority` field is set to the Squads vault from the first call.
+```bash
+# 1. Confirm wallet + balance
+solana config set --url mainnet-beta
+solana balance  # need ≥ 3 SOL on the deployer
+
+# 2. Confirm the creator wallet keypair is on disk and matches the pump.fun creator
+solana-keygen pubkey ~/.config/solana/covenant-creator-wallet.json
+# expected: 2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb
+
+# 3. Print PDAs you'll need
+cargo run --example mainnet_bootstrap -p covenant-stake-keeper -- pdas
+```
+
+### Deploy the program (5 min)
+
+```bash
+cd agent-os
+cargo build-sbf --manifest-path programs/stake/Cargo.toml
+solana program deploy \
+    --program-id ~/.config/solana/covenant-stake-program.json \
+    target/deploy/covenant_stake_program.so
+solana program show CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED
+```
+
+### Vault setup (5 min)
+
+```bash
+cargo run --example mainnet_bootstrap -p covenant-stake-keeper -- vault-setup
+# prints two spl-token commands; run each in a fresh terminal and record the ATA addresses
+```
+
+### Initialize (5 min)
+
+```bash
+# Decide pause_authority — separate device from deployer; can be the same wallet
+# imported into Phantom on your phone for fast-reach.
+cargo run --example mainnet_bootstrap -p covenant-stake-keeper -- initialize \
+    <locked_vault_ata> <buylock_vault_ata> <pause_authority_pubkey>
+```
+
+This sends `initialize` with the audit-recommended conservative parameters:
+
+| Param | Value | Why |
+|---|---|---|
+| `min_lock_amount` | 10_000 CVNT | High enough that lock-cap squat needs real capital |
+| `fee_router_max_deposit_lamports` | 0.5 SOL | Caps the per-deposit blast radius (B2 belt-and-suspenders) |
+| `fee_router_rate_limit_secs` | 60 | Standard cooldown |
+| `fee_router_authority` | creator wallet pubkey | So the same key signing the pump.fun fee claim also signs `deposit_sol_fees` |
+| `pause_authority` | (your hot pause key) | Fast-reach if anything looks off |
+| `authority` | (deployer keypair) | Held by you for v1; rotate to Squads when ready |
+
+### Genesis position (5 min)
+
+```bash
+cargo run --example mainnet_bootstrap -p covenant-stake-keeper -- genesis-position
+```
+
+Opens a 1k-CVNT position at the 30d tier from the deployer wallet. Two reasons:
+1. `total_weight > 0` immediately, so the keeper's first `deposit_sol_fees` doesn't trip the B2 guard.
+2. Public "founder is in the pool" signal.
+
+The CVNT for the genesis position must already be in your deployer's ATA. If not, transfer from Phantom first.
+
+### Frontend production env (5 min)
+
+In Vercel for the `landing` project, set:
+```
+NEXT_PUBLIC_SOLANA_CLUSTER=mainnet-beta
+NEXT_PUBLIC_SOLANA_RPC_URL=<your Helius mainnet RPC URL>
+```
+
+Redeploy. The `/stake`, `/positions`, `/treasury` routes now point at mainnet.
+
+### Keeper bring-up — DRY_RUN observation (24h)
+
+Deploy the keeper to Render via `agent-os/crates/covenant-stake-keeper/render.yaml`:
+
+1. New Render service → "Background Worker" → connect this repo
+2. Render reads `render.yaml` and creates the service with `DRY_RUN=1`
+3. Upload `~/.config/solana/covenant-creator-wallet.json` as a Render Secret File (path `/etc/secrets/covenant-creator-wallet.json`)
+4. Fill the `sync: false` env vars in the Render dashboard: `COVENANT_STAKE_KEEPER_RPC_URL`, `_TREASURY_RECIPIENT`, `_SUBSIDY_RECIPIENT`
+5. Deploy. Tail logs for one full sweep cycle (1h):
+
+```
+sweep split balance=2500000000 reserve=50000000 surplus=2450000000 stakers=612500000 buylock=612500000 treasury=735000000 subsidy=490000000
+dry_run: skipping actual sends
+```
+
+If the split numbers match what you expect, you're good to flip live.
+
+### Flip keeper live
+
+In Render dashboard, change `COVENANT_STAKE_KEEPER_DRY_RUN` to `0`, redeploy. Next sweep fires real tx. Watch for:
+- `deposited stakers SOL` log line
+- `sent treasury+subsidy cuts` log line
+- `buylock leg requires Jupiter SOL→CVNT swap … not implemented in v1` warn (expected, v1.1 work)
+
+### Post-launch first 48h
+
+- Watch the treasury page (`opencovenant.org/treasury`) — confirm `cumulative_sol_distributed` increments each sweep
+- Open `/positions` from your founder wallet — confirm you can claim
+- Confirm one external user can stake (test with a friend)
+- Schedule Squads handoff for `config.authority` and program upgrade authority
+
+### What this deploy does NOT include (v1.1 work)
+
+- Buy-and-lock Jupiter swap leg (keeper logs and skips)
+- Treasury + subsidy recipients on-chain (currently keeper env vars — H2 audit item)
+- Two-step authority handoff (M1)
+- Force-close-expired ix for abandoned positions
+- Token-2022 test coverage parity (production mint is Token-2022; tests use legacy SPL)
+- Cloudflare geofence + ToS click-through (not legally required for "just us" run; reconsider if scale grows)
 
 ## Soak protocol
 

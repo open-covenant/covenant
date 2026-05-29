@@ -1,0 +1,35 @@
+services:
+  - type: worker
+    name: covenant-stake-keeper
+    runtime: rust
+    rootDir: agent-os
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: cargo build --release -p covenant-stake-keeper --bin covenant-stake-keeper
+    startCommand: ./target/release/covenant-stake-keeper run
+    autoDeploy: true
+    envVars:
+      - key: RUST_LOG
+        value: covenant_stake_keeper=info
+      - key: COVENANT_STAKE_KEEPER_RPC_URL
+        sync: false
+      - key: COVENANT_STAKE_KEEPER_CREATOR_KEYPAIR
+        value: /etc/secrets/covenant-creator-wallet.json
+      - key: COVENANT_STAKE_KEEPER_TREASURY_RECIPIENT
+        sync: false
+      - key: COVENANT_STAKE_KEEPER_SUBSIDY_RECIPIENT
+        sync: false
+      - key: COVENANT_STAKE_KEEPER_DRY_RUN
+        value: "1"
+      - key: COVENANT_STAKE_KEEPER_SWEEP_INTERVAL_SECS
+        value: "3600"
+      - key: COVENANT_STAKE_KEEPER_ACCRUAL_INTERVAL_SECS
+        value: "21600"
+      - key: COVENANT_STAKE_KEEPER_MIN_SWEEP_LAMPORTS
+        value: "10000000"
+      - key: COVENANT_STAKE_KEEPER_RESERVE_LAMPORTS
+        value: "50000000"
+    secretFiles:
+      - name: covenant-creator-wallet.json
+        sync: false

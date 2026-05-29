@@ -77,6 +77,53 @@ export function tierMultiplier(bps: number): string {
   return `${(bps / 10_000).toFixed(2)}×`;
 }
 
+export function formatPercent(value: number, opts: { maxFrac?: number } = {}): string {
+  const maxFrac = opts.maxFrac ?? 2;
+  return `${value.toFixed(maxFrac)}%`;
+}
+
+/**
+ * Backward-looking annualised rate based on lifetime distributions.
+ * Returns null if the protocol has no time, no distributions, or no TVL.
+ *
+ *   trailing_rate = (cumulative_sol / years_since_init) / tvl_in_sol
+ *
+ * This is NOT an APY promise — it is the rate the protocol would
+ * implicitly run at IF it kept distributing at its lifetime average,
+ * which is unlikely to be exact going forward.
+ */
+export function trailingAnnualisedRate(opts: {
+  cumulativeSolLamports: bigint;
+  initializedTs: bigint;
+  totalWeightCvnt: bigint;
+  multiplier?: number;
+  solPerCvnt?: number;
+}): number | null {
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const elapsed = Number(now - opts.initializedTs);
+  if (elapsed <= 0) return null;
+  if (opts.cumulativeSolLamports === 0n) return null;
+  if (opts.totalWeightCvnt === 0n) return null;
+  const yearsElapsed = elapsed / (365.25 * 86_400);
+  const cumulativeSol = Number(opts.cumulativeSolLamports) / 1e9;
+  const annualisedSol = cumulativeSol / yearsElapsed;
+  // Convert TVL from raw CVNT (6 decimals) to a SOL-denominated TVL using
+  // a sol/CVNT price ratio supplied by the caller (defaults to 0 which
+  // makes the rate undefined and we return null).
+  const tvlCvnt = Number(opts.totalWeightCvnt) / 1e6;
+  if (!opts.solPerCvnt || opts.solPerCvnt <= 0) {
+    // No price — return a CVNT-denominated rate instead (annualised SOL
+    // per locked-CVNT-weight).
+    if (tvlCvnt <= 0) return null;
+    const ratePerCvntPerYear = annualisedSol / tvlCvnt;
+    // Caller can scale this into a percent. We return as-is.
+    return ratePerCvntPerYear;
+  }
+  const tvlSol = tvlCvnt * opts.solPerCvnt;
+  if (tvlSol <= 0) return null;
+  return (annualisedSol / tvlSol) * 100;
+}
+
 export function relativeFromNow(unixTs: bigint): string {
   const target = Number(unixTs) * 1000;
   const now = Date.now();

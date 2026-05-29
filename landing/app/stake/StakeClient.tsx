@@ -27,6 +27,20 @@ import {
 } from "../../lib/stake/readers";
 import { formatCvnt, formatSol, formatWithGrouping, parseCvntInput, shortAddr } from "../../lib/stake/format";
 
+function computeTrailingRate(config: ConfigState | null): string {
+  if (!config || config.cumulativeSolDistributed === 0n) return "—";
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const elapsed = Number(now - config.initializedTs);
+  if (elapsed <= 0) return "—";
+  if (config.totalWeight === 0n) return "—";
+  const yearsElapsed = elapsed / (365.25 * 86_400);
+  const cumulativeSol = Number(config.cumulativeSolDistributed) / 1e9;
+  const tvlWeight = Number(config.totalWeight) / 1e6;
+  if (tvlWeight <= 0) return "—";
+  const solPerWeightPerYear = cumulativeSol / yearsElapsed / tvlWeight;
+  return `${(solPerWeightPerYear * 1000).toFixed(4)} mSOL / CVNT-weight / yr`;
+}
+
 type TxState =
   | { phase: "idle" }
   | { phase: "submitting" }
@@ -291,6 +305,11 @@ export function StakeClient() {
                 }
               />
               <StatRow
+                label="Trailing rate"
+                value={computeTrailingRate(config)}
+                hint="Lifetime SOL distributed ÷ time elapsed ÷ total weight. Backward-looking; not indicative of future amounts."
+              />
+              <StatRow
                 label="Active positions"
                 value={config ? `${config.activeLockCount} / ${config.maxActiveLocks}` : "—"}
               />
@@ -367,7 +386,7 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
 
 function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6 backdrop-blur-sm sm:p-8">
+    <section className="rounded-md border border-neutral-900/80 p-6 sm:p-8">
       {children}
     </section>
   );
@@ -442,11 +461,14 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
-      <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">{label}</div>
-      <div className="font-mono text-base text-neutral-100">{value}</div>
+    <div className="border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">{label}</div>
+        <div className="font-mono text-base text-neutral-100">{value}</div>
+      </div>
+      {hint && <div className="mt-1 text-[10px] leading-relaxed text-neutral-600">{hint}</div>}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { useState } from "react";
 type Status = "idle" | "sending" | "sent" | "error";
 
 const field =
-  "w-full border border-neutral-800 bg-transparent px-3 py-3 text-[13px] text-neutral-100 placeholder:text-neutral-600 outline-none transition-colors focus:border-neutral-500 sm:text-[14px]";
+  "w-full border border-neutral-800 bg-neutral-950/50 px-3 py-3 text-[13px] text-neutral-100 placeholder:text-neutral-600 outline-none backdrop-blur-sm transition-colors focus:border-neutral-500 focus:bg-neutral-950/70 sm:text-[14px]";
 const label =
   "mb-2 block text-[10px] uppercase tracking-[0.3em] text-neutral-500";
 
@@ -94,7 +94,7 @@ export function ContactForm() {
         <button
           type="submit"
           disabled={status === "sending"}
-          className="border border-neutral-700 px-6 py-3 text-[11px] uppercase tracking-[0.25em] text-neutral-200 transition-colors hover:border-neutral-400 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="border border-neutral-700 bg-neutral-950/50 px-6 py-3 text-[11px] uppercase tracking-[0.25em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-400 hover:bg-neutral-950/70 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {status === "sending" ? "Sending" : "Send"}
         </button>

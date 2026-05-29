@@ -1,0 +1,23 @@
+[package]
+name = "covenant-hyre"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Hyre x402 provider profile for Covenant — manifest-driven catalog + MCP tools over the generic x402 gateway."
+
+[dependencies]
+covenant-x402 = { path = "../covenant-x402" }
+covenant-mcp = { path = "../covenant-mcp" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+base64 = "0.22"

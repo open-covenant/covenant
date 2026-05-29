@@ -309,6 +309,52 @@ async fn main() -> Result<()> {
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);
 
+    let server = match x402_dispatch_config_from_env() {
+        Some(cfg) => {
+            info!(
+                signer = %cfg.signer_binary.display(),
+                "x402 outbound dispatch enabled"
+            );
+            server.with_x402_dispatch(cfg)
+        }
+        None => server,
+    };
+
+    let server = match hyre_config_from_env() {
+        Some(cfg) => {
+            // Prefer the live manifest so a restart picks up Hyre's
+            // current endpoints; fall back to the vendored copy offline.
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let catalog = match covenant_hyre::HyreCatalog::refresh(&client, &cfg).await {
+                Ok(c) => {
+                    info!(source = "manifest", base_url = %cfg.base_url, "hyre catalog loaded");
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "hyre manifest refresh failed; using vendored catalog");
+                    covenant_hyre::HyreCatalog::from_vendored(&cfg).ok()
+                }
+            };
+            match catalog {
+                Some(catalog) => {
+                    info!(
+                        endpoints = catalog.endpoints().len(),
+                        "hyre provider enabled"
+                    );
+                    server.with_hyre(covenantd::hyre::HyreState::new(catalog, cfg))
+                }
+                None => {
+                    tracing::warn!("hyre catalog unavailable; provider disabled");
+                    server
+                }
+            }
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -569,6 +615,105 @@ async fn bootstrap_operator_token(
     peers.register(entry).await?;
     info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
     Ok(())
+}
+
+/// Build the outbound x402 dispatch config from env, or return None
+/// when the operator hasn't opted in. Returning None keeps the daemon
+/// running fully offline-from-payments — every `Request::PayX402`
+/// will surface "not configured" until the operator sets these vars
+/// and restarts.
+///
+/// Required when opted in:
+/// - `COVENANT_X402_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_X402_SIGNER_BINARY` — path to a built
+///   `covenant-x402-signer` binary
+///
+/// Forwarded to the sidecar via its env:
+/// - `COVENANT_X402_FUNDING_KEYPAIR` — funding keypair JSON path
+/// - `COVENANT_X402_RPC_URL` — Solana RPC URL
+fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
+    let enabled = std::env::var("COVENANT_X402_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let signer_binary = match std::env::var("COVENANT_X402_SIGNER_BINARY") {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => {
+            tracing::warn!(
+                "COVENANT_X402_ENABLED is set but COVENANT_X402_SIGNER_BINARY is not; outbound x402 dispatch will remain disabled"
+            );
+            return None;
+        }
+    };
+    let mut signer_env = Vec::new();
+    for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
+        if let Ok(v) = std::env::var(key) {
+            signer_env.push((key.to_string(), v));
+        }
+    }
+    Some(covenantd::x402::X402Config {
+        enabled: true,
+        signer_binary,
+        signer_env,
+    })
+}
+
+/// Build the Hyre provider config from env, or None when the operator
+/// hasn't opted in. The catalog itself loads from the vendored manifest;
+/// these vars only tune the rail and the spend policy.
+///
+/// - `COVENANT_HYRE_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_HYRE_BASE_URL` — override the API host (optional)
+/// - `COVENANT_HYRE_NETWORK` / `COVENANT_HYRE_ASSET` — override the
+///   settlement rail if Hyre's challenge ever diverges (optional)
+/// - `COVENANT_HYRE_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
+/// - `COVENANT_HYRE_ALLOW` — comma-separated endpoint slug allowlist (optional)
+/// - `COVENANT_HYRE_MARKUP_BPS` — resale markup in basis points (optional)
+fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
+    let enabled = std::env::var("COVENANT_HYRE_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_hyre::HyreConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_HYRE_BASE_URL") {
+        cfg.base_url = url;
+    }
+    if let Ok(network) = std::env::var("COVENANT_HYRE_NETWORK") {
+        cfg.network = network;
+    }
+    if let Ok(asset) = std::env::var("COVENANT_HYRE_ASSET") {
+        cfg.asset = asset;
+    }
+    if let Ok(cap) = std::env::var("COVENANT_HYRE_PER_CALL_CAP") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.per_call_cap = n,
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_HYRE_PER_CALL_CAP")
+            }
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_HYRE_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(bps) = std::env::var("COVENANT_HYRE_MARKUP_BPS") {
+        match bps.trim().parse() {
+            Ok(n) => cfg.markup_bps = n,
+            Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_HYRE_MARKUP_BPS"),
+        }
+    }
+    Some(cfg)
 }
 
 /// Mask secret query params (api keys, tokens) in a URL before logging it,

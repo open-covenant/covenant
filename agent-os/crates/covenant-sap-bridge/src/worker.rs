@@ -82,8 +82,7 @@ where
             .map_err(|e| BridgeError::Worker(format!("close stdin: {e}")))?;
     }
 
-    let output = match tokio::time::timeout(config.worker_timeout, child.wait_with_output()).await
-    {
+    let output = match tokio::time::timeout(config.worker_timeout, child.wait_with_output()).await {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => return Err(BridgeError::Worker(format!("wait: {e}"))),
         Err(_) => {

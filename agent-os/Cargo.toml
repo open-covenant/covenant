@@ -17,6 +17,8 @@ members = [
     "crates/covenant-a2a",
     "crates/covenant-peer-auth",
     "crates/covenant-budget",
+    "crates/covenant-x402",
+    "crates/covenant-hyre",
     "crates/covenant-sap-bridge",
     "crates/covenantd",
     "crates/covenant",

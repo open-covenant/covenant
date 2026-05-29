@@ -21,6 +21,7 @@ Deployed and initialized on mainnet 2026-05-29.
 | Authority + pause_authority | `8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM` |
 | FeeRouter authority (creator wallet) | `2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb` |
 | Genesis position PDA | `GxCf7jACvmJBrBwrvnrdQMtx46jma79CUc9yRysqkCm6` |
+| Render keeper service | `srv-d8cm9kh9rddc73ddhceg` (https://dashboard.render.com/worker/srv-d8cm9kh9rddc73ddhceg) |
 
 Mainnet launch transactions:
 - Program deploy: `2iv1S1JoEGLQk9DtgwTLx9MsyoMbyzvAv6wfx3dXfxrJsTTiC9bgYAvKfUBSKEyiEFWYBYNLdycLHWbrZwxjLUyQ`
@@ -284,7 +285,10 @@ If the split numbers match what you expect, you're good to flip live.
 In Render dashboard, change `COVENANT_STAKE_KEEPER_DRY_RUN` to `0`, redeploy. Next sweep fires real tx. Watch for:
 - `deposited stakers SOL` log line
 - `sent treasury+subsidy cuts` log line
-- `buylock leg requires Jupiter SOL→CVNT swap … not implemented in v1` warn (expected, v1.1 work)
+- `jupiter quote received` + `buylock leg complete` (the buy-and-lock leg routes through Jupiter v6, swaps 25% of the sweep SOL into $CVNT, and routes it into the locked vault via `deposit_buylock_cvnt`)
+- If buylock dips below `min_buylock_lamports` (default 50M = 0.05 SOL), the log will show `buylock leg below min — deferred to next sweep` instead
+
+Failure modes are by-design observable, not silent: any leg that fails logs a `warn` with the error and the next sweep retries it independently. No partial state is ever committed.
 
 ### Post-launch first 48h
 

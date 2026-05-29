@@ -194,19 +194,25 @@ export async function fetchOwnerTokenAccountsForMint(
 ): Promise<OwnedTokenAccount[]> {
   const resp = await connection.getParsedTokenAccountsByOwner(
     owner,
-    { mint },
+    { programId: tokenProgramId },
     "confirmed",
   );
+  const mintStr = mint.toBase58();
   return resp.value
-    .filter((acc) => acc.account.owner.equals(tokenProgramId))
     .map((acc) => {
-      const info = (acc.account.data as { parsed: { info: { tokenAmount: { amount: string } } } })
-        .parsed.info.tokenAmount;
+      const info = (
+        acc.account.data as {
+          parsed: { info: { mint: string; tokenAmount: { amount: string } } };
+        }
+      ).parsed.info;
       return {
         pubkey: acc.pubkey,
-        amount: BigInt(info.amount),
+        mint: info.mint,
+        amount: BigInt(info.tokenAmount.amount),
       };
-    });
+    })
+    .filter((a) => a.mint === mintStr)
+    .map(({ pubkey, amount }) => ({ pubkey, amount }));
 }
 
 export function pickStakeSource(accounts: OwnedTokenAccount[]): OwnedTokenAccount | null {

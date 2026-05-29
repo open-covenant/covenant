@@ -4,7 +4,7 @@ services:
     runtime: rust
     rootDir: agent-os
     plan: starter
-    region: oregon
+    region: frankfurt
     branch: main
     buildCommand: cargo build --release -p covenant-stake-keeper --bin covenant-stake-keeper
     startCommand: ./target/release/covenant-stake-keeper run

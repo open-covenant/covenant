@@ -21,7 +21,7 @@ Deployed and initialized on mainnet 2026-05-29.
 | Authority + pause_authority | `8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM` |
 | FeeRouter authority (creator wallet) | `2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb` |
 | Genesis position PDA | `GxCf7jACvmJBrBwrvnrdQMtx46jma79CUc9yRysqkCm6` |
-| Render keeper service | `srv-d8cm9kh9rddc73ddhceg` (https://dashboard.render.com/worker/srv-d8cm9kh9rddc73ddhceg) |
+| Render keeper service | `srv-d8cnp3c2m8qs73d7mmi0` (Frankfurt) (https://dashboard.render.com/worker/srv-d8cnp3c2m8qs73d7mmi0) |
 
 Mainnet launch transactions:
 - Program deploy: `2iv1S1JoEGLQk9DtgwTLx9MsyoMbyzvAv6wfx3dXfxrJsTTiC9bgYAvKfUBSKEyiEFWYBYNLdycLHWbrZwxjLUyQ`

@@ -3,35 +3,20 @@ mod common;
 use common::*;
 
 #[test]
-fn deposit_with_zero_weight_leaves_pending_for_first_locker() {
+fn deposit_rejected_when_no_active_stakers() {
     let mut env = boot();
-    // No positions yet — total_weight is 0, internal_accrue should be a no-op
-    // BUT deposit still moves SOL into the reward vault. Actually no — when
-    // there's no locker, internal_accrue is a no-op, so pending_sol_lamports
-    // grows. First locker on create_position folds it before adding their weight.
+    let err = deposit_sol_fees(&mut env, 500_000_000)
+        .expect_err("deposit must reject when no stakers exist");
+    assert_eq!(custom_error(&err), Some(E_NO_ACTIVE_STAKERS));
 
-    deposit_sol_fees(&mut env, 500_000_000).expect("deposit while empty");
-    let cfg = config_state(&env);
-    assert_eq!(cfg.pending_sol_lamports, 500_000_000);
-    assert_eq!(cfg.acc_sol_per_weight, 0);
-
-    // First locker triggers fold-before-add via internal_accrue called at top
-    // of create_position. They should NOT earn against the pending pool.
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
     create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
         .expect("create");
 
-    // Pending was 500M with total_weight=0 → fold is no-op (returns early).
-    // It remains pending. Next deposit will fold it together with the new amount.
-    let cfg = config_state(&env);
-    assert_eq!(cfg.pending_sol_lamports, 500_000_000);
-    assert_eq!(cfg.total_weight, MIN_LOCK_AMOUNT as u128);
-
-    advance_clock(&mut env, RATE_LIMIT_SECS);
-    deposit_sol_fees(&mut env, 0_500_000_000).expect("second deposit folds prior");
+    deposit_sol_fees(&mut env, 500_000_000).expect("deposit after first locker");
     let cfg = config_state(&env);
     assert_eq!(cfg.pending_sol_lamports, 0);
-    assert_eq!(cfg.cumulative_sol_distributed, 1_000_000_000);
+    assert_eq!(cfg.cumulative_sol_distributed, 500_000_000);
     assert!(cfg.acc_sol_per_weight > 0);
 }
 
@@ -150,22 +135,19 @@ fn tier_multipliers_apply_correctly_in_weight_math() {
 }
 
 #[test]
-fn fees_deposited_before_first_locker_distribute_to_them_via_next_deposit() {
+fn b2_regression_no_active_stakers_blocks_deposit() {
+    // Defense in depth: even after a position is opened and closed, if
+    // total_weight returns to 0, deposits must reject again.
     let mut env = boot();
-    deposit_sol_fees(&mut env, 500_000_000).expect("deposit before any locker");
-    assert_eq!(config_state(&env).pending_sol_lamports, 500_000_000);
-
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
     create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
         .expect("create");
-
-    advance_clock(&mut env, RATE_LIMIT_SECS);
-    deposit_sol_fees(&mut env, 1).expect("triggering deposit folds the orphan pending");
-
-    let before = sol_balance(&env, &owner.pubkey());
+    deposit_sol_fees(&mut env, 100_000_000).expect("deposit while active");
     claim(&mut env, &owner, 1).expect("claim");
-    let after = sol_balance(&env, &owner.pubkey());
-    let received = after - before;
-    assert!(received >= 500_000_000, "received {}", received);
-    assert!(received <= 500_000_001 + 100, "received {}", received);
+    advance_clock(&mut env, TIER_30D_SECS + 1);
+    close_position(&mut env, &owner, &ata, 1).expect("close");
+
+    let err = deposit_sol_fees(&mut env, 50_000_000)
+        .expect_err("post-close deposit must reject");
+    assert_eq!(custom_error(&err), Some(E_NO_ACTIVE_STAKERS));
 }

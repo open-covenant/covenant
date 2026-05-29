@@ -99,6 +99,7 @@ pub fn boot() -> Env {
     let config = config_pda();
     let fee_router = fee_router_pda();
     let reward_vault = reward_vault_pda();
+    let program_data = inject_program_data(&mut svm, payer.pubkey());
 
     let data = ix::Initialize {
         args: InitializeArgs {
@@ -121,6 +122,7 @@ pub fn boot() -> Env {
         AccountMeta::new_readonly(locked_cvnt_vault, false),
         AccountMeta::new_readonly(buylock_cvnt_vault, false),
         AccountMeta::new(payer.pubkey(), true),
+        AccountMeta::new_readonly(program_data, false),
         AccountMeta::new_readonly(spl_token::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
@@ -354,8 +356,8 @@ pub fn accrue(env: &mut Env) -> Result<(), TransactionError> {
     )
 }
 
-pub fn set_pause(env: &mut Env, signer: &Keypair, paused: bool) -> Result<(), TransactionError> {
-    let data = ix::SetPause { paused }.data();
+pub fn pause(env: &mut Env, signer: &Keypair) -> Result<(), TransactionError> {
+    let data = ix::Pause {}.data();
     let metas = vec![
         AccountMeta::new(env.config, false),
         AccountMeta::new_readonly(signer.pubkey(), true),
@@ -372,6 +374,121 @@ pub fn set_pause(env: &mut Env, signer: &Keypair, paused: bool) -> Result<(), Tr
         }],
         &[&signer_kp],
     )
+}
+
+pub fn unpause(env: &mut Env, authority: &Keypair) -> Result<(), TransactionError> {
+    let data = ix::Unpause {}.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    let auth_kp = authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&auth_kp],
+    )
+}
+
+pub fn update_min_lock_amount(
+    env: &mut Env,
+    authority: &Keypair,
+    new_min: u64,
+) -> Result<(), TransactionError> {
+    let data = ix::UpdateMinLockAmount { new_min }.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    let auth_kp = authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&auth_kp],
+    )
+}
+
+pub fn update_max_active_locks(
+    env: &mut Env,
+    authority: &Keypair,
+    new_max: u32,
+) -> Result<(), TransactionError> {
+    let data = ix::UpdateMaxActiveLocks { new_max }.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    let auth_kp = authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&auth_kp],
+    )
+}
+
+pub fn update_authority(
+    env: &mut Env,
+    authority: &Keypair,
+    new_authority: Pubkey,
+) -> Result<(), TransactionError> {
+    let data = ix::UpdateAuthority { new_authority }.data();
+    let metas = vec![
+        AccountMeta::new(env.config, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    let auth_kp = authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&auth_kp],
+    )
+}
+
+pub fn inject_program_data(svm: &mut LiteSVM, upgrade_authority: Pubkey) -> Pubkey {
+    use solana_sdk::account::Account as SolAccount;
+    use solana_sdk::bpf_loader_upgradeable;
+    let (pd_addr, _) = Pubkey::find_program_address(&[ID.as_ref()], &bpf_loader_upgradeable::ID);
+    let mut data = vec![3u8, 0, 0, 0];
+    data.extend_from_slice(&0u64.to_le_bytes());
+    data.push(1);
+    data.extend_from_slice(upgrade_authority.as_ref());
+    let lamports = svm.minimum_balance_for_rent_exemption(data.len());
+    svm.set_account(
+        pd_addr,
+        SolAccount {
+            lamports,
+            data,
+            owner: bpf_loader_upgradeable::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+    pd_addr
 }
 
 pub fn rotate_fee_router(
@@ -544,6 +661,8 @@ pub const E_INSUFFICIENT_REWARD_VAULT: u32 = 6012;
 pub const E_NOTHING_TO_CLAIM: u32 = 6013;
 pub const E_ZERO_AMOUNT: u32 = 6014;
 pub const E_INVALID_PARAMETER: u32 = 6015;
+pub const E_NO_ACTIVE_STAKERS: u32 = 6016;
+pub const E_INVALID_MINT_DECIMALS: u32 = 6017;
 
 pub const TIER_30D_BPS: u16 = 10_000;
 pub const TIER_90D_BPS: u16 = 15_000;

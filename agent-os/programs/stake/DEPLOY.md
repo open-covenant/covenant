@@ -21,15 +21,22 @@ Deployed and initialized on devnet 2026-05-29. End-to-end smoke confirms the
 | Buy-and-lock vault | `Drh3yZYHDekF1i3PFLH1JcVUkcNeJsc51YD6bvL8vy3j` |
 | Authority + pause + fee_router (smoke) | `8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM` |
 
-Smoke transactions:
+Smoke transactions (initial v0 deploy + lifecycle):
 - Deploy: `45gtgGHfUEuB6nBtMfVSfAGQt2EqQoya2kXYWypCEBGuFpNQtGtzEWRjB6kXtxWCFpx9C6YLxfMBgK73jgxHFwAW`
 - Initialize: `4htTj2GMbdQ1oEh1JDkbDtnseNrzj3C3juZBMUwidXWv6neUSvREmo1Hb3noWZXTWzJdJxbNUPP1VtHVsCA6tQ1W`
-- create_position: `54qSP8S4vo6fwWccAk4RPTfy5ej24XQXsRrtMXnt8BcnzVKGJBZ4n8qCy96MW76FWvbtMjZptgFGkMANYAPYhjoA`
+- create_position (nonce=1): `54qSP8S4vo6fwWccAk4RPTfy5ej24XQXsRrtMXnt8BcnzVKGJBZ4n8qCy96MW76FWvbtMjZptgFGkMANYAPYhjoA`
 - deposit_sol_fees: `25ub2vt6ekhYMJsHjrgdqZW1xiysuuYSZexC678hkmrNF2i6QzfdjhprjrX7fCKyTsxZY8nCc1Y2F1MpVoYNZAW3`
 - claim: `3t1v5FCfNNfEjZsXzozruQC3r2GdAmgsmEUgs63Ef41UUmHJ7DfBBGNUYhucP1AGDKs1yQB8b1CTKSFckQuBAMBt`
 
-Single locker absorbed 1_000_000 lamports of a 1_000_000-lamport deposit
-exactly — accumulator math matches litesvm.
+Audit-fix upgrade + 2-locker pro-rata validation:
+- Upgrade: `2sbzRCPhJjE4hhtwRUzKKFUz7wNxeuFC2XNthgVyBqRLobsiYotByQrQ995h4Q68a5sn9E9qq3XSWnruXtdehsUF`
+- create_position (nonce=2): `3PDG2Q8jJXPoVRrW6F9aFEFemytmKoSki8KcPAbWeCvQXZgv76vQSQX9JErEqUAXCg1eF9biUfLpD2DZt1BA9y3W`
+- deposit_sol_fees (1M lamports): `4EiZxnFbBeTsrPBGFUKRDaXb3wocf1neJipeSCNCyPdikh46U2HTC2qqB52fooLLTJ34JSmxfb6ViJBuiLrQgvU8`
+- claim: `5YgdDmSFeLrd2kRbeyzswu86NUBUqgmYcvrFMwcLQu2QShnurkGu7QHt4pVQbuPw4cKGzH2AyD8MNe5rF7smp6iq`
+
+First smoke: single locker absorbed 1_000_000 lamports of a 1_000_000-lamport
+deposit exactly. Second smoke after audit upgrade: two lockers with equal
+weight split 1M lamports 500k/500k, matching the accumulator math.
 
 Reproduce the smoke locally with:
 

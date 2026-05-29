@@ -85,6 +85,10 @@ fn main() -> Result<()> {
             };
             init_args.serialize(&mut data)?;
 
+            let (program_data, _) = Pubkey::find_program_address(
+                &[program_id.as_ref()],
+                &solana_sdk::bpf_loader_upgradeable::ID,
+            );
             let metas = vec![
                 AccountMeta::new(config_pda, false),
                 AccountMeta::new(fee_router_pda, false),
@@ -95,6 +99,7 @@ fn main() -> Result<()> {
                 AccountMeta::new_readonly(locked_vault, false),
                 AccountMeta::new_readonly(buylock_vault, false),
                 AccountMeta::new(deployer.pubkey(), true),
+                AccountMeta::new_readonly(program_data, false),
                 AccountMeta::new_readonly(spl_token::ID, false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ];
@@ -160,8 +165,14 @@ fn main() -> Result<()> {
             )?;
             send(&rpc, &deployer, &[mint_to_ix], &[])?;
 
-            // create_position(nonce=1, amount=2_000_000_000, tier=10_000 bps)
-            let nonce: u64 = 1;
+            // Use a unique nonce per smoke run so subsequent invocations don't
+            // collide on the [b"stake_v2", user, nonce] PDA. We generate a
+            // random user above so the seed combination stays unique either
+            // way, but explicit args.get(3) lets the operator override.
+            let nonce: u64 = args
+                .get(3)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
             let amount: u64 = 2_000_000_000;
             let tier_bps: u16 = 10_000;
             let (position_pda, _) = Pubkey::find_program_address(

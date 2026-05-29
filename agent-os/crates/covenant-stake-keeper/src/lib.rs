@@ -270,21 +270,28 @@ impl Keeper {
             return Ok(());
         }
 
+        // Each leg runs and logs independently. A failure on one leg does
+        // NOT abort the cycle — drift across cycles is preferable to losing
+        // a whole sweep because of a single transient RPC error.
         if split.stakers > 0 {
-            let sig = self.send_deposit_sol_fees(split.stakers).await?;
-            info!(sig = %sig, lamports = split.stakers, "deposited stakers SOL");
+            match self.send_deposit_sol_fees(split.stakers).await {
+                Ok(sig) => info!(sig = %sig, lamports = split.stakers, "deposited stakers SOL"),
+                Err(e) => warn!(error = %e, lamports = split.stakers, "stakers leg failed; continuing"),
+            }
         }
-        if split.treasury > 0 {
-            let sig = self
-                .send_system_transfer(&self.treasury, split.treasury)
-                .await?;
-            info!(sig = %sig, lamports = split.treasury, "sent treasury cut");
-        }
-        if split.subsidy > 0 {
-            let sig = self
-                .send_system_transfer(&self.subsidy, split.subsidy)
-                .await?;
-            info!(sig = %sig, lamports = split.subsidy, "sent subsidy cut");
+        if split.treasury > 0 || split.subsidy > 0 {
+            match self
+                .send_treasury_and_subsidy(split.treasury, split.subsidy)
+                .await
+            {
+                Ok(sig) => info!(
+                    sig = %sig,
+                    treasury = split.treasury,
+                    subsidy = split.subsidy,
+                    "sent treasury+subsidy cuts"
+                ),
+                Err(e) => warn!(error = %e, "treasury+subsidy leg failed; continuing"),
+            }
         }
         if split.buylock > 0 {
             warn!(
@@ -322,9 +329,23 @@ impl Keeper {
         self.send_ix(ix).await
     }
 
-    async fn send_system_transfer(&self, to: &Pubkey, amount: u64) -> Result<String> {
-        let ix = system_instruction::transfer(&self.creator.pubkey(), to, amount);
-        self.send_ix(ix).await
+    async fn send_treasury_and_subsidy(&self, treasury: u64, subsidy: u64) -> Result<String> {
+        let mut ixs = Vec::with_capacity(2);
+        if treasury > 0 {
+            ixs.push(system_instruction::transfer(
+                &self.creator.pubkey(),
+                &self.treasury,
+                treasury,
+            ));
+        }
+        if subsidy > 0 {
+            ixs.push(system_instruction::transfer(
+                &self.creator.pubkey(),
+                &self.subsidy,
+                subsidy,
+            ));
+        }
+        self.send_ixs(&ixs).await
     }
 
     async fn send_accrue(&self) -> Result<String> {
@@ -338,13 +359,17 @@ impl Keeper {
     }
 
     async fn send_ix(&self, ix: Instruction) -> Result<String> {
+        self.send_ixs(&[ix]).await
+    }
+
+    async fn send_ixs(&self, ixs: &[Instruction]) -> Result<String> {
         let blockhash = self
             .rpc
             .get_latest_blockhash()
             .await
             .context("get latest blockhash")?;
         let tx = Transaction::new_signed_with_payer(
-            &[ix],
+            ixs,
             Some(&self.creator.pubkey()),
             &[self.creator.as_ref()],
             blockhash,

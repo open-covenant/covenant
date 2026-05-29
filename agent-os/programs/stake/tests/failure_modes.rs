@@ -24,7 +24,7 @@ fn create_position_rejects_amount_below_minimum() {
 fn create_position_rejected_while_paused() {
     let mut env = boot();
     let pause_kp = env.pause_keypair.insecure_clone();
-    set_pause(&mut env, &pause_kp, true).expect("set_pause");
+    pause(&mut env, &pause_kp).expect("pause");
 
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
     let err = create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
@@ -33,13 +33,17 @@ fn create_position_rejected_while_paused() {
 }
 
 #[test]
-fn pause_authority_cannot_unpause_then_authority_can() {
+fn pause_authority_can_pause_but_not_unpause() {
     let mut env = boot();
     let pause_kp = env.pause_keypair.insecure_clone();
-    set_pause(&mut env, &pause_kp, true).expect("pause via pause_authority");
+    pause(&mut env, &pause_kp).expect("pause via pause_authority");
     assert!(config_state(&env).paused);
 
-    set_pause(&mut env, &pause_kp, false).expect("unpause via pause_authority");
+    let err = unpause(&mut env, &pause_kp).expect_err("pause_authority cannot unpause");
+    assert_eq!(custom_error(&err), Some(E_UNAUTHORIZED_AUTHORITY));
+
+    let authority = env.payer.insecure_clone();
+    unpause(&mut env, &authority).expect("authority can unpause");
     assert!(!config_state(&env).paused);
 }
 
@@ -48,7 +52,7 @@ fn unauthorized_signer_cannot_pause() {
     let mut env = boot();
     let stranger = Keypair::new();
     env.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    let err = set_pause(&mut env, &stranger, true).expect_err("stranger cannot pause");
+    let err = pause(&mut env, &stranger).expect_err("stranger cannot pause");
     assert_eq!(custom_error(&err), Some(E_UNAUTHORIZED_AUTHORITY));
 }
 

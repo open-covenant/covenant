@@ -18,6 +18,7 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_lang::system_program;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
@@ -69,6 +70,48 @@ pub const DEFAULT_FEE_ROUTER_RATE_LIMIT_SECS: i64 = 60;
 /// Default FeeRouter max per-deposit cap (5 SOL).
 pub const DEFAULT_FEE_ROUTER_MAX_DEPOSIT_LAMPORTS: u64 = 5_000_000_000;
 
+/// $CVNT decimals — enforced at initialize so DEFAULT_MIN_LOCK_AMOUNT and
+/// downstream unit math always reference the same base.
+pub const EXPECTED_MINT_DECIMALS: u8 = 6;
+
+/// Layout offsets into a BPF UpgradeableLoaderState::ProgramData account.
+const PD_OPT_TAG_OFFSET: usize = 12;
+const PD_AUTHORITY_OFFSET: usize = 13;
+const PD_AUTHORITY_END: usize = PD_AUTHORITY_OFFSET + 32;
+
+fn verify_upgrade_authority(program_data: &AccountInfo, signer: &Pubkey) -> Result<()> {
+    require_keys_eq!(
+        *program_data.owner,
+        bpf_loader_upgradeable::ID,
+        CovenantStakeError::UnauthorizedAuthority
+    );
+    let (expected_pd, _) =
+        Pubkey::find_program_address(&[crate::ID.as_ref()], &bpf_loader_upgradeable::ID);
+    require_keys_eq!(
+        program_data.key(),
+        expected_pd,
+        CovenantStakeError::UnauthorizedAuthority
+    );
+    let data = program_data.try_borrow_data()?;
+    require!(
+        data.len() >= PD_AUTHORITY_END,
+        CovenantStakeError::UnauthorizedAuthority
+    );
+    require!(
+        data[PD_OPT_TAG_OFFSET] == 1,
+        CovenantStakeError::UnauthorizedAuthority
+    );
+    let raw: [u8; 32] = data[PD_AUTHORITY_OFFSET..PD_AUTHORITY_END]
+        .try_into()
+        .map_err(|_| error!(CovenantStakeError::UnauthorizedAuthority))?;
+    require_keys_eq!(
+        Pubkey::new_from_array(raw),
+        *signer,
+        CovenantStakeError::UnauthorizedAuthority
+    );
+    Ok(())
+}
+
 fn tier_lock_secs(bps: u16) -> Result<i64> {
     match bps {
         TIER_30D_BPS => Ok(TIER_30D_SECS),
@@ -92,6 +135,12 @@ pub mod stake {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+        require!(
+            ctx.accounts.covnt_mint.decimals == EXPECTED_MINT_DECIMALS,
+            CovenantStakeError::InvalidMintDecimals
+        );
+        verify_upgrade_authority(&ctx.accounts.program_data, &ctx.accounts.authority.key())?;
+
         let config = &mut ctx.accounts.config;
         config.authority = ctx.accounts.authority.key();
         config.pause_authority = args.pause_authority;
@@ -142,12 +191,47 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
-        ctx.accounts.config.paused = paused;
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
+        ctx.accounts.config.paused = true;
         emit!(ProtocolPauseUpdated {
-            paused,
+            paused: true,
             by: ctx.accounts.signer.key(),
         });
+        Ok(())
+    }
+
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        ctx.accounts.config.paused = false;
+        emit!(ProtocolPauseUpdated {
+            paused: false,
+            by: ctx.accounts.authority.key(),
+        });
+        Ok(())
+    }
+
+    pub fn update_min_lock_amount(
+        ctx: Context<UpdateConfigParam>,
+        new_min: u64,
+    ) -> Result<()> {
+        require!(new_min > 0, CovenantStakeError::InvalidParameter);
+        let old = ctx.accounts.config.min_lock_amount;
+        ctx.accounts.config.min_lock_amount = new_min;
+        emit!(MinLockAmountUpdated { old, new: new_min });
+        Ok(())
+    }
+
+    pub fn update_max_active_locks(
+        ctx: Context<UpdateConfigParam>,
+        new_max: u32,
+    ) -> Result<()> {
+        require!(new_max > 0, CovenantStakeError::InvalidParameter);
+        require!(
+            new_max >= ctx.accounts.config.active_lock_count,
+            CovenantStakeError::InvalidParameter
+        );
+        let old = ctx.accounts.config.max_active_locks;
+        ctx.accounts.config.max_active_locks = new_max;
+        emit!(MaxActiveLocksUpdated { old, new: new_max });
         Ok(())
     }
 
@@ -372,7 +456,7 @@ pub mod stake {
     }
 
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        // No pause gate: principal is the user's right after lock_end.
         let now = Clock::get()?.unix_timestamp;
         require!(
             ctx.accounts.position.lock_end <= now,
@@ -448,6 +532,10 @@ pub mod stake {
     pub fn deposit_sol_fees(ctx: Context<DepositSolFees>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
         require!(amount > 0, CovenantStakeError::ZeroAmount);
+        require!(
+            ctx.accounts.config.total_weight > 0,
+            CovenantStakeError::NoActiveStakers
+        );
         let now = Clock::get()?.unix_timestamp;
 
         let fee_router = &mut ctx.accounts.fee_router;
@@ -490,7 +578,7 @@ pub mod stake {
     }
 
     pub fn accrue(ctx: Context<Accrue>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        // accrue is a pure observability poke — no pause gate.
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
         let folded = config.pending_sol_lamports;
@@ -713,12 +801,16 @@ pub struct Initialize<'info> {
     pub buylock_cvnt_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    /// CHECK: ProgramData PDA for the bpf upgradeable loader. Validated by
+    /// `verify_upgrade_authority` against the bpf_loader_upgradeable program
+    /// owner + derived PDA + the upgrade_authority field in the layout.
+    pub program_data: UncheckedAccount<'info>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct SetPause<'info> {
+pub struct Pause<'info> {
     #[account(
         mut,
         seeds = [b"stake_config"],
@@ -729,6 +821,30 @@ pub struct SetPause<'info> {
     )]
     pub config: Account<'info, Config>,
     pub signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Unpause<'info> {
+    #[account(
+        mut,
+        seeds = [b"stake_config"],
+        bump = config.bump,
+        has_one = authority @ CovenantStakeError::UnauthorizedAuthority,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateConfigParam<'info> {
+    #[account(
+        mut,
+        seeds = [b"stake_config"],
+        bump = config.bump,
+        has_one = authority @ CovenantStakeError::UnauthorizedAuthority,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1068,6 +1184,17 @@ pub struct BuyLockDeposited {
     pub cumulative_buylock_cvnt: u64,
 }
 
+#[event]
+pub struct MinLockAmountUpdated {
+    pub old: u64,
+    pub new: u64,
+}
+
+#[event]
+pub struct MaxActiveLocksUpdated {
+    pub old: u32,
+    pub new: u32,
+}
 
 #[error_code]
 pub enum CovenantStakeError {
@@ -1103,4 +1230,8 @@ pub enum CovenantStakeError {
     ZeroAmount,
     #[msg("invalid parameter")]
     InvalidParameter,
+    #[msg("no active stakers — fees would orphan")]
+    NoActiveStakers,
+    #[msg("covnt mint decimals must equal 6")]
+    InvalidMintDecimals,
 }

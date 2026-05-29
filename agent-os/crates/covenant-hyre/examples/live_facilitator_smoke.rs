@@ -34,13 +34,18 @@ async fn main() {
             pay_to: PAY_TO.into(),
             max_timeout_seconds: 30,
             asset: USDC_MINT.into(),
-            extra: FacilitatorExtra { fee_payer: PAYAI_FEE_PAYER.into() },
+            extra: FacilitatorExtra {
+                fee_payer: PAYAI_FEE_PAYER.into(),
+            },
         },
     );
 
     println!("posting /verify with malformed tx...");
     println!("network ref (capability): {SOLANA_NETWORK}");
-    let resp = client.verify(&req).await.expect("verify call should round-trip");
+    let resp = client
+        .verify(&req)
+        .await
+        .expect("verify call should round-trip");
     println!("isValid:        {}", resp.is_valid);
     println!("invalidReason:  {:?}", resp.invalid_reason);
     println!("invalidMessage: {:?}", resp.invalid_message);

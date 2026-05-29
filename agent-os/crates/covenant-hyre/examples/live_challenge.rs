@@ -35,7 +35,11 @@ async fn main() {
         let resp = req.send().await.expect("request");
         println!("status: {}", resp.status());
         if resp.status().as_u16() != 402 {
-            println!("  (expected 402; got {}). body: {}", resp.status(), resp.text().await.unwrap_or_default());
+            println!(
+                "  (expected 402; got {}). body: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
             continue;
         }
         let challenge = resp.text().await.expect("body");
@@ -57,7 +61,10 @@ async fn main() {
                     .as_ref()
                     .and_then(|e| e.fee_payer.as_deref())
                     .unwrap_or("(none)");
-                println!("  selected: amount={amount} atomic USDC  payTo={}  network={}", a.pay_to, a.network);
+                println!(
+                    "  selected: amount={amount} atomic USDC  payTo={}  network={}",
+                    a.pay_to, a.network
+                );
                 println!("            feePayer(sponsored gas)={fee_payer}");
                 println!(
                     "  pins:   payTo {} | asset {} | feePayer {} | network compatible with {}",

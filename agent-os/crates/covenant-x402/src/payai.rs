@@ -66,11 +66,7 @@ impl PayaiSolanaSigner {
         Self::with(keypair, rpc_url, reqwest::Client::new())
     }
 
-    pub fn with(
-        keypair: Keypair,
-        rpc_url: impl Into<String>,
-        http: reqwest::Client,
-    ) -> Self {
+    pub fn with(keypair: Keypair, rpc_url: impl Into<String>, http: reqwest::Client) -> Self {
         Self {
             keypair,
             rpc_url: rpc_url.into(),
@@ -81,14 +77,10 @@ impl PayaiSolanaSigner {
     /// Loads the funder keypair from a Solana CLI keypair file. The
     /// error message omits the bytes, surfacing only the path and the
     /// underlying reason.
-    pub fn from_keypair_file(
-        path: impl AsRef<Path>,
-        rpc_url: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn from_keypair_file(path: impl AsRef<Path>, rpc_url: impl Into<String>) -> Result<Self> {
         let path = path.as_ref();
-        let keypair = read_keypair_file(path).map_err(|e| {
-            X402Error::Sign(format!("read funder keypair {}: {e}", path.display()))
-        })?;
+        let keypair = read_keypair_file(path)
+            .map_err(|e| X402Error::Sign(format!("read funder keypair {}: {e}", path.display())))?;
         Ok(Self::new(keypair, rpc_url))
     }
 
@@ -115,11 +107,8 @@ impl PayaiSolanaSigner {
         let blockhash_str = parsed
             .pointer("/result/value/blockhash")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                X402Error::Sign(format!("rpc: no blockhash in response: {parsed}"))
-            })?;
-        Hash::from_str(blockhash_str)
-            .map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
+            .ok_or_else(|| X402Error::Sign(format!("rpc: no blockhash in response: {parsed}")))?;
+        Hash::from_str(blockhash_str).map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
     }
 
     /// `true` if the account exists on chain. PayAI removed
@@ -159,18 +148,14 @@ impl Signer for PayaiSolanaSigner {
             .as_ref()
             .and_then(|e| e.fee_payer.as_deref())
             .ok_or_else(|| {
-                X402Error::Sign(
-                    "PayaiSolanaSigner requires requirements.extra.feePayer".into(),
-                )
+                X402Error::Sign("PayaiSolanaSigner requires requirements.extra.feePayer".into())
             })?;
         let fee_payer = Pubkey::from_str(fee_payer_str)
             .map_err(|e| X402Error::Sign(format!("parse feePayer {fee_payer_str:?}: {e}")))?;
-        let mint = Pubkey::from_str(&requirements.asset).map_err(|e| {
-            X402Error::Sign(format!("parse asset {:?}: {e}", requirements.asset))
-        })?;
-        let recipient = Pubkey::from_str(&requirements.pay_to).map_err(|e| {
-            X402Error::Sign(format!("parse pay_to {:?}: {e}", requirements.pay_to))
-        })?;
+        let mint = Pubkey::from_str(&requirements.asset)
+            .map_err(|e| X402Error::Sign(format!("parse asset {:?}: {e}", requirements.asset)))?;
+        let recipient = Pubkey::from_str(&requirements.pay_to)
+            .map_err(|e| X402Error::Sign(format!("parse pay_to {:?}: {e}", requirements.pay_to)))?;
         let amount: u64 = requirements
             .amount
             .parse()
@@ -205,8 +190,8 @@ impl Signer for PayaiSolanaSigner {
             decimals,
             blockhash,
         )?;
-        let serialized = bincode::serialize(&tx)
-            .map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
+        let serialized =
+            bincode::serialize(&tx).map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
         let tx_b64 = BASE64.encode(serialized);
 
         let envelope = serde_json::json!({
@@ -334,18 +319,15 @@ mod tests {
         let cb_id = solana_compute_budget_interface::id();
         let token_id = spl_token::ID;
         assert_eq!(
-            keys[msg.instructions[0].program_id_index as usize],
-            cb_id,
+            keys[msg.instructions[0].program_id_index as usize], cb_id,
             "instr 0 is ComputeBudget"
         );
         assert_eq!(
-            keys[msg.instructions[1].program_id_index as usize],
-            cb_id,
+            keys[msg.instructions[1].program_id_index as usize], cb_id,
             "instr 1 is ComputeBudget"
         );
         assert_eq!(
-            keys[msg.instructions[2].program_id_index as usize],
-            token_id,
+            keys[msg.instructions[2].program_id_index as usize], token_id,
             "instr 2 is SPL token"
         );
 
@@ -426,7 +408,10 @@ mod tests {
             scheme: "exact".into(),
             extra: None,
         };
-        let err = signer.build_payment(&req).await.expect_err("must require feePayer");
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("must require feePayer");
         assert!(format!("{err}").contains("feePayer"), "got: {err}");
     }
 
@@ -446,6 +431,9 @@ mod tests {
         };
         let err = signer.build_payment(&req).await.expect_err("unknown mint");
         let msg = format!("{err}");
-        assert!(msg.contains("not in PayaiSolanaSigner's known set"), "got: {msg}");
+        assert!(
+            msg.contains("not in PayaiSolanaSigner's known set"),
+            "got: {msg}"
+        );
     }
 }

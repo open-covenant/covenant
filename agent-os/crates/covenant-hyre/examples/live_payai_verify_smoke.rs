@@ -17,7 +17,7 @@
 use std::process::Stdio;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use covenant_hyre::config::{PAY_TO, PAYAI_FEE_PAYER, USDC_MINT};
+use covenant_hyre::config::{PAYAI_FEE_PAYER, PAY_TO, USDC_MINT};
 use covenant_hyre::facilitator::{
     FacilitatorClient, FacilitatorExtra, FacilitatorPayload, FacilitatorRequest,
     FacilitatorRequirements,
@@ -62,7 +62,13 @@ async fn main() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn sidecar");
-    child.stdin.take().unwrap().write_all(&payload).await.unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&payload)
+        .await
+        .unwrap();
     let out = child.wait_with_output().await.unwrap();
     if !out.status.success() {
         eprintln!(
@@ -73,9 +79,14 @@ async fn main() {
         std::process::exit(1);
     }
     let header = String::from_utf8(out.stdout).unwrap().trim().to_string();
-    println!("x-payment (first 60 chars): {}…", &header[..header.len().min(60)]);
+    println!(
+        "x-payment (first 60 chars): {}…",
+        &header[..header.len().min(60)]
+    );
 
-    let envelope_bytes = BASE64.decode(header.as_bytes()).expect("base64 decode header");
+    let envelope_bytes = BASE64
+        .decode(header.as_bytes())
+        .expect("base64 decode header");
     let envelope: serde_json::Value =
         serde_json::from_slice(&envelope_bytes).expect("envelope is JSON");
     let tx_b64 = envelope["payload"]["transaction"]
@@ -84,7 +95,10 @@ async fn main() {
         .to_string();
     let envelope_network = envelope["network"].as_str().unwrap_or("?").to_string();
     println!("envelope.network: {envelope_network}");
-    println!("envelope.scheme:  {}", envelope["scheme"].as_str().unwrap_or("?"));
+    println!(
+        "envelope.scheme:  {}",
+        envelope["scheme"].as_str().unwrap_or("?")
+    );
 
     let facilitator_req = FacilitatorRequest::new(
         FacilitatorPayload::new(envelope_network, tx_b64),

@@ -9324,7 +9324,11 @@ required = {caps:?}
 
         let dir = tempfile::tempdir().unwrap();
         let signer = dir.path().join("signer.sh");
-        std::fs::write(&signer, "#!/bin/sh\ncat >/dev/null\nprintf 'x402-mock-header'\n").unwrap();
+        std::fs::write(
+            &signer,
+            "#!/bin/sh\ncat >/dev/null\nprintf 'x402-mock-header'\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let settlement = Arc::new(InMemorySettlement::new());
@@ -9401,9 +9405,9 @@ required = {caps:?}
         let settled = events
             .iter()
             .find_map(|e| match &e.kind {
-                AuditKind::ExternalPaymentSettled { provider, amount, .. } => {
-                    Some((provider.clone(), amount.clone()))
-                }
+                AuditKind::ExternalPaymentSettled {
+                    provider, amount, ..
+                } => Some((provider.clone(), amount.clone())),
                 _ => None,
             })
             .expect("ExternalPaymentSettled audit event");

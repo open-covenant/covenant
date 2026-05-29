@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Result, types::PaymentRequirements};
+use crate::{types::PaymentRequirements, Result};
 
 /// Constructs the `x-payment` header value for a chosen payment
 /// option.
@@ -19,10 +19,7 @@ use crate::{Result, types::PaymentRequirements};
 /// payment payload the x402 spec expects in the header.
 #[async_trait]
 pub trait Signer: Send + Sync {
-    async fn build_payment(
-        &self,
-        requirements: &PaymentRequirements,
-    ) -> Result<String>;
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String>;
 }
 
 /// Deterministic mock signer for tests.
@@ -35,10 +32,7 @@ pub struct MockSigner;
 
 #[async_trait]
 impl Signer for MockSigner {
-    async fn build_payment(
-        &self,
-        requirements: &PaymentRequirements,
-    ) -> Result<String> {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String> {
         Ok(format!(
             "mock:{}:{}",
             requirements.network, requirements.amount
@@ -63,9 +57,6 @@ mod tests {
             extra: None,
         };
         let header = signer.build_payment(&req).await.expect("sign");
-        assert_eq!(
-            header,
-            "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:80000"
-        );
+        assert_eq!(header, "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:80000");
     }
 }

@@ -1126,105 +1126,100 @@ impl MemoryStore for SqliteStore {
     ) -> Result<MemoryCompactionOutcome, MemoryError> {
         validate_compaction_request(&request)?;
         let conn = self.conn.clone();
-        task::spawn_blocking(
-            move || -> Result<MemoryCompactionOutcome, MemoryError> {
-                let g = conn
-                    .lock()
-                    .map_err(|e| MemoryError::Worker(e.to_string()))?;
+        task::spawn_blocking(move || -> Result<MemoryCompactionOutcome, MemoryError> {
+            let g = conn
+                .lock()
+                .map_err(|e| MemoryError::Worker(e.to_string()))?;
 
-                // Projection read: only the columns plan_compaction reads.
-                // Other MemoryRecord fields (owner, text, embedding) are
-                // filled with cheap placeholders since plan_compaction
-                // ignores them; the apply path never writes back through
-                // those fields, so the placeholders never reach disk.
-                let mut stmt = g.prepare(
-                    "SELECT id, tier, created_at, parent, metadata
+            // Projection read: only the columns plan_compaction reads.
+            // Other MemoryRecord fields (owner, text, embedding) are
+            // filled with cheap placeholders since plan_compaction
+            // ignores them; the apply path never writes back through
+            // those fields, so the placeholders never reach disk.
+            let mut stmt = g.prepare(
+                "SELECT id, tier, created_at, parent, metadata
                      FROM memories ORDER BY created_at DESC",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    let id_s: String = row.get(0)?;
-                    let tier_s: String = row.get(1)?;
-                    let created_at: i64 = row.get(2)?;
-                    let parent_s: Option<String> = row.get(3)?;
-                    let metadata_s: String = row.get(4)?;
-                    Ok((id_s, tier_s, created_at, parent_s, metadata_s))
-                })?;
-                let mut records = Vec::new();
-                for r in rows {
-                    let (id_s, tier_s, created_at, parent_s, metadata_s) = r?;
-                    let id = Uuid::parse_str(&id_s)
-                        .map_err(|e| MemoryError::Worker(e.to_string()))?;
-                    let tier = SqliteStore::parse_tier(&tier_s);
-                    let parent = parent_s
-                        .map(|s| {
-                            Uuid::parse_str(&s).map_err(|e| MemoryError::Worker(e.to_string()))
-                        })
-                        .transpose()?;
-                    let metadata = serde_json::from_str(&metadata_s)?;
-                    records.push(MemoryRecord {
-                        id,
-                        tier,
-                        owner: covenant_types::AgentId::new("", [0u8; 32]),
-                        text: String::new(),
-                        embedding: Vec::new(),
-                        metadata,
-                        created_at: created_at as u64,
-                        parent,
-                    });
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let id_s: String = row.get(0)?;
+                let tier_s: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let parent_s: Option<String> = row.get(3)?;
+                let metadata_s: String = row.get(4)?;
+                Ok((id_s, tier_s, created_at, parent_s, metadata_s))
+            })?;
+            let mut records = Vec::new();
+            for r in rows {
+                let (id_s, tier_s, created_at, parent_s, metadata_s) = r?;
+                let id = Uuid::parse_str(&id_s).map_err(|e| MemoryError::Worker(e.to_string()))?;
+                let tier = SqliteStore::parse_tier(&tier_s);
+                let parent = parent_s
+                    .map(|s| Uuid::parse_str(&s).map_err(|e| MemoryError::Worker(e.to_string())))
+                    .transpose()?;
+                let metadata = serde_json::from_str(&metadata_s)?;
+                records.push(MemoryRecord {
+                    id,
+                    tier,
+                    owner: covenant_types::AgentId::new("", [0u8; 32]),
+                    text: String::new(),
+                    embedding: Vec::new(),
+                    metadata,
+                    created_at: created_at as u64,
+                    parent,
+                });
+            }
+            drop(stmt);
+
+            let (outcome, updates) = plan_compaction(&records, &request);
+
+            if request.mode != MemoryRepairMode::Apply || !outcome.would_change {
+                return Ok(outcome);
+            }
+
+            g.execute_batch("BEGIN IMMEDIATE")?;
+            g.execute_batch(&format!("SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"))?;
+
+            let apply_result: Result<(), MemoryError> = (|| {
+                for id in &outcome.deleted {
+                    g.execute(
+                        "DELETE FROM memories WHERE id = ?1",
+                        rusqlite::params![id.to_string()],
+                    )?;
                 }
-                drop(stmt);
-
-                let (outcome, updates) = plan_compaction(&records, &request);
-
-                if request.mode != MemoryRepairMode::Apply || !outcome.would_change {
-                    return Ok(outcome);
+                for update in &updates {
+                    let metadata_str = serde_json::to_string(&update.metadata)?;
+                    g.execute(
+                        "UPDATE memories SET metadata = ?1, parent = ?2 WHERE id = ?3",
+                        rusqlite::params![
+                            metadata_str,
+                            update.parent.as_ref().map(|u| u.to_string()),
+                            update.id.to_string(),
+                        ],
+                    )?;
                 }
+                Ok(())
+            })();
 
-                g.execute_batch("BEGIN IMMEDIATE")?;
-                g.execute_batch(&format!("SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"))?;
-
-                let apply_result: Result<(), MemoryError> = (|| {
-                    for id in &outcome.deleted {
-                        g.execute(
-                            "DELETE FROM memories WHERE id = ?1",
-                            rusqlite::params![id.to_string()],
-                        )?;
-                    }
-                    for update in &updates {
-                        let metadata_str = serde_json::to_string(&update.metadata)?;
-                        g.execute(
-                            "UPDATE memories SET metadata = ?1, parent = ?2 WHERE id = ?3",
-                            rusqlite::params![
-                                metadata_str,
-                                update.parent.as_ref().map(|u| u.to_string()),
-                                update.id.to_string(),
-                            ],
-                        )?;
-                    }
-                    Ok(())
-                })();
-
-                match apply_result {
-                    Ok(()) => {
-                        g.execute_batch(&format!(
-                            "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
-                        ))?;
-                        g.execute_batch("COMMIT")?;
-                        Ok(outcome)
-                    }
-                    Err(e) => {
-                        let _ = g.execute_batch(&format!(
-                            "ROLLBACK TO SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
-                        ));
-                        let _ = g.execute_batch(&format!(
-                            "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
-                        ));
-                        let _ = g.execute_batch("ROLLBACK");
-                        Err(e)
-                    }
+            match apply_result {
+                Ok(()) => {
+                    g.execute_batch(&format!(
+                        "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ))?;
+                    g.execute_batch("COMMIT")?;
+                    Ok(outcome)
                 }
-            },
-        )
+                Err(e) => {
+                    let _ = g.execute_batch(&format!(
+                        "ROLLBACK TO SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ));
+                    let _ = g.execute_batch(&format!(
+                        "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ));
+                    let _ = g.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
+        })
         .await
         .map_err(|e| MemoryError::Worker(e.to_string()))?
     }
@@ -4149,9 +4144,7 @@ mod tests {
             .expect_err("trigger ABORT must surface as a compact() error");
         match err {
             MemoryError::Sqlite(_) => {}
-            other => panic!(
-                "expected MemoryError::Sqlite from the trigger ABORT, got {other:?}"
-            ),
+            other => panic!("expected MemoryError::Sqlite from the trigger ABORT, got {other:?}"),
         }
 
         // The savepoint must roll back EVERY prior delete — without the

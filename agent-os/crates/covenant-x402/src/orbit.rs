@@ -105,11 +105,7 @@ impl OrbitClient {
 
     /// Fetches a single page. Prefer [`Self::fetch_all`] for the
     /// common "materialise everything" case.
-    pub async fn fetch_page(
-        &self,
-        limit: usize,
-        offset: usize,
-    ) -> Result<RegistryResponse> {
+    pub async fn fetch_page(&self, limit: usize, offset: usize) -> Result<RegistryResponse> {
         let url = format!(
             "{}/api/services-list?limit={}&offset={}",
             self.base_url.trim_end_matches('/'),
@@ -137,10 +133,7 @@ impl OrbitClient {
             let returned = page.items.len();
             all.extend(page.items);
             offset += returned;
-            if returned == 0
-                || offset >= page.pagination.total
-                || returned < self.page_size
-            {
+            if returned == 0 || offset >= page.pagination.total || returned < self.page_size {
                 debug!(
                     pages = page_num + 1,
                     fetched = all.len(),
@@ -195,13 +188,8 @@ impl Catalog {
 
     /// Every entry whose server title matches exactly. Useful for
     /// "list every endpoint Xona exposes".
-    pub fn by_server<'a>(
-        &'a self,
-        title: &'a str,
-    ) -> impl Iterator<Item = &'a RegistryEntry> + 'a {
-        self.entries
-            .iter()
-            .filter(move |e| e.server_title == title)
+    pub fn by_server<'a>(&'a self, title: &'a str) -> impl Iterator<Item = &'a RegistryEntry> + 'a {
+        self.entries.iter().filter(move |e| e.server_title == title)
     }
 
     /// First entry whose slug matches. Slugs are not guaranteed
@@ -306,11 +294,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OrbitClient::with(
-            reqwest::Client::new(),
-            server.uri(),
-            100,
-        );
+        let client = OrbitClient::with(reqwest::Client::new(), server.uri(), 100);
         let resp = client.fetch_page(100, 0).await.expect("page");
         assert_eq!(resp.items.len(), 1);
         assert_eq!(resp.pagination.total, 1);
@@ -354,8 +338,10 @@ mod tests {
         let client = OrbitClient::with(reqwest::Client::new(), server.uri(), 2);
         let entries = client.fetch_all().await.expect("all");
         assert_eq!(entries.len(), 5);
-        assert_eq!(entries.iter().map(|e| e.slug.as_str()).collect::<Vec<_>>(),
-                   vec!["a", "b", "c", "d", "e"]);
+        assert_eq!(
+            entries.iter().map(|e| e.slug.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c", "d", "e"]
+        );
     }
 
     #[tokio::test]
@@ -401,9 +387,11 @@ mod tests {
 
     #[test]
     fn catalog_find_pricing_matches_chain_and_asset() {
-        let entries = vec![
-            serde_json::from_value(xona_entry_json("image/creative-director", "80000")).unwrap(),
-        ];
+        let entries =
+            vec![
+                serde_json::from_value(xona_entry_json("image/creative-director", "80000"))
+                    .unwrap(),
+            ];
         let cat = Catalog::new(entries);
         let p = cat
             .find_pricing(
@@ -418,16 +406,13 @@ mod tests {
 
     #[test]
     fn catalog_find_pricing_returns_none_on_chain_mismatch() {
-        let entries = vec![
-            serde_json::from_value(xona_entry_json("image/creative-director", "80000")).unwrap(),
-        ];
+        let entries =
+            vec![
+                serde_json::from_value(xona_entry_json("image/creative-director", "80000"))
+                    .unwrap(),
+            ];
         let cat = Catalog::new(entries);
-        let p = cat.find_pricing(
-            "Xona",
-            "image/creative-director",
-            "base:8453",
-            "usdc-base",
-        );
+        let p = cat.find_pricing("Xona", "image/creative-director", "base:8453", "usdc-base");
         assert!(p.is_none());
     }
 }

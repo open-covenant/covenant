@@ -357,7 +357,10 @@ mod tests {
     }
 
     fn find<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a Arc<dyn Tool> {
-        tools.iter().find(|t| t.name() == name).expect("tool present")
+        tools
+            .iter()
+            .find(|t| t.name() == name)
+            .expect("tool present")
     }
 
     #[test]
@@ -435,7 +438,9 @@ mod tests {
             .await
             .unwrap();
         let req = exec.last.lock().unwrap().clone().unwrap();
-        assert!(req.url.ends_with("/trenches/curve/Mint1?curve_key=a%20b%2Fc"));
+        assert!(req
+            .url
+            .ends_with("/trenches/curve/Mint1?curve_key=a%20b%2Fc"));
     }
 
     #[tokio::test]

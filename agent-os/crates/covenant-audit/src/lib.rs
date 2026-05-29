@@ -3790,8 +3790,14 @@ mod tests {
         let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
         match log2.record(dated(400)).await {
             Err(AuditError::ChainCorruption { events, chain }) => {
-                assert_eq!(events, 3, "ChainCorruption.events reports the orphan-events row count");
-                assert_eq!(chain, 2, "ChainCorruption.chain reports the post-rename chain row count");
+                assert_eq!(
+                    events, 3,
+                    "ChainCorruption.events reports the orphan-events row count"
+                );
+                assert_eq!(
+                    chain, 2,
+                    "ChainCorruption.chain reports the post-rename chain row count"
+                );
             }
             other => panic!("expected ChainCorruption on orphan-events shape, got {other:?}"),
         }
@@ -3801,7 +3807,10 @@ mod tests {
         // the restored events file, rewrites the chain to the same body
         // (idempotent), and renames events to match.
         let recovered = log2.purge_older_than(150).await.unwrap();
-        assert_eq!(recovered, 1, "self-heal purges the same orphan that the original purge would have dropped");
+        assert_eq!(
+            recovered, 1,
+            "self-heal purges the same orphan that the original purge would have dropped"
+        );
 
         // Idempotency assertion: the chain file after self-heal must
         // be byte-identical to the chain file the original purge
@@ -3815,10 +3824,18 @@ mod tests {
         );
 
         // After recovery, the log is consistent and record() works again.
-        log2.record(dated(400)).await.expect("record after self-heal");
+        log2.record(dated(400))
+            .await
+            .expect("record after self-heal");
         let report = log2.verify_integrity().await.unwrap();
-        assert!(report.valid, "verify_integrity must pass after self-heal: {report:?}");
-        assert_eq!(report.events, 3, "post-heal events: 200, 300, plus the new 400");
+        assert!(
+            report.valid,
+            "verify_integrity must pass after self-heal: {report:?}"
+        );
+        assert_eq!(
+            report.events, 3,
+            "post-heal events: 200, 300, plus the new 400"
+        );
         assert_eq!(report.anchors, 3, "post-heal chain matches events length");
     }
 

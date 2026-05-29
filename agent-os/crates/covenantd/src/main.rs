@@ -340,7 +340,10 @@ async fn main() -> Result<()> {
             };
             match catalog {
                 Some(catalog) => {
-                    info!(endpoints = catalog.endpoints().len(), "hyre provider enabled");
+                    info!(
+                        endpoints = catalog.endpoints().len(),
+                        "hyre provider enabled"
+                    );
                     server.with_hyre(covenantd::hyre::HyreState::new(catalog, cfg))
                 }
                 None => {
@@ -691,7 +694,9 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     if let Ok(cap) = std::env::var("COVENANT_HYRE_PER_CALL_CAP") {
         match cap.trim().parse() {
             Ok(n) => cfg.per_call_cap = n,
-            Err(_) => tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_HYRE_PER_CALL_CAP"),
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_HYRE_PER_CALL_CAP")
+            }
         }
     }
     if let Ok(list) = std::env::var("COVENANT_HYRE_ALLOW") {

@@ -53,8 +53,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use spl_associated_token_account::{
-    get_associated_token_address,
-    instruction::create_associated_token_account_idempotent,
+    get_associated_token_address, instruction::create_associated_token_account_idempotent,
 };
 use tracing::debug;
 
@@ -80,11 +79,7 @@ impl SolanaSigner {
 
     /// Customised builder — pass an existing reqwest client when
     /// you want to share connection pooling.
-    pub fn with(
-        keypair: Keypair,
-        rpc_url: impl Into<String>,
-        http: reqwest::Client,
-    ) -> Self {
+    pub fn with(keypair: Keypair, rpc_url: impl Into<String>, http: reqwest::Client) -> Self {
         Self {
             keypair,
             rpc_url: rpc_url.into(),
@@ -96,10 +91,7 @@ impl SolanaSigner {
     /// JSON byte-array format `solana-keygen` writes) and builds a
     /// signer. The error message deliberately omits the key bytes —
     /// only the path and the underlying reason are surfaced.
-    pub fn from_keypair_file(
-        path: impl AsRef<Path>,
-        rpc_url: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn from_keypair_file(path: impl AsRef<Path>, rpc_url: impl Into<String>) -> Result<Self> {
         let path = path.as_ref();
         let keypair = read_keypair_file(path).map_err(|e| {
             X402Error::Sign(format!("read funding keypair {}: {e}", path.display()))
@@ -146,9 +138,7 @@ impl SolanaSigner {
         let parsed: serde_json::Value = resp.json().await?;
         // A missing account surfaces as `result.value == null`.
         if parsed.pointer("/result/value").map(|v| v.is_null()) == Some(true) {
-            return Err(X402Error::Sign(format!(
-                "mint {mint} not found on-chain"
-            )));
+            return Err(X402Error::Sign(format!("mint {mint} not found on-chain")));
         }
         let decimals = parsed
             .pointer("/result/value/data/parsed/info/decimals")
@@ -159,9 +149,8 @@ impl SolanaSigner {
                      (not an SPL mint, or node lacks jsonParsed support)"
                 ))
             })?;
-        u8::try_from(decimals).map_err(|_| {
-            X402Error::Sign(format!("mint {mint}: implausible decimals {decimals}"))
-        })
+        u8::try_from(decimals)
+            .map_err(|_| X402Error::Sign(format!("mint {mint}: implausible decimals {decimals}")))
     }
 
     async fn latest_blockhash(&self) -> Result<Hash> {
@@ -184,23 +173,14 @@ impl SolanaSigner {
         let blockhash_str = parsed
             .pointer("/result/value/blockhash")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                X402Error::Sign(format!(
-                    "rpc: no blockhash in response: {}",
-                    parsed
-                ))
-            })?;
-        Hash::from_str(blockhash_str)
-            .map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
+            .ok_or_else(|| X402Error::Sign(format!("rpc: no blockhash in response: {}", parsed)))?;
+        Hash::from_str(blockhash_str).map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
     }
 }
 
 #[async_trait::async_trait]
 impl Signer for SolanaSigner {
-    async fn build_payment(
-        &self,
-        requirements: &PaymentRequirements,
-    ) -> Result<String> {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String> {
         if !requirements.network.starts_with("solana:") {
             return Err(X402Error::Sign(format!(
                 "SolanaSigner cannot handle network {:?}",
@@ -227,17 +207,11 @@ impl Signer for SolanaSigner {
             "SolanaSigner building transfer"
         );
 
-        let tx = build_transfer_transaction(
-            &self.keypair,
-            mint,
-            pay_to,
-            amount,
-            decimals,
-            blockhash,
-        )?;
+        let tx =
+            build_transfer_transaction(&self.keypair, mint, pay_to, amount, decimals, blockhash)?;
 
-        let serialized = bincode::serialize(&tx)
-            .map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
+        let serialized =
+            bincode::serialize(&tx).map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
         let tx_b64 = BASE64.encode(serialized);
 
         let envelope = serde_json::json!({
@@ -307,8 +281,7 @@ pub fn build_transfer_transaction(
     )
     .map_err(|e| X402Error::Sign(format!("build transfer_checked: {e}")))?;
 
-    let mut tx =
-        Transaction::new_with_payer(&[create_dest_ata, transfer], Some(&payer_pubkey));
+    let mut tx = Transaction::new_with_payer(&[create_dest_ata, transfer], Some(&payer_pubkey));
     tx.try_sign(&[payer], recent_blockhash)
         .map_err(|e| X402Error::Sign(format!("sign tx: {e}")))?;
     Ok(tx)
@@ -340,8 +313,7 @@ mod tests {
         let expected = kp.pubkey();
         write_keypair_file(&kp, path.to_str().unwrap()).expect("write keypair");
 
-        let signer =
-            SolanaSigner::from_keypair_file(&path, "https://rpc.example/").expect("load");
+        let signer = SolanaSigner::from_keypair_file(&path, "https://rpc.example/").expect("load");
         assert_eq!(signer.pubkey(), expected);
     }
 
@@ -353,7 +325,9 @@ mod tests {
         );
         match result {
             Ok(_) => panic!("expected error for missing file"),
-            Err(X402Error::Sign(msg)) => assert!(msg.contains("read funding keypair"), "got: {msg}"),
+            Err(X402Error::Sign(msg)) => {
+                assert!(msg.contains("read funding keypair"), "got: {msg}")
+            }
             Err(e) => panic!("expected Sign error, got: {e:?}"),
         }
     }
@@ -382,10 +356,7 @@ mod tests {
     fn build_transaction_has_single_signature_and_two_instructions() {
         let payer = Keypair::new();
         let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
-        let recipient = Pubkey::from_str(
-            "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
-        )
-        .unwrap();
+        let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
         let blockhash = Hash::new_from_array([7u8; 32]);
 
         let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
@@ -407,10 +378,7 @@ mod tests {
     fn build_transaction_targets_correct_atas() {
         let payer = Keypair::new();
         let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
-        let recipient = Pubkey::from_str(
-            "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
-        )
-        .unwrap();
+        let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
         let blockhash = Hash::new_from_array([7u8; 32]);
 
         let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
@@ -423,8 +391,14 @@ mod tests {
         // accounts in instruction order. The TransferChecked
         // instruction references source, mint, destination, owner.
         let keys = &tx.message.account_keys;
-        assert!(keys.contains(&expected_source), "source ATA must appear in account keys");
-        assert!(keys.contains(&expected_dest), "dest ATA must appear in account keys");
+        assert!(
+            keys.contains(&expected_source),
+            "source ATA must appear in account keys"
+        );
+        assert!(
+            keys.contains(&expected_dest),
+            "dest ATA must appear in account keys"
+        );
         assert!(keys.contains(&mint), "mint must appear in account keys");
     }
 
@@ -436,19 +410,17 @@ mod tests {
         let server = MockServer::start().await;
         let fixed_blockhash = "11111111111111111111111111111112"; // base58 of [0,..,0,1]
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "result": {
-                        "context": {"slot": 1},
-                        "value": {
-                            "blockhash": fixed_blockhash,
-                            "lastValidBlockHeight": 1
-                        }
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "blockhash": fixed_blockhash,
+                        "lastValidBlockHeight": 1
                     }
-                }),
-            ))
+                }
+            })))
             .mount(&server)
             .await;
 
@@ -575,7 +547,10 @@ mod tests {
             .await;
         let signer = SolanaSigner::new(Keypair::new(), server.uri());
         let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
-        let err = signer.resolve_decimals(&mint).await.expect_err("not a mint");
+        let err = signer
+            .resolve_decimals(&mint)
+            .await
+            .expect_err("not a mint");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no parsed decimals")));
     }
 }

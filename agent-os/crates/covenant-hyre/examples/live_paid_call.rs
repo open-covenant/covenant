@@ -84,7 +84,10 @@ async fn main() {
     println!("net:     {} ({})", cfg.network, SOLANA_NETWORK);
     println!("asset:   {} ({})", cfg.asset, USDC_MINT);
     println!("pay_to:  {PAY_TO}");
-    println!("cap:     {PER_CALL_CAP} atomic USDC ({:.4} USDC)", PER_CALL_CAP as f64 / 1e6);
+    println!(
+        "cap:     {PER_CALL_CAP} atomic USDC ({:.4} USDC)",
+        PER_CALL_CAP as f64 / 1e6
+    );
 
     let http = reqwest::Client::new();
 
@@ -167,13 +170,22 @@ async fn main() {
 
     if let Some(amount) = out.paid_amount {
         if (200..300).contains(&out.status) {
-            println!("\nOK — paid {amount} atomic USDC against {}.", chosen.pay_to);
+            println!(
+                "\nOK — paid {amount} atomic USDC against {}.",
+                chosen.pay_to
+            );
             println!("Look at Hyre's response headers for an x-payment-response hop if you need the on-chain sig.");
         } else {
-            println!("\nFAIL — Hyre returned {} after we paid. Investigate.", out.status);
+            println!(
+                "\nFAIL — Hyre returned {} after we paid. Investigate.",
+                out.status
+            );
             std::process::exit(2);
         }
     } else {
-        println!("\nNo payment recorded — Hyre returned {} on the first GET (free).", out.status);
+        println!(
+            "\nNo payment recorded — Hyre returned {} on the first GET (free).",
+            out.status
+        );
     }
 }

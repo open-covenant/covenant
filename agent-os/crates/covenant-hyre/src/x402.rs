@@ -61,7 +61,9 @@ pub struct Extra {
 impl Accept {
     /// Atomic price, from whichever of the two field spellings is set.
     pub fn atomic_amount(&self) -> Option<&str> {
-        self.amount.as_deref().or(self.max_amount_required.as_deref())
+        self.amount
+            .as_deref()
+            .or(self.max_amount_required.as_deref())
     }
 }
 
@@ -108,8 +110,7 @@ pub fn select<'a>(
         a.scheme == "exact"
             && a.asset == asset
             && network_matches(&a.network, network)
-            && a
-                .atomic_amount()
+            && a.atomic_amount()
                 .and_then(|s| s.parse::<u128>().ok())
                 .is_some_and(|n| n <= per_call_cap)
     })
@@ -201,12 +202,13 @@ pub async fn execute_paid(
 
     let challenge = first.text().await?;
     let accepts = parse_challenge(&challenge)?;
-    let accept = select(&accepts, &plan.network, &plan.asset, plan.per_call_cap).ok_or_else(|| {
-        HyreError::NotAllowed(format!(
-            "no x402 option on {} / {} within cap {} atomic",
-            plan.network, plan.asset, plan.per_call_cap
-        ))
-    })?;
+    let accept =
+        select(&accepts, &plan.network, &plan.asset, plan.per_call_cap).ok_or_else(|| {
+            HyreError::NotAllowed(format!(
+                "no x402 option on {} / {} within cap {} atomic",
+                plan.network, plan.asset, plan.per_call_cap
+            ))
+        })?;
     if let Some(fee_payer) = accept.extra.as_ref().and_then(|e| e.fee_payer.as_deref()) {
         debug!(%fee_payer, url = %plan.url, "payai facilitator co-signs as feePayer");
     }
@@ -317,7 +319,8 @@ mod tests {
 
     #[test]
     fn parses_bare_array_shaped_challenge() {
-        let body = r#"[{"scheme":"exact","network":"solana:x","asset":"M","payTo":"P","amount":"5"}]"#;
+        let body =
+            r#"[{"scheme":"exact","network":"solana:x","asset":"M","payTo":"P","amount":"5"}]"#;
         let accepts = parse_challenge(body).expect("parse array");
         assert_eq!(accepts[0].atomic_amount(), Some("5"));
     }
@@ -332,8 +335,14 @@ mod tests {
     #[test]
     fn select_rejects_over_cap_and_wrong_asset() {
         let accepts = parse_challenge(LIVE_DEFI_TVL_402).unwrap();
-        assert!(select(&accepts, NETWORK, ASSET, 9_999).is_none(), "over cap");
-        assert!(select(&accepts, NETWORK, "OTHER_MINT", 10_000).is_none(), "wrong asset");
+        assert!(
+            select(&accepts, NETWORK, ASSET, 9_999).is_none(),
+            "over cap"
+        );
+        assert!(
+            select(&accepts, NETWORK, "OTHER_MINT", 10_000).is_none(),
+            "wrong asset"
+        );
     }
 
     #[tokio::test]
@@ -395,7 +404,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/defi/tvl"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
             .mount(&server)
             .await;
         let out = execute_paid(

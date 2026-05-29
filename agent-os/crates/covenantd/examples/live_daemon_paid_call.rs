@@ -49,7 +49,10 @@ async fn main() {
 
     let issuer = AgentId::new("operator@local", [0x11; 32]);
     let payer = AgentId::new("payer@local", [0x22; 32]);
-    budget.set_capacity(&payer, 100_000).await.expect("seed budget");
+    budget
+        .set_capacity(&payer, 100_000)
+        .await
+        .expect("seed budget");
     println!("payer budget seeded: 100000 credits");
 
     let x402 = Arc::new(X402Config {
@@ -107,7 +110,10 @@ async fn main() {
     println!("status:        {}", response.status);
     println!("receipt_id:    {:?}", response.receipt_id);
     let body_preview = response.body.to_string();
-    println!("body (head):   {}", &body_preview[..body_preview.len().min(300)]);
+    println!(
+        "body (head):   {}",
+        &body_preview[..body_preview.len().min(300)]
+    );
 
     let settled = settlement.recent(10).await.expect("settlement recent");
     let audit_events = audit.recent(10).await.expect("audit recent");
@@ -131,7 +137,10 @@ async fn main() {
     }
     println!("payer remaining:     {payer_remaining} credits (was 100000)");
 
-    assert!(response.status >= 200 && response.status < 300, "non-2xx status");
+    assert!(
+        response.status >= 200 && response.status < 300,
+        "non-2xx status"
+    );
     assert!(response.receipt_id.is_some(), "no receipt id");
     assert!(!settled.is_empty(), "no settlement receipt written");
     assert!(!audit_events.is_empty(), "no audit event written");

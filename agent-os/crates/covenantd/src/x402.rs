@@ -330,7 +330,10 @@ pub async fn pay_and_record(
     } else {
         None
     };
-    Ok(PaidOutcome { response, receipt_id })
+    Ok(PaidOutcome {
+        response,
+        receipt_id,
+    })
 }
 
 #[cfg(test)]
@@ -390,7 +393,12 @@ mod tests {
         let events = audit.recent(10).await.unwrap();
         assert_eq!(events.len(), 1);
         match &events[0].kind {
-            AuditKind::ExternalPaymentSettled { receipt_id: rid, amount, provider, .. } => {
+            AuditKind::ExternalPaymentSettled {
+                receipt_id: rid,
+                amount,
+                provider,
+                ..
+            } => {
                 assert_eq!(*rid, receipt_id);
                 assert_eq!(amount, "80000");
                 assert_eq!(provider, "xona");
@@ -479,14 +487,20 @@ mod tests {
         let signer = SubprocessSigner::new("sh")
             .arg("-c")
             .arg("cat >/dev/null; echo 'no funding key' >&2; exit 3");
-        let err = signer.build_payment(&requirement()).await.expect_err("fail");
+        let err = signer
+            .build_payment(&requirement())
+            .await
+            .expect_err("fail");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no funding key")));
     }
 
     #[tokio::test]
     async fn subprocess_signer_rejects_empty_header() {
         let signer = SubprocessSigner::new("sh").arg("-c").arg("cat >/dev/null");
-        let err = signer.build_payment(&requirement()).await.expect_err("empty");
+        let err = signer
+            .build_payment(&requirement())
+            .await
+            .expect_err("empty");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("empty header")));
     }
 }

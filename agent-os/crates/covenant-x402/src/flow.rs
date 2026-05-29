@@ -77,10 +77,7 @@ impl Catalog {
             }
         }
 
-        let method = entry
-            .method
-            .parse::<Method>()
-            .unwrap_or(Method::POST);
+        let method = entry.method.parse::<Method>().unwrap_or(Method::POST);
 
         let capability = Capability {
             provider: req.provider.to_string(),
@@ -95,14 +92,9 @@ impl Catalog {
     }
 
     /// Resolve an entry by optional server title + slug.
-    fn resolve_entry(
-        &self,
-        server_title: Option<&str>,
-        slug: &str,
-    ) -> Option<&RegistryEntry> {
-        self.iter().find(|e| {
-            e.slug == slug && server_title.is_none_or(|t| e.server_title == t)
-        })
+    fn resolve_entry(&self, server_title: Option<&str>, slug: &str) -> Option<&RegistryEntry> {
+        self.iter()
+            .find(|e| e.slug == slug && server_title.is_none_or(|t| e.server_title == t))
     }
 }
 

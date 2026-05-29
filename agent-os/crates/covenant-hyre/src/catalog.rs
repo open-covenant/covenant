@@ -134,7 +134,10 @@ mod tests {
         };
         let cat = HyreCatalog::from_vendored(&config).unwrap();
         assert_eq!(cat.endpoints().len(), 2);
-        assert!(cat.endpoints().iter().all(|e| e.slug().starts_with("defi/")));
+        assert!(cat
+            .endpoints()
+            .iter()
+            .all(|e| e.slug().starts_with("defi/")));
     }
 
     #[test]

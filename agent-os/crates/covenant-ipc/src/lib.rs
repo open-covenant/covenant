@@ -11232,7 +11232,10 @@ mod tests {
             "per_call_cap must round-trip as a decimal string so u128 \
              amounts above JSON's 53-bit integer ceiling survive the wire",
         );
-        assert_eq!(obj.get("credits").and_then(serde_json::Value::as_u64), Some(8));
+        assert_eq!(
+            obj.get("credits").and_then(serde_json::Value::as_u64),
+            Some(8)
+        );
 
         let back: Request = serde_json::from_value(wire).unwrap();
         assert_eq!(back, event, "PayX402 must round-trip verbatim");
@@ -11264,7 +11267,10 @@ mod tests {
         let wire = serde_json::to_value(&resp).unwrap();
         let obj = wire.as_object().expect("object");
         assert_eq!(obj.get("kind"), Some(&serde_json::json!("x402_paid")));
-        assert_eq!(obj.get("status").and_then(serde_json::Value::as_u64), Some(200));
+        assert_eq!(
+            obj.get("status").and_then(serde_json::Value::as_u64),
+            Some(200)
+        );
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);

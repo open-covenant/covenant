@@ -260,7 +260,9 @@ struct AnthropicResponse {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicContent {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     /// Catchall for tool_use, tool_result, thinking, server_tool_use, and
     /// any future block type Anthropic adds. The deserializer consumes the
     /// remaining fields silently so an unknown block can't crash the
@@ -2173,7 +2175,10 @@ model = "nomic-embed-text"
         let response: AnthropicResponse = serde_json::from_str(raw).unwrap();
         let err = process_anthropic_response(response, 4096).expect_err("must error");
         match err {
-            ProviderError::Truncated { max_tokens, partial } => {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
                 assert_eq!(max_tokens, 4096);
                 assert_eq!(
                     partial, "step 1: identify the regression\nstep 2",
@@ -2204,7 +2209,10 @@ model = "nomic-embed-text"
         let p = AnthropicProvider::new("k", "claude-sonnet-4-6");
         assert_eq!(p.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS);
         let p = p.with_max_tokens(16_384);
-        assert_eq!(p.max_tokens, 16_384, "with_max_tokens must override the default");
+        assert_eq!(
+            p.max_tokens, 16_384,
+            "with_max_tokens must override the default"
+        );
     }
 
     #[test]

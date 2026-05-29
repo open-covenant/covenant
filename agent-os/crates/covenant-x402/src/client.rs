@@ -56,12 +56,10 @@ impl Client {
         }
 
         let challenge_text = initial.text().await?;
-        let requirements: Vec<PaymentRequirements> =
-            serde_json::from_str(&challenge_text)
-                .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
+        let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
+            .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
-        let chosen = pick_requirement(&requirements, capability)
-            .ok_or(X402Error::NoMatch)?;
+        let chosen = pick_requirement(&requirements, capability).ok_or(X402Error::NoMatch)?;
 
         debug!(
             network = %chosen.network,
@@ -185,10 +183,7 @@ mod tests {
         // First hit: no x-payment header, return 402 + challenge.
         Mock::given(method("POST"))
             .and(path("/image/creative-director"))
-            .respond_with(
-                ResponseTemplate::new(402)
-                    .set_body_json(challenge.clone()),
-            )
+            .respond_with(ResponseTemplate::new(402).set_body_json(challenge.clone()))
             .up_to_n_times(1)
             .mount(&server)
             .await;
@@ -197,13 +192,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/image/creative-director"))
             .and(header_exists("x-payment"))
-            .and(header(
-                "x-payment",
-                "mock:solana:mainnet:80000",
-            ))
+            .and(header("x-payment", "mock:solana:mainnet:80000"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "ok": true })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
             )
             .mount(&server)
             .await;
@@ -242,9 +233,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/expensive"))
-            .respond_with(
-                ResponseTemplate::new(402).set_body_json(challenge),
-            )
+            .respond_with(ResponseTemplate::new(402).set_body_json(challenge))
             .mount(&server)
             .await;
 

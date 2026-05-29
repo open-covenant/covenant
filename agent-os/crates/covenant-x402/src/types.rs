@@ -103,14 +103,10 @@ mod tests {
 
     #[test]
     fn decodes_upstream_sample() {
-        let parsed: Vec<PaymentRequirements> =
-            serde_json::from_str(XONA_SAMPLE).expect("decode");
+        let parsed: Vec<PaymentRequirements> = serde_json::from_str(XONA_SAMPLE).expect("decode");
         assert_eq!(parsed.len(), 1);
         let r = &parsed[0];
-        assert_eq!(
-            r.network,
-            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-        );
+        assert_eq!(r.network, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp");
         assert_eq!(r.amount, "80000");
         assert_eq!(r.amount_usdc, 0.08);
         assert_eq!(r.scheme, "exact");
@@ -118,8 +114,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_serde() {
-        let parsed: Vec<PaymentRequirements> =
-            serde_json::from_str(XONA_SAMPLE).expect("decode");
+        let parsed: Vec<PaymentRequirements> = serde_json::from_str(XONA_SAMPLE).expect("decode");
         let re_encoded = serde_json::to_string(&parsed).expect("encode");
         let re_parsed: Vec<PaymentRequirements> =
             serde_json::from_str(&re_encoded).expect("re-decode");

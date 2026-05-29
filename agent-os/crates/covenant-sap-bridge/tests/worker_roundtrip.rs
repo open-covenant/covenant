@@ -209,7 +209,10 @@ async fn attest_root_rejects_short_hash_before_spawning_worker() {
         release_scope: "audit".into(),
         recorded_at: 0,
     };
-    let err = bridge.publish_audit_root(&att).await.expect_err("must reject");
+    let err = bridge
+        .publish_audit_root(&att)
+        .await
+        .expect_err("must reject");
     match err {
         BridgeError::Invalid(msg) => {
             assert!(

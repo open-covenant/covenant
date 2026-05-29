@@ -71,7 +71,9 @@ impl FacilitatorRequirements {
             pay_to: req.pay_to.clone(),
             max_timeout_seconds: 30,
             asset: req.asset.clone(),
-            extra: FacilitatorExtra { fee_payer: fee_payer.into() },
+            extra: FacilitatorExtra {
+                fee_payer: fee_payer.into(),
+            },
         }
     }
 }
@@ -100,7 +102,9 @@ impl FacilitatorPayload {
             x402_version: X402_VERSION_V1,
             scheme: SCHEME_EXACT.into(),
             network: network.into(),
-            payload: FacilitatorTxEnvelope { transaction: transaction_b64.into() },
+            payload: FacilitatorTxEnvelope {
+                transaction: transaction_b64.into(),
+            },
         }
     }
 }
@@ -160,7 +164,10 @@ pub struct FacilitatorClient {
 
 impl FacilitatorClient {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { base_url: FACILITATOR.into(), http }
+        Self {
+            base_url: FACILITATOR.into(),
+            http,
+        }
     }
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
@@ -227,12 +234,21 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["maxAmountRequired"], "80000");
-        assert_eq!(json["payTo"], "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC");
+        assert_eq!(
+            json["payTo"],
+            "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC"
+        );
         assert_eq!(json["mimeType"], "application/json");
         assert_eq!(json["outputSchema"], serde_json::json!({}));
         assert_eq!(json["maxTimeoutSeconds"], 30);
-        assert_eq!(json["extra"]["feePayer"], "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4");
-        assert!(json.get("amount").is_none(), "must not emit xona-style amount");
+        assert_eq!(
+            json["extra"]["feePayer"],
+            "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        );
+        assert!(
+            json.get("amount").is_none(),
+            "must not emit xona-style amount"
+        );
         assert!(json.get("amountUsdc").is_none());
     }
 
@@ -251,7 +267,9 @@ mod tests {
                 pay_to: "p".into(),
                 max_timeout_seconds: 30,
                 asset: "a".into(),
-                extra: FacilitatorExtra { fee_payer: "f".into() },
+                extra: FacilitatorExtra {
+                    fee_payer: "f".into(),
+                },
             },
         );
         let json = serde_json::to_value(&req).unwrap();
@@ -267,13 +285,17 @@ mod tests {
         let body = r#"{"isValid":false,"invalidReason":"invalid_exact_svm_payload_transaction_could_not_be_decoded","payer":""}"#;
         let resp: VerifyResponse = serde_json::from_str(body).unwrap();
         assert!(!resp.is_valid);
-        assert_eq!(resp.invalid_reason.as_deref(), Some("invalid_exact_svm_payload_transaction_could_not_be_decoded"));
+        assert_eq!(
+            resp.invalid_reason.as_deref(),
+            Some("invalid_exact_svm_payload_transaction_could_not_be_decoded")
+        );
         assert_eq!(resp.payer.as_deref(), Some(""));
     }
 
     #[test]
     fn settle_response_decodes_success_with_signature() {
-        let body = r#"{"success":true,"payer":"7G73…","transaction":"5j7s…sig","network":"solana"}"#;
+        let body =
+            r#"{"success":true,"payer":"7G73…","transaction":"5j7s…sig","network":"solana"}"#;
         let resp: SettleResponse = serde_json::from_str(body).unwrap();
         assert!(resp.success);
         assert_eq!(resp.transaction, "5j7s…sig");
@@ -300,6 +322,9 @@ mod tests {
         assert_eq!(req.max_amount_required, "80000");
         assert_eq!(req.asset, src.asset);
         assert_eq!(req.pay_to, src.pay_to);
-        assert_eq!(req.extra.fee_payer, "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4");
+        assert_eq!(
+            req.extra.fee_payer,
+            "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        );
     }
 }

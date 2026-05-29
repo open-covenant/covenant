@@ -146,7 +146,10 @@ fn is_solana_root(path: &str) -> bool {
 }
 
 fn str_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
-    obj.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+    obj.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 fn parse_params(raw: Option<&Value>) -> Vec<Param> {

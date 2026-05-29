@@ -181,6 +181,43 @@ export async function fetchTokenAccountAmount(
   return readU64LE(new Uint8Array(acc.data), 64);
 }
 
+export interface OwnedTokenAccount {
+  pubkey: PublicKey;
+  amount: bigint;
+}
+
+export async function fetchOwnerTokenAccountsForMint(
+  connection: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+  tokenProgramId: PublicKey,
+): Promise<OwnedTokenAccount[]> {
+  const resp = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { mint },
+    "confirmed",
+  );
+  return resp.value
+    .filter((acc) => acc.account.owner.equals(tokenProgramId))
+    .map((acc) => {
+      const info = (acc.account.data as { parsed: { info: { tokenAmount: { amount: string } } } })
+        .parsed.info.tokenAmount;
+      return {
+        pubkey: acc.pubkey,
+        amount: BigInt(info.amount),
+      };
+    });
+}
+
+export function pickStakeSource(accounts: OwnedTokenAccount[]): OwnedTokenAccount | null {
+  if (accounts.length === 0) return null;
+  return accounts.reduce((best, cur) => (cur.amount > best.amount ? cur : best));
+}
+
+export function sumBalances(accounts: OwnedTokenAccount[]): bigint {
+  return accounts.reduce((s, a) => s + a.amount, 0n);
+}
+
 export function ownerPositionFilter(owner: PublicKey) {
   return {
     memcmp: { offset: 8, bytes: bs58.encode(owner.toBuffer()) },

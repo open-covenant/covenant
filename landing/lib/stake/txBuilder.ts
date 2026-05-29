@@ -33,18 +33,19 @@ export const TIER_OPTIONS: { label: string; days: number; bps: number }[] = [
 
 export function buildCreatePositionIx(opts: {
   owner: PublicKey;
+  ownerCvntAccount: PublicKey;
   nonce: bigint;
   amount: bigint;
   lockTierBps: number;
 }): TransactionInstruction {
-  const { owner, nonce, amount, lockTierBps } = opts;
+  const { owner, ownerCvntAccount, nonce, amount, lockTierBps } = opts;
   const { cvntMint, tokenProgramId } = getClusterConfig();
   const lockedVault = deriveAta(
     lockedVaultAuthorityPda(),
     cvntMint,
     tokenProgramId,
   );
-  const ownerAta = deriveAta(owner, cvntMint, tokenProgramId);
+  const ownerAta = ownerCvntAccount;
   const position = positionPda(owner, nonce);
 
   const data = concatBytes(

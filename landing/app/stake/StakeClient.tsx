@@ -13,15 +13,16 @@ import { explorerTxUrl, getClusterConfig } from "../../lib/stake/env";
 import {
   TIER_30D_BPS,
   TIER_OPTIONS,
-  buildCreateAtaIx,
   buildCreatePositionIx,
 } from "../../lib/stake/txBuilder";
 import {
   fetchConfig,
-  fetchTokenAccountAmount,
+  fetchOwnerTokenAccountsForMint,
+  pickStakeSource,
+  sumBalances,
   type ConfigState,
+  type OwnedTokenAccount,
 } from "../../lib/stake/readers";
-import { deriveAta } from "../../lib/stake/pdas";
 import { formatCvnt, parseCvntInput } from "../../lib/stake/format";
 
 type TxState =
@@ -42,10 +43,13 @@ export function StakeClient() {
   );
 
   const [config, setConfig] = useState<ConfigState | null>(null);
-  const [balance, setBalance] = useState<bigint | null>(null);
+  const [accounts, setAccounts] = useState<OwnedTokenAccount[] | null>(null);
   const [amount, setAmount] = useState("");
   const [tierBps, setTierBps] = useState(TIER_30D_BPS);
   const [tx, setTx] = useState<TxState>({ phase: "idle" });
+
+  const balance = accounts === null ? null : sumBalances(accounts);
+  const stakeSource = accounts === null ? null : pickStakeSource(accounts);
 
   useEffect(() => {
     if (!connection) return;
@@ -60,13 +64,19 @@ export function StakeClient() {
 
   useEffect(() => {
     if (!publicKey || !connection) {
-      setBalance(null);
+      setAccounts(null);
       return;
     }
     let cancelled = false;
-    const ata = deriveAta(publicKey, cluster.cvntMint, cluster.tokenProgramId);
-    fetchTokenAccountAmount(connection, ata).then((amt) => {
-      if (!cancelled) setBalance(amt ?? 0n);
+    fetchOwnerTokenAccountsForMint(
+      connection,
+      publicKey,
+      cluster.cvntMint,
+      cluster.tokenProgramId,
+    ).then((accs) => {
+      if (!cancelled) setAccounts(accs);
+    }).catch(() => {
+      if (!cancelled) setAccounts([]);
     });
     return () => {
       cancelled = true;
@@ -76,35 +86,32 @@ export function StakeClient() {
   const parsedAmount = useMemo(() => parseCvntInput(amount), [amount]);
   const minLockAmount = config?.minLockAmount ?? 0n;
   const meetsMin = parsedAmount !== null && parsedAmount >= minLockAmount;
-  const sufficientBalance =
-    parsedAmount !== null && balance !== null && balance >= parsedAmount;
+  const sufficientInSource =
+    parsedAmount !== null &&
+    stakeSource !== null &&
+    stakeSource.amount >= parsedAmount;
   const canSubmit =
     !!publicKey &&
     !!config &&
+    !!stakeSource &&
     meetsMin &&
-    sufficientBalance &&
+    sufficientInSource &&
     tx.phase !== "submitting";
 
   const handleStake = async () => {
-    if (!publicKey || !walletProvider || !parsedAmount || !connection) return;
+    if (!publicKey || !walletProvider || !parsedAmount || !connection || !stakeSource) return;
     setTx({ phase: "submitting" });
     try {
-      const ata = deriveAta(publicKey, cluster.cvntMint, cluster.tokenProgramId);
-      const ataInfo = await connection.getAccountInfo(ata, "confirmed");
-
       const nonce = BigInt(Date.now());
-      const ixs = [];
-      if (!ataInfo) {
-        ixs.push(buildCreateAtaIx({ payer: publicKey, owner: publicKey }));
-      }
-      ixs.push(
+      const ixs = [
         buildCreatePositionIx({
           owner: publicKey,
+          ownerCvntAccount: stakeSource.pubkey,
           nonce,
           amount: parsedAmount,
           lockTierBps: tierBps,
         }),
-      );
+      ];
       const { blockhash, lastValidBlockHeight } =
         await connection.getLatestBlockhash("confirmed");
       const transaction = new Transaction({
@@ -224,9 +231,21 @@ export function StakeClient() {
             below minimum lock amount
           </p>
         )}
-        {publicKey && parsedAmount !== null && meetsMin && !sufficientBalance && (
+        {publicKey && parsedAmount !== null && meetsMin && !sufficientInSource && stakeSource && (
           <p className="mt-3 text-center text-[11px] text-amber-400">
-            balance too low
+            largest CVNT account holds {formatCvnt(stakeSource.amount)} — lock
+            from there, or consolidate
+          </p>
+        )}
+        {publicKey && accounts !== null && accounts.length === 0 && (
+          <p className="mt-3 text-center text-[11px] text-amber-400">
+            no $CVNT in this wallet
+          </p>
+        )}
+        {publicKey && accounts !== null && accounts.length > 1 && (
+          <p className="mt-3 text-center text-[11px] text-neutral-500">
+            {accounts.length} CVNT accounts found — locking from the largest
+            ({formatCvnt(stakeSource?.amount ?? 0n)})
           </p>
         )}
 

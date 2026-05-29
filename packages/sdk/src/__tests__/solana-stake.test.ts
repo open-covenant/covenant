@@ -8,7 +8,11 @@ import {
   prepareStakeCreatePositionInstruction,
   prepareStakeDepositSolFeesInstruction,
   prepareStakeIncreaseAmountInstruction,
+  prepareStakePauseInstruction,
   prepareStakeRotateFeeRouterInstruction,
+  prepareStakeUnpauseInstruction,
+  prepareStakeUpdateMaxActiveLocksInstruction,
+  prepareStakeUpdateMinLockAmountInstruction,
 } from '../solana/stake.js';
 
 const ADDR = '11111111111111111111111111111111';
@@ -140,5 +144,35 @@ describe('Solana stake instruction descriptors', () => {
 
   it('preserves all four tier bps as discriminated literals', () => {
     expect(STAKE_TIER_365D_BPS).toBe(30_000);
+  });
+
+  it('builds a pause bundle with pause_authority OR authority as signer', () => {
+    const bundle = prepareStakePauseInstruction({ configAccount: ADDR, signer: ADDR });
+    expect(bundle.instructions[0]!.instruction).toBe('pause');
+    expect(bundle.instructions[0]!.accounts.find((a) => a.name === 'signer')?.signer).toBe(true);
+  });
+
+  it('builds an unpause bundle restricted to authority', () => {
+    const bundle = prepareStakeUnpauseInstruction({ configAccount: ADDR, authority: ADDR });
+    expect(bundle.instructions[0]!.instruction).toBe('unpause');
+    expect(bundle.instructions[0]!.accounts.find((a) => a.name === 'authority')?.signer).toBe(true);
+  });
+
+  it('builds update_min_lock_amount + update_max_active_locks bundles', () => {
+    const b1 = prepareStakeUpdateMinLockAmountInstruction({
+      configAccount: ADDR,
+      authority: ADDR,
+      newMin: '5000000000',
+    });
+    expect(b1.instructions[0]!.instruction).toBe('update_min_lock_amount');
+    expect(b1.instructions[0]!.data.new_min).toBe('5000000000');
+
+    const b2 = prepareStakeUpdateMaxActiveLocksInstruction({
+      configAccount: ADDR,
+      authority: ADDR,
+      newMax: 1000,
+    });
+    expect(b2.instructions[0]!.instruction).toBe('update_max_active_locks');
+    expect(b2.instructions[0]!.data.new_max).toBe(1000);
   });
 });

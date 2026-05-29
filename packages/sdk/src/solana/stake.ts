@@ -36,6 +36,7 @@ export interface StakeInitializeInput {
   covntMint: SolanaAddress;
   lockedCvntVault: SolanaAddress;
   buylockCvntVault: SolanaAddress;
+  programData: SolanaAddress;
   pauseAuthority: SolanaAddress;
   feeRouterAuthority: SolanaAddress;
   minLockAmount: string;
@@ -43,10 +44,26 @@ export interface StakeInitializeInput {
   feeRouterRateLimitSecs: string;
 }
 
-export interface StakeSetPauseInput {
+export interface StakePauseInput {
   configAccount: SolanaAddress;
   signer: SolanaAddress;
-  paused: boolean;
+}
+
+export interface StakeUnpauseInput {
+  configAccount: SolanaAddress;
+  authority: SolanaAddress;
+}
+
+export interface StakeUpdateMinLockAmountInput {
+  configAccount: SolanaAddress;
+  authority: SolanaAddress;
+  newMin: string;
+}
+
+export interface StakeUpdateMaxActiveLocksInput {
+  configAccount: SolanaAddress;
+  authority: SolanaAddress;
+  newMax: number;
 }
 
 export interface StakeUpdateAuthorityInput {
@@ -146,6 +163,7 @@ export function prepareStakeInitializeInstruction(
       meta('locked_cvnt_vault', input.lockedCvntVault, false, false),
       meta('buylock_cvnt_vault', input.buylockCvntVault, false, false),
       meta('authority', input.authority, true, true),
+      meta('program_data', input.programData, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
       meta('system_program', SYSTEM_PROGRAM_ID, false, false),
     ],
@@ -159,17 +177,55 @@ export function prepareStakeInitializeInstruction(
   });
 }
 
-export function prepareStakeSetPauseInstruction(
-  input: StakeSetPauseInput,
-): PreparedSolanaBundle {
+export function prepareStakePauseInstruction(input: StakePauseInput): PreparedSolanaBundle {
   return bundle({
     programId: COVENANT_STAKE_PROGRAM_ID,
-    instruction: 'set_pause',
+    instruction: 'pause',
     accounts: [
       meta('config', input.configAccount, false, true),
       meta('signer', input.signer, true, false),
     ],
-    data: { paused: input.paused },
+    data: {},
+  });
+}
+
+export function prepareStakeUnpauseInstruction(input: StakeUnpauseInput): PreparedSolanaBundle {
+  return bundle({
+    programId: COVENANT_STAKE_PROGRAM_ID,
+    instruction: 'unpause',
+    accounts: [
+      meta('config', input.configAccount, false, true),
+      meta('authority', input.authority, true, false),
+    ],
+    data: {},
+  });
+}
+
+export function prepareStakeUpdateMinLockAmountInstruction(
+  input: StakeUpdateMinLockAmountInput,
+): PreparedSolanaBundle {
+  return bundle({
+    programId: COVENANT_STAKE_PROGRAM_ID,
+    instruction: 'update_min_lock_amount',
+    accounts: [
+      meta('config', input.configAccount, false, true),
+      meta('authority', input.authority, true, false),
+    ],
+    data: { new_min: input.newMin },
+  });
+}
+
+export function prepareStakeUpdateMaxActiveLocksInstruction(
+  input: StakeUpdateMaxActiveLocksInput,
+): PreparedSolanaBundle {
+  return bundle({
+    programId: COVENANT_STAKE_PROGRAM_ID,
+    instruction: 'update_max_active_locks',
+    accounts: [
+      meta('config', input.configAccount, false, true),
+      meta('authority', input.authority, true, false),
+    ],
+    data: { new_max: input.newMax },
   });
 }
 

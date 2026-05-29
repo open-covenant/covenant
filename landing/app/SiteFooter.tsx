@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { RELEASE_STATUS, TAGLINE } from "./_brand";
+import { FOOTER_LINKS, RELEASE_STATUS, TAGLINE } from "./_brand";
 
 type SiteFooterProps = {
   /** Extra classes for the outer <footer>. Pages own positioning. */
@@ -39,12 +39,27 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
           Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
         </span>
       </span>
-      <Link
-        href="/privacy"
-        className="text-neutral-500 transition-colors hover:text-neutral-200"
-      >
-        Privacy
-      </Link>
+      {FOOTER_LINKS.map((item) =>
+        item.external ? (
+          <a
+            key={item.href}
+            href={item.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-neutral-500 transition-colors hover:text-neutral-200"
+          >
+            {item.label}
+          </a>
+        ) : (
+          <Link
+            key={item.href}
+            href={item.href}
+            className="text-neutral-500 transition-colors hover:text-neutral-200"
+          >
+            {item.label}
+          </Link>
+        ),
+      )}
     </footer>
   );
 }

@@ -35,6 +35,12 @@ const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() {
+        bail!("usage: mainnet_stake_e2e <keypair> <amount> <days>  |  claim <keypair> <position_pda>");
+    }
+    if args[0] == "claim" {
+        return run_claim(&args[1..]);
+    }
     if args.len() < 3 {
         bail!("usage: mainnet_stake_e2e <keypair_path> <amount_cvnt> <tier_days>");
     }
@@ -188,5 +194,73 @@ fn main() -> Result<()> {
     println!("\nEND-TO-END SUCCESS");
     println!("explorer: https://explorer.solana.com/tx/{sig}");
     println!("position: https://explorer.solana.com/address/{position_pda}");
+    Ok(())
+}
+
+fn run_claim(args: &[String]) -> Result<()> {
+    if args.len() < 2 {
+        bail!("usage: mainnet_stake_e2e claim <keypair_path> <position_pda>");
+    }
+    let keypair_path = &args[0];
+    let position_pda = Pubkey::from_str(&args[1]).context("position pda")?;
+
+    let user = read_keypair_file(keypair_path)
+        .map_err(|e| anyhow!("read {}: {}", keypair_path, e))?;
+    let user_key = user.pubkey();
+    let program_id = Pubkey::from_str(COVENANT_STAKE_PROGRAM_ID_STR)?;
+    let (config_pda, _) = Pubkey::find_program_address(&[b"stake_config"], &program_id);
+    let (reward_vault_pda, _) = Pubkey::find_program_address(&[b"reward_vault"], &program_id);
+
+    let rpc = RpcClient::new_with_commitment(MAINNET_RPC.to_string(), CommitmentConfig::confirmed());
+
+    println!("user         = {user_key}");
+    println!("position     = {position_pda}");
+    println!("config       = {config_pda}");
+    println!("reward_vault = {reward_vault_pda}");
+    println!();
+
+    let data = anchor_discriminator("claim").to_vec();
+    let metas = vec![
+        AccountMeta::new(config_pda, false),
+        AccountMeta::new(position_pda, false),
+        AccountMeta::new(reward_vault_pda, false),
+        AccountMeta::new(user_key, true),
+    ];
+    let ix = Instruction { program_id, accounts: metas, data };
+
+    let lamports_before = rpc.get_balance(&user_key)?;
+    let blockhash = rpc.get_latest_blockhash().context("blockhash")?;
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&user_key), &[&user], blockhash);
+    println!("submitting claim...");
+    let result = rpc.send_and_confirm_transaction_with_spinner_and_config(
+        &tx,
+        CommitmentConfig::confirmed(),
+        RpcSendTransactionConfig {
+            skip_preflight: false,
+            preflight_commitment: Some(CommitmentConfig::confirmed().commitment),
+            ..Default::default()
+        },
+    );
+
+    match result {
+        Ok(sig) => {
+            let lamports_after = rpc.get_balance(&user_key)?;
+            let delta = lamports_after as i128 - lamports_before as i128;
+            println!("claim tx = {sig}");
+            println!("user balance delta = {delta} lamports");
+            println!("(positive delta minus tx fee = claimed amount; negative or zero delta = nothing claimed)");
+            println!("CLAIM PATH: SUCCESS");
+        }
+        Err(e) => {
+            let msg = format!("{e}");
+            println!("claim returned error: {msg}");
+            if msg.contains("NothingToClaim") || msg.contains("0x17d5") {
+                println!("CLAIM PATH: NothingToClaim (expected — keeper is in DRY_RUN, no SOL distributed yet)");
+            } else {
+                println!("CLAIM PATH: unexpected error");
+                return Err(e.into());
+            }
+        }
+    }
     Ok(())
 }

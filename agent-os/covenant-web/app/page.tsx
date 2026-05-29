@@ -285,7 +285,7 @@ export default function OverviewPage() {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Privacy
+                Privacy policy
               </a>
               .
             </p>

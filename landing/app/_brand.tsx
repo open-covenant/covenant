@@ -11,9 +11,13 @@ export const NAV_LINKS = [
   { label: "stake", href: "/stake", external: false as const },
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
-  { label: "paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
-  { label: "contact", href: "/contact", external: false as const },
+];
+
+export const FOOTER_LINKS = [
+  { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
+  { label: "Contact", href: "/contact", external: false as const },
+  { label: "Privacy policy", href: "/privacy", external: false as const },
 ];
 
 export function XIcon({ className }: { className?: string }) {

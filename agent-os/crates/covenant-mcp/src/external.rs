@@ -22,6 +22,8 @@ pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub enum BootstrapError {
     #[error("transport: {0}")]
     Transport(#[from] McpClientError),
+    #[error("malformed initialize response: {0}")]
+    BadInitialize(String),
     #[error("malformed tools/list response: {0}")]
     BadList(String),
     #[error("duplicate remote tool name after MCP prefixing: {0}")]
@@ -33,6 +35,17 @@ pub struct RemoteToolOptions {
     pub tool_prefix: Option<String>,
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+}
+
+fn initialize_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Run `initialize` → `notifications/initialized` → `tools/list` against
@@ -55,7 +68,30 @@ pub async fn bootstrap_remote_tools_with_options(
         "capabilities": {},
         "clientInfo": { "name": "covenant", "version": env!("CARGO_PKG_VERSION") }
     });
-    let _ = client.request("initialize", init_params).await?;
+    let init_response = client.request("initialize", init_params).await?;
+    // The MCP `initialize` result MUST be a JSON object per the spec.
+    // A non-object (null, string, array, number) is a misconfigured or
+    // incompatible server; refusing here keeps the broken session from
+    // poisoning the downstream tools/list call with a useless error.
+    let init_obj = init_response.as_object().ok_or_else(|| {
+        BootstrapError::BadInitialize(format!(
+            "expected JSON object, got {}",
+            initialize_kind(&init_response)
+        ))
+    })?;
+    // protocolVersion mismatch is non-fatal in Phase 0 — the spec
+    // explicitly allows the server to negotiate a different version —
+    // but operators triaging a broken connection deserve a warn so the
+    // log shows what the server actually offered.
+    if let Some(advertised) = init_obj.get("protocolVersion").and_then(|v| v.as_str()) {
+        if advertised != PROTOCOL_VERSION {
+            tracing::warn!(
+                client_protocol = PROTOCOL_VERSION,
+                server_protocol = advertised,
+                "mcp: initialize protocolVersion mismatch"
+            );
+        }
+    }
     client
         .notify("notifications/initialized", Value::Null)
         .await?;
@@ -944,5 +980,57 @@ mod tests {
             source_message, "transport closed",
             "BootstrapError::Transport source() Display must remain the literal 'transport closed' — anchors the McpClientError::Closed Display verbatim through the wrapper so a cross-crate refactor that changed McpClientError::Closed's Display under a 'consistency with sibling variants' rationale would surface as a Transport pin failure (cross-crate-Display-drift regression class)"
         );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rejects_non_object_initialize_response() {
+        // Misconfigured-server guard: an MCP server that responds to
+        // initialize with a non-object payload (string, array, null,
+        // number) is incompatible with the spec. Refusing here keeps
+        // the broken session from poisoning tools/list with a
+        // downstream error that obscures the actual root cause.
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(|method, _| match method {
+            "initialize" => Ok(serde_json::json!("not an object")),
+            other => happy_handler(other, &Value::Null),
+        }));
+        let outcome = bootstrap_remote_tools(client).await;
+        match outcome {
+            Err(BootstrapError::BadInitialize(message)) => {
+                assert!(
+                    message.contains("expected JSON object"),
+                    "BadInitialize must explain WHAT was rejected: {message}"
+                );
+                assert!(
+                    message.contains("string"),
+                    "BadInitialize must surface the offending kind so operators triaging the audit log see what the server actually returned: {message}"
+                );
+            }
+            Err(other) => panic!("expected BadInitialize, got Err({other:?})"),
+            Ok(tools) => panic!(
+                "expected BadInitialize, got Ok with {} tools — non-object initialize must surface as a Bootstrap rejection, not a silent success",
+                tools.len()
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_accepts_object_initialize_with_mismatched_protocol_version() {
+        // Compatibility guard: protocolVersion drift is non-fatal per
+        // the MCP spec — the server may negotiate a different version
+        // — so bootstrap must succeed. The mismatch lands in the log
+        // (visible to operators via tracing) without breaking the
+        // session.
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(|method, _| match method {
+            "initialize" => Ok(serde_json::json!({
+                "protocolVersion": "1999-01-01",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "fake", "version": "0.0.1" }
+            })),
+            other => happy_handler(other, &Value::Null),
+        }));
+        let tools = bootstrap_remote_tools(client).await.expect(
+            "version drift must not abort bootstrap — MCP spec allows server-side negotiation",
+        );
+        assert_eq!(tools.len(), 2);
     }
 }

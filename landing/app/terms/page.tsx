@@ -282,10 +282,13 @@ const SECTIONS: Section[] = [
     title: "Governing law",
     body: (
       <p className={paragraph}>
-        These Terms are governed by the laws of the State of Delaware, United States, without
-        regard to its conflict-of-laws principles. The exclusive venue for any dispute arising
-        from or relating to the Services or these Terms shall be the state or federal courts
-        located in Wilmington, Delaware, and you consent to personal jurisdiction in those courts.
+        These Terms are governed by the laws of the European Union and, supplementally, by the
+        laws of the European Union member state in which the operator is established (the
+        &ldquo;Operating Jurisdiction&rdquo;), without regard to conflict-of-laws principles. The
+        exclusive venue for any dispute arising from or relating to the Services or these Terms
+        shall be the competent courts of the Operating Jurisdiction. Nothing in this section
+        deprives consumers (where applicable) of the protection of mandatory provisions of the
+        law of their country of habitual residence.
       </p>
     ),
   },

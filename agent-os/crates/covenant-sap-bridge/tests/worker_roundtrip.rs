@@ -3,8 +3,10 @@
 //! null, and error envelopes map onto the typed bridge surface without
 //! touching the network.
 
+use std::time::Duration;
+
 use covenant_sap_bridge::attestation::AuditRootAttestation;
-use covenant_sap_bridge::config::{Cluster, Config};
+use covenant_sap_bridge::config::{Cluster, Config, DEFAULT_WORKER_TIMEOUT};
 use covenant_sap_bridge::identity::AgentManifest;
 use covenant_sap_bridge::{BridgeError, SapBridge};
 
@@ -19,6 +21,7 @@ fn bridge_with_stub(envelope_json: &str) -> SapBridge {
         rpc_url: "https://api.devnet.solana.com".into(),
         explorer_url: "https://explorer.oobeprotocol.ai".into(),
         worker_command: vec!["sh".into(), "-c".into(), script],
+        worker_timeout: DEFAULT_WORKER_TIMEOUT,
     };
     SapBridge::new(config).expect("bridge")
 }
@@ -130,6 +133,100 @@ async fn diff_agent_against_matching_chain_account_is_empty() {
 }
 
 #[tokio::test]
+async fn worker_invoke_times_out_on_hung_subprocess_with_short_budget() {
+    // Pre-fix: worker::invoke awaited wait_with_output with no deadline,
+    // so a stalled SAP worker would block the daemon's reconciliation /
+    // attestation task forever — violating the "bridge must never block
+    // the offline daemon" guarantee. Post-fix: the timeout fires, the
+    // subprocess is reaped via kill_on_drop, and the caller receives a
+    // structured BridgeError::Timeout it can backoff distinctly from a
+    // spawn / decode failure.
+    //
+    // Stub: drains stdin, sleeps 5s (well beyond a healthy round-trip),
+    // and only THEN prints an envelope. The 200ms config budget guarantees
+    // the timeout branch fires before the stub finishes.
+    let script = "cat >/dev/null; sleep 5; printf '{\"ok\":true,\"data\":{}}'";
+    let config = Config {
+        enabled: true,
+        cluster: Cluster::Devnet,
+        program_id: "SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ".into(),
+        rpc_url: "https://api.devnet.solana.com".into(),
+        explorer_url: "https://explorer.oobeprotocol.ai".into(),
+        worker_command: vec!["sh".into(), "-c".into(), script.into()],
+        // Budget of 1s gives the timeout branch headroom under CI load
+        // without dragging out the test (still 5x faster than the stub).
+        worker_timeout: Duration::from_secs(1),
+    };
+    let bridge = SapBridge::new(config).expect("bridge");
+    let start = std::time::Instant::now();
+    let err = bridge
+        .publish_agent(&demo_manifest())
+        .await
+        .expect_err("must time out");
+    let elapsed = start.elapsed();
+    // Upper bound the deadline at the stub's full sleep length minus a
+    // small margin — strict enough to catch a refactor that silently
+    // dropped the timeout (which would let the stub run to completion
+    // and return Ok), loose enough that CI jitter (slow VM, contended
+    // scheduler) doesn't flake.
+    assert!(
+        elapsed < Duration::from_millis(4_500),
+        "timeout must fire before the stub's 5s sleep finishes — pins that the deadline \
+         is real, not silently dropped; got elapsed {elapsed:?}"
+    );
+    match err {
+        BridgeError::Timeout { secs } => {
+            assert_eq!(secs, 1, "Timeout.secs must report the configured budget");
+        }
+        other => panic!(
+            "expected BridgeError::Timeout (so reconciliation loops can apply a hang-specific \
+             backoff), got {other:?}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn attest_root_rejects_short_hash_before_spawning_worker() {
+    // The hash-length pre-validation in publish_audit_root must fire
+    // before any subprocess spawn. Using a worker_command that points
+    // at a binary that DOES NOT EXIST means a spawn would surface
+    // BridgeError::Worker — so receiving BridgeError::Invalid here
+    // proves the validation ran before the spawn attempt.
+    let config = Config {
+        enabled: true,
+        cluster: Cluster::Devnet,
+        program_id: "SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ".into(),
+        rpc_url: "https://api.devnet.solana.com".into(),
+        explorer_url: "https://explorer.oobeprotocol.ai".into(),
+        worker_command: vec!["definitely-not-a-real-binary-xyz".into()],
+        worker_timeout: DEFAULT_WORKER_TIMEOUT,
+    };
+    let bridge = SapBridge::new(config).expect("bridge");
+    let att = AuditRootAttestation {
+        root_hash_hex: "deadbeef".into(), // 8 chars, not 64
+        release_target: "agent".into(),
+        release_subject: "covenant-demo".into(),
+        release_scope: "audit".into(),
+        recorded_at: 0,
+    };
+    let err = bridge.publish_audit_root(&att).await.expect_err("must reject");
+    match err {
+        BridgeError::Invalid(msg) => {
+            assert!(
+                msg.contains("64"),
+                "Invalid message must name the required length so the operator can fix \
+                 the source caller: {msg}"
+            );
+        }
+        BridgeError::Worker(_) => panic!(
+            "Worker error means the bridge tried to spawn the non-existent binary instead \
+             of pre-validating the hash — the validation branch did not fire"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn disabled_bridge_never_invokes_worker() {
     // Worker command would error if spawned (nonexistent program), so
     // reaching it at all would surface as a Worker error, not Disabled.
@@ -143,4 +240,23 @@ async fn disabled_bridge_never_invokes_worker() {
         .await
         .expect_err("disabled");
     assert!(matches!(err, BridgeError::Disabled));
+}
+
+#[tokio::test]
+async fn worker_timeout_secs_env_override_is_parsed_and_applied() {
+    // Pin the env-var wiring so an operator-tuned timeout actually
+    // reaches the subprocess deadline. A refactor that misnamed the env
+    // key, or fell back to DEFAULT_WORKER_TIMEOUT on a numeric value,
+    // would surface here.
+    let cfg = Config::from_env([("COVENANT_SAP_WORKER_TIMEOUT_SECS", "7")]);
+    assert_eq!(cfg.worker_timeout, Duration::from_secs(7));
+    // Garbage falls back to the default rather than silently disabling the
+    // deadline (zero would).
+    let cfg = Config::from_env([("COVENANT_SAP_WORKER_TIMEOUT_SECS", "abc")]);
+    assert_eq!(cfg.worker_timeout, DEFAULT_WORKER_TIMEOUT);
+    let cfg = Config::from_env([("COVENANT_SAP_WORKER_TIMEOUT_SECS", "0")]);
+    assert_eq!(
+        cfg.worker_timeout, DEFAULT_WORKER_TIMEOUT,
+        "0 must not silently disable the deadline — fall back to the default"
+    );
 }

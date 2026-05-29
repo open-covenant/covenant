@@ -172,12 +172,19 @@ impl ManifestDiff {
             manifest.protocols.iter().map(String::as_str).collect();
         let protocols_changed = current_protocols != manifest_protocols;
 
-        // Pricing comparison is intentionally coarse: both sides flow
-        // through serde_json::Value, and Covenant's simple PricingTier
-        // doesn't yet round-trip to SDK-native tiers. Treat any
-        // pricing on the manifest as a potential change until the
-        // budget rate-card mapping lands.
-        let pricing_changed = !manifest.pricing.is_empty() || !current.pricing.is_empty();
+        // Pricing comparison is intentionally coarse: the Rust
+        // `PricingTier` doesn't yet round-trip to SDK-native tiers, so a
+        // real equality check would require a bridge translator that
+        // hasn't landed. Fall back to "fire only when the manifest
+        // declares pricing" — the prior `manifest.is_empty() ||
+        // current.is_empty()` over-fired on EVERY reconcile for any
+        // agent already carrying on-chain pricing (the chain side is
+        // never empty once published, so the second disjunct was
+        // unconditionally true). Narrowing to `!manifest.is_empty()`
+        // stops the runaway `update_agent` storm for the steady-state
+        // "manifest has no rate card" case while still flagging the
+        // case where the operator declares pricing they want pushed.
+        let pricing_changed = !manifest.pricing.is_empty();
 
         let metadata_changed = manifest.name != current.name
             || manifest.description.as_deref().unwrap_or("") != current.description
@@ -268,5 +275,50 @@ mod tests {
     fn rename_marks_metadata_changed() {
         let d = ManifestDiff::between(&detail("old", &[], &[]), &manifest("new", &[], &[]));
         assert!(d.metadata_changed);
+    }
+
+    #[test]
+    fn pricing_changed_is_false_when_manifest_has_no_pricing_even_if_chain_carries_some() {
+        // Regression pin for the sap-bridge-worker-robustness fix: the
+        // prior `pricing_changed = !manifest.is_empty() || !current.is_empty()`
+        // returned TRUE for every reconcile of any agent already carrying
+        // on-chain pricing (because `current.pricing` is never empty once
+        // published), forcing a runaway `update_agent` RPC on every poll.
+        // After the narrowing, an empty-manifest run lands `pricing_changed
+        // = false` so the diff reports no work and the reconciliation loop
+        // stays quiet.
+        let mut on_chain = detail("demo", &[], &["a2a"]);
+        on_chain.pricing = vec![serde_json::json!({"id": "tier-1", "priceUsdMicros": 1000})];
+        let d = ManifestDiff::between(&on_chain, &manifest("demo", &[], &["a2a"]));
+        assert!(
+            !d.pricing_changed,
+            "manifest with empty pricing must NOT flag pricing_changed even when the chain \
+             carries pricing rows — a refactor that re-introduced the OR with \
+             current.pricing would force update_agent on every reconcile for any \
+             previously-published agent, exactly the runaway-RPC failure mode this \
+             slice closes",
+        );
+        assert!(
+            d.is_empty(),
+            "the whole diff must be empty in this case so reconcile reports no work: {d:?}"
+        );
+    }
+
+    #[test]
+    fn pricing_changed_is_true_when_manifest_declares_pricing() {
+        // Counterpart: when the manifest declares pricing the diff must
+        // still flag it so the operator's rate card actually reaches the
+        // chain. Without this assertion a future refactor that nullified
+        // pricing_changed entirely would silently drop publishable
+        // pricing updates.
+        let on_chain = detail("demo", &[], &[]);
+        let mut m = manifest("demo", &[], &[]);
+        m.pricing = vec![PricingTier {
+            id: "tier-1".into(),
+            price_usd_micros: 1_000,
+            unit: "call".into(),
+        }];
+        let d = ManifestDiff::between(&on_chain, &m);
+        assert!(d.pricing_changed);
     }
 }

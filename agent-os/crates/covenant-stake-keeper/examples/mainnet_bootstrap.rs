@@ -166,6 +166,50 @@ fn main() -> Result<()> {
             println!("initialize tx = {sig}");
             Ok(())
         }
+        "set-fee-router-max" => {
+            if args.len() < 2 {
+                bail!("usage: mainnet_bootstrap set-fee-router-max <new_max_lamports>");
+            }
+            let new_max: u64 = args[1].parse().context("new_max_lamports")?;
+
+            let rpc = RpcClient::new_with_commitment(
+                MAINNET_RPC.to_string(),
+                CommitmentConfig::confirmed(),
+            );
+            let deployer = load_default_keypair()?;
+            println!("authority      = {}", deployer.pubkey());
+            println!("new max        = {new_max} lamports ({} SOL)", new_max as f64 / 1e9);
+            println!("waiting 5s; Ctrl-C to abort...");
+            std::thread::sleep(std::time::Duration::from_secs(5));
+
+            #[derive(BorshSerialize)]
+            struct RotateFeeRouterArgs {
+                new_authority: Option<[u8; 32]>,
+                new_max_deposit_lamports: Option<u64>,
+                new_rate_limit_secs: Option<i64>,
+            }
+            let mut data = anchor_discriminator("rotate_fee_router").to_vec();
+            RotateFeeRouterArgs {
+                new_authority: None,
+                new_max_deposit_lamports: Some(new_max),
+                new_rate_limit_secs: None,
+            }
+            .serialize(&mut data)?;
+
+            let metas = vec![
+                AccountMeta::new_readonly(config_pda, false),
+                AccountMeta::new(fee_router_pda, false),
+                AccountMeta::new_readonly(deployer.pubkey(), true),
+            ];
+            let sig = send(
+                &rpc,
+                &deployer,
+                &[Instruction { program_id, accounts: metas, data }],
+                &[],
+            )?;
+            println!("rotate_fee_router tx = {sig}");
+            Ok(())
+        }
         "genesis-position" => {
             let rpc = RpcClient::new_with_commitment(
                 MAINNET_RPC.to_string(),

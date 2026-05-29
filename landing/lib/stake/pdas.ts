@@ -41,10 +41,10 @@ export function buylockVaultAuthorityPda(): PublicKey {
 }
 
 export function positionPda(owner: PublicKey, nonce: bigint): PublicKey {
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(nonce);
+  const nonceBytes = new Uint8Array(8);
+  new DataView(nonceBytes.buffer).setBigUint64(0, nonce, true);
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("stake_v2"), owner.toBuffer(), nonceBuf],
+    [Buffer.from("stake_v2"), owner.toBuffer(), Buffer.from(nonceBytes)],
     STAKE_PROGRAM_ID,
   )[0];
 }

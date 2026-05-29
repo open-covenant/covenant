@@ -51,6 +51,15 @@ export const config = {
   // any deployment but collapses every visitor behind shared NAT to one
   // address. Picking too large lets a client rotate IPs via the header.
   trustedProxyHops: nonNegativeInt(process.env.TRUSTED_PROXY_HOPS, 0, "TRUSTED_PROXY_HOPS"),
+
+  // Operator-allowlisted IPs that bypass the per-IP bucket AND the
+  // daily/monthly USD spend caps. The kill-switch, the concurrency cap,
+  // and observability still apply, so an exempt run still shows on
+  // `/v1/budget`. Comma-separated list, IPv4 / IPv6 / bracketless. Set
+  // to the operator's own IP so the public daily-cap exhaustion (which
+  // is intentionally low) doesn't block diagnostic / development
+  // traffic from the people maintaining the deployment.
+  exemptIps: parseIpSet(process.env.CODER_EXEMPT_IPS),
 } as const;
 
 /**
@@ -70,6 +79,21 @@ function nonNegativeInt(raw: string | undefined, fallback: number, name: string)
     );
   }
   return n;
+}
+
+/**
+ * Parse a comma-separated IP allowlist. Empty / unset yields an empty
+ * set; whitespace and trailing-comma typos are tolerated so an operator
+ * editing the env var doesn't have to be byte-perfect.
+ */
+function parseIpSet(raw: string | undefined): ReadonlySet<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
 }
 
 /** USD per 1M tokens, by model. cacheRead ~0.1x input, cacheWrite ~1.25x input. */

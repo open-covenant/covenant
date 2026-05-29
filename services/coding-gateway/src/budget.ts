@@ -233,17 +233,31 @@ export class SpendLedger {
     }
   }
 
-  reserve(maxUsd: number = this.caps.perRunUsdMax): Reservation {
+  /**
+   * Reserve a per-run admission slot. `bypassSpendCaps` skips the daily
+   * and monthly USD checks — used for operator-allowlisted IPs (see
+   * `CODER_EXEMPT_IPS`) — but the kill-switch, the concurrency cap, and
+   * the bookkeeping (`active`, `reserved`, `dailyUsd`/`monthlyUsd`, the
+   * persisted pending entry) still apply, so an exempt run is still
+   * observable on `/v1/budget` and still tears down when the kill
+   * switch fires.
+   */
+  reserve(
+    maxUsd: number = this.caps.perRunUsdMax,
+    bypassSpendCaps: boolean = false,
+  ): Reservation {
     this.roll();
     if (this.killed) return { ok: false, reason: "kill-switch engaged" };
     if (this.active >= this.caps.maxConcurrent) {
       return { ok: false, reason: "at capacity — try again shortly" };
     }
-    if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
-      return { ok: false, reason: "daily free capacity reached — resets at 00:00 UTC" };
-    }
-    if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
-      return { ok: false, reason: "monthly capacity reached" };
+    if (!bypassSpendCaps) {
+      if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
+        return { ok: false, reason: "daily free capacity reached — resets at 00:00 UTC" };
+      }
+      if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
+        return { ok: false, reason: "monthly capacity reached" };
+      }
     }
     this.reserved += maxUsd;
     this.active += 1;

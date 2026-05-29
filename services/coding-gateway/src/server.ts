@@ -132,6 +132,7 @@ function startRun(
   reservedMax: number,
   reservationId: string,
   sourceIpStr: string,
+  exempt: boolean,
 ): Run {
   const id = randomUUID();
   const run: Run = {
@@ -211,8 +212,10 @@ function startRun(
       unsubscribeKill();
       // Release the per-IP slot on every terminal outcome (success,
       // failure, cancel). A leak here would pin the bucket against a
-      // legit client until the next service restart.
-      ipBucket.release(sourceIpStr);
+      // legit client until the next service restart. Exempt IPs never
+      // took a slot, so skip — release would be a harmless no-op against
+      // the slot map, but skipping keeps the intent explicit.
+      if (!exempt) ipBucket.release(sourceIpStr);
       if (sandbox) await sandbox.destroy().catch(() => {});
       for (const res of run.subscribers) res.end();
       run.subscribers.clear();
@@ -283,6 +286,7 @@ export const server = createServer(async (req, res) => {
         ipBucket,
         ledger,
         ipMaxPerIp: config.ipMaxPerIp,
+        exemptIps: config.exemptIps,
       });
       if (!outcome.ok) {
         if (outcome.retryAfterMs !== undefined) {
@@ -290,7 +294,13 @@ export const server = createServer(async (req, res) => {
         }
         return json(res, 429, { error: outcome.reason });
       }
-      const run = startRun(body.input, outcome.reservedMax, outcome.reservationId, ip);
+      const run = startRun(
+        body.input,
+        outcome.reservedMax,
+        outcome.reservationId,
+        ip,
+        outcome.exempt,
+      );
       return json(res, 200, { run_id: run.id });
     }
 

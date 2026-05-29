@@ -346,7 +346,7 @@ export function StakeClient() {
               <Step
                 index="01"
                 title="Lock CVNT for a fixed period"
-                body="Choose 30, 90, 180, or 365 days. Each period carries a weight multiplier of 1.0×, 1.5×, 2.0×, or 3.0× respectively."
+                body="Choose 7, 30, 90, or 180 days. Each period carries a weight multiplier of 0.5×, 1.0×, 1.5×, or 2.0× respectively."
               />
               <Step
                 index="02"

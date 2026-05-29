@@ -124,9 +124,9 @@ fn two_lockers_split_fees_pro_rata_by_weight() {
     let mut env = boot();
 
     // Alice: 1000 CVNT @ 1x = 1e9 weight
-    // Bob:   1000 CVNT @ 3x = 3e9 weight
-    // Total = 4e9 weight, fee = 4 SOL
-    // Alice receives 1 SOL, Bob receives 3 SOL.
+    // Bob:   1000 CVNT @ 2x = 2e9 weight
+    // Total = 3e9 weight, fee = 3 SOL
+    // Alice receives 1 SOL, Bob receives 2 SOL.
     let alice_amount = MIN_LOCK_AMOUNT;
     let bob_amount = MIN_LOCK_AMOUNT;
 
@@ -135,10 +135,10 @@ fn two_lockers_split_fees_pro_rata_by_weight() {
 
     create_position(&mut env, &alice, &alice_ata, 1, alice_amount, TIER_30D_BPS)
         .expect("alice create");
-    create_position(&mut env, &bob, &bob_ata, 1, bob_amount, TIER_365D_BPS)
+    create_position(&mut env, &bob, &bob_ata, 1, bob_amount, TIER_180D_BPS)
         .expect("bob create");
 
-    let fee_amount = 4_000_000_000;
+    let fee_amount = 3_000_000_000;
     deposit_sol_fees(&mut env, fee_amount).expect("deposit");
 
     let alice_before = sol_balance(&env, &alice.pubkey());
@@ -151,8 +151,8 @@ fn two_lockers_split_fees_pro_rata_by_weight() {
     let alice_share = alice_after - alice_before;
     let bob_share = bob_after - bob_before;
 
-    let expected_alice = fee_amount / 4;
-    let expected_bob = 3 * fee_amount / 4;
+    let expected_alice = fee_amount / 3;
+    let expected_bob = 2 * fee_amount / 3;
     let tolerance = 100_000; // 0.0001 SOL rounding tolerance
 
     assert!(

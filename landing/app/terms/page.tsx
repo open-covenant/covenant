@@ -169,8 +169,8 @@ const SECTIONS: Section[] = [
       <div className="space-y-5">
         <p className={paragraph}>
           <span className={subtle}>What it is.</span> The Covenant staking program is an on-chain
-          Solana program that lets holders of $CVNT lock tokens for fixed periods (30, 90, 180, or
-          365 days) and earn a share of protocol revenue distributed in SOL. All program state is
+          Solana program that lets holders of $CVNT lock tokens for fixed periods (7, 30, 90, or
+          180 days) and earn a share of protocol revenue distributed in SOL. All program state is
           public and readable directly from Solana mainnet.
         </p>
         <p className={paragraph}>

@@ -15,16 +15,16 @@ export const COVENANT_STAKE_PROGRAM_ID: SolanaAddress =
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
+export const STAKE_TIER_7D_BPS = 5_000;
 export const STAKE_TIER_30D_BPS = 10_000;
 export const STAKE_TIER_90D_BPS = 15_000;
 export const STAKE_TIER_180D_BPS = 20_000;
-export const STAKE_TIER_365D_BPS = 30_000;
 
 export type StakeLockTierBps =
+  | typeof STAKE_TIER_7D_BPS
   | typeof STAKE_TIER_30D_BPS
   | typeof STAKE_TIER_90D_BPS
-  | typeof STAKE_TIER_180D_BPS
-  | typeof STAKE_TIER_365D_BPS;
+  | typeof STAKE_TIER_180D_BPS;
 
 export interface StakeInitializeInput {
   authority: SolanaAddress;
@@ -391,10 +391,10 @@ export function prepareStakeDepositBuylockCvntInstruction(
 
 function assertLockTier(tier: number): asserts tier is StakeLockTierBps {
   if (
+    tier !== STAKE_TIER_7D_BPS &&
     tier !== STAKE_TIER_30D_BPS &&
     tier !== STAKE_TIER_90D_BPS &&
-    tier !== STAKE_TIER_180D_BPS &&
-    tier !== STAKE_TIER_365D_BPS
+    tier !== STAKE_TIER_180D_BPS
   ) {
     throw new Error(`invalid stake lock tier bps: ${tier}`);
   }

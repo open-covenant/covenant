@@ -48,11 +48,11 @@ fn main() -> Result<()> {
     let amount_cvnt: u64 = args[1].parse().context("amount_cvnt")?;
     let tier_days: u32 = args[2].parse().context("tier_days")?;
     let tier_bps: u16 = match tier_days {
+        7 => 5_000,
         30 => 10_000,
         90 => 15_000,
         180 => 20_000,
-        365 => 30_000,
-        _ => bail!("tier_days must be 30, 90, 180, or 365"),
+        _ => bail!("tier_days must be 7, 30, 90, or 180"),
     };
     let amount_raw = amount_cvnt
         .checked_mul(1_000_000)

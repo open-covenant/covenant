@@ -664,12 +664,12 @@ pub const E_INVALID_PARAMETER: u32 = 6015;
 pub const E_NO_ACTIVE_STAKERS: u32 = 6016;
 pub const E_INVALID_MINT_DECIMALS: u32 = 6017;
 
+pub const TIER_7D_BPS: u16 = 5_000;
 pub const TIER_30D_BPS: u16 = 10_000;
 pub const TIER_90D_BPS: u16 = 15_000;
 pub const TIER_180D_BPS: u16 = 20_000;
-pub const TIER_365D_BPS: u16 = 30_000;
 
+pub const TIER_7D_SECS: i64 = 7 * 86_400;
 pub const TIER_30D_SECS: i64 = 30 * 86_400;
 pub const TIER_90D_SECS: i64 = 90 * 86_400;
 pub const TIER_180D_SECS: i64 = 180 * 86_400;
-pub const TIER_365D_SECS: i64 = 365 * 86_400;

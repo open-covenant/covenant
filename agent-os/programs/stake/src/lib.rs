@@ -1,7 +1,7 @@
 //! Covenant `$CVNT` staking program.
 //!
-//! Lock-tiered fee-share: users lock `$CVNT` for 30/90/180/365 days at
-//! 1.0x/1.5x/2.0x/3.0x weight multipliers, and earn pro-rata SOL fees
+//! Lock-tiered fee-share: users lock `$CVNT` for 7/30/90/180 days at
+//! 0.5x/1.0x/1.5x/2.0x weight multipliers, and earn pro-rata SOL fees
 //! collected from protocol revenue (pump.fun creator fees, sandbox metered
 //! tier, Hyre markup, SAP capabilities) routed in via a permissioned
 //! FeeRouter PDA.
@@ -53,16 +53,16 @@ pub const MAX_ACTIVE_LOCKS: u32 = 500;
 /// Default minimum lock principal (1000 CVNT @ 6 decimals).
 pub const DEFAULT_MIN_LOCK_AMOUNT: u64 = 1_000_000_000;
 
+const TIER_7D_BPS: u16 = 5_000;
 const TIER_30D_BPS: u16 = 10_000;
 const TIER_90D_BPS: u16 = 15_000;
 const TIER_180D_BPS: u16 = 20_000;
-const TIER_365D_BPS: u16 = 30_000;
 
 const SECONDS_PER_DAY: i64 = 86_400;
+const TIER_7D_SECS: i64 = 7 * SECONDS_PER_DAY;
 const TIER_30D_SECS: i64 = 30 * SECONDS_PER_DAY;
 const TIER_90D_SECS: i64 = 90 * SECONDS_PER_DAY;
 const TIER_180D_SECS: i64 = 180 * SECONDS_PER_DAY;
-const TIER_365D_SECS: i64 = 365 * SECONDS_PER_DAY;
 
 /// Default FeeRouter rate limit (60s between deposits).
 pub const DEFAULT_FEE_ROUTER_RATE_LIMIT_SECS: i64 = 60;
@@ -114,10 +114,10 @@ fn verify_upgrade_authority(program_data: &AccountInfo, signer: &Pubkey) -> Resu
 
 fn tier_lock_secs(bps: u16) -> Result<i64> {
     match bps {
+        TIER_7D_BPS => Ok(TIER_7D_SECS),
         TIER_30D_BPS => Ok(TIER_30D_SECS),
         TIER_90D_BPS => Ok(TIER_90D_SECS),
         TIER_180D_BPS => Ok(TIER_180D_SECS),
-        TIER_365D_BPS => Ok(TIER_365D_SECS),
         _ => err!(CovenantStakeError::InvalidLockTier),
     }
 }
@@ -1204,7 +1204,7 @@ pub enum CovenantStakeError {
     LockNotExpired,
     #[msg("lock period has already expired")]
     LockExpired,
-    #[msg("lock tier must be 10000, 15000, 20000, or 30000 bps")]
+    #[msg("lock tier must be 5000, 10000, 15000, or 20000 bps")]
     InvalidLockTier,
     #[msg("lock principal below configured minimum")]
     LockAmountTooSmall,

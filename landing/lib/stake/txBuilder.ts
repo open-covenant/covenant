@@ -19,16 +19,16 @@ import {
   rewardVaultPda,
 } from "./pdas";
 
+export const TIER_7D_BPS = 5_000;
 export const TIER_30D_BPS = 10_000;
 export const TIER_90D_BPS = 15_000;
 export const TIER_180D_BPS = 20_000;
-export const TIER_365D_BPS = 30_000;
 
 export const TIER_OPTIONS: { label: string; days: number; bps: number }[] = [
+  { label: "7 days · 0.5x", days: 7, bps: TIER_7D_BPS },
   { label: "30 days · 1.0x", days: 30, bps: TIER_30D_BPS },
   { label: "90 days · 1.5x", days: 90, bps: TIER_90D_BPS },
   { label: "180 days · 2.0x", days: 180, bps: TIER_180D_BPS },
-  { label: "365 days · 3.0x", days: 365, bps: TIER_365D_BPS },
 ];
 
 export function buildCreatePositionIx(opts: {

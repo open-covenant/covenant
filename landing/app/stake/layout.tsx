@@ -8,14 +8,14 @@ import { NetworkBanner } from "./NetworkBanner";
 export const metadata: Metadata = {
   title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
   description:
-    "Lock $CVNT for 30, 90, 180, or 365 days and receive a pro-rata share of protocol revenue distributed in SOL. Amounts depend on actual revenue and are not guaranteed.",
+    "Lock $CVNT for 7, 30, 90, or 180 days and receive a pro-rata share of protocol revenue distributed in SOL. Amounts depend on actual revenue and are not guaranteed.",
   alternates: { canonical: "/stake" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/stake",
     title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
     description:
-      "Lock $CVNT for 30, 90, 180, or 365 days and receive a pro-rata share of protocol revenue distributed in SOL.",
+      "Lock $CVNT for 7, 30, 90, or 180 days and receive a pro-rata share of protocol revenue distributed in SOL.",
   },
 };
 

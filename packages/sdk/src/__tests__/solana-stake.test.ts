@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   COVENANT_STAKE_PROGRAM_ID,
+  STAKE_TIER_7D_BPS,
   STAKE_TIER_30D_BPS,
-  STAKE_TIER_365D_BPS,
   prepareStakeClaimInstruction,
   prepareStakeClosePositionInstruction,
   prepareStakeCreatePositionInstruction,
@@ -143,7 +143,8 @@ describe('Solana stake instruction descriptors', () => {
   });
 
   it('preserves all four tier bps as discriminated literals', () => {
-    expect(STAKE_TIER_365D_BPS).toBe(30_000);
+    expect(STAKE_TIER_7D_BPS).toBe(5_000);
+    expect(STAKE_TIER_30D_BPS).toBe(10_000);
   });
 
   it('builds a pause bundle with pause_authority OR authority as signer', () => {

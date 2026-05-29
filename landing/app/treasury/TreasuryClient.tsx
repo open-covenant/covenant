@@ -183,10 +183,10 @@ function Dashboard({ state }: { state: TreasuryState }) {
           <Panel>
             <PanelEyebrow>Lock tiers</PanelEyebrow>
             <div className="mt-6 grid grid-cols-1 gap-2">
+              <TierLine days={7} multiplier="0.5×" />
               <TierLine days={30} multiplier="1.0×" />
               <TierLine days={90} multiplier="1.5×" />
               <TierLine days={180} multiplier="2.0×" />
-              <TierLine days={365} multiplier="3.0×" />
             </div>
             <p className="mt-6 text-[11px] leading-relaxed text-neutral-500">
               A position&apos;s weight equals its principal multiplied by the

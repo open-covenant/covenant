@@ -60,14 +60,14 @@ export function lockEndDate(lockEnd: bigint): string {
 
 export function tierLabel(bps: number): string {
   switch (bps) {
+    case 5_000:
+      return "7 days · 0.5×";
     case 10_000:
       return "30 days · 1.0×";
     case 15_000:
       return "90 days · 1.5×";
     case 20_000:
       return "180 days · 2.0×";
-    case 30_000:
-      return "365 days · 3.0×";
     default:
       return `${(bps / 10_000).toFixed(2)}×`;
   }

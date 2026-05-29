@@ -97,13 +97,13 @@ fn tier_multipliers_apply_correctly_in_weight_math() {
     let (c, c_ata) = funded_owner(&mut env, amount);
     let (d, d_ata) = funded_owner(&mut env, amount);
 
-    create_position(&mut env, &a, &a_ata, 1, amount, TIER_30D_BPS).expect("a");
-    create_position(&mut env, &b, &b_ata, 1, amount, TIER_90D_BPS).expect("b");
-    create_position(&mut env, &c, &c_ata, 1, amount, TIER_180D_BPS).expect("c");
-    create_position(&mut env, &d, &d_ata, 1, amount, TIER_365D_BPS).expect("d");
+    create_position(&mut env, &a, &a_ata, 1, amount, TIER_7D_BPS).expect("a");
+    create_position(&mut env, &b, &b_ata, 1, amount, TIER_30D_BPS).expect("b");
+    create_position(&mut env, &c, &c_ata, 1, amount, TIER_90D_BPS).expect("c");
+    create_position(&mut env, &d, &d_ata, 1, amount, TIER_180D_BPS).expect("d");
 
     let cfg = config_state(&env);
-    let expected = (amount as u128) * (10_000 + 15_000 + 20_000 + 30_000) / 10_000;
+    let expected = (amount as u128) * (5_000 + 10_000 + 15_000 + 20_000) / 10_000;
     assert_eq!(cfg.total_weight, expected);
     assert_eq!(cfg.active_lock_count, 4);
 
@@ -128,9 +128,9 @@ fn tier_multipliers_apply_correctly_in_weight_math() {
     let share_d = sol_balance(&env, &d.pubkey()) - baseline_d;
 
     let tol = 1_000_000;
-    assert!(share_a.abs_diff(1_000_000_000) < tol);
+    assert!(share_a.abs_diff(750_000_000) < tol);
     assert!(share_b.abs_diff(1_500_000_000) < tol);
-    assert!(share_c.abs_diff(2_000_000_000) < tol);
+    assert!(share_c.abs_diff(2_250_000_000) < tol);
     assert!(share_d.abs_diff(3_000_000_000) < tol);
 }
 

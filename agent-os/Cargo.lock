@@ -1365,6 +1365,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-stake-keeper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh 1.6.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-client",
+ "solana-sdk",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "covenant-stake-program"
 version = "0.1.0"
 dependencies = [

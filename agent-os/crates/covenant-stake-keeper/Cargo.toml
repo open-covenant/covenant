@@ -1,0 +1,31 @@
+[package]
+name = "covenant-stake-keeper"
+version = "0.1.0"
+description = "Off-chain keeper for the covenant-stake program: sweeps pump.fun creator-fee SOL inflows from the creator wallet on a fixed cadence, routes 25% to the staking reward vault via deposit_sol_fees, 30% to treasury, 20% to the operator subsidy, and 25% to a buy-and-lock leg (Jupiter swap stub in v1). Belt-and-suspenders accrual tick keeps any pending fees folded into the per-weight accumulator."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "covenant_stake_keeper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "covenant-stake-keeper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+borsh = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+solana-client = "2"
+solana-sdk = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

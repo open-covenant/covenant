@@ -30,7 +30,7 @@ To run it locally, build the daemon and CLI, register the sample agent, and star
 
 ```bash
 git clone https://github.com/open-covenant/covenant && cd covenant
-cd agent-os && cargo build --workspace --exclude covenant-settlement-program
+cd agent-os && cargo build --workspace --exclude covenant-settlement-program --locked
 
 # Register the example agent (daemon loads $COVENANT_HOME/agents/ at startup)
 mkdir -p ~/.covenant/agents

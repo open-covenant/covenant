@@ -23,7 +23,7 @@ cd covenant
 
 ```bash
 cd agent-os
-cargo build --workspace --exclude covenant-settlement-program --release
+cargo build --workspace --exclude covenant-settlement-program --release --locked
 ```
 
 The two binaries land at `target/release/covenantd` (daemon) and `target/release/covenant` (CLI). State lives under `$COVENANT_HOME` (default `$HOME/.covenant`).

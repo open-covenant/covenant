@@ -38,7 +38,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
 dotenvy = "0.15"
-futures = "0.3"
+futures = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

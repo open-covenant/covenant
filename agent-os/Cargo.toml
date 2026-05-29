@@ -65,5 +65,9 @@ axum = "0.7"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 solana-sdk = "2"
 solana-client = "2"
-sha2 = "0.10"
+sha2 = "0.11"
 borsh = { version = "1", features = ["derive"] }
+futures = "0.3"
+libc = "0.2"
+crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.28"

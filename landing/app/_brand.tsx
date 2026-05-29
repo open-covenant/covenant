@@ -17,7 +17,7 @@ export const NAV_LINKS = [
 export const FOOTER_LINKS = [
   { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "Contact", href: "/contact", external: false as const },
-  { label: "Privacy policy", href: "/privacy", external: false as const },
+  { label: "Privacy Policy", href: "/privacy", external: false as const },
 ];
 
 export function XIcon({ className }: { className?: string }) {

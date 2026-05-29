@@ -20,14 +20,14 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
   return (
     <footer
       className={[
-        "flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 px-4 text-center text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]",
+        "flex flex-col items-center gap-3 px-4 text-center",
         className ?? "",
       ]
         .filter(Boolean)
         .join(" ")}
       style={style}
     >
-      <span className="inline-flex items-center gap-2.5">
+      <span className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]">
         <Image
           src="/logomark.svg"
           alt="covenant"
@@ -39,27 +39,29 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
           Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
         </span>
       </span>
-      {FOOTER_LINKS.map((item) =>
-        item.external ? (
-          <a
-            key={item.href}
-            href={item.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-neutral-500 transition-colors hover:text-neutral-200"
-          >
-            {item.label}
-          </a>
-        ) : (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="text-neutral-500 transition-colors hover:text-neutral-200"
-          >
-            {item.label}
-          </Link>
-        ),
-      )}
+      <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] text-neutral-500 sm:text-[13px]">
+        {FOOTER_LINKS.map((item) =>
+          item.external ? (
+            <a
+              key={item.href}
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-neutral-200"
+            >
+              {item.label}
+            </a>
+          ) : (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="transition-colors hover:text-neutral-200"
+            >
+              {item.label}
+            </Link>
+          ),
+        )}
+      </nav>
     </footer>
   );
 }

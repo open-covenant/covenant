@@ -20,26 +20,16 @@ import {
   fetchConfig,
   fetchOwnerTokenAccountsForMint,
   fetchRewardVaultLamports,
+  fetchTokenAccountAmount,
   pickStakeSource,
   sumBalances,
   type ConfigState,
   type OwnedTokenAccount,
 } from "../../lib/stake/readers";
+import { deriveAta, lockedVaultAuthorityPda } from "../../lib/stake/pdas";
 import { formatCvnt, formatSol, formatWithGrouping, parseCvntInput, shortAddr } from "../../lib/stake/format";
-
-function computeTrailingRate(config: ConfigState | null): string {
-  if (!config || config.cumulativeSolDistributed === 0n) return "—";
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  const elapsed = Number(now - config.initializedTs);
-  if (elapsed <= 0) return "—";
-  if (config.totalWeight === 0n) return "—";
-  const yearsElapsed = elapsed / (365.25 * 86_400);
-  const cumulativeSol = Number(config.cumulativeSolDistributed) / 1e9;
-  const tvlWeight = Number(config.totalWeight) / 1e6;
-  if (tvlWeight <= 0) return "—";
-  const solPerWeightPerYear = cumulativeSol / yearsElapsed / tvlWeight;
-  return `${(solPerWeightPerYear * 1000).toFixed(4)} mSOL / CVNT-weight / yr`;
-}
+import { computeApy, formatApy } from "../../lib/stake/apy";
+import { fetchCvntSolPrice, type CvntPrice } from "../../lib/stake/price";
 
 type TxState =
   | { phase: "idle" }
@@ -60,6 +50,8 @@ export function StakeClient() {
 
   const [config, setConfig] = useState<ConfigState | null>(null);
   const [rewardVaultLamports, setRewardVaultLamports] = useState<bigint | null>(null);
+  const [lockedCvnt, setLockedCvnt] = useState<bigint | null>(null);
+  const [price, setPrice] = useState<CvntPrice | null>(null);
   const [accounts, setAccounts] = useState<OwnedTokenAccount[] | null>(null);
   const [amount, setAmount] = useState("");
   const [tierBps, setTierBps] = useState(TIER_30D_BPS);
@@ -70,18 +62,27 @@ export function StakeClient() {
 
   useEffect(() => {
     let cancelled = false;
+    const lockedVault = deriveAta(
+      lockedVaultAuthorityPda(),
+      cluster.cvntMint,
+      cluster.tokenProgramId,
+    );
     Promise.all([
       fetchConfig(connection),
       fetchRewardVaultLamports(connection),
-    ]).then(([c, rv]) => {
+      fetchTokenAccountAmount(connection, lockedVault),
+      fetchCvntSolPrice(),
+    ]).then(([c, rv, lv, p]) => {
       if (cancelled) return;
       setConfig(c);
       setRewardVaultLamports(rv);
+      setLockedCvnt(lv ?? 0n);
+      setPrice(p);
     });
     return () => {
       cancelled = true;
     };
-  }, [connection, tx]);
+  }, [connection, tx, cluster.cvntMint, cluster.tokenProgramId]);
 
   useEffect(() => {
     if (!publicKey) {
@@ -313,9 +314,19 @@ export function StakeClient() {
                 }
               />
               <StatRow
-                label="Trailing rate"
-                value={computeTrailingRate(config)}
-                hint="Lifetime SOL distributed ÷ time elapsed ÷ total weight. Backward-looking; not indicative of future amounts."
+                label="Annualized return"
+                value={(() => {
+                  if (!config || !price || lockedCvnt === null) return "—";
+                  const apy = computeApy({
+                    cumulativeSolDistributedLamports: config.cumulativeSolDistributed,
+                    initializedTsSeconds: config.initializedTs,
+                    nowSeconds: Math.floor(Date.now() / 1000),
+                    lockedCvntRawAmount: lockedCvnt,
+                    solPerCvnt: price.solPerCvnt,
+                  });
+                  return apy ? formatApy(apy.pct) : "—";
+                })()}
+                hint="Lifetime SOL distributed ÷ time elapsed, annualized ÷ locked CVNT value in SOL. Trailing realized rate; varies with revenue and CVNT price."
               />
               <StatRow
                 label="Active positions"

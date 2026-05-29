@@ -20,12 +20,15 @@ import {
   formatSol,
   formatWithGrouping,
 } from "../../lib/stake/format";
+import { computeApy, formatApy } from "../../lib/stake/apy";
+import { fetchCvntSolPrice, type CvntPrice } from "../../lib/stake/price";
 
 interface TreasuryState {
   config: ConfigState;
   rewardVaultLamports: bigint;
   lockedVaultCvnt: bigint;
   buylockVaultCvnt: bigint;
+  price: CvntPrice | null;
 }
 
 export function TreasuryClient() {
@@ -49,11 +52,12 @@ export function TreasuryClient() {
         cluster.cvntMint,
         cluster.tokenProgramId,
       );
-      const [rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt] =
+      const [rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt, price] =
         await Promise.all([
           fetchRewardVaultLamports(connection),
           fetchTokenAccountAmount(connection, lockedVault),
           fetchTokenAccountAmount(connection, buylockVault),
+          fetchCvntSolPrice(),
         ]);
       if (!cancelled) {
         setState({
@@ -61,6 +65,7 @@ export function TreasuryClient() {
           rewardVaultLamports,
           lockedVaultCvnt: lockedVaultCvnt ?? 0n,
           buylockVaultCvnt: buylockVaultCvnt ?? 0n,
+          price,
         });
       }
     })();
@@ -90,15 +95,29 @@ export function TreasuryClient() {
 }
 
 function Dashboard({ state }: { state: TreasuryState }) {
-  const { config, rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt } = state;
+  const { config, rewardVaultLamports, lockedVaultCvnt, buylockVaultCvnt, price } = state;
   const lockUtilization =
     config.maxActiveLocks > 0
       ? Math.round((config.activeLockCount / config.maxActiveLocks) * 100)
       : 0;
+  const apy = price
+    ? computeApy({
+        cumulativeSolDistributedLamports: config.cumulativeSolDistributed,
+        initializedTsSeconds: config.initializedTs,
+        nowSeconds: Math.floor(Date.now() / 1000),
+        lockedCvntRawAmount: lockedVaultCvnt,
+        solPerCvnt: price.solPerCvnt,
+      })
+    : null;
 
   return (
     <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="Annualized return (trailing)"
+          value={apy ? formatApy(apy.pct) : "—"}
+          unit={apy ? `${config.activeLockCount} / ${config.maxActiveLocks} positions` : "awaiting data"}
+        />
         <KpiCard
           label="Lifetime SOL distributed"
           value={formatSol(config.cumulativeSolDistributed, { maxFrac: 4 })}
@@ -113,11 +132,6 @@ function Dashboard({ state }: { state: TreasuryState }) {
           label="Protocol-held CVNT"
           value={formatCvnt(buylockVaultCvnt, { maxFrac: 0 })}
           unit="CVNT"
-        />
-        <KpiCard
-          label="Active positions"
-          value={`${config.activeLockCount} / ${config.maxActiveLocks}`}
-          unit={`${lockUtilization}% utilized`}
         />
       </div>
 

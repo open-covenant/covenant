@@ -171,7 +171,9 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         title={intentText ? `“${intentText}”` : "Task"}
         subhead={
           running
-            ? `Building in the sandbox${matchedAgent ? ` · ${formatAgentId(matchedAgent)}` : ""}. The steps appear here when the run finishes.`
+            ? traceItems.length > 0
+              ? `Watching live${matchedAgent ? ` · ${formatAgentId(matchedAgent)}` : ""} — each step lands the moment the sandbox emits it.`
+              : `Building in the sandbox${matchedAgent ? ` · ${formatAgentId(matchedAgent)}` : ""}. Steps stream in as the agent works.`
             : dispatchKind
               ? dispatchKind.matched_agent
                 ? `Ran by ${formatAgentId(dispatchKind.matched_agent)}. The result is signed (${shortHash(dispatchKind.result_hash_hex, 10)}) so it can’t be quietly changed.`
@@ -250,11 +252,16 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         <div className="panel">
           <p className="empty">Loading the task&apos;s steps…</p>
         </div>
-      ) : running ? (
-        <div className="panel">
+      ) : running && traceItems.length === 0 ? (
+        // Run is in flight but no event has arrived yet — short window
+        // between submit and the first tool call. The SSE stream is open
+        // (or reconnecting); the first frame will trigger a re-render
+        // into the live-trace branch below.
+        <div className="panel running-empty">
+          <span className="pulse" aria-hidden="true" />
           <p className="empty">
-            The build is running in the sandbox. Its steps — files written, commands
-            run — appear here as a signed trail once the run finishes.
+            Waiting for the sandbox to emit its first step. The
+            connection is live — steps appear the moment they happen.
           </p>
         </div>
       ) : traceItems.length === 0 ? (
@@ -266,7 +273,16 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           </p>
         </div>
       ) : (
-        <div className="trace">
+        <div className={`trace${running ? " trace-live" : ""}`}>
+          {running && (
+            // Header pip on the live timeline — operators want a single
+            // visual cue that the events below are streaming in real
+            // time, not a paused snapshot.
+            <article className="trace-live-banner">
+              <span className="pulse" aria-hidden="true" />
+              <span>Live · streaming from the sandbox</span>
+            </article>
+          )}
           {overflow > 0 && (
             <article className="trace-overflow">
               <p>
@@ -508,14 +524,91 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         }
 
         .step-head .live {
-          color: var(--accent, #c9c9c9);
+          color: #fafafa;
           font-family: var(--font-mono);
           font-size: 10px;
           letter-spacing: 0.1em;
           text-transform: uppercase;
-          border: 1px solid var(--border-soft);
+          border: 1px solid #fafafa;
           border-radius: 3px;
           padding: 1px 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .step-head .live::before {
+          content: "";
+          width: 5px;
+          height: 5px;
+          border-radius: 999px;
+          background: #fafafa;
+          animation: cov-live-pulse 1.4s ease-in-out infinite;
+        }
+
+        .running-empty {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .running-empty .empty {
+          margin: 0;
+        }
+
+        .trace-live-banner {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 14px;
+          padding: 8px 12px;
+          border: 1px solid var(--border-soft);
+          border-radius: 6px;
+          background: #0a0a0a;
+          color: var(--fg);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .pulse {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: #fafafa;
+          box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.55);
+          animation: cov-live-pulse 1.6s ease-in-out infinite;
+        }
+
+        .trace-live .trace-step:last-child .rail .dot {
+          background: #fafafa;
+          box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.5);
+          animation: cov-live-pulse 1.6s ease-in-out infinite;
+        }
+
+        @keyframes cov-live-pulse {
+          0% {
+            box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.55);
+            opacity: 1;
+          }
+          70% {
+            box-shadow: 0 0 0 9px rgba(250, 250, 250, 0);
+            opacity: 0.55;
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(250, 250, 250, 0);
+            opacity: 1;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .pulse,
+          .step-head .live::before,
+          .trace-live .trace-step:last-child .rail .dot {
+            animation: none;
+          }
         }
 
         .headline {

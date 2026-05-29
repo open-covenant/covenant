@@ -270,7 +270,7 @@ impl Keeper {
         loop {
             tick.tick().await;
             if let Err(e) = self.sweep_once().await {
-                warn!(error = %e, "sweep failed");
+                warn!(error = ?e, "sweep failed");
             }
         }
     }
@@ -280,7 +280,7 @@ impl Keeper {
         loop {
             tick.tick().await;
             if let Err(e) = self.accrue_once().await {
-                warn!(error = %e, "accrue failed");
+                warn!(error = ?e, "accrue failed");
             }
         }
     }
@@ -324,7 +324,7 @@ impl Keeper {
         if split.stakers > 0 {
             match self.send_deposit_sol_fees(split.stakers).await {
                 Ok(sig) => info!(sig = %sig, lamports = split.stakers, "deposited stakers SOL"),
-                Err(e) => warn!(error = %e, lamports = split.stakers, "stakers leg failed; continuing"),
+                Err(e) => warn!(error = ?e, lamports = split.stakers, "stakers leg failed; continuing"),
             }
         }
         if split.treasury > 0 || split.subsidy > 0 {
@@ -338,7 +338,7 @@ impl Keeper {
                     subsidy = split.subsidy,
                     "sent treasury+subsidy cuts"
                 ),
-                Err(e) => warn!(error = %e, "treasury+subsidy leg failed; continuing"),
+                Err(e) => warn!(error = ?e, "treasury+subsidy leg failed; continuing"),
             }
         }
         if split.buylock > 0 {
@@ -358,7 +358,7 @@ impl Keeper {
                         "buylock leg complete"
                     ),
                     Err(e) => warn!(
-                        error = %e,
+                        error = ?e,
                         lamports = split.buylock,
                         "buylock leg failed; deferring to next sweep"
                     ),
@@ -541,7 +541,7 @@ impl Keeper {
                 },
             )
             .await
-            .context("send transaction")?;
+            .map_err(|e| anyhow::anyhow!("send transaction: {e:?}"))?;
         Ok(sig.to_string())
     }
 }

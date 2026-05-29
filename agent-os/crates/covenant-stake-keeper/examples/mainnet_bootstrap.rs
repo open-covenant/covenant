@@ -273,6 +273,157 @@ fn main() -> Result<()> {
             println!("Keeper can now run without tripping B2 (NoActiveStakers).");
             Ok(())
         }
+        "topup-second-tranche" => {
+            const TRANCHE_LAMPORTS: u64 = 1_500_000_000;
+            const FUND_BUFFER_LAMPORTS: u64 = 10_000_000;
+            let rpc_url = env::var("SOLANA_RPC_URL").unwrap_or_else(|_| MAINNET_RPC.to_string());
+            let rpc = RpcClient::new_with_commitment(rpc_url.clone(), CommitmentConfig::confirmed());
+            let deployer = load_default_keypair()?;
+            let creator = load_creator_keypair()?;
+            if creator.pubkey() != creator_wallet { bail!("creator keypair mismatch"); }
+
+            println!("rpc      = {rpc_url}");
+            println!("deployer = {}  ({:.9} SOL)", deployer.pubkey(), rpc.get_balance(&deployer.pubkey())? as f64 / 1e9);
+            println!("creator  = {}  ({:.9} SOL)", creator.pubkey(), rpc.get_balance(&creator.pubkey())? as f64 / 1e9);
+            println!("plan: fund creator with {:.6} SOL, then deposit {:.3} SOL, then accrue", (TRANCHE_LAMPORTS + FUND_BUFFER_LAMPORTS) as f64 / 1e9, TRANCHE_LAMPORTS as f64 / 1e9);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+
+            let guard = KeeperGuard::from_env();
+            guard.suspend()?;
+
+            println!("\n[1/3] funding creator...");
+            let fund_ix = solana_sdk::system_instruction::transfer(&deployer.pubkey(), &creator.pubkey(), TRANCHE_LAMPORTS + FUND_BUFFER_LAMPORTS);
+            let fund_sig = send(&rpc, &deployer, &[fund_ix], &[])?;
+            println!("      fund tx = {fund_sig}");
+
+            println!("\n[2/3] deposit_sol_fees({:.3} SOL) signed by creator...", TRANCHE_LAMPORTS as f64 / 1e9);
+            let mut deposit_data = anchor_discriminator("deposit_sol_fees").to_vec();
+            deposit_data.extend_from_slice(&TRANCHE_LAMPORTS.to_le_bytes());
+            let dep_sig = send(&rpc, &creator, &[Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(config_pda, false),
+                    AccountMeta::new(fee_router_pda, false),
+                    AccountMeta::new(reward_vault_pda, false),
+                    AccountMeta::new(creator.pubkey(), true),
+                    AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+                ],
+                data: deposit_data,
+            }], &[])?;
+            println!("      deposit tx = {dep_sig}");
+
+            println!("\n[3/3] accrue...");
+            let accrue_sig = send(&rpc, &creator, &[Instruction {
+                program_id,
+                accounts: vec![AccountMeta::new(config_pda, false)],
+                data: anchor_discriminator("accrue").to_vec(),
+            }], &[])?;
+            println!("      accrue tx = {accrue_sig}");
+
+            let vault = rpc.get_balance(&reward_vault_pda).unwrap_or(0);
+            println!("\nreward vault SOL: {:.9}", vault as f64 / 1e9);
+            drop(guard);
+            Ok(())
+        }
+        "topup-from-creator" => {
+            const FUND_BUFFER_LAMPORTS: u64 = 5_000_000;
+            const TRANCHE_LAMPORTS: u64 = 1_500_000_000;
+            const RATE_LIMIT_WAIT_SECS: u64 = 65;
+            const TOTAL_DEPOSIT_LAMPORTS: u64 = TRANCHE_LAMPORTS * 2;
+
+            let rpc_url = env::var("SOLANA_RPC_URL").unwrap_or_else(|_| MAINNET_RPC.to_string());
+            let rpc = RpcClient::new_with_commitment(rpc_url.clone(), CommitmentConfig::confirmed());
+
+            let deployer = load_default_keypair()?;
+            let creator = load_creator_keypair()?;
+            if creator.pubkey() != creator_wallet {
+                bail!(
+                    "creator keypair pubkey {} does not match FeeRouter authority {}",
+                    creator.pubkey(),
+                    creator_wallet
+                );
+            }
+
+            let deployer_balance = rpc.get_balance(&deployer.pubkey()).context("deployer balance")?;
+            let creator_balance = rpc.get_balance(&creator.pubkey()).context("creator balance")?;
+            let needed_at_deployer = TOTAL_DEPOSIT_LAMPORTS + FUND_BUFFER_LAMPORTS + 50_000_000;
+            if deployer_balance < needed_at_deployer {
+                bail!(
+                    "deployer balance {} < required {} ({} SOL)",
+                    deployer_balance,
+                    needed_at_deployer,
+                    needed_at_deployer as f64 / 1e9
+                );
+            }
+
+            println!("rpc                = {rpc_url}");
+            println!("deployer           = {}   ({:.9} SOL)", deployer.pubkey(), deployer_balance as f64 / 1e9);
+            println!("creator (depositor)= {}   ({:.9} SOL)", creator.pubkey(), creator_balance as f64 / 1e9);
+            println!("total to pool      = {:.3} SOL   (2 tranches of {:.3} SOL, 60s apart)", TOTAL_DEPOSIT_LAMPORTS as f64 / 1e9, TRANCHE_LAMPORTS as f64 / 1e9);
+            println!("creator fund step  = {:.6} SOL   (deposit + fee buffer)", (TOTAL_DEPOSIT_LAMPORTS + FUND_BUFFER_LAMPORTS) as f64 / 1e9);
+            println!();
+            println!("press Ctrl-C now to abort; sending in 5s...");
+            std::thread::sleep(std::time::Duration::from_secs(5));
+
+            let guard = KeeperGuard::from_env();
+            guard.suspend()?;
+
+            println!("\n[1/4] funding creator wallet from deployer...");
+            let fund_ix = solana_sdk::system_instruction::transfer(
+                &deployer.pubkey(),
+                &creator.pubkey(),
+                TOTAL_DEPOSIT_LAMPORTS + FUND_BUFFER_LAMPORTS,
+            );
+            let fund_sig = send(&rpc, &deployer, &[fund_ix], &[])?;
+            println!("      fund tx = {fund_sig}");
+
+            let build_deposit = |amount: u64| -> Instruction {
+                let mut data = anchor_discriminator("deposit_sol_fees").to_vec();
+                data.extend_from_slice(&amount.to_le_bytes());
+                Instruction {
+                    program_id,
+                    accounts: vec![
+                        AccountMeta::new(config_pda, false),
+                        AccountMeta::new(fee_router_pda, false),
+                        AccountMeta::new(reward_vault_pda, false),
+                        AccountMeta::new(creator.pubkey(), true),
+                        AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+                    ],
+                    data,
+                }
+            };
+
+            println!("\n[2/4] depositing tranche 1 ({:.3} SOL) signed by creator...", TRANCHE_LAMPORTS as f64 / 1e9);
+            let dep1_sig = send(&rpc, &creator, &[build_deposit(TRANCHE_LAMPORTS)], &[])?;
+            println!("      deposit_sol_fees tx 1 = {dep1_sig}");
+
+            println!("\n[3/4] waiting {RATE_LIMIT_WAIT_SECS}s for FeeRouter rate limit...");
+            std::thread::sleep(std::time::Duration::from_secs(RATE_LIMIT_WAIT_SECS));
+            println!("      depositing tranche 2 ({:.3} SOL)...", TRANCHE_LAMPORTS as f64 / 1e9);
+            let dep2_sig = send(&rpc, &creator, &[build_deposit(TRANCHE_LAMPORTS)], &[])?;
+            println!("      deposit_sol_fees tx 2 = {dep2_sig}");
+
+            println!("\n[4/4] calling accrue to fold pending into accumulator...");
+            let accrue_ix = Instruction {
+                program_id,
+                accounts: vec![AccountMeta::new(config_pda, false)],
+                data: anchor_discriminator("accrue").to_vec(),
+            };
+            let accrue_sig = send(&rpc, &creator, &[accrue_ix], &[])?;
+            println!("      accrue tx = {accrue_sig}");
+
+            let deployer_after = rpc.get_balance(&deployer.pubkey()).unwrap_or(0);
+            let creator_after = rpc.get_balance(&creator.pubkey()).unwrap_or(0);
+            let vault_after = rpc.get_balance(&reward_vault_pda).unwrap_or(0);
+            println!("\n=== POST-TOPUP READBACK ===");
+            println!("deployer SOL     : {:.9}  (was {:.9})", deployer_after as f64 / 1e9, deployer_balance as f64 / 1e9);
+            println!("creator SOL      : {:.9}  (was {:.9})", creator_after as f64 / 1e9, creator_balance as f64 / 1e9);
+            println!("reward vault SOL : {:.9}", vault_after as f64 / 1e9);
+            println!("\nDone. 3 SOL routed 100% to the staker accumulator.");
+            println!("Read /treasury or call getAccountInfo on Config to see cumulative_sol_distributed advance.");
+            drop(guard);
+            Ok(())
+        }
         _ => {
             usage();
             std::process::exit(2);
@@ -282,7 +433,7 @@ fn main() -> Result<()> {
 
 fn usage() {
     eprintln!(
-        "usage: mainnet_bootstrap <pdas|vault-setup|initialize|genesis-position> [args...]"
+        "usage: mainnet_bootstrap <pdas|vault-setup|initialize|set-fee-router-max|genesis-position|topup-from-creator> [args...]"
     );
 }
 
@@ -290,6 +441,102 @@ fn load_default_keypair() -> Result<Keypair> {
     let home = env::var("HOME").context("HOME unset")?;
     let path = format!("{home}/.config/solana/id.json");
     read_keypair_file(&path).map_err(|e| anyhow!("read keypair {}: {}", path, e))
+}
+
+fn load_creator_keypair() -> Result<Keypair> {
+    let home = env::var("HOME").context("HOME unset")?;
+    let path = format!("{home}/.config/solana/covenant-creator-wallet.json");
+    read_keypair_file(&path).map_err(|e| anyhow!("read keypair {}: {}", path, e))
+}
+
+struct KeeperGuard {
+    api_key: Option<String>,
+    service_id: Option<String>,
+}
+
+impl KeeperGuard {
+    fn from_env() -> Self {
+        Self {
+            api_key: env::var("RENDER_API_KEY").ok(),
+            service_id: env::var("KEEPER_SERVICE_ID").ok(),
+        }
+    }
+
+    fn http_client() -> Result<reqwest::Client> {
+        Ok(reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?)
+    }
+
+    fn suspend(&self) -> Result<()> {
+        let (Some(key), Some(svc)) = (self.api_key.as_ref(), self.service_id.as_ref()) else {
+            eprintln!("warn: RENDER_API_KEY or KEEPER_SERVICE_ID unset — keeper will NOT be suspended; sweep may race the deposit");
+            return Ok(());
+        };
+        eprintln!("suspending keeper service {svc}...");
+        eprintln!("NOTE: do NOT Ctrl-C until the script reports 'resuming keeper'; if you must, manually POST /v1/services/{svc}/resume");
+        let key_s = key.clone();
+        let svc_s = svc.clone();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        rt.block_on(async move {
+            let client = Self::http_client()?;
+            let status = client
+                .post(format!("https://api.render.com/v1/services/{svc_s}/suspend"))
+                .bearer_auth(&key_s)
+                .send()
+                .await?
+                .status();
+            if !status.is_success() {
+                bail!("keeper suspend failed: http {status}");
+            }
+            for attempt in 0..15 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let resp = client
+                    .get(format!("https://api.render.com/v1/services/{svc_s}"))
+                    .bearer_auth(&key_s)
+                    .send()
+                    .await?;
+                let json: serde_json::Value = resp.json().await?;
+                let s = json.get("suspended").and_then(|v| v.as_str()).unwrap_or("");
+                if s == "suspended" {
+                    eprintln!("  confirmed suspended after {}s", (attempt + 1) * 2);
+                    return Ok(());
+                }
+            }
+            bail!("keeper did not reach 'suspended' state within 30s — abort to avoid sweep race");
+        })
+    }
+
+    fn resume(&self) -> Result<()> {
+        let (Some(key), Some(svc)) = (self.api_key.as_ref(), self.service_id.as_ref()) else {
+            return Ok(());
+        };
+        eprintln!("resuming keeper service {svc}...");
+        let key_s = key.clone();
+        let svc_s = svc.clone();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let status = rt.block_on(async move {
+            Self::http_client()?
+                .post(format!("https://api.render.com/v1/services/{svc_s}/resume"))
+                .bearer_auth(&key_s)
+                .send()
+                .await
+                .map(|r| r.status())
+                .map_err(anyhow::Error::from)
+        })?;
+        if !status.is_success() {
+            bail!("keeper resume returned http {status} — verify in Render dashboard");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for KeeperGuard {
+    fn drop(&mut self) {
+        if let Err(e) = self.resume() {
+            eprintln!("warn: keeper resume failed during Drop: {e:?} — VERIFY IN RENDER DASHBOARD");
+        }
+    }
 }
 
 fn send(

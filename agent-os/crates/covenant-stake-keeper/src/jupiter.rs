@@ -25,8 +25,8 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::VersionedTransaction;
 use tracing::{debug, warn};
 
-pub const JUPITER_QUOTE_URL: &str = "https://quote-api.jup.ag/v6/quote";
-pub const JUPITER_SWAP_URL: &str = "https://quote-api.jup.ag/v6/swap";
+pub const JUPITER_QUOTE_URL: &str = "https://lite-api.jup.ag/swap/v1/quote";
+pub const JUPITER_SWAP_URL: &str = "https://lite-api.jup.ag/swap/v1/swap";
 
 pub const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 

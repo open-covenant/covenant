@@ -1,17 +1,18 @@
 // Brand constants and inline icons. Centralised so /, /roadmap, /docs/*
 // (and any future top-level page) share the same nav, X handle, GitHub
-// repo, release date, and tagline without copy-paste drift.
+// repo, release status, and tagline without copy-paste drift.
 
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
 export const TAGLINE = "Open infrastructure for agent-native computing";
-export const RELEASE_DATE = "ALPHA TARGET: 24.05.2026";
+export const RELEASE_STATUS = "ALPHA LIVE";
 
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
+  { label: "contact", href: "/contact", external: false as const },
 ];
 
 export function XIcon({ className }: { className?: string }) {

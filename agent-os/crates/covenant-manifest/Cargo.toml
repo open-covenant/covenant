@@ -1,7 +1,7 @@
 [package]
 name = "covenant-manifest"
 version = "0.1.0"
-description = "Parser and validator for agent.toml."
+description = "Parser and validator for Covenant agent.toml manifests. Reads the agent, capabilities, resources, sandbox, settlement, and hermes sections; parses Runtime (python3, node, rust-bin, hermes), NetworkPolicy (off, outbound-https-only, full), SandboxBackend (trusted-local, linux-gvisor), FilesystemPolicy (read-only-package, ephemeral, host), and HermesApprovalPolicy (operator-prompt, auto-deny, auto-once); pins RESERVED_NAMESPACES (intent., memory., identity., tool., agent.) for capability ids; and surfaces ManifestError::Parse, Io, and Validation."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

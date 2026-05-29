@@ -25,6 +25,30 @@ body {
   color: var(--color-bg);
 }
 
+button:not(:disabled),
+[role="button"]:not(:disabled),
+label[for] {
+  cursor: pointer;
+}
+
+/* Shared content width for top-level subpages (contact, roadmap, …).
+   Single source of truth — change the width here, every subpage follows. */
+.page-container {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 80rem;
+  padding-inline: 1.5rem;
+  padding-top: 180px;
+  padding-bottom: 8rem;
+}
+
+@media (min-width: 640px) {
+  .page-container {
+    padding-inline: 2rem;
+    padding-top: 220px;
+  }
+}
+
 /* Documentation prose styles. Scoped via .prose-docs to avoid bleeding
    into the landing page. */
 .prose-docs {

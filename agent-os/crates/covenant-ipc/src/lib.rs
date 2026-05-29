@@ -1,7 +1,10 @@
 //! Length-prefixed JSON IPC for the covenant daemon and CLI.
 //!
 //! Wire format: 4-byte big-endian length, then that many bytes of JSON.
-//! Frames over [`MAX_FRAME`] bytes are rejected on the read side.
+//! Frames over [`MAX_FRAME`] bytes are rejected on the read side. The
+//! protocol shape is versioned: [`PROTOCOL_VERSION`] = 1 is the current
+//! baseline emitted by the daemon, and [`MAX_PROTOCOL_VERSION`] = 2 is
+//! reserved for streaming responses (ADR 0010).
 
 #![deny(unsafe_code)]
 
@@ -125,9 +128,9 @@ pub fn accept_protocol_version(client_version: u32) -> Option<u32> {
 
 /// IPC v2 streaming envelope. Distinct from [`Response`] because each
 /// envelope is one frame on the wire and a single logical streaming response
-/// emits many frames (one [`StreamEnvelope::Begin`], zero or more
-/// [`StreamEnvelope::Chunk`], terminated by exactly one
-/// [`StreamEnvelope::End`] or [`StreamEnvelope::Error`]). All variants carry
+/// emits many frames (one [`StreamEnvelope::StreamBegin`], zero or more
+/// [`StreamEnvelope::StreamChunk`], terminated by exactly one
+/// [`StreamEnvelope::StreamEnd`] or [`StreamEnvelope::StreamError`]). All variants carry
 /// `stream_id: Uuid` so the consumer can demultiplex interleaved streams on
 /// a shared connection and the daemon-side tracker (separate slice) can
 /// enforce uniqueness via UUID semantics. `chunk` and `summary` are typed as
@@ -444,6 +447,35 @@ pub enum Request {
         per_call_cap: String,
         credits: u64,
     },
+    /// Operator-driven repair of legacy settlement-receipt rows in the
+    /// JSONL store. `dry_run` reports the would-change row count without
+    /// writing; an apply rewrites the store atomically after a rollback
+    /// checkpoint. `scope_pubkey` is reserved for a future delegated mode
+    /// that would evaluate another subject's `settlement.backfill.*` grant;
+    /// it is not yet supported, so the daemon rejects any request that sets
+    /// it. Today the operation always evaluates the authenticated operator's
+    /// own grants. Gated to the operator identity, mirroring `CompactMemory`.
+    BackfillSettlementReceipts {
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        scope_pubkey: Option<String>,
+    },
+    /// Operator-driven backfill of `metadata.receipt_id` correlations on
+    /// legacy memory records. The daemon computes the planner output
+    /// server-side from the operator's own memory and receipt rows and
+    /// applies the resulting [`covenant_memory::MemoryReceiptBackfillCorrelation`]
+    /// list under a SQLite SAVEPOINT, so clients cannot inject arbitrary
+    /// id pairs. `dry_run` reports the row count an apply would change
+    /// without writing; `scope_pubkey` is reserved for a future
+    /// delegated mode and is rejected today. Gated to the operator
+    /// identity, mirroring [`Request::BackfillSettlementReceipts`].
+    BackfillMemoryRecords {
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        scope_pubkey: Option<String>,
+    },
     SearchMemory {
         query: String,
         #[serde(default)]
@@ -688,6 +720,19 @@ pub enum Request {
         #[serde(default)]
         match_limit: Option<usize>,
     },
+    /// Resolved Synapse Agent Protocol bridge status. Read-only; no
+    /// signer or RPC needed. When the daemon was started without the
+    /// bridge wired in, [`Response::SapStatus`] is returned with
+    /// `enabled = false`.
+    SapStatus,
+    /// Publish an agent through the SAP bridge. The manifest travels
+    /// as a JSON string to keep the IPC surface decoupled from the
+    /// bridge crate's types — the daemon parses it into
+    /// `covenant_sap_bridge::identity::AgentManifest` before invoking
+    /// the worker. Failures surface as [`Response::Error`].
+    SapPublishAgent {
+        manifest_json: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -747,6 +792,30 @@ pub enum Response {
     },
     ReceiptBatches {
         batches: Vec<ReceiptBatchSummary>,
+    },
+    /// Successful response to [`Request::BackfillSettlementReceipts`].
+    /// `row_count` is the number of legacy rows the backfill changed (or
+    /// would change on a dry run); `rollback_path` is the checkpoint
+    /// sibling written before an apply rewrite, absent on a dry run or a
+    /// no-op. Carries the `covenant_settlement::BackfillOutcome` fields
+    /// inline so this crate keeps no dependency on the settlement crate.
+    SettlementReceiptsBackfilled {
+        row_count: u64,
+        #[serde(default)]
+        rollback_path: Option<String>,
+        dry_run: bool,
+    },
+    /// Successful response to [`Request::BackfillMemoryRecords`].
+    /// `row_count` is the number of memory rows the backfill rewrote (or
+    /// would rewrite on a dry run); `savepoint_name` is the SQLite
+    /// SAVEPOINT identifier the mutator wrapped the batch in so a
+    /// per-row failure rolled back atomically. Carries the
+    /// `covenant_memory::BackfillReceiptCorrelationOutcome` fields
+    /// inline so this crate keeps no dependency on the memory crate.
+    MemoryRecordsBackfilled {
+        row_count: u64,
+        savepoint_name: String,
+        dry_run: bool,
     },
     VerifyReport {
         window: usize,
@@ -885,6 +954,24 @@ pub enum Response {
         status: u16,
         body: String,
     },
+    /// Snapshot of the SAP bridge config as the daemon resolved it at
+    /// boot. `enabled = false` means the bridge is off (default) and
+    /// any SAP-backed request will return [`Response::Error`].
+    SapStatus {
+        enabled: bool,
+        cluster: String,
+        program_id: String,
+        rpc_url: String,
+        explorer_url: String,
+        /// Whether the worker has a signer configured
+        /// (`COVENANT_SAP_KEYPAIR`). False means publish / update
+        /// paths will fail; status and read paths still work.
+        has_signer: bool,
+    },
+    SapPublishedAgent {
+        agent_pda: String,
+        signature: String,
+    },
     Error {
         message: String,
     },
@@ -932,6 +1019,103 @@ where
     writer.write_all(&payload).await?;
     writer.flush().await?;
     Ok(())
+}
+
+/// Outcome of [`read_response_or_stream`]. `Terminal` carries a v1
+/// [`Response`] frame. `Stream` carries the reassembled v2 streaming
+/// body. Callers branch on the variant to render the result; v1-only
+/// call sites that opt out of streaming never see `Stream`.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResponseOrStream {
+    Terminal(Response),
+    Stream(CollectedStream),
+}
+
+/// Failure modes for [`read_response_or_stream`]. Wraps [`IpcError`]
+/// for I/O / framing / serialize failures and [`CollectStreamError`]
+/// for stream-content protocol violations. The third variant covers
+/// frame-level shapes that are neither a terminal `Response` nor a
+/// valid `StreamBegin` — e.g., a bare `StreamChunk` with no preceding
+/// `StreamBegin`, which the `Frame` decoder will accept (untagged
+/// alternation falls through to `StreamEnvelope`) but
+/// [`collect_stream_envelopes`] would reject. Surfacing that case at
+/// the I/O layer keeps the helper's behaviour deterministic when the
+/// daemon emits a malformed stream.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadResponseOrStreamError {
+    #[error("io/frame: {0}")]
+    Ipc(#[from] IpcError),
+    #[error("stream: {0}")]
+    Stream(#[from] CollectStreamError),
+}
+
+/// Read a single logical IPC reply from `reader`, demultiplexing
+/// between the v1 single-frame [`Response`] shape and the v2
+/// multi-frame [`StreamEnvelope`] sequence.
+///
+/// Reads the first frame and branches:
+///
+/// - `Frame::Response(r)`: returns `ResponseOrStream::Terminal(r)`
+///   immediately. v1 wire shape stays byte-for-byte equivalent to a
+///   direct `read_frame::<_, Response>` call.
+/// - `Frame::Stream(StreamEnvelope::StreamBegin { .. })`: continues
+///   reading [`Frame`]s and accumulates the envelopes until the
+///   terminal `StreamEnd`/`StreamError` arrives. The full envelope
+///   sequence is then passed through [`collect_stream_envelopes`] to
+///   reassemble the [`CollectedStream`], returned as
+///   [`ResponseOrStream::Stream`].
+/// - Any other initial [`Frame`] shape (a bare `StreamChunk`,
+///   `StreamEnd`, or `StreamError` without a preceding `StreamBegin`)
+///   is forwarded into [`collect_stream_envelopes`] so the caller
+///   gets a [`CollectStreamError::MissingBegin`] rather than a silent
+///   accept of half a stream.
+///
+/// The helper does not buffer beyond the envelopes of one stream and
+/// has no global timeout — the caller's reader is responsible for
+/// connection-level deadlines.
+pub async fn read_response_or_stream<R>(
+    reader: &mut R,
+) -> Result<ResponseOrStream, ReadResponseOrStreamError>
+where
+    R: AsyncReadExt + Unpin,
+{
+    let first: Frame = read_frame(reader).await?;
+    match first {
+        Frame::Response(response) => Ok(ResponseOrStream::Terminal(response)),
+        Frame::Stream(envelope) => {
+            let mut envelopes = vec![envelope];
+            let terminated = matches!(
+                envelopes.last(),
+                Some(StreamEnvelope::StreamEnd { .. } | StreamEnvelope::StreamError { .. })
+            );
+            if !terminated && matches!(envelopes.last(), Some(StreamEnvelope::StreamBegin { .. })) {
+                loop {
+                    let next: Frame = read_frame(reader).await?;
+                    let next_envelope = match next {
+                        Frame::Stream(env) => env,
+                        Frame::Response(_) => {
+                            return Err(ReadResponseOrStreamError::Stream(
+                                CollectStreamError::EnvelopeAfterTerminal {
+                                    got: "v1_response_mid_stream",
+                                },
+                            ));
+                        }
+                    };
+                    let is_terminal = matches!(
+                        next_envelope,
+                        StreamEnvelope::StreamEnd { .. } | StreamEnvelope::StreamError { .. }
+                    );
+                    envelopes.push(next_envelope);
+                    if is_terminal {
+                        break;
+                    }
+                }
+            }
+            let collected = collect_stream_envelopes(&envelopes)?;
+            Ok(ResponseOrStream::Stream(collected))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2324,6 +2508,214 @@ mod tests {
              field; the operator's receipt-flush behaviour \
              diverges from the documented contract without a \
              single error surface",
+        );
+    }
+
+    #[test]
+    fn request_backfill_settlement_receipts_serde_pins_additive_two_field_variant() {
+        // Request::BackfillSettlementReceipts is the operator-driven
+        // settlement-receipt backfill the CLI and HTTP gateway send to
+        // repair legacy receipt rows. With #[serde(tag = "kind",
+        // rename_all = "snake_case")] the wire object is exactly three
+        // top-level keys: kind='backfill_settlement_receipts', dry_run,
+        // and scope_pubkey. Both fields are #[serde(default)] so a stale
+        // CLI omitting them decodes as a dry_run=false, unscoped apply —
+        // the additive-only contract that keeps v1 fixture replay
+        // byte-for-byte. It pairs with
+        // Response::SettlementReceiptsBackfilled.
+        let event = Request::BackfillSettlementReceipts {
+            dry_run: true,
+            scope_pubkey: Some("subjectpubkeyb58".into()),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "scope_pubkey"],
+            "Request::BackfillSettlementReceipts wire form must be \
+             exactly three top-level keys: 'kind' plus 'dry_run' and \
+             'scope_pubkey'. A refactor that nested the mode/subject \
+             under a typed options struct would shift them one level \
+             deeper and every CLI/HTTP backfill trigger would fail to \
+             decode on the daemon side — the operator could not repair \
+             legacy receipt rows through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("backfill_settlement_receipts")),
+            "Request discriminator slug must be the durable \
+             'backfill_settlement_receipts'; a slug regression silently \
+             routes incoming backfill frames to the daemon's catch-all \
+             error branch",
+        );
+        assert_eq!(
+            obj.get("dry_run"),
+            Some(&serde_json::json!(true)),
+            "dry_run must surface as the literal boolean mode selector — \
+             the daemon binds apply = !dry_run, so a rename or retype \
+             would silently flip a reporting probe into a destructive \
+             rewrite",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::BackfillSettlementReceipts must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             every CLI/HTTP backfill consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "backfill_settlement_receipts"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::BackfillSettlementReceipts must decode from a \
+             payload missing both optional fields — the #[serde(default)] \
+             attributes are the additive-only compatibility hinge that \
+             keeps v1 fixture replay byte-for-byte",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            },
+            "Request::BackfillSettlementReceipts with both fields missing \
+             must default to a dry_run=false, unscoped apply — dropping \
+             the #[serde(default)] would break stale CLIs and the \
+             v1-additive contract",
+        );
+    }
+
+    #[test]
+    fn request_backfill_memory_records_serde_pins_additive_two_field_variant() {
+        // Request::BackfillMemoryRecords is the operator-driven
+        // memory-record backfill the CLI and HTTP gateway send to
+        // repair legacy memory rows lacking metadata.receipt_id. With
+        // #[serde(tag = "kind", rename_all = "snake_case")] the wire
+        // object is exactly three top-level keys: kind='backfill_memory_records',
+        // dry_run, and scope_pubkey. Both fields are #[serde(default)]
+        // so a stale CLI omitting them decodes as a dry_run=false,
+        // unscoped apply — the additive-only contract that keeps v1
+        // fixture replay byte-for-byte. It pairs with
+        // Response::MemoryRecordsBackfilled.
+        let event = Request::BackfillMemoryRecords {
+            dry_run: true,
+            scope_pubkey: Some("subjectpubkeyb58".into()),
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "scope_pubkey"],
+            "Request::BackfillMemoryRecords wire form must be exactly \
+             three top-level keys: 'kind' plus 'dry_run' and \
+             'scope_pubkey'. A refactor that nested the mode/subject \
+             under a typed options struct would shift them one level \
+             deeper and every CLI/HTTP memory-backfill trigger would \
+             fail to decode on the daemon side — the operator could \
+             not repair legacy memory rows through the supported path",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("backfill_memory_records")),
+            "Request discriminator slug must be the durable \
+             'backfill_memory_records'; a slug regression silently \
+             routes incoming backfill frames to the daemon's catch-all \
+             error branch",
+        );
+        assert_eq!(
+            obj.get("dry_run"),
+            Some(&serde_json::json!(true)),
+            "dry_run must surface as the literal boolean mode selector — \
+             the daemon binds apply = !dry_run, so a rename or retype \
+             would silently flip a reporting probe into a destructive \
+             rewrite",
+        );
+
+        let back: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, event,
+            "Request::BackfillMemoryRecords must round-trip through \
+             serde_json verbatim — the PartialEq derive is the contract \
+             every CLI/HTTP backfill consumer leans on",
+        );
+
+        let stale = serde_json::json!({"kind": "backfill_memory_records"});
+        let stale_decoded: Request = serde_json::from_value(stale).expect(
+            "Request::BackfillMemoryRecords must decode from a payload \
+             missing both optional fields — the #[serde(default)] \
+             attributes are the additive-only compatibility hinge that \
+             keeps v1 fixture replay byte-for-byte",
+        );
+        assert_eq!(
+            stale_decoded,
+            Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            },
+            "Request::BackfillMemoryRecords with both fields missing \
+             must default to a dry_run=false, unscoped apply — dropping \
+             the #[serde(default)] would break stale CLIs and the \
+             v1-additive contract",
+        );
+    }
+
+    #[test]
+    fn response_memory_records_backfilled_serde_pins_three_field_variant() {
+        // Response::MemoryRecordsBackfilled is the success answer the
+        // daemon returns to Request::BackfillMemoryRecords. The wire
+        // form is exactly four top-level keys: kind='memory_records_backfilled',
+        // row_count (u64), savepoint_name (String), and dry_run (bool).
+        // None of the fields are skip_serializing_if so the shape is
+        // identical across success and apply/dry-run modes — operators
+        // shouldn't have to special-case the absence of savepoint_name
+        // when computing rollback latency dashboards.
+        let event = Response::MemoryRecordsBackfilled {
+            row_count: 7,
+            savepoint_name: "backfill_receipt_correlation".into(),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Response serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "kind", "row_count", "savepoint_name"],
+            "Response::MemoryRecordsBackfilled wire form must be \
+             exactly four top-level keys: 'kind' plus 'row_count', \
+             'savepoint_name', and 'dry_run'. A refactor that wrapped \
+             the outcome under an 'outcome' nested object would shift \
+             every key one level deeper and silently break operator \
+             dashboards keyed off the flat shape",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("memory_records_backfilled")),
+            "Response discriminator slug must be the durable \
+             'memory_records_backfilled'; a slug regression silently \
+             routes the answer to the CLI's catch-all unexpected-response \
+             branch",
+        );
+
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::MemoryRecordsBackfilled must round-trip through \
+             serde_json verbatim — operator-side parsers lean on \
+             PartialEq for fixture replay",
         );
     }
 
@@ -5937,7 +6329,7 @@ mod tests {
             cluster: "devnet".into(),
             rpc_url: Some("https://api.devnet.solana.com".into()),
             ws_url: Some("wss://api.devnet.solana.com".into()),
-            program_id: Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2".into()),
+            program_id: Some("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into()),
             covnt_mint: Some("4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E".into()),
             ready: true,
             missing: vec![],
@@ -10876,5 +11268,192 @@ mod tests {
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
+    }
+
+    async fn frames_to_reader<I>(frames: I) -> std::io::Cursor<Vec<u8>>
+    where
+        I: IntoIterator<Item = Frame>,
+    {
+        let mut buf: Vec<u8> = Vec::new();
+        for frame in frames {
+            write_frame(&mut buf, &frame).await.expect("write_frame");
+        }
+        std::io::Cursor::new(buf)
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_returns_terminal_for_v1_response_frame() {
+        // v1 path: a single Frame::Response on the wire. The helper
+        // must return ResponseOrStream::Terminal verbatim — byte-for-byte
+        // equivalent to a direct read_frame::<_, Response> call.
+        let response = Response::Pong;
+        let mut reader = frames_to_reader([Frame::Response(response.clone())]).await;
+        let outcome = read_response_or_stream(&mut reader)
+            .await
+            .expect("v1 terminal frame must succeed");
+        match outcome {
+            ResponseOrStream::Terminal(r) => assert_eq!(r, response),
+            ResponseOrStream::Stream(_) => panic!("v1 Response must not decode as Stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_collects_v2_stream_until_end() {
+        // v2 happy path: StreamBegin -> N StreamChunks -> StreamEnd.
+        // Helper must read all four frames, hand the slice to
+        // collect_stream_envelopes, and return the assembled
+        // CollectedStream with response_kind + chunks + summary intact.
+        let stream_id = Uuid::from_u128(0x1234);
+        let mut reader = frames_to_reader([
+            Frame::Stream(StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            }),
+            Frame::Stream(StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 0,
+                chunk: serde_json::json!({"id": "a"}),
+            }),
+            Frame::Stream(StreamEnvelope::StreamChunk {
+                stream_id,
+                sequence: 1,
+                chunk: serde_json::json!({"id": "b"}),
+            }),
+            Frame::Stream(StreamEnvelope::StreamEnd {
+                stream_id,
+                summary: None,
+            }),
+        ])
+        .await;
+
+        let outcome = read_response_or_stream(&mut reader)
+            .await
+            .expect("v2 happy path must succeed");
+        let collected = match outcome {
+            ResponseOrStream::Stream(c) => c,
+            ResponseOrStream::Terminal(r) => {
+                panic!("v2 streaming frames must not decode as Terminal {r:?}")
+            }
+        };
+        assert_eq!(collected.stream_id, stream_id);
+        assert_eq!(collected.response_kind, "memories");
+        assert_eq!(collected.chunks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_surfaces_stream_error_as_collect_error() {
+        // The daemon may answer with StreamBegin then StreamError when
+        // serialization of a chunk fails mid-stream. The helper must
+        // unwrap that into a CollectStreamError::Reported so the caller
+        // sees the daemon's failure message verbatim and not a
+        // misleading io::UnexpectedEof or success.
+        let stream_id = Uuid::from_u128(7);
+        let mut reader = frames_to_reader([
+            Frame::Stream(StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            }),
+            Frame::Stream(StreamEnvelope::StreamError {
+                stream_id,
+                message: "serialize failed".into(),
+            }),
+        ])
+        .await;
+
+        let err = read_response_or_stream(&mut reader)
+            .await
+            .expect_err("StreamError must surface as Err");
+        match err {
+            ReadResponseOrStreamError::Stream(CollectStreamError::Reported {
+                stream_id: sid,
+                message,
+            }) => {
+                assert_eq!(sid, stream_id);
+                assert_eq!(message, "serialize failed");
+            }
+            other => panic!("expected Stream(Reported), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_rejects_bare_stream_chunk_without_begin() {
+        // A StreamChunk arriving without a preceding StreamBegin is a
+        // malformed stream. The helper forwards it through
+        // collect_stream_envelopes so the caller gets MissingBegin
+        // rather than a silent partial accumulation.
+        let stream_id = Uuid::nil();
+        let mut reader = frames_to_reader([Frame::Stream(StreamEnvelope::StreamChunk {
+            stream_id,
+            sequence: 0,
+            chunk: serde_json::json!({}),
+        })])
+        .await;
+
+        let err = read_response_or_stream(&mut reader)
+            .await
+            .expect_err("bare StreamChunk must error");
+        match err {
+            ReadResponseOrStreamError::Stream(CollectStreamError::MissingBegin { got }) => {
+                assert_eq!(got, "stream_chunk");
+            }
+            other => panic!("expected Stream(MissingBegin), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_rejects_response_frame_mid_stream() {
+        // After StreamBegin, the daemon must only emit Stream*
+        // envelopes for that stream. A Frame::Response arriving
+        // mid-stream is a protocol violation; the helper must not
+        // silently treat it as a terminal Response and drop the
+        // partially-collected stream.
+        let stream_id = Uuid::from_u128(99);
+        let mut reader = frames_to_reader([
+            Frame::Stream(StreamEnvelope::StreamBegin {
+                stream_id,
+                response_kind: "memories".into(),
+            }),
+            Frame::Response(Response::Pong),
+        ])
+        .await;
+
+        let err = read_response_or_stream(&mut reader)
+            .await
+            .expect_err("Response mid-stream must error");
+        match err {
+            ReadResponseOrStreamError::Stream(CollectStreamError::EnvelopeAfterTerminal {
+                got,
+            }) => {
+                assert_eq!(got, "v1_response_mid_stream");
+            }
+            other => panic!(
+                "expected Stream(EnvelopeAfterTerminal v1_response_mid_stream), got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_response_or_stream_propagates_eof_during_stream_drain() {
+        // If the connection drops after StreamBegin (no StreamEnd ever
+        // arrives), the next read_frame returns an io::UnexpectedEof
+        // through IpcError::Io. The helper must propagate that as
+        // ReadResponseOrStreamError::Ipc, not invent a successful
+        // empty-chunk completion.
+        let stream_id = Uuid::nil();
+        let mut reader = frames_to_reader([Frame::Stream(StreamEnvelope::StreamBegin {
+            stream_id,
+            response_kind: "memories".into(),
+        })])
+        .await;
+
+        let err = read_response_or_stream(&mut reader)
+            .await
+            .expect_err("truncated stream must error");
+        match err {
+            ReadResponseOrStreamError::Ipc(IpcError::Io(e)) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
+            }
+            other => panic!("expected Ipc(Io(UnexpectedEof)), got {other:?}"),
+        }
     }
 }

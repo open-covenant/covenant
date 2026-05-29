@@ -2,13 +2,14 @@
 //!
 //! ```text
 //!   covenant ping [--json]
-//!   covenant intent [--json] <text>
-//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json]
+//!   covenant intent [--json] [--stream] <text>
+//!   covenant memory recent [--tier <working|episodic|longterm>] [--limit N] [--json] [--stream]
 //!   covenant memory search <query> [--tier <working|episodic|longterm>] [--limit N] [--min-relevance F] [--json]
 //!   covenant memory purge [--tier <T>] (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M>|--delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M>|--delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M>|--mark-longterm-stale-older-than-ms <D>] [--json]
 //!   covenant memory plan-receipt-backfill [--limit N] [--json]
+//!   covenant memory backfill-receipt-correlation [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant memory repair detach-parent <id> --reason <text> [--expected-parent <uuid>] [--apply]
 //!   covenant memory repair delete <id> --reason <text> [--apply]
 //!   covenant memory repair backfill-provenance <id> --reason <text> --provenance <json> [--apply]
@@ -20,11 +21,26 @@
 //!   covenant chain status [--json]
 //!   covenant chain flush-receipts [--limit N] [--json]
 //!   covenant chain receipt-batches [--limit N] [--json]
+//!   covenant chain register-agent --program-id <BASE58> --agent-key <BASE58> --metadata-hash <HEX64> --capability-hash <HEX64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain stake --program-id <BASE58> --agent-key <BASE58> --owner-covnt <BASE58> --stake-vault <BASE58> --amount <U64> --lock-until <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain buy-credits --program-id <BASE58> --owner-covnt <BASE58> --treasury <BASE58> --amount-covnt <U64> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant chain initialize --program-id <BASE58> --covnt-mint <BASE58> --treasury <BASE58> --slash-authority <BASE58> --credits-per-covnt <U64> [--min-stake-lock <U64>] [COMMON]
+//!   covenant chain open-credit-account --program-id <BASE58> [COMMON]
+//!   covenant chain unstake --program-id <BASE58> --agent-key <BASE58> --stake-vault <BASE58> --owner-covnt <BASE58> [COMMON]
+//!   covenant chain close-position --program-id <BASE58> --agent-key <BASE58> [COMMON]
+//!   covenant chain migrate-config --program-id <BASE58> --min-stake-lock <U64> [COMMON]
+//!   covenant chain set-min-stake-lock --program-id <BASE58> --value <U64> [COMMON]
+//!   covenant chain set-credits-per-covnt --program-id <BASE58> --value <U64> [COMMON]
+//!   covenant chain update-authority --program-id <BASE58> --new <BASE58> [COMMON]
+//!   covenant chain update-slash-authority --program-id <BASE58> --new <BASE58> [COMMON]
+//!   covenant chain update-treasury --program-id <BASE58> --treasury <BASE58> [COMMON]
+//!     COMMON = [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]
+//!   covenant settlement backfill-receipts [--dry-run] [--json]   (--scope-pubkey reserved, not yet supported)
 //!   covenant verify [--window N] [--json]
 //!   covenant ignore check [--json] <text>
 //!   covenant tools list [--json]
 //!   covenant tools call <name> [--args <json>] [--json]
-//!   covenant audit recent [--limit N] [--since-ms <epoch_ms>] [--json]
+//!   covenant audit recent [--limit N] [--since-ms <epoch_ms>] [--json] [--stream]
 //!   covenant audit verify [--json]
 //!   covenant audit purge (--before-ms <M> | --older-than-ms <D>) [--json]
 //!   covenant a2a status [--limit N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]
@@ -49,10 +65,11 @@ use covenant_a2a::{
 };
 use covenant_audit::{AuditEvent, AuditIntegrityReport, AuditKind};
 use covenant_ipc::{
-    read_frame, write_frame, ChainStatus, ReceiptBatchSummary, Request, Response, VerifyCheck,
-    VerifyDrift,
+    read_frame, read_response_or_stream, write_frame, ChainStatus, ReceiptBatchSummary, Request,
+    Response, ResponseOrStream, VerifyCheck, VerifyDrift,
 };
 use covenant_mcp::ToolSpec;
+use covenant_memory::memory_receipt_backfill_plan_json;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
 use covenant_types::{
@@ -60,8 +77,15 @@ use covenant_types::{
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
     SettlementReceipt,
 };
-use std::collections::HashSet;
-use std::path::PathBuf;
+use solana_client::rpc_client::RpcClient;
+use solana_client::rpc_config::RpcSendTransactionConfig;
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signer::keypair::Keypair;
+use solana_sdk::signer::Signer;
+use solana_sdk::transaction::Transaction;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::net::UnixStream;
 
 fn covenant_home() -> Result<PathBuf> {
@@ -70,6 +94,1936 @@ fn covenant_home() -> Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant"))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum KeypairLoadError {
+    #[error("cannot resolve default operator keypair path: HOME is not set (pass --keypair PATH or export HOME)")]
+    HomeUnresolved,
+    #[error("operator keypair file not found at {path}")]
+    MissingFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} cannot be read: permission denied")]
+    PermissionDenied {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} cannot be read")]
+    NotReadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("operator keypair file at {path} is not a JSON array of bytes")]
+    MalformedJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("operator keypair file at {path} has {actual} bytes, expected exactly 64 (Solana keypair convention)")]
+    WrongByteCount { path: PathBuf, actual: usize },
+    #[error("operator keypair file at {path} is not a valid Solana ed25519 keypair: {reason}")]
+    InvalidKeyMaterial { path: PathBuf, reason: String },
+}
+
+fn compute_default_keypair_path(home: impl AsRef<Path>) -> PathBuf {
+    home.as_ref().join(".config").join("solana").join("id.json")
+}
+
+fn resolve_operator_keypair_path(provided: Option<PathBuf>) -> Result<PathBuf, KeypairLoadError> {
+    if let Some(p) = provided {
+        return Ok(p);
+    }
+    let home = std::env::var("HOME").map_err(|_| KeypairLoadError::HomeUnresolved)?;
+    Ok(compute_default_keypair_path(home))
+}
+
+fn classify_keypair_read_error(path: PathBuf, source: std::io::Error) -> KeypairLoadError {
+    match source.kind() {
+        std::io::ErrorKind::NotFound => KeypairLoadError::MissingFile { path, source },
+        std::io::ErrorKind::PermissionDenied => KeypairLoadError::PermissionDenied { path, source },
+        _ => KeypairLoadError::NotReadable { path, source },
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ClusterResolveError {
+    #[error("unknown Solana cluster {name:?}; accepted values are devnet, localnet, mainnet, mainnet-beta")]
+    UnknownCluster { name: String },
+    #[error("--rpc-url was provided but the value is empty")]
+    EmptyRpcUrl,
+}
+
+// Cluster -> default RPC URL mapping mirrors packages/config/networks.mjs
+// so the CLI and the landing/UI route the same operator-supplied cluster
+// names to the same endpoints. Default cluster is devnet to align with
+// the devnet program ID pinned in docs/internal/status.md row "On-chain
+// settlement".
+fn resolve_solana_rpc_url(
+    cluster: Option<&str>,
+    rpc_url_override: Option<&str>,
+) -> Result<String, ClusterResolveError> {
+    if let Some(url) = rpc_url_override {
+        if url.is_empty() {
+            return Err(ClusterResolveError::EmptyRpcUrl);
+        }
+        return Ok(url.to_string());
+    }
+    let name = cluster.unwrap_or("devnet");
+    let url = match name {
+        "devnet" => "https://api.devnet.solana.com",
+        "localnet" => "http://127.0.0.1:8899",
+        "mainnet" | "mainnet-beta" => "https://api.mainnet-beta.solana.com",
+        other => {
+            return Err(ClusterResolveError::UnknownCluster {
+                name: other.to_string(),
+            })
+        }
+    };
+    Ok(url.to_string())
+}
+
+// Settlement-program PDA seed bytes mirror agent-os/programs/settlement/
+// src/lib.rs. Wrapping each find_program_address call lets the verb
+// sub-slices use the canonical seeds without re-spelling the byte
+// literals at every call site, where a one-character typo would derive a
+// deterministic-but-wrong PDA and surface only as AccountNotInitialized
+// from on-chain simulation.
+fn settlement_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"config"], program_id)
+}
+
+fn settlement_agent_pda(program_id: &Pubkey, agent_key: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"agent", agent_key.as_ref()], program_id)
+}
+
+fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
+}
+
+// Seeds mirror agent-os/programs/settlement/src/lib.rs:547 exactly:
+//   [b"stake", agent.agent_key.as_ref(), owner.key().as_ref()]
+// A one-byte typo in either tag literal or a wrong slice (e.g. the
+// agent PDA bytes instead of agent_key) derives a deterministic-but-
+// wrong PDA. The on-chain dispatcher then rejects the transaction
+// with ConstraintSeeds at submission time, which surfaces as an
+// opaque RPC error rather than a local-test failure — so the helper
+// is unit-pinned against the literal seed bytes.
+fn settlement_stake_position_pda(
+    program_id: &Pubkey,
+    agent_key: &Pubkey,
+    owner: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"stake", agent_key.as_ref(), owner.as_ref()], program_id)
+}
+
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:877-882
+// (agent_key, metadata_hash, capability_hash). Borsh serializes in
+// struct declaration order; following the alphabetical data_keys order
+// in packages/sdk/compatibility/instructions.v1.json (which is a sorted
+// set used by validate-sdk-compatibility, not a serialization spec)
+// would silently swap capability_hash and metadata_hash on the wire,
+// and the on-chain account would deserialize with the operator's
+// capability_hash parsed as metadata_hash and vice versa.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct RegisterAgentArgs {
+    agent_key: [u8; 32],
+    metadata_hash: [u8; 32],
+    capability_hash: [u8; 32],
+}
+
+fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
+}
+
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:137
+// (amount, lock_until). Borsh serializes in struct-declaration order;
+// a swap would silently make the on-chain program lock for amount
+// epochs and stake lock_until lamports — both numerically valid u64s,
+// so neither side errors at the wire layer.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct StakeArgs {
+    amount: u64,
+    lock_until: u64,
+}
+
+fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of two u64 fields is infallible")
+}
+
+// Mirrors agent-os/programs/settlement/src/lib.rs:91
+// `buy_credits(ctx, amount_covnt: u64)`. The on-chain handler
+// reads a single u64 argument; a struct grow without an on-chain
+// mirror would silently truncate at deserialize-time on chain.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+struct BuyCreditsArgs {
+    amount_covnt: u64,
+}
+
+fn serialize_buy_credits_args(args: &BuyCreditsArgs) -> Vec<u8> {
+    borsh::to_vec(args).expect("borsh serialization of one u64 field is infallible")
+}
+
+// Account ordering and signer/writable flags mirror the on-chain
+// RegisterAgent struct at agent-os/programs/settlement/src/lib.rs:429-448:
+//   config           — PDA, read-only
+//   agent            — PDA, writable, NOT signer (init-by-operator)
+//   operator         — signer, writable (fee payer)
+//   system_program   — read-only
+// Anchor's dispatcher routes accounts positionally; any reorder silently
+// remaps roles and the transaction would fail with a confusing
+// ConstraintSeeds / AccountNotInitialized error.
+fn build_register_agent_instruction(
+    program_id: &Pubkey,
+    operator_pubkey: &Pubkey,
+    args: &RegisterAgentArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (agent_pda, _) = settlement_agent_pda(program_id, &Pubkey::new_from_array(args.agent_key));
+
+    let mut data = Vec::with_capacity(8 + 96);
+    data.extend_from_slice(&compute_anchor_global_discriminator("register_agent"));
+    data.extend_from_slice(&serialize_register_agent_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(agent_pda, false),
+            AccountMeta::new(*operator_pubkey, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+// The canonical SPL Token (legacy, v3) program ID. The on-chain
+// Stake / BuyCredits instructions declare Program<Token> which only
+// accepts this address; the Token-2022 program at
+// TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb is a different
+// program and a substitution would be rejected with InvalidProgramId.
+const SPL_TOKEN_PROGRAM_ID: Pubkey =
+    Pubkey::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+// Account ordering and signer/writable flags mirror the on-chain
+// Stake struct at agent-os/programs/settlement/src/lib.rs:531-567:
+//   config         — PDA, read-only
+//   agent          — PDA, writable, !signer
+//   position       — PDA, writable, !signer (#[account(init, ...)])
+//   owner          — signer, writable (fee payer)
+//   owner_covnt    — writable, !signer (source of the stake transfer)
+//   stake_vault    — writable, !signer (destination of the stake transfer)
+//   token_program  — read-only, legacy SPL Token
+//   system_program — read-only
+// Anchor's dispatcher reads accounts positionally, so a single-slot
+// reorder silently remaps roles and either fails ConstraintSeeds
+// (PDAs) or Unauthorized (token-owner checks).
+fn build_stake_instruction(
+    program_id: &Pubkey,
+    operator: &Pubkey,
+    agent_key: &Pubkey,
+    owner_covnt: &Pubkey,
+    stake_vault: &Pubkey,
+    covnt_mint: &Pubkey,
+    args: &StakeArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (agent_pda, _) = settlement_agent_pda(program_id, agent_key);
+    let (position_pda, _) = settlement_stake_position_pda(program_id, agent_key, operator);
+
+    let mut data = Vec::with_capacity(8 + 16);
+    data.extend_from_slice(&compute_anchor_global_discriminator("stake"));
+    data.extend_from_slice(&serialize_stake_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(agent_pda, false),
+            AccountMeta::new(position_pda, false),
+            AccountMeta::new(*operator, true),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new(*stake_vault, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+// Account ordering and signer/writable flags mirror the on-chain
+// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:483-503:
+//   config        — PDA, read-only (has_one = treasury)
+//   credits       — PDA, writable, !signer (has_one = owner)
+//   owner         — signer, writable (fee payer + transfer authority)
+//   owner_covnt   — writable, !signer (source of the COVNT transfer)
+//   treasury      — writable, !signer (destination of the COVNT transfer;
+//                   the operator must supply config.treasury verbatim or
+//                   the has_one check fails)
+//   token_program — read-only, legacy SPL Token
+// No system_program is referenced because BuyCredits does not init
+// any new account (credits PDA is initialized by initialize_credits).
+fn build_buy_credits_instruction(
+    program_id: &Pubkey,
+    operator: &Pubkey,
+    owner_covnt: &Pubkey,
+    treasury: &Pubkey,
+    covnt_mint: &Pubkey,
+    args: &BuyCreditsArgs,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+
+    let (config_pda, _) = settlement_config_pda(program_id);
+    let (credits_pda, _) = settlement_credits_pda(program_id, operator);
+
+    let mut data = Vec::with_capacity(8 + 8);
+    data.extend_from_slice(&compute_anchor_global_discriminator("buy_credits"));
+    data.extend_from_slice(&serialize_buy_credits_args(args));
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(credits_pda, false),
+            AccountMeta::new(*operator, true),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new(*treasury, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data,
+    }
+}
+
+// First 8 bytes of sha256("global:<method>") — Anchor's instruction
+// discriminator scheme. The "global:" namespace is the only one Anchor's
+// macro-generated dispatcher accepts for #[program] mod methods; dropping
+// it would silently produce bytes that never route on chain.
+fn compute_anchor_global_discriminator(method: &str) -> [u8; 8] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"global:");
+    hasher.update(method.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest[..8]);
+    out
+}
+
+fn load_operator_keypair(provided: Option<PathBuf>) -> Result<Keypair, KeypairLoadError> {
+    let path = resolve_operator_keypair_path(provided)?;
+    let raw = std::fs::read(&path).map_err(|e| classify_keypair_read_error(path.clone(), e))?;
+    let bytes: Vec<u8> =
+        serde_json::from_slice(&raw).map_err(|source| KeypairLoadError::MalformedJson {
+            path: path.clone(),
+            source,
+        })?;
+    if bytes.len() != 64 {
+        return Err(KeypairLoadError::WrongByteCount {
+            path,
+            actual: bytes.len(),
+        });
+    }
+    Keypair::from_bytes(bytes.as_slice()).map_err(|e| KeypairLoadError::InvalidKeyMaterial {
+        path,
+        reason: e.to_string(),
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum KeypairModeError {
+    #[error("operator keypair file at {path} cannot be inspected for permissions")]
+    Stat {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "operator keypair file at {path} has overly-permissive mode {mode:#o}; group or world read \
+         would let any local user steal the signing key. fix with: chmod 0600 {path}"
+    )]
+    GroupOrWorldReadable { path: PathBuf, mode: u32 },
+}
+
+// Operator keypairs are 64-byte ed25519 secret material. A mode that
+// permits group or world read (any bit in mode & 0o077) lets a co-tenant
+// or shared-CI scrape it without the operator's knowledge — the cluster
+// would then mint settlement transactions signed by the operator's key
+// for an attacker. Fail loudly before signing, with a chmod hint so the
+// operator can fix it without guessing.
+#[cfg(unix)]
+fn check_keypair_mode(path: &Path) -> Result<(), KeypairModeError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(|source| KeypairModeError::Stat {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mode = meta.mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(KeypairModeError::GroupOrWorldReadable {
+            path: path.to_path_buf(),
+            mode,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_keypair_mode(_path: &Path) -> Result<(), KeypairModeError> {
+    // Windows uses an ACL model rather than POSIX mode bits; the
+    // 0o077 check would be a category error there. Operators on
+    // non-Unix platforms must verify keypair ACLs out-of-band.
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PubkeyArgError {
+    #[error("--{flag} value is empty; expected a 32-byte base58-encoded Solana public key")]
+    Empty { flag: &'static str },
+    #[error("--{flag} {value:?} is not a valid 32-byte base58 Solana public key: {reason}")]
+    Invalid {
+        flag: &'static str,
+        value: String,
+        reason: String,
+    },
+}
+
+fn parse_pubkey_arg(flag: &'static str, value: &str) -> Result<Pubkey, PubkeyArgError> {
+    use std::str::FromStr;
+    if value.is_empty() {
+        return Err(PubkeyArgError::Empty { flag });
+    }
+    Pubkey::from_str(value).map_err(|e| PubkeyArgError::Invalid {
+        flag,
+        value: value.to_string(),
+        reason: e.to_string(),
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum Hash32ArgError {
+    #[error("--{flag} value is empty; expected exactly 64 hex characters (32 bytes)")]
+    Empty { flag: &'static str },
+    #[error("--{flag} expected exactly 64 hex characters (32 bytes); got {actual} characters")]
+    WrongLength { flag: &'static str, actual: usize },
+    #[error("--{flag} contains a non-hex character at position {position}: {ch:?}")]
+    BadHexChar {
+        flag: &'static str,
+        position: usize,
+        ch: char,
+    },
+}
+
+fn parse_hash32_arg(flag: &'static str, value: &str) -> Result<[u8; 32], Hash32ArgError> {
+    if value.is_empty() {
+        return Err(Hash32ArgError::Empty { flag });
+    }
+    if value.len() != 64 {
+        return Err(Hash32ArgError::WrongLength {
+            flag,
+            actual: value.len(),
+        });
+    }
+    let mut out = [0u8; 32];
+    let bytes = value.as_bytes();
+    for i in 0..32 {
+        let hi = hex_nibble(bytes[2 * i]).ok_or(Hash32ArgError::BadHexChar {
+            flag,
+            position: 2 * i,
+            ch: bytes[2 * i] as char,
+        })?;
+        let lo = hex_nibble(bytes[2 * i + 1]).ok_or(Hash32ArgError::BadHexChar {
+            flag,
+            position: 2 * i + 1,
+            ch: bytes[2 * i + 1] as char,
+        })?;
+        out[i] = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct RegisterAgentCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    agent_key: [u8; 32],
+    metadata_hash: [u8; 32],
+    capability_hash: [u8; 32],
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_register_agent_cli_args(args: &[String]) -> Result<RegisterAgentCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut agent_key_pubkey: Option<Pubkey> = None;
+    let mut metadata_hash: Option<[u8; 32]> = None;
+    let mut capability_hash: Option<[u8; 32]> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--agent-key" => {
+                i += 1;
+                let v = args.get(i).context("--agent-key needs a value")?;
+                agent_key_pubkey = Some(parse_pubkey_arg("agent-key", v)?);
+            }
+            "--metadata-hash" => {
+                i += 1;
+                let v = args.get(i).context("--metadata-hash needs a value")?;
+                metadata_hash = Some(parse_hash32_arg("metadata-hash", v)?);
+            }
+            "--capability-hash" => {
+                i += 1;
+                let v = args.get(i).context("--capability-hash needs a value")?;
+                capability_hash = Some(parse_hash32_arg("capability-hash", v)?);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed: u64 = v
+                    .parse()
+                    .context("--confirm-timeout-ms must be a non-negative integer")?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let agent_key_pubkey = agent_key_pubkey.context("--agent-key is required")?;
+    let metadata_hash = metadata_hash.context("--metadata-hash is required")?;
+    let capability_hash = capability_hash.context("--capability-hash is required")?;
+    Ok(RegisterAgentCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        agent_key: agent_key_pubkey.to_bytes(),
+        metadata_hash,
+        capability_hash,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+// Splitting tx construction out of run_chain_register_agent lets unit
+// tests pin the fee-payer + single-signer invariant without standing
+// up a real RPC client. Anchor's dispatcher reads
+// message.account_keys[0] as the fee payer, and a tx whose fee payer
+// disagrees with the only signer would be rejected by the cluster
+// with a SignatureFailure error that surfaces only at submission
+// time.
+fn sign_register_agent_tx(
+    operator: &Keypair,
+    program_id: &Pubkey,
+    args: &RegisterAgentArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix = build_register_agent_instruction(program_id, &operator.pubkey(), args);
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn register_agent_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "register-agent",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "status": "confirmed",
+    })
+}
+
+fn register_agent_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "register-agent",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+#[derive(Debug)]
+struct StakeCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    agent_key: Pubkey,
+    owner_covnt: Pubkey,
+    stake_vault: Pubkey,
+    covnt_mint: Pubkey,
+    amount: u64,
+    lock_until: u64,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_u64_arg(flag: &'static str, value: &str) -> Result<u64> {
+    value
+        .parse::<u64>()
+        .with_context(|| format!("--{flag} must be a non-negative integer (got {value:?})"))
+}
+
+fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut agent_key: Option<Pubkey> = None;
+    let mut owner_covnt: Option<Pubkey> = None;
+    let mut stake_vault: Option<Pubkey> = None;
+    let mut covnt_mint: Option<Pubkey> = None;
+    let mut amount: Option<u64> = None;
+    let mut lock_until: Option<u64> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--agent-key" => {
+                i += 1;
+                let v = args.get(i).context("--agent-key needs a value")?;
+                agent_key = Some(parse_pubkey_arg("agent-key", v)?);
+            }
+            "--owner-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--owner-covnt needs a value")?;
+                owner_covnt = Some(parse_pubkey_arg("owner-covnt", v)?);
+            }
+            "--stake-vault" => {
+                i += 1;
+                let v = args.get(i).context("--stake-vault needs a value")?;
+                stake_vault = Some(parse_pubkey_arg("stake-vault", v)?);
+            }
+            "--covnt-mint" => {
+                i += 1;
+                let v = args.get(i).context("--covnt-mint needs a value")?;
+                covnt_mint = Some(parse_pubkey_arg("covnt-mint", v)?);
+            }
+            "--amount" => {
+                i += 1;
+                let v = args.get(i).context("--amount needs a value")?;
+                let parsed = parse_u64_arg("amount", v)?;
+                if parsed == 0 {
+                    // A zero stake transfers nothing, opens a
+                    // 0-balance StakePosition the operator paid
+                    // rent for, and still costs a tx fee — almost
+                    // certainly a typo rather than intent.
+                    bail!("--amount must be greater than zero");
+                }
+                amount = Some(parsed);
+            }
+            "--lock-until" => {
+                i += 1;
+                let v = args.get(i).context("--lock-until needs a value")?;
+                lock_until = Some(parse_u64_arg("lock-until", v)?);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed = parse_u64_arg("confirm-timeout-ms", v)?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let agent_key = agent_key.context("--agent-key is required")?;
+    let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
+    let stake_vault = stake_vault.context("--stake-vault is required")?;
+    let covnt_mint = covnt_mint.context("--covnt-mint is required")?;
+    let amount = amount.context("--amount is required")?;
+    let lock_until = lock_until.context("--lock-until is required")?;
+    Ok(StakeCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        agent_key,
+        owner_covnt,
+        stake_vault,
+        covnt_mint,
+        amount,
+        lock_until,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+struct StakeTxAccounts<'a> {
+    program_id: &'a Pubkey,
+    agent_key: &'a Pubkey,
+    owner_covnt: &'a Pubkey,
+    stake_vault: &'a Pubkey,
+    covnt_mint: &'a Pubkey,
+}
+
+fn sign_stake_tx(
+    operator: &Keypair,
+    accounts: &StakeTxAccounts<'_>,
+    args: &StakeArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix = build_stake_instruction(
+        accounts.program_id,
+        &operator.pubkey(),
+        accounts.agent_key,
+        accounts.owner_covnt,
+        accounts.stake_vault,
+        accounts.covnt_mint,
+        args,
+    );
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn stake_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    amount: u64,
+    lock_until: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "stake",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "amount": amount,
+        "lock_until": lock_until,
+        "status": "confirmed",
+    })
+}
+
+fn stake_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    agent_key_b58: &str,
+    amount: u64,
+    lock_until: u64,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "stake",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "agent_key": agent_key_b58,
+        "amount": amount,
+        "lock_until": lock_until,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+async fn run_chain_stake(args: &[String]) -> Result<()> {
+    let parsed = parse_stake_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = StakeArgs {
+        amount: parsed.amount,
+        lock_until: parsed.lock_until,
+    };
+    let program_id = parsed.program_id;
+    let agent_key = parsed.agent_key;
+    let owner_covnt = parsed.owner_covnt;
+    let stake_vault = parsed.stake_vault;
+    let covnt_mint = parsed.covnt_mint;
+    let agent_key_b58 = agent_key.to_string();
+
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_stake_tx(
+                &kp,
+                &StakeTxAccounts {
+                    program_id: &program_id,
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &covnt_mint,
+                },
+                &prep_args,
+                blockhash,
+            );
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            let envelope = stake_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.amount,
+                parsed.lock_until,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!("amount: {}", parsed.amount);
+                println!("lock_until: {}", parsed.lock_until);
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!("send_and_confirm_transaction failed: {client_err}")
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = stake_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.amount,
+                parsed.lock_until,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!("amount: {}", parsed.amount);
+                println!("lock_until: {}", parsed.lock_until);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct BuyCreditsCliArgs {
+    keypair_path: Option<PathBuf>,
+    cluster: String,
+    rpc_url: Option<String>,
+    program_id: Pubkey,
+    owner_covnt: Pubkey,
+    treasury: Pubkey,
+    covnt_mint: Pubkey,
+    amount_covnt: u64,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+}
+
+fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut cluster: String = "devnet".to_string();
+    let mut rpc_url: Option<String> = None;
+    let mut program_id: Option<Pubkey> = None;
+    let mut owner_covnt: Option<Pubkey> = None;
+    let mut treasury: Option<Pubkey> = None;
+    let mut covnt_mint: Option<Pubkey> = None;
+    let mut amount_covnt: Option<u64> = None;
+    let mut confirm_timeout_ms: u64 = 60_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                i += 1;
+                let v = args.get(i).context("--keypair needs a value")?;
+                keypair_path = Some(PathBuf::from(v));
+            }
+            "--cluster" => {
+                i += 1;
+                let v = args.get(i).context("--cluster needs a value")?;
+                cluster = v.clone();
+            }
+            "--rpc-url" => {
+                i += 1;
+                let v = args.get(i).context("--rpc-url needs a value")?;
+                rpc_url = Some(v.clone());
+            }
+            "--program-id" => {
+                i += 1;
+                let v = args.get(i).context("--program-id needs a value")?;
+                program_id = Some(parse_pubkey_arg("program-id", v)?);
+            }
+            "--owner-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--owner-covnt needs a value")?;
+                owner_covnt = Some(parse_pubkey_arg("owner-covnt", v)?);
+            }
+            "--treasury" => {
+                i += 1;
+                let v = args.get(i).context("--treasury needs a value")?;
+                treasury = Some(parse_pubkey_arg("treasury", v)?);
+            }
+            "--covnt-mint" => {
+                i += 1;
+                let v = args.get(i).context("--covnt-mint needs a value")?;
+                covnt_mint = Some(parse_pubkey_arg("covnt-mint", v)?);
+            }
+            "--amount-covnt" => {
+                i += 1;
+                let v = args.get(i).context("--amount-covnt needs a value")?;
+                let parsed = parse_u64_arg("amount-covnt", v)?;
+                if parsed == 0 {
+                    // A zero-amount buy_credits costs a tx fee
+                    // for a no-op token transfer — almost
+                    // certainly a typo rather than intent.
+                    bail!("--amount-covnt must be greater than zero");
+                }
+                amount_covnt = Some(parsed);
+            }
+            "--confirm-timeout-ms" => {
+                i += 1;
+                let v = args.get(i).context("--confirm-timeout-ms needs a value")?;
+                let parsed = parse_u64_arg("confirm-timeout-ms", v)?;
+                if parsed == 0 {
+                    bail!("--confirm-timeout-ms must be greater than zero");
+                }
+                confirm_timeout_ms = parsed;
+            }
+            "--json" => as_json = true,
+            other => bail!("unknown flag '{other}'"),
+        }
+        i += 1;
+    }
+    let program_id = program_id.context("--program-id is required")?;
+    let owner_covnt = owner_covnt.context("--owner-covnt is required")?;
+    let treasury = treasury.context("--treasury is required")?;
+    let covnt_mint = covnt_mint.context("--covnt-mint is required")?;
+    let amount_covnt = amount_covnt.context("--amount-covnt is required")?;
+    Ok(BuyCreditsCliArgs {
+        keypair_path,
+        cluster,
+        rpc_url,
+        program_id,
+        owner_covnt,
+        treasury,
+        covnt_mint,
+        amount_covnt,
+        confirm_timeout_ms,
+        as_json,
+    })
+}
+
+fn sign_buy_credits_tx(
+    operator: &Keypair,
+    program_id: &Pubkey,
+    owner_covnt: &Pubkey,
+    treasury: &Pubkey,
+    covnt_mint: &Pubkey,
+    args: &BuyCreditsArgs,
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Transaction {
+    let ix = build_buy_credits_instruction(
+        program_id,
+        &operator.pubkey(),
+        owner_covnt,
+        treasury,
+        covnt_mint,
+        args,
+    );
+    Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&operator.pubkey()),
+        &[operator],
+        recent_blockhash,
+    )
+}
+
+fn buy_credits_confirmed_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    owner_b58: &str,
+    amount_covnt: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.v1",
+        "verb": "buy-credits",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "owner": owner_b58,
+        "amount_covnt": amount_covnt,
+        "status": "confirmed",
+    })
+}
+
+fn buy_credits_timeout_json(
+    signature_b58: &str,
+    rpc_url: &str,
+    cluster: &str,
+    owner_b58: &str,
+    amount_covnt: u64,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "covenant.chain.tx.timeout.v1",
+        "verb": "buy-credits",
+        "signature": signature_b58,
+        "rpc_url": rpc_url,
+        "cluster": cluster,
+        "owner": owner_b58,
+        "amount_covnt": amount_covnt,
+        "status": "submitted-not-confirmed",
+        "timeout_ms": timeout_ms,
+    })
+}
+
+async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
+    let parsed = parse_buy_credits_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = BuyCreditsArgs {
+        amount_covnt: parsed.amount_covnt,
+    };
+    let program_id = parsed.program_id;
+    let owner_covnt = parsed.owner_covnt;
+    let treasury = parsed.treasury;
+    let covnt_mint = parsed.covnt_mint;
+    let owner_b58 = kp.pubkey().to_string();
+
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &program_id,
+                &owner_covnt,
+                &treasury,
+                &covnt_mint,
+                &prep_args,
+                blockhash,
+            );
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            let envelope = buy_credits_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &owner_b58,
+                parsed.amount_covnt,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("owner: {owner_b58}");
+                println!("amount_covnt: {}", parsed.amount_covnt);
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!(
+                "send_and_confirm_transaction failed: {client_err} \
+                 (if HasOneConstraintViolation: fetch config.treasury via `chain status` \
+                 and pass it verbatim to --treasury)"
+            )
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = buy_credits_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &owner_b58,
+                parsed.amount_covnt,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("owner: {owner_b58}");
+                println!("amount_covnt: {}", parsed.amount_covnt);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_chain_register_agent(args: &[String]) -> Result<()> {
+    let parsed = parse_register_agent_cli_args(args)?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(parsed.keypair_path.clone())?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    let kp = load_operator_keypair(Some(resolved_keypair_path))?;
+
+    let rpc_url = resolve_solana_rpc_url(Some(&parsed.cluster), parsed.rpc_url.as_deref())?;
+
+    let on_chain_args = RegisterAgentArgs {
+        agent_key: parsed.agent_key,
+        metadata_hash: parsed.metadata_hash,
+        capability_hash: parsed.capability_hash,
+    };
+    let program_id = parsed.program_id;
+    let agent_key_b58 = Pubkey::new_from_array(parsed.agent_key).to_string();
+
+    // Build + sign the tx on a dedicated blocking thread. The blocking
+    // RpcClient builds its own current-thread tokio runtime in its
+    // constructor; constructing it inside the outer #[tokio::main]
+    // runtime would panic ("Cannot start a runtime from within a
+    // runtime"), so the construction lives behind spawn_blocking.
+    let url_for_prep = rpc_url.clone();
+    let prep_args = on_chain_args.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let tx = sign_register_agent_tx(&kp, &program_id, &prep_args, blockhash);
+            // tx.signatures[0] is the canonical signature for the
+            // tx; Transaction::new_signed_with_payer guarantees it is
+            // filled when the operator keypair signs as fee payer.
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let confirm_timeout = Duration::from_millis(parsed.confirm_timeout_ms);
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    // ClientError carries large detail fields; box it through the
+    // join handle so clippy::result_large_err is satisfied and the
+    // join payload stays a single pointer-sized smart pointer.
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    // Preflight defaults to `finalized`, which lags the
+                    // `confirmed` blockhash and rejects with "Blockhash not
+                    // found" before submit. Pin it to `confirmed` to match.
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    match tokio::time::timeout(confirm_timeout, submit_handle).await {
+        Err(_elapsed) => {
+            // The blocking submit task keeps running in the
+            // background; we only stop waiting on confirmation. The
+            // signature is already known from the locally-signed tx,
+            // so the operator can poll the cluster manually.
+            let envelope = register_agent_timeout_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+                parsed.confirm_timeout_ms,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+                println!(
+                    "timeout_ms: {} (poll the cluster manually to confirm)",
+                    parsed.confirm_timeout_ms,
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => {
+            bail!("send_and_confirm_transaction failed: {client_err}")
+        }
+        Ok(Ok(Ok(_confirmed_sig))) => {
+            let envelope = register_agent_confirmed_json(
+                &signature_b58,
+                &rpc_url,
+                &parsed.cluster,
+                &agent_key_b58,
+            );
+            if parsed.as_json {
+                println!("{}", serde_json::to_string(&envelope)?);
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {}", parsed.cluster);
+                println!("agent_key: {agent_key_b58}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// --- additional settlement instruction builders ---------------------------
+// These mirror the on-chain account ordering in
+// agent-os/programs/settlement/src/lib.rs. Anchor reads accounts positionally,
+// so the order is load-bearing.
+
+fn build_initialize_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    covnt_mint: &Pubkey,
+    treasury: &Pubkey,
+    slash_authority: &Pubkey,
+    credits_per_covnt: u64,
+    min_stake_lock: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator("initialize").to_vec();
+    data.extend_from_slice(slash_authority.as_ref());
+    data.extend_from_slice(&credits_per_covnt.to_le_bytes());
+    data.extend_from_slice(&min_stake_lock.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new(*authority, true),
+            AccountMeta::new_readonly(*covnt_mint, false),
+            AccountMeta::new_readonly(*treasury, false),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+fn build_open_credit_account_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (credits, _) = settlement_credits_pda(program_id, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(credits, false),
+            AccountMeta::new(*owner, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data: compute_anchor_global_discriminator("open_credit_account").to_vec(),
+    }
+}
+
+fn build_unstake_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+    agent_key: &Pubkey,
+    stake_vault: &Pubkey,
+    owner_covnt: &Pubkey,
+    covnt_mint: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let (agent, _) = settlement_agent_pda(program_id, agent_key);
+    let (position, _) = settlement_stake_position_pda(program_id, agent_key, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(config, false),
+            AccountMeta::new(agent, false),
+            AccountMeta::new(position, false),
+            AccountMeta::new(*owner, true),
+            AccountMeta::new(*stake_vault, false),
+            AccountMeta::new(*owner_covnt, false),
+            AccountMeta::new_readonly(*covnt_mint, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data: compute_anchor_global_discriminator("unstake").to_vec(),
+    }
+}
+
+fn build_close_position_instruction(
+    program_id: &Pubkey,
+    owner: &Pubkey,
+    agent_key: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (position, _) = settlement_stake_position_pda(program_id, agent_key, owner);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(position, false),
+            AccountMeta::new(*owner, true),
+        ],
+        data: compute_anchor_global_discriminator("close_position").to_vec(),
+    }
+}
+
+fn build_migrate_config_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    min_stake_lock: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator("migrate_config").to_vec();
+    data.extend_from_slice(&min_stake_lock.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new(*authority, true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    }
+}
+
+fn build_update_config_u64_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    method: &str,
+    value: u64,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator(method).to_vec();
+    data.extend_from_slice(&value.to_le_bytes());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data,
+    }
+}
+
+fn build_update_config_pubkey_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    method: &str,
+    new_value: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    let mut data = compute_anchor_global_discriminator(method).to_vec();
+    data.extend_from_slice(new_value.as_ref());
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data,
+    }
+}
+
+fn build_update_treasury_instruction(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    treasury: &Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let (config, _) = settlement_config_pda(program_id);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(config, false),
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new_readonly(*treasury, false),
+        ],
+        data: compute_anchor_global_discriminator("update_treasury").to_vec(),
+    }
+}
+
+// Shared flag bag for the direct-RPC chain verbs added on top of the original
+// register-agent/stake/buy-credits trio. Every `--flag value` pair lands in
+// `map`; `--json` is the only valueless flag.
+struct ChainFlags {
+    map: std::collections::HashMap<String, String>,
+    json: bool,
+}
+
+fn parse_chain_flags(args: &[String]) -> Result<ChainFlags> {
+    let mut map = std::collections::HashMap::new();
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--json" {
+            json = true;
+            i += 1;
+            continue;
+        }
+        if a.starts_with("--") {
+            let v = args
+                .get(i + 1)
+                .with_context(|| format!("{a} needs a value"))?;
+            map.insert(a.clone(), v.clone());
+            i += 2;
+        } else {
+            bail!("unexpected argument '{a}'");
+        }
+    }
+    Ok(ChainFlags { map, json })
+}
+
+impl ChainFlags {
+    fn pubkey(&self, flag: &'static str) -> Result<Pubkey> {
+        let v = self
+            .map
+            .get(flag)
+            .with_context(|| format!("{flag} is required"))?;
+        Ok(parse_pubkey_arg(flag.trim_start_matches('-'), v)?)
+    }
+
+    fn u64(&self, flag: &'static str) -> Result<u64> {
+        let v = self
+            .map
+            .get(flag)
+            .with_context(|| format!("{flag} is required"))?;
+        parse_u64_arg(flag.trim_start_matches('-'), v)
+    }
+
+    fn u64_or(&self, flag: &'static str, default: u64) -> Result<u64> {
+        match self.map.get(flag) {
+            Some(v) => parse_u64_arg(flag.trim_start_matches('-'), v),
+            None => Ok(default),
+        }
+    }
+
+    fn cluster(&self) -> String {
+        self.map
+            .get("--cluster")
+            .cloned()
+            .unwrap_or_else(|| "devnet".to_string())
+    }
+
+    fn timeout_ms(&self) -> u64 {
+        self.map
+            .get("--confirm-timeout-ms")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60_000)
+    }
+
+    fn operator_and_rpc(&self) -> Result<(Keypair, String)> {
+        let resolved = resolve_operator_keypair_path(self.map.get("--keypair").map(PathBuf::from))?;
+        check_keypair_mode(&resolved)?;
+        let keypair = load_operator_keypair(Some(resolved))?;
+        let rpc_url = resolve_solana_rpc_url(
+            Some(&self.cluster()),
+            self.map.get("--rpc-url").map(|s| s.as_str()),
+        )?;
+        Ok((keypair, rpc_url))
+    }
+}
+
+// Build + sign on a blocking thread (the blocking RpcClient builds its own
+// runtime), submit with a confirmed-commitment preflight, and emit the same
+// `covenant.chain.tx.v1` envelope shape the register-agent path uses.
+#[allow(clippy::too_many_arguments)]
+async fn submit_chain_tx(
+    verb: &'static str,
+    cluster: String,
+    rpc_url: String,
+    keypair: Keypair,
+    confirm_timeout_ms: u64,
+    as_json: bool,
+    extra: serde_json::Map<String, serde_json::Value>,
+    build_ix: impl FnOnce(&Pubkey) -> solana_sdk::instruction::Instruction + Send + 'static,
+) -> Result<()> {
+    let operator = keypair.pubkey();
+    let url_for_prep = rpc_url.clone();
+    let (tx, signature_b58) =
+        tokio::task::spawn_blocking(move || -> Result<(Transaction, String)> {
+            let client =
+                RpcClient::new_with_commitment(url_for_prep, CommitmentConfig::confirmed());
+            let blockhash = client
+                .get_latest_blockhash()
+                .context("get_latest_blockhash from Solana RPC")?;
+            let ix = build_ix(&operator);
+            let tx =
+                Transaction::new_signed_with_payer(&[ix], Some(&operator), &[&keypair], blockhash);
+            let sig = tx.signatures[0].to_string();
+            Ok((tx, sig))
+        })
+        .await
+        .context("join blockhash worker")??;
+
+    let url_for_submit = rpc_url.clone();
+    let tx_to_send = tx.clone();
+    let submit_handle = tokio::task::spawn_blocking(
+        move || -> std::result::Result<
+            solana_sdk::signature::Signature,
+            Box<solana_client::client_error::ClientError>,
+        > {
+            let client =
+                RpcClient::new_with_commitment(url_for_submit, CommitmentConfig::confirmed());
+            client
+                .send_and_confirm_transaction_with_spinner_and_config(
+                    &tx_to_send,
+                    CommitmentConfig::confirmed(),
+                    RpcSendTransactionConfig {
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        ..Default::default()
+                    },
+                )
+                .map_err(Box::new)
+        },
+    );
+
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("verb".to_string(), verb.into());
+    envelope.insert("signature".to_string(), signature_b58.clone().into());
+    envelope.insert("rpc_url".to_string(), rpc_url.clone().into());
+    envelope.insert("cluster".to_string(), cluster.clone().into());
+    for (k, v) in extra {
+        envelope.insert(k, v);
+    }
+
+    match tokio::time::timeout(Duration::from_millis(confirm_timeout_ms), submit_handle).await {
+        Err(_elapsed) => {
+            envelope.insert("kind".to_string(), "covenant.chain.tx.timeout.v1".into());
+            envelope.insert("status".to_string(), "submitted-not-confirmed".into());
+            envelope.insert("timeout_ms".to_string(), confirm_timeout_ms.into());
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::Value::Object(envelope))?
+                );
+            } else {
+                println!("status: submitted-not-confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {cluster}");
+            }
+            std::process::exit(1);
+        }
+        Ok(Err(join_err)) => bail!("submit worker panicked: {join_err}"),
+        Ok(Ok(Err(client_err))) => bail!("send_and_confirm_transaction failed: {client_err}"),
+        Ok(Ok(Ok(_confirmed))) => {
+            envelope.insert("kind".to_string(), "covenant.chain.tx.v1".into());
+            envelope.insert("status".to_string(), "confirmed".into());
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::Value::Object(envelope))?
+                );
+            } else {
+                println!("status: confirmed");
+                println!("signature: {signature_b58}");
+                println!("rpc_url: {rpc_url}");
+                println!("cluster: {cluster}");
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn run_chain_initialize(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let covnt_mint = f.pubkey("--covnt-mint")?;
+    let treasury = f.pubkey("--treasury")?;
+    let slash_authority = f.pubkey("--slash-authority")?;
+    let credits_per_covnt = f.u64("--credits-per-covnt")?;
+    let min_stake_lock = f.u64_or("--min-stake-lock", 0)?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("covnt_mint".to_string(), covnt_mint.to_string().into());
+    extra.insert("credits_per_covnt".to_string(), credits_per_covnt.into());
+    extra.insert("min_stake_lock".to_string(), min_stake_lock.into());
+    submit_chain_tx(
+        "initialize",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| {
+            build_initialize_instruction(
+                &program_id,
+                authority,
+                &covnt_mint,
+                &treasury,
+                &slash_authority,
+                credits_per_covnt,
+                min_stake_lock,
+            )
+        },
+    )
+    .await
+}
+
+async fn run_chain_open_credit_account(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    submit_chain_tx(
+        "open-credit-account",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        serde_json::Map::new(),
+        move |owner| build_open_credit_account_instruction(&program_id, owner),
+    )
+    .await
+}
+
+async fn run_chain_unstake(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let agent_key = f.pubkey("--agent-key")?;
+    let stake_vault = f.pubkey("--stake-vault")?;
+    let owner_covnt = f.pubkey("--owner-covnt")?;
+    let covnt_mint = f.pubkey("--covnt-mint")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("agent_key".to_string(), agent_key.to_string().into());
+    submit_chain_tx(
+        "unstake",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |owner| {
+            build_unstake_instruction(
+                &program_id,
+                owner,
+                &agent_key,
+                &stake_vault,
+                &owner_covnt,
+                &covnt_mint,
+            )
+        },
+    )
+    .await
+}
+
+async fn run_chain_close_position(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let agent_key = f.pubkey("--agent-key")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("agent_key".to_string(), agent_key.to_string().into());
+    submit_chain_tx(
+        "close-position",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |owner| build_close_position_instruction(&program_id, owner, &agent_key),
+    )
+    .await
+}
+
+async fn run_chain_migrate_config(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let min_stake_lock = f.u64("--min-stake-lock")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("min_stake_lock".to_string(), min_stake_lock.into());
+    submit_chain_tx(
+        "migrate-config",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_migrate_config_instruction(&program_id, authority, min_stake_lock),
+    )
+    .await
+}
+
+async fn run_chain_set_config_u64(
+    args: &[String],
+    verb: &'static str,
+    method: &'static str,
+) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let value = f.u64("--value")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("value".to_string(), value.into());
+    submit_chain_tx(
+        verb,
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_update_config_u64_instruction(&program_id, authority, method, value),
+    )
+    .await
+}
+
+async fn run_chain_set_config_pubkey(
+    args: &[String],
+    verb: &'static str,
+    method: &'static str,
+) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let new_value = f.pubkey("--new")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("new".to_string(), new_value.to_string().into());
+    submit_chain_tx(
+        verb,
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| {
+            build_update_config_pubkey_instruction(&program_id, authority, method, &new_value)
+        },
+    )
+    .await
+}
+
+async fn run_chain_update_treasury(args: &[String]) -> Result<()> {
+    let f = parse_chain_flags(args)?;
+    let program_id = f.pubkey("--program-id")?;
+    let treasury = f.pubkey("--treasury")?;
+    let (keypair, rpc_url) = f.operator_and_rpc()?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("treasury".to_string(), treasury.to_string().into());
+    submit_chain_tx(
+        "update-treasury",
+        f.cluster(),
+        rpc_url,
+        keypair,
+        f.timeout_ms(),
+        f.json,
+        extra,
+        move |authority| build_update_treasury_instruction(&program_id, authority, &treasury),
+    )
+    .await
 }
 
 async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result<()> {
@@ -98,13 +2052,13 @@ fn print_usage() {
     eprintln!(
         "  covenant bootstrap [--json]             grant the capabilities every loaded agent needs to run its first task"
     );
-    eprintln!("  covenant intent [--json] <text>         submit an intent and print the result");
+    eprintln!("  covenant intent [--json] [--stream] <text>  submit an intent and print the result (--stream opts into v2 streaming response framing)");
     eprintln!("  covenant ping [--json]                  check the daemon is responsive");
     eprintln!(
         "  covenant version                        print daemon protocol metadata as JSON (no token required)"
     );
     eprintln!(
-        "  covenant memory recent [--tier T] [-n N] [--json]      list recent memory records"
+        "  covenant memory recent [--tier T] [-n N] [--json] [--stream]      list recent memory records (--stream opts into v2 streaming response framing)"
     );
     eprintln!(
         "  covenant memory search <query> [--tier T] [-n N] [--min-relevance F] [--json]  semantic search via embeddings; --min-relevance F drops records whose cosine score is below F (range [0.0, 1.0]) before the limit is applied"
@@ -119,6 +2073,7 @@ fn print_usage() {
         "  covenant memory plan-compaction --reason TEXT [--detach-stale-parents] [--delete-working-before-ms M|--delete-working-older-than-ms D] [--delete-episodic-before-ms M|--delete-episodic-older-than-ms D] [--mark-longterm-stale-before-ms M|--mark-longterm-stale-older-than-ms D] [--json]"
     );
     eprintln!("  covenant memory plan-receipt-backfill [-n N] [--json]  dry-run legacy memory receipt correlation plan");
+    eprintln!("  covenant memory backfill-receipt-correlation [--dry-run] [--json]  apply legacy memory receipt correlation (--scope-pubkey reserved, not yet supported)");
     eprintln!(
         "  covenant memory repair detach-parent <id> --reason TEXT [--expected-parent UUID] [--apply]"
     );
@@ -134,12 +2089,27 @@ fn print_usage() {
         "  covenant chain flush-receipts [-n N] [--json]  batch local receipts into a Solana receipt root"
     );
     eprintln!("  covenant chain receipt-batches [-n N] [--json]  list local receipt batches");
+    eprintln!(
+        "  covenant chain register-agent --program-id BASE58 --agent-key BASE58 --metadata-hash HEX64 --capability-hash HEX64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement register_agent transaction with the operator keypair"
+    );
+    eprintln!(
+        "  covenant chain stake --program-id BASE58 --agent-key BASE58 --owner-covnt BASE58 --stake-vault BASE58 --amount U64 --lock-until U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement stake transaction with the operator keypair"
+    );
+    eprintln!(
+        "  covenant chain buy-credits --program-id BASE58 --owner-covnt BASE58 --treasury BASE58 --amount-covnt U64 [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit a settlement buy_credits transaction with the operator keypair; --treasury MUST equal config.treasury (fetch via `chain status` if unknown)"
+    );
+    eprintln!(
+        "  covenant chain initialize|open-credit-account|unstake|close-position|migrate-config|set-min-stake-lock|set-credits-per-covnt|update-authority|update-slash-authority|update-treasury  --program-id BASE58 [verb-specific flags] [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--confirm-timeout-ms N] [--json]  sign and submit the matching settlement instruction with the operator keypair"
+    );
+    eprintln!(
+        "  covenant settlement backfill-receipts [--dry-run] [--json]  repair legacy settlement-receipt rows (--scope-pubkey reserved, not yet supported)"
+    );
     eprintln!("  covenant verify [-w N] [--json]      cross-check audit log vs other state");
     eprintln!("  covenant ignore check [--json] <text>   test text against .covenantignore rules");
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
     eprintln!(
-        "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied"
+        "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json] [--stream]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied; --stream opts into v2 streaming response framing"
     );
     eprintln!("  covenant audit verify [--json]         verify local audit hash-chain sidecar");
     eprintln!(
@@ -185,6 +2155,12 @@ fn print_usage() {
     );
     eprintln!(
         "  covenant intents resume latest [--json]          re-dispatch the most recent budget-rejected intent"
+    );
+    eprintln!(
+        "  covenant sap status [--json]            resolved SAP bridge status (cluster, program, signer presence)"
+    );
+    eprintln!(
+        "  covenant sap publish --manifest <file> [--json]  publish the daemon's agent through the SAP bridge"
     );
 }
 
@@ -247,7 +2223,20 @@ async fn print_memory_response(
     stream: &mut UnixStream,
     json: Option<MemoryReadJsonArgs>,
 ) -> Result<()> {
-    match read_frame::<_, Response>(stream).await? {
+    let response = match read_response_or_stream(stream).await? {
+        ResponseOrStream::Terminal(r) => r,
+        ResponseOrStream::Stream(collected) => {
+            if collected.response_kind != "memories" {
+                bail!(
+                    "unexpected stream response_kind '{}' (expected 'memories')",
+                    collected.response_kind
+                );
+            }
+            let records = decode_memory_chunks(collected.chunks)?;
+            Response::Memories { records }
+        }
+    };
+    match response {
         Response::Memories { records } => {
             if let Some(args) = json {
                 println!(
@@ -275,6 +2264,87 @@ async fn print_memory_response(
         Response::Error { message } => bail!("daemon error: {message}"),
         other => bail!("unexpected response: {other:?}"),
     }
+}
+
+fn decode_memory_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<MemoryRecord>> {
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            serde_json::from_value::<MemoryRecord>(chunk)
+                .with_context(|| format!("decode memory stream chunk {i}"))
+        })
+        .collect()
+}
+
+fn decode_audit_chunks(chunks: Vec<serde_json::Value>) -> Result<Vec<AuditEvent>> {
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            serde_json::from_value::<AuditEvent>(chunk)
+                .with_context(|| format!("decode audit stream chunk {i}"))
+        })
+        .collect()
+}
+
+fn decode_intent_stream(
+    chunks: Vec<serde_json::Value>,
+    summary: Option<serde_json::Value>,
+) -> Result<Response> {
+    // ADR 0010 / Server::stream_submit_intent emits exactly one
+    // StreamChunk carrying an AgentResult plus a StreamEnd.summary that
+    // names {intent_id, status, settlement}. The CLI extracts the two
+    // load-bearing AgentResult fields (text + sources) by hand instead
+    // of pulling in covenant-runtime as a CLI dep — the streamed
+    // runtime_events vec is always empty per ADR.
+    if chunks.len() != 1 {
+        bail!(
+            "intent stream expected exactly one AgentResult chunk, got {}",
+            chunks.len()
+        );
+    }
+    let chunk = chunks.into_iter().next().expect("len == 1 just checked");
+    let chunk_obj = chunk
+        .as_object()
+        .context("intent stream chunk is not a JSON object")?;
+    let text = chunk_obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .context("intent stream chunk missing 'text'")?
+        .to_string();
+    let sources: Vec<String> = match chunk_obj.get("sources") {
+        Some(v) => serde_json::from_value(v.clone())
+            .context("decode 'sources' from intent stream chunk")?,
+        None => Vec::new(),
+    };
+    let summary = summary.context("intent stream missing summary on StreamEnd")?;
+    let intent_id: uuid::Uuid = serde_json::from_value(
+        summary
+            .get("intent_id")
+            .cloned()
+            .context("intent stream summary missing intent_id")?,
+    )
+    .context("decode intent_id from summary")?;
+    let status: String = serde_json::from_value(
+        summary
+            .get("status")
+            .cloned()
+            .context("intent stream summary missing status")?,
+    )
+    .context("decode status from summary")?;
+    let settlement: Option<SettlementReceipt> = match summary.get("settlement").cloned() {
+        Some(v) if v.is_null() => None,
+        Some(v) => Some(serde_json::from_value(v).context("decode settlement from summary")?),
+        None => None,
+    };
+    Ok(Response::IntentResult {
+        intent_id,
+        status,
+        text,
+        sources,
+        settlement,
+    })
 }
 
 fn memory_tier_slug(tier: MemoryTier) -> &'static str {
@@ -502,14 +2572,7 @@ async fn main() -> Result<()> {
             }
 
             if as_json {
-                let payload = serde_json::json!({
-                    "kind": "bootstrap_result",
-                    "granted": granted
-                        .iter()
-                        .map(|(a, s)| serde_json::json!({ "action": a, "signature_b58": s }))
-                        .collect::<Vec<_>>(),
-                    "already_granted": already,
-                });
+                let payload = bootstrap_result_json(&granted, &already);
                 println!("{}", serde_json::to_string(&payload)?);
             } else if granted.is_empty() {
                 println!(
@@ -563,17 +2626,20 @@ async fn main() -> Result<()> {
                 eprintln!("covenant intent: missing intent text");
                 std::process::exit(2);
             }
-            // Strip `--json` only from leading positions. Stop scanning
-            // for flags after the first non-flag token so `covenant
-            // intent search --json command help` keeps the literal text
-            // `search --json command help` instead of silently dropping
-            // the `--json` in the middle.
+            // Strip `--json` and `--stream` only from leading positions.
+            // Stop scanning for flags after the first non-flag token so
+            // `covenant intent search --json command help` keeps the
+            // literal text `search --json command help` instead of
+            // silently dropping the `--json` in the middle.
             let mut as_json = false;
+            let mut prefer_stream = false;
             let mut text_parts: Vec<String> = Vec::new();
             let mut consuming_flags = true;
             for arg in args.iter().skip(1) {
                 if consuming_flags && arg == "--json" {
                     as_json = true;
+                } else if consuming_flags && arg == "--stream" {
+                    prefer_stream = true;
                 } else {
                     consuming_flags = false;
                     text_parts.push(arg.clone());
@@ -588,11 +2654,23 @@ async fn main() -> Result<()> {
                 &mut stream,
                 &Request::SubmitIntent {
                     text: request_text,
-                    prefer_stream: None,
+                    prefer_stream: prefer_stream.then_some(true),
                 },
             )
             .await?;
-            match read_frame::<_, Response>(&mut stream).await? {
+            let response = match read_response_or_stream(&mut stream).await? {
+                ResponseOrStream::Terminal(r) => r,
+                ResponseOrStream::Stream(collected) => {
+                    if collected.response_kind != "intent_result" {
+                        bail!(
+                            "unexpected stream response_kind '{}' (expected 'intent_result')",
+                            collected.response_kind
+                        );
+                    }
+                    decode_intent_stream(collected.chunks, collected.summary)?
+                }
+            };
+            match response {
                 Response::IntentResult {
                     intent_id,
                     status,
@@ -629,6 +2707,7 @@ async fn main() -> Result<()> {
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
                     let mut as_json = false;
+                    let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -643,6 +2722,7 @@ async fn main() -> Result<()> {
                                 limit = v.parse().context("--limit must be an integer")?;
                             }
                             "--json" => as_json = true,
+                            "--stream" => prefer_stream = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -652,7 +2732,7 @@ async fn main() -> Result<()> {
                         &Request::RecentMemory {
                             tier,
                             limit,
-                            prefer_stream: None,
+                            prefer_stream: prefer_stream.then_some(true),
                         },
                     )
                     .await?;
@@ -896,6 +2976,58 @@ async fn main() -> Result<()> {
                             "receipt backfill plan: {records} candidate(s), {unmatched_receipts} unmatched legacy receipt(s), {unmatched_memory} unmatched memory record(s)"
                         );
                         println!("mutation: unsupported; this command only emits a dry-run plan");
+                    }
+                }
+                "backfill-receipt-correlation" => {
+                    let mut dry_run = false;
+                    let mut as_json = false;
+                    let mut scope_pubkey = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--dry-run" => dry_run = true,
+                            "--json" => as_json = true,
+                            "--scope-pubkey" => {
+                                i += 1;
+                                scope_pubkey = Some(
+                                    args.get(i).context("--scope-pubkey needs a value")?.clone(),
+                                );
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::BackfillMemoryRecords {
+                            dry_run,
+                            scope_pubkey,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::MemoryRecordsBackfilled {
+                            row_count,
+                            savepoint_name,
+                            dry_run,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&memory_backfill_json(
+                                        row_count,
+                                        &savepoint_name,
+                                        dry_run
+                                    ))?
+                                );
+                            } else {
+                                println!("row_count: {row_count}");
+                                println!("dry_run: {dry_run}");
+                                println!("savepoint_name: {savepoint_name}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
                     }
                 }
                 "repair" => {
@@ -1520,11 +3652,60 @@ async fn main() -> Result<()> {
                         other => bail!("unexpected response: {other:?}"),
                     }
                 }
-                "register-agent" | "stake" | "buy-credits" => {
-                    bail!(
-                        "chain {} is prepared by the Solana SDK; daemon signing is not wired yet",
-                        args[1]
-                    );
+                "register-agent" => {
+                    run_chain_register_agent(&args[2..]).await?;
+                }
+                "stake" => {
+                    run_chain_stake(&args[2..]).await?;
+                }
+                "buy-credits" => {
+                    run_chain_buy_credits(&args[2..]).await?;
+                }
+                "initialize" => {
+                    run_chain_initialize(&args[2..]).await?;
+                }
+                "open-credit-account" => {
+                    run_chain_open_credit_account(&args[2..]).await?;
+                }
+                "unstake" => {
+                    run_chain_unstake(&args[2..]).await?;
+                }
+                "close-position" => {
+                    run_chain_close_position(&args[2..]).await?;
+                }
+                "migrate-config" => {
+                    run_chain_migrate_config(&args[2..]).await?;
+                }
+                "set-min-stake-lock" => {
+                    run_chain_set_config_u64(
+                        &args[2..],
+                        "set-min-stake-lock",
+                        "set_min_stake_lock",
+                    )
+                    .await?;
+                }
+                "set-credits-per-covnt" => {
+                    run_chain_set_config_u64(
+                        &args[2..],
+                        "set-credits-per-covnt",
+                        "set_credits_per_covnt",
+                    )
+                    .await?;
+                }
+                "update-authority" => {
+                    run_chain_set_config_pubkey(&args[2..], "update-authority", "update_authority")
+                        .await?;
+                }
+                "update-slash-authority" => {
+                    run_chain_set_config_pubkey(
+                        &args[2..],
+                        "update-slash-authority",
+                        "update_slash_authority",
+                    )
+                    .await?;
+                }
+                "update-treasury" => {
+                    run_chain_update_treasury(&args[2..]).await?;
                 }
                 other => bail!("unknown chain subcommand '{other}'"),
             }
@@ -1694,6 +3875,7 @@ async fn main() -> Result<()> {
                     let mut limit: usize = 50;
                     let mut since_ms: Option<u64> = None;
                     let mut as_json = false;
+                    let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -1709,6 +3891,7 @@ async fn main() -> Result<()> {
                                     Some(v.parse().context("--since-ms must be an integer")?);
                             }
                             "--json" => as_json = true,
+                            "--stream" => prefer_stream = true,
                             other => bail!("unknown flag '{other}'"),
                         }
                         i += 1;
@@ -1718,11 +3901,24 @@ async fn main() -> Result<()> {
                         &Request::RecentAudit {
                             limit,
                             since_ms,
-                            prefer_stream: None,
+                            prefer_stream: prefer_stream.then_some(true),
                         },
                     )
                     .await?;
-                    match read_frame::<_, Response>(&mut stream).await? {
+                    let response = match read_response_or_stream(&mut stream).await? {
+                        ResponseOrStream::Terminal(r) => r,
+                        ResponseOrStream::Stream(collected) => {
+                            if collected.response_kind != "audit_events" {
+                                bail!(
+                                    "unexpected stream response_kind '{}' (expected 'audit_events')",
+                                    collected.response_kind
+                                );
+                            }
+                            let events = decode_audit_chunks(collected.chunks)?;
+                            Response::AuditEvents { events }
+                        }
+                    };
+                    match response {
                         Response::AuditEvents { events } => {
                             if as_json {
                                 println!(
@@ -2506,6 +4702,177 @@ async fn main() -> Result<()> {
                 other => bail!("unexpected response: {other:?}"),
             }
         }
+        "settlement" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "backfill-receipts" => {
+                    let mut dry_run = false;
+                    let mut as_json = false;
+                    let mut scope_pubkey = None;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--dry-run" => dry_run = true,
+                            "--json" => as_json = true,
+                            "--scope-pubkey" => {
+                                i += 1;
+                                scope_pubkey = Some(
+                                    args.get(i).context("--scope-pubkey needs a value")?.clone(),
+                                );
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::BackfillSettlementReceipts {
+                            dry_run,
+                            scope_pubkey,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SettlementReceiptsBackfilled {
+                            row_count,
+                            rollback_path,
+                            dry_run,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&settlement_backfill_json(
+                                        row_count,
+                                        rollback_path.as_deref(),
+                                        dry_run
+                                    ))?
+                                );
+                            } else {
+                                println!("row_count: {row_count}");
+                                println!("dry_run: {dry_run}");
+                                println!(
+                                    "rollback_path: {}",
+                                    rollback_path.as_deref().unwrap_or("(none)")
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant settlement: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
+        "sap" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "status" => {
+                    let mut as_json = false;
+                    for arg in &args[2..] {
+                        match arg.as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                    }
+                    write_frame(&mut stream, &Request::SapStatus).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapStatus {
+                            enabled,
+                            cluster,
+                            program_id,
+                            rpc_url,
+                            explorer_url,
+                            has_signer,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_status",
+                                    "enabled": enabled,
+                                    "cluster": cluster,
+                                    "program_id": program_id,
+                                    "rpc_url": rpc_url,
+                                    "explorer_url": explorer_url,
+                                    "has_signer": has_signer,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("enabled: {enabled}");
+                                println!("cluster: {cluster}");
+                                println!("program_id: {program_id}");
+                                println!("rpc_url: {rpc_url}");
+                                println!("explorer_url: {explorer_url}");
+                                println!("has_signer: {has_signer}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "publish" => {
+                    let mut manifest_path: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--manifest" => {
+                                i += 1;
+                                manifest_path = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--manifest needs a file path")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let manifest_path = manifest_path.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap publish requires --manifest <file>")
+                    })?;
+                    let manifest_json = std::fs::read_to_string(&manifest_path)
+                        .with_context(|| format!("read manifest at {manifest_path}"))?;
+                    // Parse-and-reserialize round-trip rejects malformed
+                    // JSON up front so the daemon never sees garbage.
+                    let _: serde_json::Value = serde_json::from_str(&manifest_json)
+                        .with_context(|| format!("parse manifest at {manifest_path}"))?;
+                    write_frame(&mut stream, &Request::SapPublishAgent { manifest_json }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAgent {
+                            agent_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_agent",
+                                    "agent_pda": agent_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("agent_pda: {agent_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant sap: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
         other => {
             eprintln!("covenant: unknown command '{other}'");
             print_usage();
@@ -2873,89 +5240,6 @@ fn memory_compaction_plan_json(outcome: &MemoryCompactionOutcome) -> serde_json:
     })
 }
 
-fn memory_receipt_backfill_plan_json(
-    limit: usize,
-    memories: &[MemoryRecord],
-    receipts: &[SettlementReceipt],
-) -> serde_json::Value {
-    let memory_receipts = receipts
-        .iter()
-        .filter(|receipt| receipt.resource == ResourceKind::Memory)
-        .collect::<Vec<_>>();
-    let correlated = memory_receipts
-        .iter()
-        .filter_map(|receipt| receipt.memory_record_id)
-        .collect::<HashSet<_>>();
-    let mut used_memory = HashSet::new();
-    let mut records = Vec::new();
-    let mut unmatched_legacy_receipts = Vec::new();
-
-    let legacy_receipts = memory_receipts
-        .iter()
-        .copied()
-        .filter(|receipt| receipt.memory_record_id.is_none())
-        .collect::<Vec<_>>();
-
-    for receipt in &legacy_receipts {
-        let candidate = memories.iter().find(|memory| {
-            memory.owner.pubkey == receipt.payer.pubkey
-                && !correlated.contains(&memory.id)
-                && !used_memory.contains(&memory.id)
-        });
-
-        if let Some(memory) = candidate {
-            used_memory.insert(memory.id);
-            records.push(serde_json::json!({
-                "receipt_id": receipt.id,
-                "memory_record_id": memory.id,
-                "payer_display": receipt.payer.display,
-                "payer_pubkey": receipt.payer.pubkey_base58(),
-                "memory_owner_display": memory.owner.display,
-                "memory_owner_pubkey": memory.owner.pubkey_base58(),
-                "credits_consumed": receipt.credits_consumed,
-                "status": "candidate",
-                "reason": "legacy memory receipt has no memory_record_id and the same owner has an uncorrelated memory record"
-            }));
-        } else {
-            unmatched_legacy_receipts.push(serde_json::json!({
-                "receipt_id": receipt.id,
-                "payer_display": receipt.payer.display,
-                "payer_pubkey": receipt.payer.pubkey_base58(),
-                "credits_consumed": receipt.credits_consumed,
-                "reason": "no uncorrelated memory record for receipt payer in the requested window"
-            }));
-        }
-    }
-
-    let unmatched_memory_records = memories
-        .iter()
-        .filter(|memory| !correlated.contains(&memory.id) && !used_memory.contains(&memory.id))
-        .map(|memory| {
-            serde_json::json!({
-                "memory_record_id": memory.id,
-                "owner_display": memory.owner.display,
-                "owner_pubkey": memory.owner.pubkey_base58(),
-                "tier": memory_tier_slug(memory.tier),
-                "reason": "no legacy receipt candidate for memory owner in the requested window"
-            })
-        })
-        .collect::<Vec<_>>();
-
-    serde_json::json!({
-        "kind": "memory_receipt_backfill_plan",
-        "mode": "dry_run",
-        "limit": limit,
-        "mutation_supported": false,
-        "records": records,
-        "unmatched_legacy_receipts": unmatched_legacy_receipts,
-        "unmatched_memory_records": unmatched_memory_records,
-        "refusal": {
-            "apply_supported": false,
-            "reason": "receipt backfill mutation is not implemented; review this plan before adding an explicit mutation path with audit evidence"
-        }
-    })
-}
-
 fn memory_read_json(
     mode: &str,
     tier: Option<MemoryTier>,
@@ -3048,6 +5332,42 @@ fn flush_receipts_json(
         "limit": limit,
         "receipts_updated": receipts_updated,
         "batch": batch,
+    })
+}
+
+fn settlement_backfill_json(
+    row_count: u64,
+    rollback_path: Option<&str>,
+    dry_run: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "covenant.settlement.backfill.v1",
+        "row_count": row_count,
+        "rollback_path": rollback_path,
+        "dry_run": dry_run,
+    })
+}
+
+fn memory_backfill_json(row_count: u64, savepoint_name: &str, dry_run: bool) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "covenant.memory.backfill.v1",
+        "row_count": row_count,
+        "savepoint_name": savepoint_name,
+        "dry_run": dry_run,
+    })
+}
+
+fn bootstrap_result_json(
+    granted: &[(String, String)],
+    already_granted: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "bootstrap_result",
+        "granted": granted
+            .iter()
+            .map(|(a, s)| serde_json::json!({ "action": a, "signature_b58": s }))
+            .collect::<Vec<_>>(),
+        "already_granted": already_granted,
     })
 }
 
@@ -3982,6 +6302,221 @@ mod tests {
         assert_shape(&receipt_list_json(10, Some(1_699_999_999_000), &receipts));
         assert_shape(&receipt_list_json(10, None, &receipts));
         assert_shape(&receipt_list_json(10, None, &[]));
+    }
+
+    #[test]
+    fn settlement_backfill_json_renders_stable_shape() {
+        let dry_run = settlement_backfill_json(12, None, true);
+        assert_eq!(dry_run["schema"], "covenant.settlement.backfill.v1");
+        assert_eq!(dry_run["row_count"], 12);
+        assert!(dry_run["rollback_path"].is_null());
+        assert_eq!(dry_run["dry_run"], true);
+
+        let mutation = settlement_backfill_json(
+            12,
+            Some("/tmp/settlement.backfill-rollback-001.jsonl"),
+            false,
+        );
+        assert_eq!(mutation["schema"], "covenant.settlement.backfill.v1");
+        assert_eq!(mutation["row_count"], 12);
+        assert_eq!(
+            mutation["rollback_path"],
+            "/tmp/settlement.backfill-rollback-001.jsonl"
+        );
+        assert_eq!(mutation["dry_run"], false);
+    }
+
+    #[test]
+    fn settlement_backfill_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["dry_run", "rollback_path", "row_count", "schema"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("settlement_backfill_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "settlement_backfill_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["schema"].is_string(),
+                "schema must be a string: {value}"
+            );
+            assert_eq!(
+                value["schema"].as_str(),
+                Some("covenant.settlement.backfill.v1"),
+                "schema literal must match the documented version slot exactly; renaming to a future v2 is a separate envelope, not a field rename",
+            );
+            assert!(
+                value["row_count"].is_u64(),
+                "row_count must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["rollback_path"].is_string() || value["rollback_path"].is_null(),
+                "rollback_path must be string-or-null (never the literal \"(none)\"); JSON consumers branch on null to detect dry-run: {value}",
+            );
+            assert!(
+                value["dry_run"].is_boolean(),
+                "dry_run must serialize as a JSON boolean, never 0/1 or a string: {value}",
+            );
+        }
+
+        assert_shape(&settlement_backfill_json(12, None, true));
+        assert_shape(&settlement_backfill_json(
+            12,
+            Some("/tmp/settlement.backfill-rollback-001.jsonl"),
+            false,
+        ));
+        assert_shape(&settlement_backfill_json(0, None, true));
+    }
+
+    #[test]
+    fn memory_backfill_json_renders_stable_shape() {
+        let dry_run = memory_backfill_json(0, "memory_backfill_sp_001", true);
+        assert_eq!(dry_run["schema"], "covenant.memory.backfill.v1");
+        assert_eq!(dry_run["row_count"], 0);
+        assert_eq!(dry_run["savepoint_name"], "memory_backfill_sp_001");
+        assert_eq!(dry_run["dry_run"], true);
+
+        let mutation = memory_backfill_json(7, "memory_backfill_sp_002", false);
+        assert_eq!(mutation["schema"], "covenant.memory.backfill.v1");
+        assert_eq!(mutation["row_count"], 7);
+        assert_eq!(mutation["savepoint_name"], "memory_backfill_sp_002");
+        assert_eq!(mutation["dry_run"], false);
+    }
+
+    #[test]
+    fn memory_backfill_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["dry_run", "row_count", "savepoint_name", "schema"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("memory_backfill_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "memory_backfill_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(
+                value["schema"].is_string(),
+                "schema must be a string: {value}"
+            );
+            assert_eq!(
+                value["schema"].as_str(),
+                Some("covenant.memory.backfill.v1"),
+                "schema literal must match the documented version slot exactly; renaming to a future v2 is a separate envelope, not a field rename",
+            );
+            assert!(
+                value["row_count"].is_u64(),
+                "row_count must serialize as a non-negative integer, not a string: {value}",
+            );
+            assert!(
+                value["savepoint_name"].is_string(),
+                "savepoint_name must always be a non-null string; the &str type at the emitter forbids null and the docs contract treats absence as a protocol violation: {value}",
+            );
+            assert!(
+                !value["savepoint_name"].as_str().unwrap().is_empty(),
+                "savepoint_name must be non-empty; the daemon allocates a real identifier even on dry-run so consumers can correlate planning runs against later mutation runs: {value}",
+            );
+            assert!(
+                value["dry_run"].is_boolean(),
+                "dry_run must serialize as a JSON boolean, never 0/1 or a string: {value}",
+            );
+        }
+
+        assert_shape(&memory_backfill_json(0, "memory_backfill_sp_001", true));
+        assert_shape(&memory_backfill_json(7, "memory_backfill_sp_002", false));
+        assert_shape(&memory_backfill_json(0, "memory_backfill_sp_003", true));
+    }
+
+    #[test]
+    fn bootstrap_result_json_renders_stable_shape() {
+        let granted = vec![
+            ("memory.read".to_string(), "sig_b58_a".to_string()),
+            ("a2a.send".to_string(), "sig_b58_b".to_string()),
+        ];
+        let already = vec!["audit.read".to_string()];
+        let populated = bootstrap_result_json(&granted, &already);
+        assert_eq!(populated["kind"], "bootstrap_result");
+        assert_eq!(populated["granted"][0]["action"], "memory.read");
+        assert_eq!(populated["granted"][0]["signature_b58"], "sig_b58_a");
+        assert_eq!(populated["granted"][1]["action"], "a2a.send");
+        assert_eq!(populated["granted"][1]["signature_b58"], "sig_b58_b");
+        assert_eq!(populated["already_granted"][0], "audit.read");
+
+        let no_new_grants =
+            bootstrap_result_json(&[], &["memory.read".to_string(), "audit.read".to_string()]);
+        assert_eq!(no_new_grants["kind"], "bootstrap_result");
+        assert!(no_new_grants["granted"].as_array().unwrap().is_empty());
+        assert_eq!(no_new_grants["already_granted"][0], "memory.read");
+        assert_eq!(no_new_grants["already_granted"][1], "audit.read");
+    }
+
+    #[test]
+    fn bootstrap_result_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["already_granted", "granted", "kind"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("bootstrap_result_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "bootstrap_result_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("bootstrap_result"));
+            assert!(
+                value["granted"].is_array(),
+                "granted must be an array: {value}",
+            );
+            assert!(
+                value["already_granted"].is_array(),
+                "already_granted must be an array: {value}",
+            );
+        }
+
+        let granted = vec![
+            ("memory.read".to_string(), "sig_b58_a".to_string()),
+            ("a2a.send".to_string(), "sig_b58_b".to_string()),
+        ];
+        let already = vec!["audit.read".to_string()];
+        let populated = bootstrap_result_json(&granted, &already);
+        assert_shape(&populated);
+        assert!(
+            populated["granted"][0].is_object(),
+            "granted entries must be {{action, signature_b58}} objects, never bare strings: {populated}",
+        );
+        assert!(
+            populated["already_granted"][0].is_string(),
+            "already_granted entries must be bare action strings, never objects — the asymmetry is documented: {populated}",
+        );
+
+        let no_new_grants =
+            bootstrap_result_json(&[], &["memory.read".to_string(), "audit.read".to_string()]);
+        assert_shape(&no_new_grants);
+        assert!(
+            no_new_grants["granted"].as_array().unwrap().is_empty(),
+            "empty-granted case must serialize as [], not null or absent: {no_new_grants}",
+        );
+        assert!(
+            no_new_grants["already_granted"][0].is_string(),
+            "already_granted entries must be bare strings even when granted is empty: {no_new_grants}",
+        );
+
+        assert_shape(&bootstrap_result_json(&[], &[]));
     }
 
     #[test]
@@ -5007,570 +7542,6 @@ mod tests {
     }
 
     #[test]
-    fn memory_receipt_backfill_plan_json_pairs_legacy_receipts_by_owner() {
-        let owner = AgentId::new("owner@local", [4u8; 32]);
-        let memory_id = uuid::Uuid::from_u128(10);
-        let memory = MemoryRecord {
-            id: memory_id,
-            tier: MemoryTier::Working,
-            owner: owner.clone(),
-            text: "legacy memory".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let receipt_id = uuid::Uuid::from_u128(20);
-        let receipt = SettlementReceipt {
-            id: receipt_id,
-            payer: owner.clone(),
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 3,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        let value = memory_receipt_backfill_plan_json(100, &[memory], &[receipt]);
-        assert_eq!(value["kind"], "memory_receipt_backfill_plan");
-        assert_eq!(value["mode"], "dry_run");
-        assert_eq!(value["mutation_supported"], false);
-        assert_eq!(value["records"].as_array().map(Vec::len), Some(1));
-        assert_eq!(value["records"][0]["receipt_id"], receipt_id.to_string());
-        assert_eq!(
-            value["records"][0]["memory_record_id"],
-            memory_id.to_string()
-        );
-        assert_eq!(value["records"][0]["status"], "candidate");
-        assert_eq!(
-            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
-            Some(0)
-        );
-        assert_eq!(
-            value["unmatched_memory_records"].as_array().map(Vec::len),
-            Some(0)
-        );
-        assert_eq!(value["refusal"]["apply_supported"], false);
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_lists_unmatched_rows() {
-        let memory_owner = AgentId::new("memory@local", [5u8; 32]);
-        let payer = AgentId::new("payer@local", [6u8; 32]);
-        let memory = MemoryRecord {
-            id: uuid::Uuid::from_u128(30),
-            tier: MemoryTier::LongTerm,
-            owner: memory_owner,
-            text: "unmatched memory".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let receipt = SettlementReceipt {
-            id: uuid::Uuid::from_u128(40),
-            payer,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 1,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        let value = memory_receipt_backfill_plan_json(10, &[memory], &[receipt]);
-        assert_eq!(value["records"].as_array().map(Vec::len), Some(0));
-        assert_eq!(
-            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            value["unmatched_memory_records"].as_array().map(Vec::len),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_pins_top_level_schema() {
-        const EXPECTED_KEYS: &[&str] = &[
-            "kind",
-            "limit",
-            "mode",
-            "mutation_supported",
-            "records",
-            "refusal",
-            "unmatched_legacy_receipts",
-            "unmatched_memory_records",
-        ];
-
-        fn assert_shape(value: &serde_json::Value) {
-            let object = value
-                .as_object()
-                .expect("memory_receipt_backfill_plan_json must return an object");
-            let mut keys: Vec<String> = object.keys().cloned().collect();
-            keys.sort();
-            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
-            assert_eq!(
-                keys, expected,
-                "memory_receipt_backfill_plan_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
-            );
-
-            assert!(value["kind"].is_string(), "kind must be a string: {value}");
-            assert_eq!(value["kind"].as_str(), Some("memory_receipt_backfill_plan"));
-            assert!(value["mode"].is_string(), "mode must be a string: {value}");
-            assert!(
-                value["limit"].is_u64(),
-                "limit must be a non-negative integer, not a string: {value}",
-            );
-            assert!(
-                value["mutation_supported"].is_boolean(),
-                "mutation_supported must be a JSON bool, not 0/1 or a string: {value}",
-            );
-            assert!(
-                value["records"].is_array(),
-                "records must be an array, not a string blob: {value}",
-            );
-            assert!(
-                value["unmatched_legacy_receipts"].is_array(),
-                "unmatched_legacy_receipts must be an array, not a string blob: {value}",
-            );
-            assert!(
-                value["unmatched_memory_records"].is_array(),
-                "unmatched_memory_records must be an array, not a string blob: {value}",
-            );
-            assert!(
-                value["refusal"].is_object(),
-                "refusal must be a structured object, not a string blob: {value}",
-            );
-        }
-
-        let owner = AgentId::new("owner@local", [4u8; 32]);
-        let memory = MemoryRecord {
-            id: uuid::Uuid::from_u128(10),
-            tier: MemoryTier::Working,
-            owner: owner.clone(),
-            text: "legacy memory".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let receipt = SettlementReceipt {
-            id: uuid::Uuid::from_u128(20),
-            payer: owner,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 3,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        assert_shape(&memory_receipt_backfill_plan_json(
-            100,
-            &[memory],
-            &[receipt],
-        ));
-        assert_shape(&memory_receipt_backfill_plan_json(0, &[], &[]));
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_pins_refusal_object_schema() {
-        const EXPECTED_KEYS: &[&str] = &["apply_supported", "reason"];
-
-        fn assert_refusal_shape(value: &serde_json::Value) {
-            let refusal = value["refusal"]
-                .as_object()
-                .expect("memory_receipt_backfill_plan_json refusal field must be an object");
-            let mut keys: Vec<String> = refusal.keys().cloned().collect();
-            keys.sort();
-            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
-            assert_eq!(
-                keys, expected,
-                "memory_receipt_backfill_plan_json refusal object keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
-            );
-
-            assert!(
-                value["refusal"]["apply_supported"].is_boolean(),
-                "refusal.apply_supported must be a JSON bool, not 0/1 or a string: {value}",
-            );
-            assert_eq!(
-                value["refusal"]["apply_supported"].as_bool(),
-                Some(false),
-                "refusal.apply_supported must be false until receipt backfill mutation lands: {value}",
-            );
-            assert!(
-                value["refusal"]["reason"].is_string(),
-                "refusal.reason must be a string, not a structured object: {value}",
-            );
-        }
-
-        let owner = AgentId::new("owner@local", [4u8; 32]);
-        let memory = MemoryRecord {
-            id: uuid::Uuid::from_u128(10),
-            tier: MemoryTier::Working,
-            owner: owner.clone(),
-            text: "legacy memory".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let receipt = SettlementReceipt {
-            id: uuid::Uuid::from_u128(20),
-            payer: owner,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 3,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        assert_refusal_shape(&memory_receipt_backfill_plan_json(
-            100,
-            &[memory],
-            &[receipt],
-        ));
-        assert_refusal_shape(&memory_receipt_backfill_plan_json(0, &[], &[]));
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_pins_records_element_schema() {
-        const EXPECTED_KEYS: &[&str] = &[
-            "credits_consumed",
-            "memory_owner_display",
-            "memory_owner_pubkey",
-            "memory_record_id",
-            "payer_display",
-            "payer_pubkey",
-            "reason",
-            "receipt_id",
-            "status",
-        ];
-
-        fn assert_records_element_shape(value: &serde_json::Value) {
-            let records = value["records"]
-                .as_array()
-                .expect("memory_receipt_backfill_plan_json records field must be an array");
-            assert!(
-                records.len() >= 2,
-                "fixture must produce at least two records to pin the per-element schema across distinct payers: {value}",
-            );
-            for record in records {
-                let object = record
-                    .as_object()
-                    .expect("each records[] element must be an object");
-                let mut keys: Vec<String> = object.keys().cloned().collect();
-                keys.sort();
-                let expected: Vec<String> =
-                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
-                assert_eq!(
-                    keys, expected,
-                    "memory_receipt_backfill_plan_json records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
-                );
-
-                assert!(
-                    record["receipt_id"].is_string(),
-                    "records[].receipt_id must be a string uuid: {record}"
-                );
-                assert!(
-                    record["memory_record_id"].is_string(),
-                    "records[].memory_record_id must be a string uuid: {record}"
-                );
-                assert!(
-                    record["payer_display"].is_string(),
-                    "records[].payer_display must be a string: {record}"
-                );
-                assert!(
-                    record["payer_pubkey"].is_string(),
-                    "records[].payer_pubkey must be a base58 string: {record}"
-                );
-                assert!(
-                    record["memory_owner_display"].is_string(),
-                    "records[].memory_owner_display must be a string: {record}"
-                );
-                assert!(
-                    record["memory_owner_pubkey"].is_string(),
-                    "records[].memory_owner_pubkey must be a base58 string: {record}"
-                );
-                assert!(
-                    record["credits_consumed"].is_u64(),
-                    "records[].credits_consumed must be a non-negative integer, not a stringified number: {record}",
-                );
-                assert!(
-                    record["status"].is_string(),
-                    "records[].status must be a string slug: {record}"
-                );
-                assert!(
-                    record["reason"].is_string(),
-                    "records[].reason must be a string, not a structured object: {record}"
-                );
-            }
-        }
-
-        let owner_a = AgentId::new("owner-a@local", [10u8; 32]);
-        let owner_b = AgentId::new("owner-b@local", [11u8; 32]);
-        let memory_a = MemoryRecord {
-            id: uuid::Uuid::from_u128(101),
-            tier: MemoryTier::Working,
-            owner: owner_a.clone(),
-            text: "memory a".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let memory_b = MemoryRecord {
-            id: uuid::Uuid::from_u128(102),
-            tier: MemoryTier::LongTerm,
-            owner: owner_b.clone(),
-            text: "memory b".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let receipt_a = SettlementReceipt {
-            id: uuid::Uuid::from_u128(201),
-            payer: owner_a,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 5,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-        let receipt_b = SettlementReceipt {
-            id: uuid::Uuid::from_u128(202),
-            payer: owner_b,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 7,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        assert_records_element_shape(&memory_receipt_backfill_plan_json(
-            100,
-            &[memory_a, memory_b],
-            &[receipt_a, receipt_b],
-        ));
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_pins_unmatched_legacy_receipts_element_schema() {
-        const EXPECTED_KEYS: &[&str] = &[
-            "credits_consumed",
-            "payer_display",
-            "payer_pubkey",
-            "reason",
-            "receipt_id",
-        ];
-
-        fn assert_unmatched_legacy_receipt_shape(value: &serde_json::Value) {
-            let entries = value["unmatched_legacy_receipts"]
-                .as_array()
-                .expect("memory_receipt_backfill_plan_json unmatched_legacy_receipts field must be an array");
-            assert!(
-                entries.len() >= 2,
-                "fixture must produce at least two unmatched_legacy_receipts to pin the per-element schema across distinct payers: {value}",
-            );
-            for entry in entries {
-                let object = entry
-                    .as_object()
-                    .expect("each unmatched_legacy_receipts[] element must be an object");
-                let mut keys: Vec<String> = object.keys().cloned().collect();
-                keys.sort();
-                let expected: Vec<String> =
-                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
-                assert_eq!(
-                    keys, expected,
-                    "memory_receipt_backfill_plan_json unmatched_legacy_receipts[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
-                );
-
-                assert!(
-                    entry["receipt_id"].is_string(),
-                    "unmatched_legacy_receipts[].receipt_id must be a string uuid: {entry}"
-                );
-                assert!(
-                    entry["payer_display"].is_string(),
-                    "unmatched_legacy_receipts[].payer_display must be a string: {entry}"
-                );
-                assert!(
-                    entry["payer_pubkey"].is_string(),
-                    "unmatched_legacy_receipts[].payer_pubkey must be a base58 string: {entry}"
-                );
-                assert!(
-                    entry["credits_consumed"].is_u64(),
-                    "unmatched_legacy_receipts[].credits_consumed must be a non-negative integer, not a stringified number: {entry}",
-                );
-                assert!(entry["reason"].is_string(), "unmatched_legacy_receipts[].reason must be a string, not a structured object: {entry}");
-            }
-        }
-
-        let payer_a = AgentId::new("payer-a@local", [20u8; 32]);
-        let payer_b = AgentId::new("payer-b@local", [21u8; 32]);
-        let receipt_a = SettlementReceipt {
-            id: uuid::Uuid::from_u128(301),
-            payer: payer_a,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 11,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-        let receipt_b = SettlementReceipt {
-            id: uuid::Uuid::from_u128(302),
-            payer: payer_b,
-            resource: ResourceKind::Memory,
-            memory_record_id: None,
-            credits_consumed: 13,
-            settled_at: 2,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: None,
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        };
-
-        assert_unmatched_legacy_receipt_shape(&memory_receipt_backfill_plan_json(
-            100,
-            &[],
-            &[receipt_a, receipt_b],
-        ));
-    }
-
-    #[test]
-    fn memory_receipt_backfill_plan_json_pins_unmatched_memory_records_element_schema() {
-        const EXPECTED_KEYS: &[&str] = &[
-            "memory_record_id",
-            "owner_display",
-            "owner_pubkey",
-            "reason",
-            "tier",
-        ];
-
-        fn assert_unmatched_memory_record_shape(value: &serde_json::Value) {
-            let entries = value["unmatched_memory_records"].as_array().expect(
-                "memory_receipt_backfill_plan_json unmatched_memory_records field must be an array",
-            );
-            assert!(
-                entries.len() >= 2,
-                "fixture must produce at least two unmatched_memory_records to pin the per-element schema across distinct owners: {value}",
-            );
-            for entry in entries {
-                let object = entry
-                    .as_object()
-                    .expect("each unmatched_memory_records[] element must be an object");
-                let mut keys: Vec<String> = object.keys().cloned().collect();
-                keys.sort();
-                let expected: Vec<String> =
-                    EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
-                assert_eq!(
-                    keys, expected,
-                    "memory_receipt_backfill_plan_json unmatched_memory_records[] element keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
-                );
-
-                assert!(
-                    entry["memory_record_id"].is_string(),
-                    "unmatched_memory_records[].memory_record_id must be a string uuid: {entry}"
-                );
-                assert!(
-                    entry["owner_display"].is_string(),
-                    "unmatched_memory_records[].owner_display must be a string: {entry}"
-                );
-                assert!(
-                    entry["owner_pubkey"].is_string(),
-                    "unmatched_memory_records[].owner_pubkey must be a base58 string: {entry}"
-                );
-                assert!(
-                    entry["tier"].is_string(),
-                    "unmatched_memory_records[].tier must be a documented tier slug string, not a structured object: {entry}",
-                );
-                assert!(entry["reason"].is_string(), "unmatched_memory_records[].reason must be a string, not a structured object: {entry}");
-            }
-        }
-
-        let owner_a = AgentId::new("owner-a@local", [30u8; 32]);
-        let owner_b = AgentId::new("owner-b@local", [31u8; 32]);
-        let memory_a = MemoryRecord {
-            id: uuid::Uuid::from_u128(401),
-            tier: MemoryTier::Working,
-            owner: owner_a,
-            text: "memory a".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-        let memory_b = MemoryRecord {
-            id: uuid::Uuid::from_u128(402),
-            tier: MemoryTier::LongTerm,
-            owner: owner_b,
-            text: "memory b".into(),
-            embedding: Vec::new(),
-            metadata: serde_json::json!({}),
-            created_at: 1,
-            parent: None,
-        };
-
-        assert_unmatched_memory_record_shape(&memory_receipt_backfill_plan_json(
-            100,
-            &[memory_a, memory_b],
-            &[],
-        ));
-    }
-
-    #[test]
     fn memory_read_json_renders_stable_shape() {
         let owner = AgentId::new("owner@local", [4u8; 32]);
         let record = MemoryRecord {
@@ -6433,6 +8404,80 @@ mod tests {
     }
 
     #[test]
+    fn decode_intent_stream_reassembles_response_from_chunk_and_summary() {
+        // Daemon's stream_submit_intent emits one StreamChunk carrying
+        // AgentResult { text, sources, runtime_events:[] } and a
+        // StreamEnd.summary holding intent_id/status/settlement. The
+        // CLI must reassemble those into Response::IntentResult so the
+        // print branch is unchanged from v1.
+        let intent_id = uuid::Uuid::from_u128(0xABCD_1234);
+        let chunk = serde_json::json!({
+            "text": "answer body",
+            "sources": ["doc://a", "doc://b"],
+            "runtime_events": []
+        });
+        let summary = serde_json::json!({
+            "intent_id": intent_id,
+            "status": "ok",
+            "settlement": null,
+        });
+        let response =
+            decode_intent_stream(vec![chunk], Some(summary)).expect("happy intent stream decodes");
+        match response {
+            Response::IntentResult {
+                intent_id: id,
+                status,
+                text,
+                sources,
+                settlement,
+            } => {
+                assert_eq!(id, intent_id);
+                assert_eq!(status, "ok");
+                assert_eq!(text, "answer body");
+                assert_eq!(sources, vec!["doc://a", "doc://b"]);
+                assert!(settlement.is_none());
+            }
+            other => panic!("expected IntentResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_intent_stream_rejects_wrong_chunk_count() {
+        // The streamed intent path emits exactly one chunk per ADR.
+        // Two chunks means the daemon changed its emit pattern; fail
+        // loudly so the CLI doesn't silently drop or duplicate output.
+        let summary = serde_json::json!({
+            "intent_id": uuid::Uuid::nil(),
+            "status": "ok",
+            "settlement": null,
+        });
+        let err = decode_intent_stream(
+            vec![
+                serde_json::json!({"text": "a"}),
+                serde_json::json!({"text": "b"}),
+            ],
+            Some(summary),
+        )
+        .expect_err("two-chunk intent stream must error");
+        assert!(
+            err.to_string().contains("exactly one"),
+            "error must name the contract: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_intent_stream_requires_summary() {
+        // StreamEnd without a summary is a daemon protocol bug; without
+        // it the CLI cannot reconstruct intent_id/status/settlement.
+        let chunk = serde_json::json!({"text": "answer", "sources": []});
+        let err = decode_intent_stream(vec![chunk], None).expect_err("missing summary must error");
+        assert!(
+            err.to_string().contains("missing summary"),
+            "error names the missing field: {err}"
+        );
+    }
+
+    #[test]
     fn peers_list_status_filter_resolves_three_branches_and_rejects_both() {
         // No flag → no filter; the wire default that surfaces both halves.
         assert_eq!(peers_list_status_filter(false, false).unwrap(), None);
@@ -6451,5 +8496,2294 @@ mod tests {
             err.to_string().contains("mutually exclusive"),
             "error mentions mutual exclusion: {err}"
         );
+    }
+
+    mod keypair_loader {
+        use super::super::{
+            classify_keypair_read_error, compute_default_keypair_path, load_operator_keypair,
+            resolve_operator_keypair_path, KeypairLoadError,
+        };
+        use solana_sdk::signer::{keypair::Keypair, Signer};
+        use std::io::Write;
+        use std::path::PathBuf;
+        use tempfile::tempdir;
+
+        fn write_bytes(dir: &std::path::Path, name: &str, bytes: &[u8]) -> PathBuf {
+            let path = dir.join(name);
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(bytes).expect("write fixture");
+            path
+        }
+
+        #[test]
+        fn happy_path_returns_keypair_matching_fixture() {
+            // Generate a real Solana keypair, persist its 64 bytes in the
+            // canonical JSON array form, and confirm the loader produces a
+            // Keypair with the matching public key.
+            let dir = tempdir().expect("tempdir");
+            let kp = Keypair::new();
+            let json = serde_json::to_vec(&kp.to_bytes().to_vec()).expect("serialize bytes");
+            let path = write_bytes(dir.path(), "id.json", &json);
+            let loaded = load_operator_keypair(Some(path)).expect("happy path");
+            assert_eq!(loaded.pubkey(), kp.pubkey());
+        }
+
+        #[test]
+        fn missing_file_returns_missing_variant() {
+            // An explicit path to a never-created file must surface
+            // MissingFile, never the generic NotReadable bucket, so the
+            // operator sees "the file is absent" instead of an opaque IO
+            // error.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("absent.json");
+            let err = load_operator_keypair(Some(path.clone())).expect_err("must error");
+            match err {
+                KeypairLoadError::MissingFile { path: p, .. } => assert_eq!(p, path),
+                other => panic!("expected MissingFile, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn malformed_json_returns_malformed_variant() {
+            // The file exists but its content is not a JSON byte array;
+            // serde_json::from_slice rejects it and we must classify the
+            // failure as MalformedJson, not WrongByteCount, so the
+            // operator knows the file is corrupt rather than truncated.
+            let dir = tempdir().expect("tempdir");
+            let path = write_bytes(dir.path(), "id.json", b"not json at all");
+            let err = load_operator_keypair(Some(path)).expect_err("must error");
+            assert!(
+                matches!(err, KeypairLoadError::MalformedJson { .. }),
+                "expected MalformedJson, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn wrong_byte_count_returns_explicit_count() {
+            // A short JSON array (3 bytes) is the silent-wrong-pubkey
+            // failure mode: solana_sdk::Keypair::from_bytes accepting a
+            // truncated slice would derive a wrong identity. The loader
+            // must reject any count != 64 with the actual count surfaced.
+            let dir = tempdir().expect("tempdir");
+            let path = write_bytes(dir.path(), "id.json", b"[1,2,3]");
+            let err = load_operator_keypair(Some(path)).expect_err("must error");
+            match err {
+                KeypairLoadError::WrongByteCount { actual, .. } => assert_eq!(actual, 3),
+                other => panic!("expected WrongByteCount, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn classify_read_error_distinguishes_missing_from_permission_denied() {
+            // The two error classes must be distinct so an operator can
+            // tell "the file is absent" from "the daemon process lacks
+            // read permission on the file". Both map from std::io::Error
+            // kinds, so we exercise the classifier directly without
+            // depending on the host filesystem's permission model.
+            let p = PathBuf::from("/cov-test/keypair.json");
+            let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+            assert!(matches!(
+                classify_keypair_read_error(p.clone(), not_found),
+                KeypairLoadError::MissingFile { .. }
+            ));
+            let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+            assert!(matches!(
+                classify_keypair_read_error(p.clone(), denied),
+                KeypairLoadError::PermissionDenied { .. }
+            ));
+            let other = std::io::Error::from(std::io::ErrorKind::Interrupted);
+            assert!(matches!(
+                classify_keypair_read_error(p, other),
+                KeypairLoadError::NotReadable { .. }
+            ));
+        }
+
+        #[test]
+        fn resolve_path_prefers_explicit_value_over_default() {
+            let explicit = PathBuf::from("/tmp/cov-test/explicit.json");
+            let resolved =
+                resolve_operator_keypair_path(Some(explicit.clone())).expect("explicit wins");
+            assert_eq!(resolved, explicit);
+        }
+
+        #[test]
+        fn default_path_follows_solana_cli_convention() {
+            // The canonical Solana CLI keypair lives at
+            // $HOME/.config/solana/id.json. We test the pure helper so
+            // the test does not race against other tests mutating HOME.
+            assert_eq!(
+                compute_default_keypair_path("/u/op"),
+                PathBuf::from("/u/op/.config/solana/id.json")
+            );
+        }
+    }
+
+    mod anchor_discriminator {
+        use super::super::compute_anchor_global_discriminator;
+
+        // These three byte arrays are the canonical Anchor instruction
+        // discriminators the on-chain settlement program (declared in
+        // agent-os/programs/settlement/src/lib.rs) accepts for the three
+        // operator-signed verbs. Independently reproducible with:
+        //   python3 -c 'import hashlib;\
+        //     print(list(hashlib.sha256(b"global:register_agent").digest()[:8]))'
+        // A regression in compute_anchor_global_discriminator that drops
+        // the "global:" prefix, hashes the wrong slice of the digest, or
+        // accepts a non-snake-case method name would silently produce
+        // bytes the dispatcher routes to InstructionFallbackNotFound; the
+        // tests below pin the byte stream so that regression is loud.
+
+        #[test]
+        fn register_agent_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("register_agent"),
+                [135, 157, 66, 195, 2, 113, 175, 30]
+            );
+        }
+
+        #[test]
+        fn stake_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("stake"),
+                [206, 176, 202, 18, 200, 209, 179, 108]
+            );
+        }
+
+        #[test]
+        fn buy_credits_matches_on_chain_discriminator() {
+            assert_eq!(
+                compute_anchor_global_discriminator("buy_credits"),
+                [14, 173, 58, 38, 248, 235, 115, 102]
+            );
+        }
+
+        #[test]
+        fn global_prefix_is_part_of_the_hash() {
+            // A drop of the "global:" namespace would silently produce
+            // a different byte stream. This test pins the difference so
+            // a refactor that mistakenly hashes the bare method name
+            // fails loudly instead of producing valid-looking but
+            // unroutable bytes.
+            use sha2::{Digest, Sha256};
+            let bare = {
+                let mut h = Sha256::new();
+                h.update(b"register_agent");
+                let d = h.finalize();
+                let mut out = [0u8; 8];
+                out.copy_from_slice(&d[..8]);
+                out
+            };
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                bare,
+                "discriminator must include the 'global:' namespace prefix"
+            );
+        }
+
+        #[test]
+        fn snake_case_and_camel_case_produce_different_discriminators() {
+            // Anchor's macro-generated dispatcher uses the snake_case
+            // method identifier from the #[program] mod. A caller that
+            // passes a wrong-case name will compute a digest the on-chain
+            // dispatcher does not accept; this test pins the difference
+            // so the failure is visible as a discriminator mismatch
+            // rather than a silent on-chain rejection.
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                compute_anchor_global_discriminator("registerAgent")
+            );
+            assert_ne!(
+                compute_anchor_global_discriminator("register_agent"),
+                compute_anchor_global_discriminator("RegisterAgent")
+            );
+        }
+    }
+
+    mod build_register_agent_instruction {
+        use super::super::{
+            build_register_agent_instruction, compute_anchor_global_discriminator,
+            serialize_register_agent_args, settlement_agent_pda, settlement_config_pda,
+            RegisterAgentArgs,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixture_args() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [9u8; 32],
+                metadata_hash: [10u8; 32],
+                capability_hash: [11u8; 32],
+            }
+        }
+
+        #[test]
+        fn data_is_discriminator_followed_by_serialized_args() {
+            // The on-chain Anchor dispatcher reads the first 8 bytes as
+            // the instruction discriminator and the remainder as the
+            // borsh-encoded args payload. Any other layout (args first,
+            // discriminator omitted, padding) routes to
+            // InstructionFallbackNotFound.
+            let ix = build_register_agent_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixture_args(),
+            );
+            let disc = compute_anchor_global_discriminator("register_agent");
+            assert_eq!(&ix.data[..8], &disc, "data prefix must be discriminator");
+            let args_bytes = serialize_register_agent_args(&fixture_args());
+            assert_eq!(
+                &ix.data[8..],
+                &args_bytes,
+                "data tail must be serialized args"
+            );
+            assert_eq!(ix.data.len(), 8 + 96);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order() {
+            // agent-os/programs/settlement/src/lib.rs:429-448 declares
+            // RegisterAgent { config, agent, operator, system_program }.
+            // The Instruction.accounts vector must match positionally.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let args = fixture_args();
+            let ix = build_register_agent_instruction(&program, &operator, &args);
+            assert_eq!(ix.accounts.len(), 4);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_agent_pda(&program, &Pubkey::new_from_array(args.agent_key)).0
+            );
+            assert_eq!(ix.accounts[2].pubkey, operator);
+            assert_eq!(ix.accounts[3].pubkey, solana_sdk::system_program::id());
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config        — read-only (no #[account(mut)])
+            // agent         — writable (#[account(init, ...)]), not signer
+            // operator      — signer + writable (#[account(mut)] + Signer)
+            // system_program— read-only (Program<...>)
+            let ix = build_register_agent_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixture_args(),
+            );
+            assert_eq!(
+                (ix.accounts[0].is_signer, ix.accounts[0].is_writable),
+                (false, false)
+            );
+            assert_eq!(
+                (ix.accounts[1].is_signer, ix.accounts[1].is_writable),
+                (false, true)
+            );
+            assert_eq!(
+                (ix.accounts[2].is_signer, ix.accounts[2].is_writable),
+                (true, true)
+            );
+            assert_eq!(
+                (ix.accounts[3].is_signer, ix.accounts[3].is_writable),
+                (false, false)
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_register_agent_instruction(&program, &fixed_operator(), &fixture_args());
+            assert_eq!(ix.program_id, program);
+        }
+    }
+
+    mod build_stake_instruction {
+        use super::super::{
+            build_stake_instruction, compute_anchor_global_discriminator, serialize_stake_args,
+            settlement_agent_pda, settlement_config_pda, settlement_stake_position_pda, StakeArgs,
+            SPL_TOKEN_PROGRAM_ID,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixed_agent_key() -> Pubkey {
+            Pubkey::new_from_array([7u8; 32])
+        }
+
+        fn fixed_owner_covnt() -> Pubkey {
+            Pubkey::new_from_array([13u8; 32])
+        }
+
+        fn fixed_stake_vault() -> Pubkey {
+            Pubkey::new_from_array([17u8; 32])
+        }
+
+        fn fixture_args() -> StakeArgs {
+            StakeArgs {
+                amount: 1_500_000,
+                lock_until: 1_700_999_999,
+            }
+        }
+
+        fn build_fixture_ix() -> solana_sdk::instruction::Instruction {
+            build_stake_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixed_agent_key(),
+                &fixed_owner_covnt(),
+                &fixed_stake_vault(),
+                &Pubkey::new_from_array([21u8; 32]),
+                &fixture_args(),
+            )
+        }
+
+        #[test]
+        fn data_prefix_equals_stake_discriminator_literal() {
+            // The literal stake discriminator is also pinned by the
+            // existing anchor_discriminator mod. Repeating the byte
+            // sequence here makes a regression in either source
+            // surface as a duplicate failure rather than a silent
+            // pass through one path.
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[..8],
+                &[206, 176, 202, 18, 200, 209, 179, 108],
+                "data prefix must be the stake discriminator"
+            );
+            assert_eq!(&ix.data[..8], &compute_anchor_global_discriminator("stake"));
+        }
+
+        #[test]
+        fn data_tail_equals_serialized_stake_args() {
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[8..],
+                &serialize_stake_args(&fixture_args()),
+                "data tail must be the borsh-encoded StakeArgs"
+            );
+        }
+
+        #[test]
+        fn data_length_is_discriminator_plus_two_u64s() {
+            // 8 (discriminator) + 16 (StakeArgs) = 24. A regression
+            // that pads to alignment or drops the discriminator
+            // would change this.
+            let ix = build_fixture_ix();
+            assert_eq!(ix.data.len(), 8 + 16);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order_positionally() {
+            // agent-os/programs/settlement/src/lib.rs:531-567 declares
+            // Stake { config, agent, position, owner, owner_covnt,
+            // stake_vault, token_program, system_program }.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let agent_key = fixed_agent_key();
+            let ix = build_fixture_ix();
+
+            assert_eq!(ix.accounts.len(), 9);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_agent_pda(&program, &agent_key).0
+            );
+            assert_eq!(
+                ix.accounts[2].pubkey,
+                settlement_stake_position_pda(&program, &agent_key, &operator).0
+            );
+            assert_eq!(ix.accounts[3].pubkey, operator);
+            assert_eq!(ix.accounts[4].pubkey, fixed_owner_covnt());
+            assert_eq!(ix.accounts[5].pubkey, fixed_stake_vault());
+            assert_eq!(ix.accounts[6].pubkey, Pubkey::new_from_array([21u8; 32]));
+            assert_eq!(ix.accounts[7].pubkey, SPL_TOKEN_PROGRAM_ID);
+            assert_eq!(ix.accounts[8].pubkey, solana_sdk::system_program::id());
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config:         ro
+            // agent:          w, !signer
+            // position:       w, !signer (init by owner)
+            // owner:          signer, w (fee payer + transfer authority)
+            // owner_covnt:    w, !signer
+            // stake_vault:    w, !signer
+            // token_program:  ro
+            // system_program: ro
+            let ix = build_fixture_ix();
+            let expected = [
+                (false, false), // config
+                (false, true),  // agent
+                (false, true),  // position
+                (true, true),   // owner
+                (false, true),  // owner_covnt
+                (false, true),  // stake_vault
+                (false, false), // token_program
+                (false, false), // system_program
+            ];
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(
+                    (ix.accounts[i].is_signer, ix.accounts[i].is_writable),
+                    *exp,
+                    "account[{i}] flag mismatch (expected (signer, writable) = {exp:?})"
+                );
+            }
+        }
+
+        #[test]
+        fn token_program_id_is_legacy_spl_token_constant() {
+            // Pin the canonical legacy-Token program ID inline. A
+            // substitution with the Token-2022 program at
+            // TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb would be
+            // rejected on-chain with InvalidProgramId — this test
+            // surfaces the substitution locally.
+            assert_eq!(
+                SPL_TOKEN_PROGRAM_ID.to_string(),
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_stake_instruction(
+                &program,
+                &fixed_operator(),
+                &fixed_agent_key(),
+                &fixed_owner_covnt(),
+                &fixed_stake_vault(),
+                &Pubkey::new_from_array([21u8; 32]),
+                &fixture_args(),
+            );
+            assert_eq!(ix.program_id, program);
+        }
+    }
+
+    mod build_buy_credits_instruction {
+        use super::super::{
+            build_buy_credits_instruction, compute_anchor_global_discriminator,
+            serialize_buy_credits_args, settlement_config_pda, settlement_credits_pda,
+            BuyCreditsArgs, SPL_TOKEN_PROGRAM_ID,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_operator() -> Pubkey {
+            Pubkey::new_from_array([5u8; 32])
+        }
+
+        fn fixed_owner_covnt() -> Pubkey {
+            Pubkey::new_from_array([19u8; 32])
+        }
+
+        fn fixed_treasury() -> Pubkey {
+            Pubkey::new_from_array([23u8; 32])
+        }
+
+        fn fixture_args() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 7_777_777,
+            }
+        }
+
+        fn build_fixture_ix() -> solana_sdk::instruction::Instruction {
+            build_buy_credits_instruction(
+                &fixed_program(),
+                &fixed_operator(),
+                &fixed_owner_covnt(),
+                &fixed_treasury(),
+                &Pubkey::new_from_array([22u8; 32]),
+                &fixture_args(),
+            )
+        }
+
+        #[test]
+        fn data_prefix_equals_buy_credits_discriminator_literal() {
+            // The literal buy_credits discriminator is also
+            // pinned by the existing anchor_discriminator mod.
+            // Repeating it here makes a regression in either
+            // source surface as a duplicate failure rather than
+            // a silent pass through one path.
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[..8],
+                &[14, 173, 58, 38, 248, 235, 115, 102],
+                "data prefix must be the buy_credits discriminator"
+            );
+            assert_eq!(
+                &ix.data[..8],
+                &compute_anchor_global_discriminator("buy_credits")
+            );
+        }
+
+        #[test]
+        fn data_tail_equals_serialized_buy_credits_args() {
+            let ix = build_fixture_ix();
+            assert_eq!(
+                &ix.data[8..],
+                &serialize_buy_credits_args(&fixture_args()),
+                "data tail must be the borsh-encoded BuyCreditsArgs"
+            );
+        }
+
+        #[test]
+        fn data_length_is_discriminator_plus_one_u64() {
+            // 8 (discriminator) + 8 (BuyCreditsArgs) = 16. A
+            // regression that pads to alignment or drops the
+            // discriminator would change this.
+            assert_eq!(build_fixture_ix().data.len(), 8 + 8);
+        }
+
+        #[test]
+        fn accounts_follow_on_chain_struct_order_positionally() {
+            // agent-os/programs/settlement/src/lib.rs:483-503 declares
+            // BuyCredits { config, credits, owner, owner_covnt,
+            // treasury, token_program }.
+            let program = fixed_program();
+            let operator = fixed_operator();
+            let ix = build_fixture_ix();
+
+            assert_eq!(ix.accounts.len(), 7);
+            assert_eq!(ix.accounts[0].pubkey, settlement_config_pda(&program).0);
+            assert_eq!(
+                ix.accounts[1].pubkey,
+                settlement_credits_pda(&program, &operator).0
+            );
+            assert_eq!(ix.accounts[2].pubkey, operator);
+            assert_eq!(ix.accounts[3].pubkey, fixed_owner_covnt());
+            assert_eq!(ix.accounts[4].pubkey, fixed_treasury());
+            assert_eq!(ix.accounts[5].pubkey, Pubkey::new_from_array([22u8; 32]));
+            assert_eq!(ix.accounts[6].pubkey, SPL_TOKEN_PROGRAM_ID);
+        }
+
+        #[test]
+        fn account_meta_flags_match_on_chain_struct_attributes() {
+            // config:        ro
+            // credits:       w, !signer (#[account(mut)])
+            // owner:         signer, w (fee payer + transfer authority)
+            // owner_covnt:   w, !signer
+            // treasury:      w, !signer
+            // token_program: ro
+            let ix = build_fixture_ix();
+            let expected = [
+                (false, false), // config
+                (false, true),  // credits
+                (true, true),   // owner
+                (false, true),  // owner_covnt
+                (false, true),  // treasury
+                (false, false), // token_program
+            ];
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(
+                    (ix.accounts[i].is_signer, ix.accounts[i].is_writable),
+                    *exp,
+                    "account[{i}] flag mismatch (expected (signer, writable) = {exp:?})"
+                );
+            }
+        }
+
+        #[test]
+        fn token_program_id_is_legacy_spl_token_constant() {
+            assert_eq!(
+                SPL_TOKEN_PROGRAM_ID.to_string(),
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            );
+        }
+
+        #[test]
+        fn program_id_is_propagated() {
+            let program = fixed_program();
+            let ix = build_buy_credits_instruction(
+                &program,
+                &fixed_operator(),
+                &fixed_owner_covnt(),
+                &fixed_treasury(),
+                &Pubkey::new_from_array([22u8; 32]),
+                &fixture_args(),
+            );
+            assert_eq!(ix.program_id, program);
+        }
+    }
+
+    mod register_agent_args {
+        use super::super::{serialize_register_agent_args, RegisterAgentArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [1u8; 32],
+                metadata_hash: [2u8; 32],
+                capability_hash: [3u8; 32],
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_struct_declaration_order() {
+            // The on-chain RegisterAgentArgs struct declares fields in
+            // order agent_key, metadata_hash, capability_hash. Borsh
+            // serializes in struct order, so the wire bytes must be the
+            // 96-byte concatenation in that exact order. The expected
+            // bytes are spelled out inline so a refactor that switches
+            // to data_keys order would break the assertion loudly.
+            let mut expected = Vec::with_capacity(96);
+            expected.extend_from_slice(&[1u8; 32]); // agent_key
+            expected.extend_from_slice(&[2u8; 32]); // metadata_hash
+            expected.extend_from_slice(&[3u8; 32]); // capability_hash
+            assert_eq!(serialize_register_agent_args(&fixture()), expected);
+            assert_eq!(serialize_register_agent_args(&fixture()).len(), 96);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            // Anchor's on-chain dispatcher decodes the args via the same
+            // borsh wire format we emit here. A round-trip with
+            // BorshDeserialize confirms our encoded bytes can be parsed
+            // back to the identical struct — if a field were skipped or
+            // re-ordered, the deserialized struct would differ.
+            let original = fixture();
+            let bytes = serialize_register_agent_args(&original);
+            let decoded = RegisterAgentArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn each_field_contributes_to_the_encoded_output() {
+            // A regression that silently dropped any one field would
+            // produce a shorter byte stream that still decodes if borsh
+            // is permissive about trailing length. The on-chain program
+            // is strict, so we pin per-field byte sensitivity: mutating
+            // each field changes the output, proving no field is
+            // skipped.
+            let base = serialize_register_agent_args(&fixture());
+
+            let mut a = fixture();
+            a.agent_key[0] = 99;
+            assert_ne!(serialize_register_agent_args(&a), base);
+
+            let mut m = fixture();
+            m.metadata_hash[0] = 99;
+            assert_ne!(serialize_register_agent_args(&m), base);
+
+            let mut c = fixture();
+            c.capability_hash[0] = 99;
+            assert_ne!(serialize_register_agent_args(&c), base);
+        }
+    }
+
+    mod cluster_rpc_url {
+        use super::super::{resolve_solana_rpc_url, ClusterResolveError};
+
+        #[test]
+        fn devnet_resolves_to_canonical_url() {
+            assert_eq!(
+                resolve_solana_rpc_url(Some("devnet"), None).unwrap(),
+                "https://api.devnet.solana.com"
+            );
+        }
+
+        #[test]
+        fn localnet_resolves_to_loopback_rpc() {
+            assert_eq!(
+                resolve_solana_rpc_url(Some("localnet"), None).unwrap(),
+                "http://127.0.0.1:8899"
+            );
+        }
+
+        #[test]
+        fn mainnet_and_mainnet_beta_are_aliases() {
+            // Solana CLI accepts --url mainnet-beta. Operators following
+            // that convention must not see UnknownCluster for it.
+            let mb = resolve_solana_rpc_url(Some("mainnet-beta"), None).unwrap();
+            let mn = resolve_solana_rpc_url(Some("mainnet"), None).unwrap();
+            assert_eq!(mb, "https://api.mainnet-beta.solana.com");
+            assert_eq!(mb, mn);
+        }
+
+        #[test]
+        fn rpc_url_override_wins_over_cluster() {
+            let url = "https://operator.private/solana-rpc";
+            let resolved =
+                resolve_solana_rpc_url(Some("mainnet"), Some(url)).expect("override wins");
+            assert_eq!(resolved, url);
+        }
+
+        #[test]
+        fn default_cluster_is_devnet() {
+            assert_eq!(
+                resolve_solana_rpc_url(None, None).unwrap(),
+                "https://api.devnet.solana.com"
+            );
+        }
+
+        #[test]
+        fn unknown_cluster_errors_with_offending_name() {
+            // A typo like "devnest" must not silently fall through to a
+            // default URL — the operator could otherwise sign against
+            // the wrong cluster.
+            let err = resolve_solana_rpc_url(Some("devnest"), None).expect_err("must error");
+            match err {
+                ClusterResolveError::UnknownCluster { name } => assert_eq!(name, "devnest"),
+                other => panic!("expected UnknownCluster, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn empty_override_is_rejected() {
+            // Some(\"\") would route to a low-level connection error
+            // downstream; reject it early with a clear cause.
+            let err = resolve_solana_rpc_url(Some("devnet"), Some("")).expect_err("must error");
+            assert!(matches!(err, ClusterResolveError::EmptyRpcUrl));
+        }
+    }
+
+    mod settlement_pda {
+        use super::super::{
+            settlement_agent_pda, settlement_config_pda, settlement_credits_pda,
+            settlement_stake_position_pda,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn fixed_program() -> Pubkey {
+            // The devnet settlement program ID pinned in
+            // docs/internal/status.md row "On-chain settlement".
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_agent_key() -> Pubkey {
+            Pubkey::new_from_array([7u8; 32])
+        }
+
+        fn fixed_owner() -> Pubkey {
+            Pubkey::new_from_array([11u8; 32])
+        }
+
+        #[test]
+        fn config_pda_is_deterministic_for_fixed_program() {
+            let p = fixed_program();
+            assert_eq!(settlement_config_pda(&p), settlement_config_pda(&p));
+        }
+
+        #[test]
+        fn config_pda_depends_on_program_id() {
+            let a = settlement_config_pda(&fixed_program()).0;
+            let b = settlement_config_pda(&Pubkey::new_from_array([1u8; 32])).0;
+            assert_ne!(a, b, "config PDA must vary with program_id");
+        }
+
+        #[test]
+        fn config_pda_matches_literal_seed_bytes() {
+            // The literal seed bytes are spelled out a second time in
+            // the test body so any drift between the helper's seeds and
+            // the on-chain program's seeds = [b"config"] is caught by
+            // this comparison instead of silently routing to the wrong
+            // address.
+            let p = fixed_program();
+            let expected = Pubkey::find_program_address(&[b"config"], &p);
+            assert_eq!(settlement_config_pda(&p), expected);
+        }
+
+        #[test]
+        fn agent_pda_depends_on_agent_key() {
+            let p = fixed_program();
+            let a = settlement_agent_pda(&p, &fixed_agent_key()).0;
+            let b = settlement_agent_pda(&p, &Pubkey::new_from_array([8u8; 32])).0;
+            assert_ne!(a, b, "agent PDA must vary with agent_key");
+        }
+
+        #[test]
+        fn agent_pda_matches_literal_seed_bytes() {
+            let p = fixed_program();
+            let key = fixed_agent_key();
+            let expected = Pubkey::find_program_address(&[b"agent", key.as_ref()], &p);
+            assert_eq!(settlement_agent_pda(&p, &key), expected);
+        }
+
+        #[test]
+        fn credits_pda_depends_on_owner() {
+            let p = fixed_program();
+            let a = settlement_credits_pda(&p, &fixed_owner()).0;
+            let b = settlement_credits_pda(&p, &Pubkey::new_from_array([12u8; 32])).0;
+            assert_ne!(a, b, "credits PDA must vary with owner");
+        }
+
+        #[test]
+        fn credits_pda_matches_literal_seed_bytes() {
+            let p = fixed_program();
+            let owner = fixed_owner();
+            let expected = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &p);
+            assert_eq!(settlement_credits_pda(&p, &owner), expected);
+        }
+
+        #[test]
+        fn stake_position_pda_depends_on_agent_key() {
+            let p = fixed_program();
+            let owner = fixed_owner();
+            let a = settlement_stake_position_pda(&p, &fixed_agent_key(), &owner).0;
+            let b =
+                settlement_stake_position_pda(&p, &Pubkey::new_from_array([22u8; 32]), &owner).0;
+            assert_ne!(a, b, "stake-position PDA must vary with agent_key");
+        }
+
+        #[test]
+        fn stake_position_pda_depends_on_owner() {
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let a = settlement_stake_position_pda(&p, &agent_key, &fixed_owner()).0;
+            let b =
+                settlement_stake_position_pda(&p, &agent_key, &Pubkey::new_from_array([33u8; 32]))
+                    .0;
+            assert_ne!(a, b, "stake-position PDA must vary with owner");
+        }
+
+        #[test]
+        fn stake_position_pda_matches_literal_seed_bytes() {
+            // The literal seed list is spelled out again here so a
+            // drift between the helper's seeds and the on-chain
+            // program's seeds = [b"stake", agent.agent_key.as_ref(),
+            // owner.key().as_ref()] surfaces locally instead of as a
+            // ConstraintSeeds error from the cluster.
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let owner = fixed_owner();
+            let expected =
+                Pubkey::find_program_address(&[b"stake", agent_key.as_ref(), owner.as_ref()], &p);
+            assert_eq!(
+                settlement_stake_position_pda(&p, &agent_key, &owner),
+                expected
+            );
+        }
+
+        #[test]
+        fn stake_position_pda_seeds_are_ordered() {
+            // Swapping agent_key with owner in the seeds would
+            // produce a different PDA even though both are 32-byte
+            // pubkeys. Pin the ordering so a future refactor that
+            // accidentally swaps the two arguments fails loudly.
+            let p = fixed_program();
+            let agent_key = fixed_agent_key();
+            let owner = fixed_owner();
+            let canonical = settlement_stake_position_pda(&p, &agent_key, &owner).0;
+            let swapped = settlement_stake_position_pda(&p, &owner, &agent_key).0;
+            assert_ne!(
+                canonical, swapped,
+                "stake-position PDA must be order-sensitive in its (agent_key, owner) seeds"
+            );
+        }
+    }
+
+    mod stake_args {
+        use super::super::{serialize_stake_args, StakeArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> StakeArgs {
+            StakeArgs {
+                amount: 0x1122_3344_5566_7788,
+                lock_until: 0xaabb_ccdd_eeff_0011,
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_struct_declaration_order() {
+            // The on-chain Stake instruction declares (amount,
+            // lock_until). Borsh serializes in struct-declaration
+            // order, little-endian. A swap of the two fields would
+            // produce the same total length and pass borsh
+            // round-trip, so we pin the exact byte layout inline.
+            let mut expected = Vec::with_capacity(16);
+            expected.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+            expected.extend_from_slice(&0xaabb_ccdd_eeff_0011u64.to_le_bytes());
+            assert_eq!(serialize_stake_args(&fixture()), expected);
+        }
+
+        #[test]
+        fn encoded_length_is_two_u64s() {
+            // Exactly 16 bytes (2 * 8). A regression that emitted
+            // u32 instead of u64 (8 bytes total) or padded to
+            // alignment (>16) would change this.
+            assert_eq!(serialize_stake_args(&fixture()).len(), 16);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            // The on-chain Anchor dispatcher decodes the args via
+            // the same borsh wire format we emit here. A round-trip
+            // with BorshDeserialize confirms our bytes parse back
+            // identically — if a field were skipped or coerced to
+            // the wrong width, the round-trip would fail or differ.
+            let original = fixture();
+            let bytes = serialize_stake_args(&original);
+            let decoded = StakeArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn each_field_contributes_to_the_encoded_output() {
+            // Mutating each field must change the encoded output;
+            // otherwise borsh is silently dropping the field or
+            // collapsing it with a sibling.
+            let base = serialize_stake_args(&fixture());
+
+            let mut a = fixture();
+            a.amount = a.amount.wrapping_add(1);
+            assert_ne!(serialize_stake_args(&a), base);
+
+            let mut l = fixture();
+            l.lock_until = l.lock_until.wrapping_add(1);
+            assert_ne!(serialize_stake_args(&l), base);
+        }
+    }
+
+    mod buy_credits_args {
+        use super::super::{serialize_buy_credits_args, BuyCreditsArgs};
+        use borsh::BorshDeserialize;
+
+        fn fixture() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 0xdead_beef_cafe_babe,
+            }
+        }
+
+        #[test]
+        fn encoded_bytes_match_little_endian_u64() {
+            // The on-chain buy_credits handler reads a single
+            // u64 in little-endian. A regression that emitted
+            // big-endian would still produce 8 bytes, so the
+            // length-only test would pass; pin the byte layout
+            // explicitly here.
+            let expected = 0xdead_beef_cafe_babeu64.to_le_bytes();
+            assert_eq!(serialize_buy_credits_args(&fixture()), expected);
+        }
+
+        #[test]
+        fn encoded_length_is_one_u64() {
+            // Exactly 8 bytes. A regression that grew the
+            // struct without updating the on-chain mirror would
+            // change this.
+            assert_eq!(serialize_buy_credits_args(&fixture()).len(), 8);
+        }
+
+        #[test]
+        fn round_trip_via_borsh_returns_same_struct() {
+            let original = fixture();
+            let bytes = serialize_buy_credits_args(&original);
+            let decoded = BuyCreditsArgs::try_from_slice(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+        }
+
+        #[test]
+        fn different_amounts_produce_different_byte_streams() {
+            let a = serialize_buy_credits_args(&BuyCreditsArgs { amount_covnt: 1 });
+            let b = serialize_buy_credits_args(&BuyCreditsArgs { amount_covnt: 2 });
+            assert_ne!(a, b, "amount_covnt must influence the encoded bytes");
+        }
+    }
+
+    mod keypair_mode {
+        use super::super::{check_keypair_mode, KeypairModeError};
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        #[cfg(unix)]
+        fn set_mode(path: &std::path::Path, mode: u32) {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("set mode");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn rejects_world_readable_mode_with_chmod_hint() {
+            // Mode 0644 leaves the secret material readable by any
+            // local user. The check must bail with a message that
+            // names the file and points the operator at the chmod
+            // remediation; otherwise the operator could miss the
+            // exposure window.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("id.json");
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(b"placeholder").expect("write");
+            set_mode(&path, 0o644);
+            let err = check_keypair_mode(&path).expect_err("must error");
+            match &err {
+                KeypairModeError::GroupOrWorldReadable { mode, .. } => {
+                    assert_eq!(*mode, 0o644)
+                }
+                other => panic!("expected GroupOrWorldReadable, got {other:?}"),
+            }
+            let msg = err.to_string();
+            assert!(msg.contains("chmod 0600"), "message hints at chmod: {msg}");
+            assert!(
+                msg.contains(path.to_string_lossy().as_ref()),
+                "message names the offending path: {msg}",
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn rejects_group_readable_mode() {
+            // 0640 grants the group read access — still enough for
+            // a co-tenant in the same posix group to scrape the
+            // operator's signing key.
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("id.json");
+            let mut f = std::fs::File::create(&path).expect("create fixture");
+            f.write_all(b"placeholder").expect("write");
+            set_mode(&path, 0o640);
+            let err = check_keypair_mode(&path).expect_err("must error");
+            assert!(
+                matches!(
+                    err,
+                    KeypairModeError::GroupOrWorldReadable { mode: 0o640, .. }
+                ),
+                "expected GroupOrWorldReadable(0o640), got {err:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn accepts_owner_only_mode() {
+            // 0600 (and 0400) leave only the file owner with read
+            // access; the check must pass without raising.
+            for mode in [0o600u32, 0o400u32] {
+                let dir = tempdir().expect("tempdir");
+                let path = dir.path().join("id.json");
+                let mut f = std::fs::File::create(&path).expect("create fixture");
+                f.write_all(b"placeholder").expect("write");
+                set_mode(&path, mode);
+                check_keypair_mode(&path)
+                    .unwrap_or_else(|e| panic!("mode {mode:o} must be accepted: {e}"));
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn missing_file_returns_stat_variant() {
+            // A path that does not exist must surface Stat, not the
+            // generic GroupOrWorldReadable variant, so the operator
+            // can tell "the key file is missing" from "the key file
+            // is exposed".
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("absent.json");
+            let err = check_keypair_mode(&path).expect_err("must error");
+            assert!(
+                matches!(err, KeypairModeError::Stat { .. }),
+                "expected Stat, got {err:?}"
+            );
+        }
+    }
+
+    mod register_agent_arg_parsing {
+        use super::super::{
+            parse_hash32_arg, parse_pubkey_arg, parse_register_agent_cli_args, Hash32ArgError,
+            PubkeyArgError,
+        };
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            // 32-byte all-1s array encodes to a known-valid 32-byte
+            // base58 Pubkey; using a fixed value keeps the test
+            // hermetic across architectures.
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn hex_32(b: u8) -> String {
+            (0..32).map(|_| format!("{b:02x}")).collect::<String>()
+        }
+
+        #[test]
+        fn rejects_short_agent_key_with_named_flag() {
+            // A 31-byte base58 input would silently parse if we
+            // accepted any byte length; the helper must surface the
+            // flag name so the operator knows which value is wrong.
+            let short_b58 = bs58::encode([1u8; 31]).into_string();
+            let err = parse_pubkey_arg("agent-key", &short_b58).expect_err("must error");
+            match err {
+                PubkeyArgError::Invalid { flag, value, .. } => {
+                    assert_eq!(flag, "agent-key");
+                    assert_eq!(value, short_b58);
+                }
+                other => panic!("expected Invalid, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn rejects_empty_pubkey() {
+            let err = parse_pubkey_arg("program-id", "").expect_err("must error");
+            assert!(matches!(err, PubkeyArgError::Empty { flag: "program-id" }));
+        }
+
+        #[test]
+        fn parses_canonical_pubkey_round_trip() {
+            let v = valid_pubkey_b58();
+            let parsed = parse_pubkey_arg("agent-key", &v).expect("parses");
+            assert_eq!(parsed.to_string(), v);
+        }
+
+        #[test]
+        fn rejects_hex_hash_with_wrong_length() {
+            // 63-char input must not silently truncate to 31 bytes.
+            // The helper surfaces the actual char count so the
+            // operator can fix the off-by-one.
+            let too_short = "a".repeat(63);
+            let err = parse_hash32_arg("metadata-hash", &too_short).expect_err("must error");
+            match err {
+                Hash32ArgError::WrongLength { flag, actual } => {
+                    assert_eq!(flag, "metadata-hash");
+                    assert_eq!(actual, 63);
+                }
+                other => panic!("expected WrongLength, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn rejects_hex_hash_with_non_hex_character() {
+            let mut v = hex_32(0xab);
+            v.replace_range(10..11, "g");
+            let err = parse_hash32_arg("capability-hash", &v).expect_err("must error");
+            match err {
+                Hash32ArgError::BadHexChar {
+                    flag, position, ch, ..
+                } => {
+                    assert_eq!(flag, "capability-hash");
+                    assert_eq!(position, 10);
+                    assert_eq!(ch, 'g');
+                }
+                other => panic!("expected BadHexChar, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn parses_canonical_hash_round_trip() {
+            let bytes = parse_hash32_arg("metadata-hash", &hex_32(0x5a)).expect("parses");
+            assert_eq!(bytes, [0x5a; 32]);
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let pubkey = valid_pubkey_b58();
+            let meta = hex_32(0xab);
+            let cap = hex_32(0xcd);
+            let argv: Vec<String> = vec![
+                "--program-id".into(),
+                pubkey.clone(),
+                "--agent-key".into(),
+                pubkey.clone(),
+                "--metadata-hash".into(),
+                meta.clone(),
+                "--capability-hash".into(),
+                cap.clone(),
+            ];
+            let parsed = parse_register_agent_cli_args(&argv).expect("parses");
+            assert_eq!(parsed.cluster, "devnet", "default cluster is devnet");
+            assert_eq!(
+                parsed.confirm_timeout_ms, 60_000,
+                "default confirm-timeout-ms is 60000"
+            );
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.metadata_hash, [0xab; 32]);
+            assert_eq!(parsed.capability_hash, [0xcd; 32]);
+        }
+
+        #[test]
+        fn missing_required_program_id_errors() {
+            let argv: Vec<String> = vec![
+                "--agent-key".into(),
+                valid_pubkey_b58(),
+                "--metadata-hash".into(),
+                hex_32(1),
+                "--capability-hash".into(),
+                hex_32(2),
+            ];
+            let err = parse_register_agent_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("--program-id"),
+                "error names the missing flag: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_zero_confirm_timeout() {
+            let pubkey = valid_pubkey_b58();
+            let argv: Vec<String> = vec![
+                "--program-id".into(),
+                pubkey.clone(),
+                "--agent-key".into(),
+                pubkey,
+                "--metadata-hash".into(),
+                hex_32(1),
+                "--capability-hash".into(),
+                hex_32(2),
+                "--confirm-timeout-ms".into(),
+                "0".into(),
+            ];
+            let err = parse_register_agent_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "rejects 0 with named reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_flag() {
+            let err = parse_register_agent_cli_args(&["--unknown".into()]).expect_err("must error");
+            assert!(
+                err.to_string().contains("--unknown"),
+                "names the unknown flag: {err}"
+            );
+        }
+    }
+
+    mod register_agent_tx_shape {
+        use super::super::{
+            build_register_agent_instruction, sign_register_agent_tx, RegisterAgentArgs,
+        };
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> RegisterAgentArgs {
+            RegisterAgentArgs {
+                agent_key: [42u8; 32],
+                metadata_hash: [43u8; 32],
+                capability_hash: [44u8; 32],
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            // Anchor's dispatcher and the cluster's signature check
+            // both read message.account_keys[0] as the fee payer.
+            // A regression that derived the fee payer from a
+            // different account would land the tx in
+            // SignatureFailure at the cluster, which only surfaces
+            // at submission. Pinning account_keys[0] here makes the
+            // regression a local-test failure.
+            let kp = Keypair::new();
+            let tx = sign_register_agent_tx(&kp, &fixed_program(), &fixed_args(), Hash::default());
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            // The on-chain RegisterAgent struct expects exactly one
+            // signer (the operator). A tx built with extra signing
+            // keypairs would be rejected with SignerCountMismatch.
+            let kp = Keypair::new();
+            let tx = sign_register_agent_tx(&kp, &fixed_program(), &fixed_args(), Hash::default());
+            assert_eq!(tx.signatures.len(), 1, "exactly one signature");
+            assert_eq!(
+                tx.message.header.num_required_signatures, 1,
+                "exactly one required signature"
+            );
+        }
+
+        #[test]
+        fn instruction_matches_build_register_agent_instruction_output() {
+            // The encoded instruction in the tx must equal the
+            // standalone build_register_agent_instruction output for
+            // the same inputs; otherwise a refactor that inlined the
+            // builder could drift in shape without the standalone
+            // unit tests catching it.
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let args = fixed_args();
+            let expected_ix = build_register_agent_instruction(&program, &kp.pubkey(), &args);
+            let tx = sign_register_agent_tx(&kp, &program, &args, Hash::default());
+
+            assert_eq!(tx.message.instructions.len(), 1, "exactly one instruction");
+            let actual_ix = &tx.message.instructions[0];
+            assert_eq!(actual_ix.data, expected_ix.data, "instruction data matches");
+            // The compiled message references each account-meta from the
+            // instruction by index into message.account_keys; verify every
+            // account from the builder is present in the compiled
+            // message. The program_id is also added to account_keys by
+            // Message::new, so account_keys.len() ≥ accounts.len() + 1
+            // — count equality is intentionally not asserted.
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod register_agent_json_envelopes {
+        use super::super::{register_agent_confirmed_json, register_agent_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            // Operators and downstream tooling consume this envelope
+            // by key. Pinning the shape inline makes a renamed key
+            // (e.g. "tx" → "transaction") fail loudly during local
+            // tests instead of breaking downstream parsers silently.
+            let v = register_agent_confirmed_json(
+                "sig123",
+                "https://api.devnet.solana.com",
+                "devnet",
+                "agentB58",
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "register-agent");
+            assert_eq!(v["signature"], "sig123");
+            assert_eq!(v["rpc_url"], "https://api.devnet.solana.com");
+            assert_eq!(v["cluster"], "devnet");
+            assert_eq!(v["agent_key"], "agentB58");
+            assert_eq!(v["status"], "confirmed");
+        }
+
+        #[test]
+        fn timeout_envelope_uses_distinct_kind_and_status() {
+            // Distinct kind + status let monitors disambiguate a
+            // confirmed transaction from a submitted-but-not-yet-
+            // confirmed one without parsing free-form text.
+            let v = register_agent_timeout_json(
+                "sig999",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                30_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["signature"], "sig999");
+            assert_eq!(v["timeout_ms"], 30_000);
+        }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "cluster",
+                "kind",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = register_agent_confirmed_json(
+                "sig123",
+                "https://api.devnet.solana.com",
+                "devnet",
+                "agentB58",
+            );
+            let object = value
+                .as_object()
+                .expect("register_agent_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "register_agent_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("register-agent"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "cluster",
+                "kind",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = register_agent_timeout_json(
+                "sig999",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                30_000,
+            );
+            let object = value
+                .as_object()
+                .expect("register_agent_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "register_agent_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("register-agent"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
+        }
+    }
+
+    mod stake_arg_parsing {
+        use super::super::{parse_stake_cli_args, parse_u64_arg};
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn minimal_argv() -> Vec<String> {
+            let pk = valid_pubkey_b58();
+            vec![
+                "--program-id".into(),
+                pk.clone(),
+                "--agent-key".into(),
+                pk.clone(),
+                "--owner-covnt".into(),
+                pk.clone(),
+                "--stake-vault".into(),
+                pk.clone(),
+                "--covnt-mint".into(),
+                pk,
+                "--amount".into(),
+                "1000".into(),
+                "--lock-until".into(),
+                "1700000000".into(),
+            ]
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let parsed = parse_stake_cli_args(&minimal_argv()).expect("parses");
+            assert_eq!(parsed.cluster, "devnet", "default cluster is devnet");
+            assert_eq!(parsed.confirm_timeout_ms, 60_000);
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.amount, 1000);
+            assert_eq!(parsed.lock_until, 1_700_000_000);
+        }
+
+        #[test]
+        fn rejects_zero_amount_with_named_reason() {
+            // Zero amount opens a 0-balance StakePosition the
+            // operator paid rent for and still costs a tx fee;
+            // a typo for amount=1000 should not silently submit.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "0".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "names the reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_non_integer_amount_with_named_flag() {
+            // A typo like --amount 1_000 would silently parse to
+            // 1 with a stray underscore — u64::from_str rejects
+            // it. The error must name --amount so the operator
+            // knows which flag to fix.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "1_000".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+
+        #[test]
+        fn rejects_negative_amount() {
+            // A bare "-1" would fail u64::from_str; the error
+            // surfaces the offending value so the operator can
+            // see the typo without guessing.
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "1000" {
+                    argv[i] = "-1".into();
+                    break;
+                }
+            }
+            let err = parse_stake_cli_args(&argv).expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+
+        #[test]
+        fn missing_each_required_flag_errors_with_its_name() {
+            // Drop each required flag one at a time and confirm
+            // the error names that flag. Iterating across all six
+            // required flags prevents a future refactor from
+            // silently making any one of them optional.
+            let required = [
+                "--program-id",
+                "--agent-key",
+                "--owner-covnt",
+                "--stake-vault",
+                "--covnt-mint",
+                "--amount",
+                "--lock-until",
+            ];
+            for flag in required {
+                let base = minimal_argv();
+                let mut filtered: Vec<String> = Vec::new();
+                let mut i = 0;
+                while i < base.len() {
+                    if base[i] == flag {
+                        i += 2;
+                        continue;
+                    }
+                    filtered.push(base[i].clone());
+                    i += 1;
+                }
+                let err = parse_stake_cli_args(&filtered)
+                    .err()
+                    .unwrap_or_else(|| panic!("expected error when {flag} is missing"));
+                assert!(
+                    err.to_string().contains(flag),
+                    "error must name the missing flag {flag}: {err}"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_u64_arg_round_trips_max_value() {
+            assert_eq!(
+                parse_u64_arg("amount", &u64::MAX.to_string()).unwrap(),
+                u64::MAX
+            );
+        }
+
+        #[test]
+        fn parse_u64_arg_rejects_empty_with_flag_name() {
+            let err = parse_u64_arg("amount", "").expect_err("must error");
+            assert!(err.to_string().contains("--amount"), "names flag: {err}");
+        }
+    }
+
+    mod stake_tx_shape {
+        use super::super::{build_stake_instruction, sign_stake_tx, StakeArgs, StakeTxAccounts};
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> StakeArgs {
+            StakeArgs {
+                amount: 2_500_000,
+                lock_until: 1_800_000_000,
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            // Same fee-payer invariant as register-agent. The
+            // Stake instruction's `owner` Signer also doubles as
+            // the fee payer at message.account_keys[0].
+            let kp = Keypair::new();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let tx = sign_stake_tx(
+                &kp,
+                &StakeTxAccounts {
+                    program_id: &fixed_program(),
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            // The on-chain Stake struct has exactly one Signer
+            // field (owner). A tx with more or fewer signers
+            // would be rejected.
+            let kp = Keypair::new();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let tx = sign_stake_tx(
+                &kp,
+                &StakeTxAccounts {
+                    program_id: &fixed_program(),
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.signatures.len(), 1);
+            assert_eq!(tx.message.header.num_required_signatures, 1);
+        }
+
+        #[test]
+        fn instruction_matches_build_stake_instruction_output() {
+            // The encoded instruction in the tx must equal the
+            // standalone build_stake_instruction output for the
+            // same inputs; a future refactor that inlined the
+            // builder could drift in shape without the standalone
+            // unit tests catching it.
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let agent_key = Pubkey::new_from_array([7u8; 32]);
+            let owner_covnt = Pubkey::new_from_array([13u8; 32]);
+            let stake_vault = Pubkey::new_from_array([17u8; 32]);
+            let args = fixed_args();
+            let expected_ix = build_stake_instruction(
+                &program,
+                &kp.pubkey(),
+                &agent_key,
+                &owner_covnt,
+                &stake_vault,
+                &Pubkey::new_from_array([21u8; 32]),
+                &args,
+            );
+            let tx = sign_stake_tx(
+                &kp,
+                &StakeTxAccounts {
+                    program_id: &program,
+                    agent_key: &agent_key,
+                    owner_covnt: &owner_covnt,
+                    stake_vault: &stake_vault,
+                    covnt_mint: &Pubkey::new_from_array([21u8; 32]),
+                },
+                &args,
+                Hash::default(),
+            );
+            assert_eq!(tx.message.instructions.len(), 1);
+            assert_eq!(tx.message.instructions[0].data, expected_ix.data);
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod stake_json_envelopes {
+        use super::super::{stake_confirmed_json, stake_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            let v = stake_confirmed_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "stake");
+            assert_eq!(v["status"], "confirmed");
+            assert_eq!(v["amount"], 12_345);
+            assert_eq!(v["lock_until"], 1_700_000_000);
+            assert_eq!(v["agent_key"], "agentB58");
+            assert_eq!(v["cluster"], "localnet");
+        }
+
+        #[test]
+        fn timeout_envelope_includes_amount_lock_until_and_timeout_ms() {
+            let v = stake_timeout_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+                45_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["verb"], "stake");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["amount"], 12_345);
+            assert_eq!(v["lock_until"], 1_700_000_000);
+            assert_eq!(v["timeout_ms"], 45_000);
+        }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "amount",
+                "cluster",
+                "kind",
+                "lock_until",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = stake_confirmed_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+            );
+            let object = value
+                .as_object()
+                .expect("stake_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "stake_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("stake"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["amount"].is_u64(),
+                "amount must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["lock_until"].is_u64(),
+                "lock_until must serialize as u64, not string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "agent_key",
+                "amount",
+                "cluster",
+                "kind",
+                "lock_until",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = stake_timeout_json(
+                "sigStake",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "agentB58",
+                12_345,
+                1_700_000_000,
+                45_000,
+            );
+            let object = value
+                .as_object()
+                .expect("stake_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "stake_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("stake"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["agent_key"].is_string(),
+                "agent_key must be a string: {value}"
+            );
+            assert!(
+                value["amount"].is_u64(),
+                "amount must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["lock_until"].is_u64(),
+                "lock_until must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
+        }
+    }
+
+    mod buy_credits_arg_parsing {
+        use super::super::parse_buy_credits_cli_args;
+        use solana_sdk::pubkey::Pubkey;
+
+        fn valid_pubkey_b58() -> String {
+            Pubkey::new_from_array([1u8; 32]).to_string()
+        }
+
+        fn minimal_argv() -> Vec<String> {
+            let pk = valid_pubkey_b58();
+            vec![
+                "--program-id".into(),
+                pk.clone(),
+                "--owner-covnt".into(),
+                pk.clone(),
+                "--treasury".into(),
+                pk.clone(),
+                "--covnt-mint".into(),
+                pk,
+                "--amount-covnt".into(),
+                "5000".into(),
+            ]
+        }
+
+        #[test]
+        fn parses_full_cli_with_defaults() {
+            let parsed = parse_buy_credits_cli_args(&minimal_argv()).expect("parses");
+            assert_eq!(parsed.cluster, "devnet");
+            assert_eq!(parsed.confirm_timeout_ms, 60_000);
+            assert!(!parsed.as_json);
+            assert!(parsed.rpc_url.is_none());
+            assert!(parsed.keypair_path.is_none());
+            assert_eq!(parsed.amount_covnt, 5000);
+        }
+
+        #[test]
+        fn rejects_zero_amount_covnt_with_named_reason() {
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "5000" {
+                    argv[i] = "0".into();
+                    break;
+                }
+            }
+            let err = parse_buy_credits_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "names the reason: {err}"
+            );
+        }
+
+        #[test]
+        fn rejects_non_integer_amount_with_named_flag() {
+            let mut argv = minimal_argv();
+            for (i, a) in argv.iter().enumerate() {
+                if a == "5000" {
+                    argv[i] = "5_000".into();
+                    break;
+                }
+            }
+            let err = parse_buy_credits_cli_args(&argv).expect_err("must error");
+            assert!(
+                err.to_string().contains("--amount-covnt"),
+                "names flag: {err}"
+            );
+        }
+
+        #[test]
+        fn missing_each_required_flag_errors_with_its_name() {
+            let required = [
+                "--program-id",
+                "--owner-covnt",
+                "--treasury",
+                "--covnt-mint",
+                "--amount-covnt",
+            ];
+            for flag in required {
+                let base = minimal_argv();
+                let mut filtered: Vec<String> = Vec::new();
+                let mut i = 0;
+                while i < base.len() {
+                    if base[i] == flag {
+                        i += 2;
+                        continue;
+                    }
+                    filtered.push(base[i].clone());
+                    i += 1;
+                }
+                let err = parse_buy_credits_cli_args(&filtered)
+                    .err()
+                    .unwrap_or_else(|| panic!("expected error when {flag} is missing"));
+                assert!(
+                    err.to_string().contains(flag),
+                    "error must name the missing flag {flag}: {err}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_unknown_flag() {
+            let err = parse_buy_credits_cli_args(&["--unknown".into()]).expect_err("must error");
+            assert!(
+                err.to_string().contains("--unknown"),
+                "names the unknown flag: {err}"
+            );
+        }
+    }
+
+    mod buy_credits_tx_shape {
+        use super::super::{build_buy_credits_instruction, sign_buy_credits_tx, BuyCreditsArgs};
+        use solana_sdk::hash::Hash;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signer::keypair::Keypair;
+        use solana_sdk::signer::Signer;
+
+        fn fixed_program() -> Pubkey {
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+                .parse()
+                .expect("settlement program id parses")
+        }
+
+        fn fixed_args() -> BuyCreditsArgs {
+            BuyCreditsArgs {
+                amount_covnt: 999_999,
+            }
+        }
+
+        #[test]
+        fn fee_payer_is_operator_pubkey() {
+            let kp = Keypair::new();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &fixed_program(),
+                &owner_covnt,
+                &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.message.account_keys[0], kp.pubkey());
+        }
+
+        #[test]
+        fn single_signer_only_the_operator() {
+            let kp = Keypair::new();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &fixed_program(),
+                &owner_covnt,
+                &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
+                &fixed_args(),
+                Hash::default(),
+            );
+            assert_eq!(tx.signatures.len(), 1);
+            assert_eq!(tx.message.header.num_required_signatures, 1);
+        }
+
+        #[test]
+        fn instruction_matches_build_buy_credits_instruction_output() {
+            let kp = Keypair::new();
+            let program = fixed_program();
+            let owner_covnt = Pubkey::new_from_array([19u8; 32]);
+            let treasury = Pubkey::new_from_array([23u8; 32]);
+            let args = fixed_args();
+            let expected_ix = build_buy_credits_instruction(
+                &program,
+                &kp.pubkey(),
+                &owner_covnt,
+                &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
+                &args,
+            );
+            let tx = sign_buy_credits_tx(
+                &kp,
+                &program,
+                &owner_covnt,
+                &treasury,
+                &Pubkey::new_from_array([22u8; 32]),
+                &args,
+                Hash::default(),
+            );
+            assert_eq!(tx.message.instructions.len(), 1);
+            assert_eq!(tx.message.instructions[0].data, expected_ix.data);
+            for meta in &expected_ix.accounts {
+                assert!(
+                    tx.message.account_keys.contains(&meta.pubkey),
+                    "tx account_keys must contain {} from the instruction",
+                    meta.pubkey
+                );
+            }
+            assert!(
+                tx.message.account_keys.contains(&program),
+                "tx account_keys must contain the program id"
+            );
+        }
+    }
+
+    mod buy_credits_json_envelopes {
+        use super::super::{buy_credits_confirmed_json, buy_credits_timeout_json};
+
+        #[test]
+        fn confirmed_envelope_pins_documented_shape() {
+            let v = buy_credits_confirmed_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.v1");
+            assert_eq!(v["verb"], "buy-credits");
+            assert_eq!(v["status"], "confirmed");
+            assert_eq!(v["amount_covnt"], 42_000);
+            assert_eq!(v["owner"], "ownerB58");
+            assert_eq!(v["cluster"], "localnet");
+        }
+
+        #[test]
+        fn timeout_envelope_includes_amount_covnt_and_timeout_ms() {
+            let v = buy_credits_timeout_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+                15_000,
+            );
+            assert_eq!(v["kind"], "covenant.chain.tx.timeout.v1");
+            assert_eq!(v["verb"], "buy-credits");
+            assert_eq!(v["status"], "submitted-not-confirmed");
+            assert_eq!(v["amount_covnt"], 42_000);
+            assert_eq!(v["timeout_ms"], 15_000);
+        }
+
+        #[test]
+        fn confirmed_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "amount_covnt",
+                "cluster",
+                "kind",
+                "owner",
+                "rpc_url",
+                "signature",
+                "status",
+                "verb",
+            ];
+
+            let value = buy_credits_confirmed_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+            );
+            let object = value
+                .as_object()
+                .expect("buy_credits_confirmed_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "buy_credits_confirmed_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.v1"));
+            assert_eq!(value["verb"].as_str(), Some("buy-credits"));
+            assert_eq!(value["status"].as_str(), Some("confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["owner"].is_string(),
+                "owner must be a string: {value}"
+            );
+            assert!(
+                value["amount_covnt"].is_u64(),
+                "amount_covnt must serialize as u64, not string: {value}"
+            );
+        }
+
+        #[test]
+        fn timeout_envelope_pins_top_level_schema() {
+            const EXPECTED_KEYS: &[&str] = &[
+                "amount_covnt",
+                "cluster",
+                "kind",
+                "owner",
+                "rpc_url",
+                "signature",
+                "status",
+                "timeout_ms",
+                "verb",
+            ];
+
+            let value = buy_credits_timeout_json(
+                "sigBuy",
+                "http://127.0.0.1:8899",
+                "localnet",
+                "ownerB58",
+                42_000,
+                15_000,
+            );
+            let object = value
+                .as_object()
+                .expect("buy_credits_timeout_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "buy_credits_timeout_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert_eq!(value["kind"].as_str(), Some("covenant.chain.tx.timeout.v1"));
+            assert_eq!(value["verb"].as_str(), Some("buy-credits"));
+            assert_eq!(value["status"].as_str(), Some("submitted-not-confirmed"));
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}"
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}"
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}"
+            );
+            assert!(
+                value["owner"].is_string(),
+                "owner must be a string: {value}"
+            );
+            assert!(
+                value["amount_covnt"].is_u64(),
+                "amount_covnt must serialize as u64, not string: {value}"
+            );
+            assert!(
+                value["timeout_ms"].is_u64(),
+                "timeout_ms must serialize as u64, not string: {value}"
+            );
+        }
     }
 }

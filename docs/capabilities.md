@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, and `memory.compact.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, and chain predicates for receipt reads, receipt batch reads, and receipt flushing at dispatch.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
 
 ## Scope Envelope
 
@@ -48,7 +48,7 @@ Live HTTP coverage pins this boundary for `tool.call.echo`: a scoped grant rejec
 
 ### `memory.*`
 
-Use for memory reads, writes, repair, compaction, and purge.
+Use for memory reads, writes, repair, compaction, purge, and receipt backfill.
 
 ```json
 {
@@ -70,6 +70,8 @@ Rules:
 - `memory.write` is required before successful intent dispatch writes a working-tier memory record. The scope is checked before agent execution or fallback dispatch.
 - A tier-scoped `memory.purge` grant only permits purging that tier. An un-tiered purge request requires the scope to include all tiers.
 - A tier-scoped `memory.compact.*` grant only permits policies that touch the listed tiers. `detach_stale_parents` with an explicit tier scope requires all tiers because parent detaches are not tier-isolated.
+- `memory.backfill.apply` and `memory.backfill.dry_run` are distinct grants for the memory-record receipt-correlation backfill; the backfill mode is part of the action and a scope may pin `apply` to bind a grant to a single mode. `before_ms` bounds the backfill to records at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded. Grants for `memory.backfill.*` reject `tiers` and `record_id` at validation time because the dispatch predicate does not bind by tier or record.
+- The `memory backfill-receipt-correlation` command (IPC `BackfillMemoryRecords`, HTTP `POST /memory/records/backfill`) enforces this scope at dispatch: an apply requires `memory.backfill.apply`, a dry run requires `memory.backfill.dry_run`, and the operator identity is required. The backfill correlates every legacy row with no recency filter, so the dispatch probes the scope with an unbounded cutoff — a recency-bounded grant (`before_ms` set) does not authorize a full repair. Correlations are recomputed server-side from the operator's own memory and receipt rows; clients cannot supply correlations directly.
 
 ### `a2a.*`
 
@@ -162,6 +164,24 @@ Rules:
 - `cluster` and `batch_id` narrow already-batched receipt rows. Unbatched local receipts do not satisfy a concrete `cluster` or `batch_id` selector.
 - `mint` is checked against the configured settlement mint for `chain.flush`; a concrete mint selector does not match if the daemon has no configured mint.
 
+### `settlement.*`
+
+Use for local settlement-receipt maintenance.
+
+```json
+{
+  "version": 1,
+  "apply": true,
+  "before_ms": null
+}
+```
+
+Rules:
+
+- `settlement.backfill.apply` and `settlement.backfill.dry_run` are distinct grants; the backfill mode is part of the action. A scope may pin `apply` to bind a grant to a single mode.
+- `before_ms` bounds the backfill to receipts at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded.
+- The `settlement backfill-receipts` command (IPC `BackfillSettlementReceipts`, HTTP `POST /settlement/receipts/backfill`) now enforces this scope at dispatch: an apply requires `settlement.backfill.apply`, a dry run requires `settlement.backfill.dry_run`, and the operator identity is required. The backfill repairs every legacy row with no recency filter, so the dispatch probes the scope with an unbounded cutoff — a recency-bounded grant (`before_ms` set) does not authorize a full repair.
+
 ## Enforcement Path
 
 1. Keep accepting `{}` for existing broad grants.
@@ -170,7 +190,7 @@ Rules:
 4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
-7. Interpret stable peer-registry list/revoke/purge predicates and chain receipt-read, batch-read, and flush predicates at dispatch.
+7. Interpret stable peer-registry list/revoke/purge predicates, chain receipt-read, batch-read, and flush predicates, and the settlement receipt-backfill predicate at dispatch.
 8. Fail closed for malformed versioned scopes after a migration window.
 9. Keep action-only checks as the fallback only for unscoped operator grants.
 

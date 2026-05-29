@@ -5,7 +5,7 @@ const SITE_URL = "https://opencovenant.org";
 const SITE_NAME = "Covenant";
 const TITLE = "Covenant — open agent-native operating layer";
 const DESCRIPTION =
-  "Covenant is the local-first coordination layer for agentic software. Intent, runtime, memory, identity, permissions, comms, audit, and settlement are the host-level primitives that humans and agents need to safely share a computer.";
+  "Covenant is the local-first coordination layer for agentic software. Intent, runtime, memory, identity, permissions, comms, compositor, and settlement are the host-level primitives that humans and agents need to safely share a computer.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

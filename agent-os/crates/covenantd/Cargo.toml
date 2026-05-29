@@ -19,12 +19,14 @@ covenant-audit = { path = "../covenant-audit" }
 covenant-budget = { path = "../covenant-budget" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
+covenant-manifest = { path = "../covenant-manifest" }
 covenant-mcp = { path = "../covenant-mcp" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
+covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
 # Default features only — the solana signer + its dep tree stay out of
 # the daemon build until the funding-key path lands behind its own
@@ -35,6 +37,8 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
+dotenvy = "0.15"
+futures = "0.3"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

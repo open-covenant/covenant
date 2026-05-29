@@ -1,5 +1,6 @@
 packages:
   - packages/config
+  - packages/sap-bridge
   - packages/sdk
   - packages/sdk-ui
   - packages/ui
@@ -8,4 +9,6 @@ packages:
   - services/mcp-bridge
   - services/hermes-mcp-bridge
   - services/compute-broker
+  - services/coding-gateway
   - services/telegram-bot
+  - services/fairscale-bridge

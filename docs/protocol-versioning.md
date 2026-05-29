@@ -36,10 +36,10 @@ Versioned fixtures live under `agent-os/crates/covenant-ipc/tests/fixtures`.
 
 The current harness replays every root `*.v1.json` response fixture through the current `Response` parser. `protocol-info.v1.json` is also compared against the current generated value and reused by HTTP gateway tests, so IPC and HTTP metadata cannot drift independently.
 
-`tests/fixtures/v2/` holds shapes that are v2-only (e.g., `StreamEnvelope::StreamBegin`). The IPC tests fail closed if:
+`tests/fixtures/v2/` holds shapes that are v2-only — the four `StreamEnvelope` variants (`StreamBegin`, `StreamChunk`, `StreamEnd`, `StreamError`) are pinned there today, with `StreamEnd` covered by two case-shape fixtures (no-summary terminal and with-summary terminal for `SubmitIntent` rollups). See [docs/protocol-migrations/v2.md](./protocol-migrations/v2.md) for the per-file inventory. The IPC tests fail closed if:
 
-- `*.v2.json` fixtures appear before `MAX_PROTOCOL_VERSION` is promoted to `2`;
-- a future supported protocol version lacks matching `*.vN.json` fixtures;
-- a future supported protocol version lacks `docs/protocol-migrations/vN.md`.
+- a `*.vN.json` fixture sits under `tests/fixtures/vN/` for an `N` that exceeds the codec's `MAX_PROTOCOL_VERSION` (i.e., the codec cannot parse a wire shape it does not yet support);
+- a supported protocol version lacks matching `*.vN.json` fixtures;
+- a supported protocol version lacks `docs/protocol-migrations/vN.md`.
 
 The canonical record for what landed in the v2 promotion is [docs/protocol-migrations/v2.md](./protocol-migrations/v2.md). Future migrations follow the same pattern: add `*.vN.json` fixtures, write `docs/protocol-migrations/vN.md`, bump the relevant constants, and let the migration-evidence test verify the bundle.

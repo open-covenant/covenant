@@ -1,9 +1,30 @@
 //! Intent router for Covenant.
 //!
-//! Routes incoming intents to registered agent capability cards via
-//! keyword-overlap matching. Reserved capability namespaces in agent
-//! manifests drive the keyword tables; new agents are picked up by
-//! placing an `agent.toml` under `$COVENANT_HOME/agents/`.
+//! [`Router`] holds a [`Vec`] of [`AgentCard`]s and scores incoming intent
+//! text against each card's capability list via keyword-overlap matching.
+//! [`Router::route`] lowercases the input before checking the keyword
+//! table, so operator queries match regardless of case; ties between
+//! equal-scoring agents resolve to the first-registered card via Vec
+//! iteration order. Returns [`RouteMatch`] (agent id plus score) or
+//! [`None`] when no capability keyword overlaps the intent.
+//!
+//! [`AgentCard`] is the routing-relevant projection of a manifest plus the
+//! runtime-relevant `package_dir` that downstream runners resolve
+//! `manifest.agent.entry` against. [`AgentCard::from_manifest_and_dir`]
+//! concatenates `capabilities.required` then `capabilities.optional` in
+//! their declared order with no dedup, preserving the full
+//! [`covenant_manifest::Manifest`] so sandbox/resources/entry fields stay
+//! available at dispatch time.
+//!
+//! [`load_agents_from_dir`] walks `$COVENANT_HOME/agents/` for
+//! `<package>/agent.toml` files and returns cards sorted by manifest id so
+//! routing tie-breaking is deterministic across hosts regardless of
+//! `std::fs::read_dir` filesystem order. Missing directories return an
+//! empty vec rather than an error; malformed manifests surface as
+//! [`RouterError::Manifest`] with the offending path and the inner
+//! [`covenant_manifest::ManifestError`] preserved via `#[source]`; IO
+//! failures on the walk surface as [`RouterError::Io`] with the inner
+//! [`std::io::Error`] preserved for retry-policy downcasts.
 
 #![deny(unsafe_code)]
 
@@ -125,6 +146,64 @@ fn capability_keywords(cap: &str) -> &'static [&'static str] {
         ],
         "tool.summarize" => &["summarize", "summarise", "tl;dr", "brief", "summary"],
         "tool.gpu_inference" => &["generate", "render", "image", "diffusion", "infer"],
+        // Coding/build intents. The sandbox is coding-focused, so this leans
+        // broad: file extensions and common build/coding nouns and verbs. Bare
+        // "app"/"api" are still omitted (they match "happen"/"rapid") — "web
+        // app"/"rest api" cover those. This v0 keyword table is a placeholder
+        // for an embedding/semantic router, which is the real fix for phrasings
+        // it misses; the non-greedy guard against research/chat intents is
+        // pinned by coder_keywords_do_not_steal_research_or_chat.
+        "tool.code" => &[
+            "build",
+            "create",
+            "make",
+            "write",
+            "implement",
+            "scaffold",
+            "refactor",
+            "fix",
+            "compile",
+            "debug",
+            "website",
+            "web app",
+            "webapp",
+            "frontend",
+            "backend",
+            "endpoint",
+            "rest api",
+            "component",
+            "page",
+            "script",
+            "program",
+            "function",
+            "class",
+            "module",
+            "cli",
+            "algorithm",
+            "parser",
+            "command-line",
+            "regex",
+            "code",
+            "bug",
+            "css",
+            "html",
+            "javascript",
+            "typescript",
+            "react",
+            "next.js",
+            "three.js",
+            "rust",
+            "python",
+            ".py",
+            ".js",
+            ".ts",
+            ".tsx",
+            ".jsx",
+            ".rs",
+            ".go",
+            ".json",
+            ".sh",
+        ],
         "memory.write" => &["remember", "save", "note", "store", "log"],
         "memory.read" => &["recall", "what did", "previous", "earlier"],
         "intent.delegate" => &["assign", "delegate", "ask another", "route to"],
@@ -206,6 +285,10 @@ required = {caps:?}
         build_card("renderer", vec!["tool.gpu_inference"])
     }
 
+    fn coder_card() -> AgentCard {
+        build_card("coder", vec!["tool.code"])
+    }
+
     #[test]
     fn empty_router_returns_none() {
         let r = Router::new();
@@ -238,6 +321,66 @@ required = {caps:?}
     fn returns_none_when_nothing_overlaps() {
         let r = Router::from_cards(vec![research_card()]);
         assert!(r.route("zzz no keywords here").is_none());
+    }
+
+    #[test]
+    fn matches_coder_for_build_intent() {
+        // The canonical intent that returned the "no agent" default
+        // before tool.code existed. With a coder card present it must
+        // route, and score several keywords (build, website, next.js,
+        // three.js) so it beats incidental single-keyword matches.
+        let r = Router::from_cards(vec![research_card(), coder_card()]);
+        let m = r
+            .route("Build a website in Next.js with a Rubik's cube solver using three.js")
+            .expect("a build intent must route to the coder once tool.code is bridged");
+        assert_eq!(m.agent_id, "coder");
+        assert!(
+            m.score >= 3.0,
+            "expected multi-keyword score, got {}",
+            m.score
+        );
+    }
+
+    #[test]
+    fn coder_keywords_do_not_steal_research_or_chat() {
+        // tool.code must not be so greedy that it outscores the agent an
+        // intent actually belongs to. A refactor that added bare "app"
+        // or "api" (matching "happen"/"rapid") or generic verbs like
+        // "create" would flip these routes and is the regression this
+        // pins. research_card declares tool.web_search + memory.write;
+        // a demo-style card declares intent.subscribe (hello/hi/...).
+        let chat = build_card("demo", vec!["intent.subscribe"]);
+        let r = Router::from_cards(vec![research_card(), coder_card(), chat]);
+
+        let m = r
+            .route("find recent papers on agent memory")
+            .expect("research intent must still match");
+        assert_eq!(m.agent_id, "research", "coder stole a research intent");
+
+        let m = r
+            .route("hello there")
+            .expect("chat intent must still match");
+        assert_eq!(m.agent_id, "demo", "coder stole a chat intent");
+    }
+
+    #[test]
+    fn coder_routes_common_coding_phrasings() {
+        // Real phrasings the first keyword table missed (found by an end-to-end
+        // run — "Create fizzbuzz.py" matched nothing). The broadened table
+        // covers file extensions and common coding nouns/verbs.
+        let r = Router::from_cards(vec![research_card(), coder_card()]);
+        for intent in [
+            "Create fizzbuzz.py and run it",
+            "write a parser in rust",
+            "make a CLI tool",
+            "implement a sorting algorithm",
+        ] {
+            assert_eq!(
+                r.route(intent).map(|m| m.agent_id),
+                Some("coder".to_string()),
+                "should route to coder: {intent}"
+            );
+        }
     }
 
     #[test]
@@ -404,6 +547,7 @@ required = {caps:?}
             ("tool.web_search", "search"),
             ("tool.summarize", "summarize"),
             ("tool.gpu_inference", "image"),
+            ("tool.code", "build"),
             ("memory.write", "remember"),
             ("memory.read", "recall"),
             ("intent.delegate", "delegate"),

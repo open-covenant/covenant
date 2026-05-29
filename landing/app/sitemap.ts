@@ -9,6 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const root: MetadataRoute.Sitemap = [
     { url: `${SITE}/`, lastModified: now, changeFrequency: "weekly", priority: 1 },
     { url: `${SITE}/roadmap`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE}/contact`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
   ];
   const docs = DOCS_NAV.flatMap((section) =>
     section.items.map((item) => ({

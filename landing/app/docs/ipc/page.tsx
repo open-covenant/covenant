@@ -9,8 +9,9 @@ export default function IpcPage() {
       <h1>Local IPC</h1>
       <p>
         The daemon&apos;s canonical wire protocol. Clients on the same
-        host — the CLI, operator UIs, third-party tooling — communicate
-        with the daemon over length-prefixed JSON on a Unix socket at{" "}
+        host — the CLI, the TUI, operator UIs, third-party tooling —
+        communicate with the daemon over length-prefixed JSON on a Unix
+        socket at{" "}
         <code>$COVENANT_HOME/sock</code>. The HTTP gateway is a thin
         adapter over the same surface.
       </p>
@@ -79,6 +80,10 @@ export default function IpcPage() {
   "tier": "working" | "episodic" | "longterm" | null,
   "before_ms": 1714938000000 }
 
+{ "kind": "purge_audit",        "before_ms": 1714938000000 }
+{ "kind": "purge_capabilities", "before_ms": 1714938000000 }
+{ "kind": "purge_peers",        "before_ms": 1714938000000 }
+
 { "kind": "recent_receipts",
   "limit":    10,
   "since_ms": null | 1714938000000 }
@@ -140,7 +145,7 @@ export default function IpcPage() {
     "protocol": "covenant.ipc",
     "version": 1,
     "min_supported": 1,
-    "max_supported": 1
+    "max_supported": 2
   } }
 
 { "kind": "authenticated",
@@ -158,6 +163,9 @@ export default function IpcPage() {
 
 { "kind": "memories",        "records":   [ ... ] }
 { "kind": "memory_purged",   "purged":    42 }
+{ "kind": "audit_purged",    "purged":    42 }
+{ "kind": "capabilities_purged", "purged": 42 }
+{ "kind": "peers_purged",    "purged":    42 }
 { "kind": "receipts",        "receipts":  [ ... ] }
 { "kind": "capabilities",    "capabilities": [ ... ] }
 { "kind": "capability_granted",
@@ -273,7 +281,7 @@ export default function IpcPage() {
       <p>
         The HTTP gateway exposes this same v2 surface as Server-Sent
         Events: see{" "}
-        <Link href="/docs/http-api#streaming-responses">
+        <Link href="/http-api#streaming-responses">
           Streaming responses
         </Link>{" "}
         on the HTTP API page for the per-frame SSE encoding.
@@ -309,9 +317,11 @@ export default function IpcPage() {
         </li>
         <li>
           <strong>Compatibility.</strong> <code>protocol_info</code> is
-          intentionally minimal and treated as stable for protocol
-          version 1. Clients should ignore unknown fields; adding new
-          required fields implies a protocol version bump.
+          intentionally minimal and treated as stable across protocol
+          versions 1 and 2 — the response shape did not change at the
+          v2 bump, only <code>max_supported</code> advanced. Clients
+          should ignore unknown fields; adding new required fields
+          implies a protocol version bump.
         </li>
       </ul>
 

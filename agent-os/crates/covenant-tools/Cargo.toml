@@ -1,7 +1,7 @@
 [package]
 name = "covenant-tools"
 version = "0.1.0"
-description = "Tool provider abstraction for Covenant. Web search trait with mock, Brave, and SerpAPI implementations."
+description = "Tool provider abstraction for Covenant. `SearchProvider` trait with `MockSearch`, `BraveSearch`, and `SerpApiSearch` implementations, a `SearchConfig` reader for the `[search]` section of `secrets.toml`, and a `pick_search` helper that returns the configured provider, falling back to `MockSearch` when nothing is configured."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

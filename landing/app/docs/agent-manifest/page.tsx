@@ -200,8 +200,9 @@ priority                = "normal"`}</code>
               <code>30000</code>
             </td>
             <td>
-              Wall-clock budget. The runtime kills the process when
-              the budget elapses.
+              CPU budget. The runtime preempts the process when the
+              projection tick flags projected overshoot and kills it
+              at the elapsed cap as the backstop.
             </td>
           </tr>
           <tr>
@@ -342,6 +343,66 @@ priority                = "normal"`}</code>
         </tbody>
       </table>
 
+      <h3>
+        <code>[hermes]</code>
+      </h3>
+      <p>
+        Optional block consulted when <code>runtime = &quot;hermes&quot;</code>;
+        ignored otherwise. Hermes manages its tool allowlist
+        server-side today, so both fields are documentary — they pin
+        the contract the agent author expects, surface in operator
+        listings, and act as the enforcement seam once Hermes exposes
+        per-run controls.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code>tools_allowed</code>
+            </td>
+            <td>list of strings</td>
+            <td>
+              <code>[]</code>
+            </td>
+            <td>
+              Tools the agent expects the run to invoke. Names match
+              Hermes&apos;s tool-registry slugs (e.g.{" "}
+              <code>terminal</code>, <code>read_file</code>,{" "}
+              <code>web</code>). Operators can spot a manifest that
+              over-asks before granting capabilities.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>approval_policy</code>
+            </td>
+            <td>enum</td>
+            <td>
+              <code>operator-prompt</code>
+            </td>
+            <td>
+              How the runner should handle Hermes{" "}
+              <code>approval.request</code> events when no operator is
+              online. <code>operator-prompt</code> blocks until an
+              operator answers via the console;{" "}
+              <code>auto-deny</code> short-circuits to a denied
+              response; <code>auto-once</code> accepts a single
+              approval and stops. Reserved — runtime enforcement lands
+              once the Hermes runner learns to post{" "}
+              <code>/v1/runs/&#123;id&#125;/approval</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
       <h2>Runtime contract</h2>
       <p>
         At dispatch, the runtime spawns the agent according to{" "}
@@ -385,10 +446,14 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
       <p>
         Stderr output is captured by the daemon&apos;s tracing subsystem
         and surfaces in operator logs. The agent process must terminate
-        within <code>resources.cpu_ms_per_task</code>; processes that
-        exceed the budget are killed and the dispatch returns an error.
-        Successful processes with malformed stdout are rejected as runtime
-        failures, not accepted as successful dispatches.
+        within <code>resources.cpu_ms_per_task</code>; the runtime
+        preempts the process via <code>SIGTERM</code>/grace/<code>SIGKILL</code>{" "}
+        when the periodic projection tick observes that the process is
+        on track to exceed the cap, and falls back to the wall-clock
+        kill at the cap if preempt did not fire. Either path produces
+        a dispatch error. Successful processes with malformed stdout
+        are rejected as runtime failures, not accepted as successful
+        dispatches.
         The current subprocess runner is trusted-local. If{" "}
         <code>sandbox.required</code> is true, it fails closed instead of
         silently running the agent without sandbox-grade isolation.
@@ -400,9 +465,28 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
       </p>
       <ul>
         <li>
-          omit any of <code>agent.id</code>, <code>agent.name</code>,
-          <code>agent.version</code>, <code>agent.entry</code>, or
-          have any of those fields empty;
+          omit or leave empty any of <code>agent.id</code>,{" "}
+          <code>agent.name</code>, or <code>agent.version</code>;
+        </li>
+        <li>
+          omit or leave empty <code>agent.entry</code> when{" "}
+          <code>runtime</code> is <code>python3</code>,{" "}
+          <code>node</code>, or <code>rust-bin</code>{" "}
+          (<code>runtime = &quot;hermes&quot;</code> ignores{" "}
+          <code>agent.entry</code> entirely);
+        </li>
+        <li>
+          contain characters in <code>agent.id</code> outside
+          ASCII <code>[A-Za-z0-9_.-]+</code> — <code>agent.id</code>{" "}
+          flows into the daemon&apos;s synthesised{" "}
+          <code>AgentId</code> display and round-trips through that
+          charset filter on every JSONL replay;
+        </li>
+        <li>
+          declare an <code>agent.entry</code> that is absolute or
+          contains <code>..</code> / root / drive components for a
+          subprocess runtime — entries must be relative paths inside
+          the agent package directory;
         </li>
         <li>
           declare a <code>required</code> or <code>optional</code>{" "}
@@ -428,10 +512,15 @@ runtime = "hermes"     →   POST to a configured Hermes HTTP endpoint`}</code>
         <code>$COVENANT_HOME/agents/</code> and loads each subdirectory
         that contains an <code>agent.toml</code>; flat{" "}
         <code>*.toml</code> files at the top of <code>agents/</code>{" "}
-        are silently skipped. Online registration is not supported;
-        the daemon must be restarted after a new manifest is added.
-        Existing manifests may be edited in place and are re-read on
-        the next daemon start.
+        and subdirectories without an <code>agent.toml</code> are
+        silently skipped. The loader sorts the returned cards by{" "}
+        <code>agent.id</code> so routing tie-breaking between
+        equal-scoring agents is deterministic across hosts regardless
+        of filesystem read order (APFS, ext4, and ntfs all return{" "}
+        <code>read_dir</code> entries in different orders). Online
+        registration is not supported; the daemon must be restarted
+        after a new manifest is added. Existing manifests may be
+        edited in place and are re-read on the next daemon start.
       </p>
 
       <h2>Related</h2>

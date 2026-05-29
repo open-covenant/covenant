@@ -1,7 +1,7 @@
 [package]
 name = "covenant-mcp"
 version = "0.1.0"
-description = "Model Context Protocol (MCP) integration for Covenant. Tool trait, in-process registry, native tools, and stdio JSON-RPC transport for external MCP servers."
+description = "Model Context Protocol (MCP) integration for Covenant. Tool trait following the public MCP wire shapes (name, description, inputSchema, Content blocks, isError) so the same trait backs native Rust implementations and external MCP servers, in-process registry, native tools, and stdio JSON-RPC 2.0 transport for external MCP servers."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

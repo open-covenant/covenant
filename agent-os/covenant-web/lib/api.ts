@@ -34,6 +34,27 @@ export type IntentResult =
     }
   | { kind: "error"; message: string };
 
+// Snapshot of an async (hermes) dispatch the client polls while a long
+// coding run is in flight. `status` starts "running" and flips to
+// "ok"/"error"/"ignored" once the spawned run records its outcome.
+export type BuildFile = {
+  path: string;
+  content: string;
+  truncated?: boolean;
+};
+
+export type IntentOutcome = {
+  kind: "intent_outcome";
+  intent_id: string;
+  status: string;
+  intent_text: string;
+  matched_agent: string | null;
+  text: string;
+  result_hash_hex: string | null;
+  updated_ms: number;
+  files?: BuildFile[];
+};
+
 export type ToolSpec = {
   name: string;
   description: string;
@@ -60,6 +81,34 @@ export type AuditKind =
       matched_agent: string | null;
       result_hash_hex: string;
       status: string;
+    }
+  | {
+      type: "hermes_tool_invoked";
+      intent_id: string;
+      run_id: string;
+      tool: string;
+      preview_hash_hex: string;
+    }
+  | {
+      type: "hermes_tool_completed";
+      intent_id: string;
+      run_id: string;
+      tool: string;
+      duration_ms: number;
+      error: boolean;
+    }
+  | {
+      type: "hermes_approval_requested";
+      intent_id: string;
+      run_id: string;
+      choices: string[];
+    }
+  | {
+      type: "hermes_approval_resolved";
+      intent_id: string;
+      run_id: string;
+      choice: string;
+      resolved: number;
     }
   | {
       type: "capability_check";
@@ -170,6 +219,22 @@ export type AuditEvent = {
   kind: AuditKind;
 };
 
+// Public agent event taxonomy broadcast over /intents/:id/events as SSE
+// frames. Each frame is one of these JSON objects (no envelope; the
+// intent_id is in the URL). Mirrors the `AgentEvent` enum in
+// covenant-types — keep field names in lockstep.
+export type AgentEvent =
+  | { type: "reasoning"; run_id: string; summary: string }
+  | { type: "tool_call"; run_id: string; tool: string; preview: string }
+  | {
+      type: "tool_result";
+      run_id: string;
+      tool: string;
+      duration_ms: number;
+      error: boolean;
+    }
+  | { type: "file_write"; run_id: string; path: string; bytes: number };
+
 export type AuditIntegrityReport = {
   anchors: number;
   events: number;
@@ -254,10 +319,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => call<{ status: string }>("/health"),
 
-  submitIntent: (text: string) =>
+  submitIntent: (text: string, turnstileToken?: string) =>
     call<IntentResult>("/intent", {
       method: "POST",
       body: JSON.stringify({ text }),
+      headers: turnstileToken ? { "x-turnstile-token": turnstileToken } : undefined,
     }),
 
   recentMemory: (limit = 20, tier?: "working" | "episodic" | "longterm") =>
@@ -337,6 +403,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ intent_id }),
     }),
+
+  // URL for the SSE stream of live AgentEvents on one intent. Browsers
+  // open an EventSource against this URL; the proxy at /api/covenant
+  // forwards the stream verbatim. Each frame is one AgentEvent JSON.
+  intentEventsUrl: (intent_id: string): string =>
+    `${BASE}/intents/${encodeURIComponent(intent_id)}/events`,
+
+  // Poll an async dispatch's outcome. Returns null for ids the daemon
+  // doesn't track as async (synchronous intents, evicted, or unknown) so
+  // callers can treat "not an async run" and "still running" distinctly.
+  intentResult: async (intent_id: string): Promise<IntentOutcome | null> => {
+    try {
+      return await call<IntentOutcome>(`/intents/${encodeURIComponent(intent_id)}/result`);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("→ 404")) return null;
+      throw e;
+    }
+  },
 
   rotateOperatorToken: () =>
     call<

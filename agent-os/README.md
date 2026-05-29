@@ -74,6 +74,7 @@ Common paths:
 | Path | Purpose |
 |---|---|
 | `sock` | Unix socket for local clients. |
+| `agents/` | Agent manifest directory loaded at startup. |
 | `identity/local.key` | Local ed25519 seed. |
 | `peers/operator.token` | Local operator token. |
 | `peers/registry.jsonl` | Peer registry and tombstones. |
@@ -83,6 +84,8 @@ Common paths:
 | `audit/events.chain.jsonl` | Local hash-chain sidecar for audit integrity verification. |
 | `memory.db` | SQLite memory store. |
 | `receipts/working.jsonl` | Local settlement receipts. |
+| `budget/ledger.jsonl` | Per-agent token-bucket budget ledger events. |
+| `budget/checkpoints.jsonl` | Pause checkpoints for resumable budget-exhausted dispatches. |
 | `runtime/gvisor` | Default scratch root when `COVENANT_RUNTIME_BACKEND=linux-gvisor`. |
 
 ## Runtime Backend
@@ -126,6 +129,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Control plane | `covenantd`, `covenant`, `covenant-router`, `covenant-runtime` |
 | Trust and policy | `covenant-identity`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
 | State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a` |
+| Compositor | `covenant-tui` |
 | Settlement | `covenant-settlement`, `programs/settlement` |
 
 ## Operating Model

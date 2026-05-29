@@ -1,11 +1,19 @@
-//! Append-only audit log.
+//! Append-only audit log with hash-chain integrity verification.
 //!
-//! Every intent dispatch, capability check, capability grant, and
-//! capability revocation produces one [`AuditEvent`]. Wire format is
-//! JSONL — one event per line, easy to tail or grep — and the
+//! Every intent dispatch, capability check/grant/rejection, budget
+//! enforcement, agent-to-agent messaging, tool approval and
+//! invocation, memory maintenance, settlement receipt backfill, peer
+//! and operator administration, and authentication-failure event
+//! produces one [`AuditEvent`]
+//! (successful revocations write tombstones to the capability and peer
+//! registries instead; only rejected revocations land here). Wire
+//! format is JSONL — one event per line, easy to tail or grep — and the
 //! [`AuditLog`] trait abstracts over a JSONL-backed implementation
 //! suitable for production and an in-memory implementation suitable
-//! for tests.
+//! for tests. [`AuditLog::verify_integrity`] returns an
+//! [`AuditIntegrityReport`] computed from the per-event hash chain;
+//! this is the verdict that `covenant audit verify` and the HTTP
+//! `GET /audit/verify` surface consume.
 
 #![deny(unsafe_code)]
 
@@ -27,7 +35,7 @@ pub enum AuditError {
     Io(#[from] std::io::Error),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
-    #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild")]
+    #[error("chain corruption: events file has {events} rows, chain file has {chain}; refusing to rebuild — events > chain is the recoverable shape, rerun purge_older_than with the same cutoff to truncate the orphan events; events < chain means the chain was tampered or restored from a stale backup, rebuild from a trusted backup")]
     ChainCorruption { events: usize, chain: usize },
 }
 
@@ -103,6 +111,19 @@ pub enum AuditKind {
         run_id: String,
         choice: String,
         resolved: u64,
+    },
+    /// A Hermes run wrote a file inside its sandbox workspace. Recorded
+    /// because workspace writes are the structural side-effect of a
+    /// coding run — message and reasoning deltas are intentionally
+    /// excluded from the chain (too high-volume; see the comment at
+    /// `covenant-runtime/src/hermes.rs::map_hermes_event`). `path` is
+    /// the sandbox-relative path; `bytes` is the file size and is
+    /// `u64` so multi-GB writes can never silently truncate.
+    HermesFileWritten {
+        intent_id: Uuid,
+        run_id: String,
+        path: String,
+        bytes: u64,
     },
     CapabilityCheck {
         agent_id: String,
@@ -251,7 +272,7 @@ pub enum AuditKind {
         refill_eta_ms: u64,
     },
     /// Logged when the budget-hard-preempt path successfully terminated
-    /// an over-budget subprocess. Distinct from [`BudgetExhausted`] (a
+    /// an over-budget subprocess. Distinct from [`AuditKind::BudgetExhausted`] (a
     /// post-completion rejection) because preempt actively kills a
     /// still-running process. `signal_sent` is the name of the signal
     /// the daemon dispatched (`"SIGTERM"`, `"SIGKILL"`, or `"none"`
@@ -410,6 +431,58 @@ pub enum AuditKind {
         amount: String,
         receipt_id: Uuid,
     },
+    /// Logged when the operator runs the settlement receipt backfill. A
+    /// dry run records `row_count` from the plan with `dry_run = true`
+    /// and no `rollback_path`; an apply records the rewritten
+    /// `row_count` and the `rollback_path` checkpoint the mutator wrote
+    /// before the atomic rewrite (absent on a no-op apply that changed
+    /// nothing). The daemon emits this only after `backfill_receipts`
+    /// returns, i.e. after the rollback checkpoint, the rewritten store
+    /// contents, and the renamed store file are fsynced, so the audit
+    /// log never claims a mutation whose data did not durably land.
+    ///
+    /// Issuer is the acting peer (the operator), matching the
+    /// [`AuditKind::MemoryRepairApplied`] audience model: the row
+    /// surfaces on the operator's `/audit/recent` feed under the
+    /// issuer-equals-peer filter rather than being mis-attributed to the
+    /// daemon identity, which would hide a guest operator's backfill from
+    /// their own feed at multi-peer. Best-effort like every other
+    /// completed-mutation kind: the rewrite is already durable and the
+    /// rollback file is on disk, so audit-write success is not a
+    /// precondition for the response (unlike the suppressible rejection
+    /// probes in `audit_kind_requires_persistence`).
+    SettlementReceiptBackfillApplied {
+        row_count: u64,
+        rollback_path: Option<String>,
+        dry_run: bool,
+    },
+    /// Logged when the operator runs the memory-record receipt-correlation
+    /// backfill. A dry run records the planner-derived `row_count` with
+    /// `dry_run = true` and no `savepoint_name`; an apply records the
+    /// committed `row_count` and the `savepoint_name` the mutator wrapped
+    /// the batch in (absent on a no-op apply that changed nothing, so the
+    /// audit row never claims a SAVEPOINT was reserved for an empty
+    /// batch). The daemon emits this only after
+    /// [`SqliteStore::backfill_receipt_correlation`] returns Ok, i.e.
+    /// after BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE
+    /// SAVEPOINT + COMMIT all succeed, so the audit log never claims a
+    /// mutation whose data did not durably land.
+    ///
+    /// Issuer is the acting peer (the operator), matching the
+    /// [`AuditKind::MemoryRepairApplied`] and
+    /// [`AuditKind::SettlementReceiptBackfillApplied`] audience model:
+    /// the row surfaces on the operator's `/audit/recent` feed under the
+    /// issuer-equals-peer filter rather than being mis-attributed to the
+    /// daemon identity, which would hide a guest operator's backfill
+    /// from their own feed at multi-peer. Best-effort like every other
+    /// completed-mutation kind: the SAVEPOINT-wrapped batch already
+    /// COMMITted, so audit-write success is not a precondition for the
+    /// response.
+    MemoryRecordBackfillApplied {
+        row_count: u64,
+        savepoint_name: Option<String>,
+        dry_run: bool,
+    },
 }
 
 #[async_trait]
@@ -514,15 +587,30 @@ async fn read_chain_entries(path: &PathBuf) -> Result<Vec<AuditChainEntry>, Audi
     }
 }
 
+/// Crash-atomic chain rewrite via tmp + rename: write the full body to a
+/// sibling `.tmp` path, flush the user-space buffer, then atomically rename it
+/// over the chain. Without this, a power loss mid-write would leave the chain
+/// file truncated at an arbitrary offset, which `read_chain_entries` would
+/// surface as a serde error. With it, observers see either the old body or
+/// the new one — never half a row.
+///
+/// Best-effort under hostile power loss: this does NOT `sync_all()` the tmp
+/// file or fsync the parent directory, matching the pre-existing events
+/// rewrite path. A crash AFTER the rename returns but BEFORE the filesystem
+/// flushes the rename + new inode can still revert to the old body on next
+/// boot. Strengthening this requires a paired upgrade of the events path —
+/// tracked separately to keep the two halves of the audit log on the same
+/// durability tier.
 async fn write_chain_entries(
     path: &PathBuf,
     entries: &[AuditChainEntry],
 ) -> Result<(), AuditError> {
+    let tmp_path = path.with_extension("jsonl.tmp");
     let mut f = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(path)
+        .open(&tmp_path)
         .await?;
     for entry in entries {
         let line = serde_json::to_string(entry)?;
@@ -530,6 +618,8 @@ async fn write_chain_entries(
         f.write_all(b"\n").await?;
     }
     f.flush().await?;
+    drop(f);
+    fs::rename(&tmp_path, path).await?;
     Ok(())
 }
 
@@ -630,9 +720,26 @@ impl AuditLog for JsonlAuditLog {
 
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
         // Read-filter-rewrite under the same lock that record uses, so a
-        // concurrent record can't race against the rewrite. Atomicity of
-        // the rewrite comes from `tempfile + rename` — readers see either
-        // the old log or the new one, never a partial rewrite.
+        // concurrent record can't race against the rewrite. Each file gets
+        // its own tmp + rename so a power-loss mid-write never leaves a
+        // half-written body on disk.
+        //
+        // Crash-atomicity ordering: write+rename CHAIN first, then
+        // write+rename EVENTS. A crash between the two renames leaves
+        // chain=K rows and events=N rows with N > K — that mismatch fails
+        // `record()`'s length check (the security-correct refusal — see
+        // record's comment on why rebuild is not safe), but it is the
+        // recoverable shape: re-running purge_older_than with the same
+        // cutoff re-derives the same K kept events, rewrites the chain to
+        // the same K rows (no-op-ish), and renames events to match. The
+        // reverse order — renaming events first — could leave events=K and
+        // chain=N (M > K), which means the chain claims an event that the
+        // events file no longer holds. That state is impossible to
+        // distinguish from chain tampering (an attacker would prefer
+        // exactly this shape so a future rebuild would accept their forged
+        // events), so the audit log must stay refused until an operator
+        // restores from a trusted backup. The chain-first ordering keeps
+        // the recoverable shape on every crash window.
         let _g = self.lock.lock().await;
         let existing = read_events(&self.path).await?;
         if existing.is_empty() {
@@ -647,6 +754,8 @@ impl AuditLog for JsonlAuditLog {
         if purged == 0 {
             return Ok(0);
         }
+        let chain_entries = build_chain_entries(&kept)?;
+        write_chain_entries(&self.chain_path(), &chain_entries).await?;
         let tmp_path = self.path.with_extension("jsonl.tmp");
         let mut f = OpenOptions::new()
             .create(true)
@@ -662,8 +771,6 @@ impl AuditLog for JsonlAuditLog {
         f.flush().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
-        let chain_entries = build_chain_entries(&kept)?;
-        write_chain_entries(&self.chain_path(), &chain_entries).await?;
         Ok(purged)
     }
 
@@ -777,11 +884,28 @@ impl AuditLog for InMemoryAuditLog {
     }
 }
 
+/// Lowercase 64-char SHA-256 hex of `bytes`.
+///
+/// Used as the redaction barrier for AuditKind::IntentDispatched.result_hash_hex
+/// (a stable fingerprint of an intent's textual result) and
+/// HermesToolInvoked.preview_hash_hex (a digest of a tool input that must not
+/// land in the audit chain in cleartext). The same primitive backs the chain
+/// hash (see sha256_hex / chain_hash), so a covenantd audit chain has one
+/// underlying digest function and one external-verification story.
+///
+/// Guarantees: collision resistance (2^128 work), preimage resistance for
+/// high-entropy inputs, and a deterministic 64-character lowercase hex output
+/// across Rust versions, platforms, and process restarts.
+///
+/// Does NOT guarantee: irreversibility for low-entropy inputs. A preview that
+/// is one of a small set of guessable values (a known file path, a short
+/// command name, a yes/no flag) is recoverable by hashing the candidate set.
+/// preview_hash_hex blocks accidental cleartext leakage and pins integrity; it
+/// is not a confidentiality primitive against an adversary who can guess the
+/// input distribution. A keyed-MAC layer is the correct fix when that threat
+/// applies, and is tracked separately from this primitive swap.
 pub fn hash_hex(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut h);
-    format!("{:016x}", h.finish())
+    sha256_hex(bytes)
 }
 
 #[cfg(test)]
@@ -1242,6 +1366,35 @@ mod tests {
              still pass naive prefix/hint substring checks; this \
              inverse assertion catches the swap: {message}"
         );
+
+        // Recovery-hint pins: audit-purge-atomicity now leaves a
+        // recoverable shape (events > chain) on a crash between the
+        // chain rename and the events rename in purge_older_than.
+        // The Display must name BOTH branches so an operator triaging
+        // ChainCorruption knows which path applies to their counts —
+        // events > chain is self-heal-via-purge; events < chain is
+        // tamper or stale-backup and requires a trusted restore.
+        // A future refactor that dropped the recovery hint under a
+        // 'less verbose' pass would silently leave operators guessing
+        // at the recovery procedure, which is exactly the
+        // diagnostic-degradation pattern this test class is here to
+        // catch.
+        assert!(
+            message.contains("rerun purge_older_than"),
+            "ChainCorruption must point at the self-heal command for the \
+             events > chain shape — operator-facing recovery hint added \
+             by audit-purge-atomicity. Dropping this phrase leaves a \
+             post-crash operator without a documented next step: \
+             {message}"
+        );
+        assert!(
+            message.contains("rebuild from a trusted backup"),
+            "ChainCorruption must point at the trusted-backup path for \
+             the events < chain shape — that shape is indistinguishable \
+             from chain tampering, so the only safe action is restore. \
+             Dropping this phrase leaves the dangerous shape with the \
+             same diagnostic as the recoverable shape: {message}"
+        );
         assert!(
             !message.contains("chain file has 5"),
             "ChainCorruption must NOT emit 'chain file has 5' — \
@@ -1255,26 +1408,26 @@ mod tests {
     }
 
     #[test]
-    fn hash_hex_pins_16_char_zero_padded_lowercase_hex_and_empty_input_safety() {
-        // hash_hex populates
-        // AuditKind::IntentDispatched.result_hash_hex on every
-        // dispatched-intent audit row. Its implementation uses
-        // DefaultHasher and formats the resulting u64 with {:016x} —
-        // zero-padded to exactly 16 lowercase hex characters. The
-        // existing hash_hex_is_stable_for_same_input pin covers
-        // determinism and uniqueness but not the three implicit
-        // contract properties of the {:016x} format that audit-row
-        // consumers and operator dashboards rely on: exact 16-char
-        // width regardless of input value (a refactor to {:x} would
-        // emit 1-16 chars and break fixed-width column alignment);
-        // lowercase hex charset (a refactor to {:016X} would silently
-        // break grep workflows and string-equality checks against
-        // known-good hashes); empty-input safety (a refactor to a
-        // hasher that panicked on empty input would crash the daemon
-        // on the first empty-result intent). Mirrors the
-        // chain_hash_pins_separator_and_sha256_composition test's
-        // parallel pin of the SHA-256 chain anchor's 64-char lowercase
-        // hex output contract.
+    fn hash_hex_pins_64_char_sha256_lowercase_hex_and_empty_input_safety() {
+        // hash_hex populates AuditKind::IntentDispatched.result_hash_hex and
+        // HermesToolInvoked.preview_hash_hex. The implementation delegates to
+        // SHA-256 (sha256_hex), producing exactly 64 lowercase hex chars per
+        // call. This test pins the three contract properties consumers and
+        // operator dashboards rely on: exact 64-char width regardless of input
+        // value (a refactor to {:x} would emit variable-length hex and break
+        // fixed-width column alignment); lowercase hex charset (a refactor to
+        // {:X} or to_uppercase would silently break grep workflows and
+        // string-equality against known-good hashes); empty-input safety (a
+        // refactor to a digest that panicked on empty input would crash the
+        // daemon on the first empty-result intent). Replaces the prior
+        // 16-char-DefaultHasher pin (covenant-audit-hash-hex-output-width-
+        // and-charset-pin), which was contract-correct for the broken
+        // primitive but blocked the SHA-256 upgrade; the SHA-256 swap
+        // simultaneously closes failure modes #1 (preview reversibility for
+        // predictable inputs), #2 (no collision resistance), and #3 (Rust-
+        // version-unstable output) tracked in audit-hash-hex-cryptographic.
+        // Mirrors chain_hash_pins_separator_and_sha256_composition's parallel
+        // pin of the chain anchor's 64-char SHA-256 contract.
         for (label, input) in [
             ("empty", &b""[..]),
             ("single byte", &b"a"[..]),
@@ -1287,51 +1440,57 @@ mod tests {
             let out = hash_hex(input);
             assert_eq!(
                 out.len(),
-                16,
-                "hash_hex must produce exactly 16 hex characters for \
-                 every input including {label} — the {{:016x}} format \
-                 zero-pads low-value u64 hash outputs to 16 chars; a \
-                 refactor that dropped the 016 width (e.g., to {{:x}}) \
-                 would emit variable-length hex (1-16 chars depending \
-                 on the high bits of the DefaultHasher output) and \
+                64,
+                "hash_hex must produce exactly 64 hex characters for every \
+                 input including {label} — SHA-256 emits a 32-byte digest \
+                 hex-encoded to 64 lowercase chars; a refactor that swapped \
+                 sha256_hex for a shorter digest or truncated the hex would \
                  break operator dashboards that fixed-width-pad the \
-                 result_hash_hex column, plus any downstream tool that \
-                 parses the hash by character position; got len {} for \
-                 output {:?}",
+                 result_hash_hex column and downstream tools that parse by \
+                 character position; got len {} for output {:?}",
                 out.len(),
                 out,
             );
             assert!(
                 out.chars()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "hash_hex output must be lowercase hex only for every \
-                 input including {label}; a refactor that swapped \
-                 {{:016x}} for {{:016X}} or applied .to_uppercase() \
-                 would silently break grep workflows (e.g., grep \
-                 'result_hash_hex.*deadbeef') and string-equality \
-                 checks against known-good hashes in fixtures or \
-                 integration tests; got output {:?}",
+                "hash_hex output must be lowercase hex only for every input \
+                 including {label}; a refactor that uppercased the hex \
+                 (e.g., {{:X}} or to_uppercase) would silently break grep \
+                 workflows and string-equality checks against known-good \
+                 hashes in fixtures or integration tests; got output {:?}",
                 out,
             );
         }
 
-        // Empty-input safety as its own assertion — pinning that the
-        // call returns at all (no panic, no hang, no Empty error)
-        // even when the input byte slice is zero-length. A refactor
-        // to a hasher that required non-zero input would crash the
-        // daemon on the first dispatched intent whose result hashes
-        // to an empty byte slice (an Empty error result or an intent
-        // that produced no output) and turn the audit emit path into
-        // a denial-of-service surface that an attacker could trigger
-        // by inducing an empty result.
+        // Empty-input safety as its own assertion — pinning that the call
+        // returns at all (no panic, no hang, no Empty error) even when the
+        // input byte slice is zero-length. A refactor to a hasher that
+        // required non-zero input would crash the daemon on the first
+        // dispatched intent whose result hashes to an empty byte slice (an
+        // Empty error result or an intent that produced no output) and turn
+        // the audit emit path into a denial-of-service surface that an
+        // attacker could trigger by inducing an empty result.
         let empty = hash_hex(b"");
         assert_eq!(
             empty.len(),
-            16,
-            "hash_hex(b\"\") must succeed and produce 16 hex chars — \
-             pinning that empty-input is a normal, non-panicking input \
-             so the audit emit path stays safe when an intent's result \
-             is empty",
+            64,
+            "hash_hex(b\"\") must succeed and produce 64 hex chars — pinning \
+             that empty-input is a normal, non-panicking input so the audit \
+             emit path stays safe when an intent's result is empty",
+        );
+        // FIPS 180-4 SHA-256 of the empty string — anchors the primitive
+        // identity. A refactor that swapped SHA-256 for Blake2 / SHA-3 / a
+        // truncated variant under any "faster digest" rationale would
+        // silently invalidate every operator's on-disk audit chain because
+        // existing rows hashed under SHA-256 would no longer match
+        // independent re-verification. Mirrors
+        // sha256_hex_pins_nist_vectors_and_lowercase_output.
+        assert_eq!(
+            empty, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "hash_hex(b\"\") must equal the FIPS 180-4 SHA-256 empty-string \
+             vector — pinning that hash_hex delegates to SHA-256 and is not \
+             silently swapped for another primitive",
         );
     }
 
@@ -3024,6 +3183,167 @@ mod tests {
     }
 
     #[test]
+    fn audit_kind_settlement_receipt_backfill_applied_serde_pins_three_field_variant() {
+        // AuditKind::SettlementReceiptBackfillApplied is the audit row
+        // covenantd emits after the settlement receipt backfill mutator
+        // returns. Three fields: row_count (u64), rollback_path
+        // (Option<String>), dry_run (bool). Integrity reports and replay
+        // join on the durable slug; a rename would silently strand every
+        // prior backfill row at decode time. rollback_path carries no
+        // #[serde(skip_serializing_if)] so the key surfaces as null on a
+        // dry run or a no-op apply — a consumer that filters on the
+        // applied-vs-dry split reads dry_run, and one that wants the
+        // rollback checkpoint reads rollback_path, so both must stay on
+        // the wire across the Some and None cases.
+        let kind = AuditKind::SettlementReceiptBackfillApplied {
+            row_count: 3,
+            rollback_path: Some("/home/op/receipts/working.jsonl.bak".into()),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "rollback_path", "row_count", "type"],
+            "AuditKind::SettlementReceiptBackfillApplied wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("settlement_receipt_backfill_applied")),
+            "AuditKind discriminator slug must be snake_case 'settlement_receipt_backfill_applied'; a rename would strand every prior backfill audit row at decode time and break integrity replay",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::SettlementReceiptBackfillApplied must round-trip through serde_json verbatim",
+        );
+
+        // row_count and dry_run are strictly required; rollback_path is
+        // Option and serde decodes a missing key as None, so it is
+        // intentionally absent from the omission walk. The null-on-wire
+        // round-trip below pins the skip_serializing_if regression for
+        // rollback_path; a #[serde(default)] on row_count would let a
+        // backfill row decode claiming zero changed rows, and a default
+        // on dry_run would let an applied rewrite masquerade as a dry run.
+        for required in ["row_count", "dry_run"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::SettlementReceiptBackfillApplied wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        let dry_run_kind = AuditKind::SettlementReceiptBackfillApplied {
+            row_count: 2,
+            rollback_path: None,
+            dry_run: true,
+        };
+        let dry_wire = serde_json::to_value(&dry_run_kind).unwrap();
+        let dry_obj = dry_wire.as_object().unwrap();
+        assert_eq!(
+            dry_obj.get("rollback_path"),
+            Some(&serde_json::Value::Null),
+            "rollback_path: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across dry-run/no-op and applied rows",
+        );
+        assert_eq!(
+            dry_obj.len(),
+            4,
+            "AuditKind::SettlementReceiptBackfillApplied with rollback_path=None must still surface four keys on the wire",
+        );
+        let back: AuditKind = serde_json::from_value(dry_wire).unwrap();
+        assert_eq!(back, dry_run_kind);
+    }
+
+    #[test]
+    fn audit_kind_memory_record_backfill_applied_serde_pins_three_field_variant() {
+        // AuditKind::MemoryRecordBackfillApplied is the audit row covenantd
+        // will emit after the memory-record receipt-correlation backfill
+        // mutator returns. Three fields: row_count (u64), savepoint_name
+        // (Option<String>), dry_run (bool). The shape mirrors
+        // SettlementReceiptBackfillApplied so the operator's audit
+        // dashboards can JOIN both backfill families under a stable column
+        // set. Integrity reports and replay join on the durable slug; a
+        // rename would silently strand every prior memory backfill row at
+        // decode time. savepoint_name carries no
+        // #[serde(skip_serializing_if)] so the key surfaces as null on a
+        // dry run or no-op apply — a consumer that filters on
+        // applied-vs-dry reads dry_run, and one that wants the SAVEPOINT
+        // identifier reads savepoint_name, so both must stay on the wire
+        // across Some and None cases.
+        let kind = AuditKind::MemoryRecordBackfillApplied {
+            row_count: 3,
+            savepoint_name: Some("backfill_receipt_correlation".into()),
+            dry_run: false,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["dry_run", "row_count", "savepoint_name", "type"],
+            "AuditKind::MemoryRecordBackfillApplied wire form must be exactly four keys: the three variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("memory_record_backfill_applied")),
+            "AuditKind discriminator slug must be snake_case 'memory_record_backfill_applied'; a rename (e.g., shortened to 'memory_backfill_applied') would strand every prior backfill audit row at decode time and break integrity replay",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::MemoryRecordBackfillApplied must round-trip through serde_json verbatim",
+        );
+
+        // row_count and dry_run are strictly required; savepoint_name is
+        // Option and serde decodes a missing key as None, so it is
+        // intentionally absent from the omission walk. The null-on-wire
+        // round-trip below pins the skip_serializing_if regression for
+        // savepoint_name; a #[serde(default)] on row_count would let a
+        // backfill row decode claiming zero changed rows, and a default
+        // on dry_run would let an applied rewrite masquerade as a dry run.
+        for required in ["row_count", "dry_run"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::MemoryRecordBackfillApplied wire form must reject a payload missing {required:?}",
+            );
+        }
+
+        let dry_run_kind = AuditKind::MemoryRecordBackfillApplied {
+            row_count: 2,
+            savepoint_name: None,
+            dry_run: true,
+        };
+        let dry_wire = serde_json::to_value(&dry_run_kind).unwrap();
+        let dry_obj = dry_wire.as_object().unwrap();
+        assert_eq!(
+            dry_obj.get("savepoint_name"),
+            Some(&serde_json::Value::Null),
+            "savepoint_name: None must surface as JSON null — the field has no #[serde(skip_serializing_if)] so the wire shape stays stable across dry-run/no-op and applied rows",
+        );
+        assert_eq!(
+            dry_obj.len(),
+            4,
+            "AuditKind::MemoryRecordBackfillApplied with savepoint_name=None must still surface four keys on the wire",
+        );
+        let back: AuditKind = serde_json::from_value(dry_wire).unwrap();
+        assert_eq!(back, dry_run_kind);
+    }
+
+    #[test]
     fn audit_kind_a2a_auto_retry_scheduler_scan_serde_pins_ten_field_variant() {
         // AuditKind::A2AAutoRetrySchedulerScan is the summary audit row
         // covenantd's disabled-by-default scheduler emits after each
@@ -3398,6 +3718,160 @@ mod tests {
         assert_eq!(log.purge_older_than(1_000_000).await.unwrap(), 0);
     }
 
+    #[tokio::test]
+    async fn jsonl_purge_self_heals_chain_first_crash_window_orphan_events_shape() {
+        // Crash-simulation test for audit-purge-atomicity.
+        //
+        // purge_older_than now writes the CHAIN file first (tmp + rename)
+        // and only then writes EVENTS (tmp + rename). A power-loss between
+        // the two renames leaves the chain at K rows and events still at N
+        // rows (N > K) — the "orphan events" shape. record() refuses
+        // (ChainCorruption — the security-correct boundary so an attacker
+        // can't trick rebuild into accepting forged events), but rerunning
+        // purge_older_than with the same cutoff re-derives the same K
+        // kept events, rewrites the chain idempotently, and renames events
+        // to match.
+        //
+        // The reverse ordering (events-first) would leave events < chain on
+        // crash — a shape indistinguishable from an attacker who truncated
+        // events under a valid chain, so it would be unrecoverable without
+        // operator action. This test pins the recoverability of the
+        // chain-first shape and would fail if a future refactor swapped the
+        // order back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let chain_path = path.with_extension("chain.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // Snapshot the steady-state events file BEFORE the purge so we can
+        // restore it afterwards — the restore reproduces the on-disk shape
+        // a crash between the chain rename and the events rename would
+        // leave behind (chain at the new shorter body, events still at the
+        // old longer body).
+        let pre_purge_events = std::fs::read_to_string(&path).unwrap();
+
+        let purged = log.purge_older_than(150).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Idempotency pin: snapshot the chain bytes the original purge
+        // produced so we can assert the rerun self-heal yields BYTE-
+        // IDENTICAL chain content. A refactor that re-derived a different
+        // chain on the rerun (e.g., by changing the index column or
+        // chain-hash chaining) would silently break external verifiers
+        // that re-read the chain after a recovery.
+        let post_purge_chain = std::fs::read_to_string(&chain_path).unwrap();
+
+        // Reproduce the crash window: chain has K=2 rows (already on disk
+        // from the successful rename), events file is rewound to N=3 rows
+        // (the rename that the simulated crash prevented).
+        std::fs::write(&path, &pre_purge_events).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            3,
+            "events file restored to N=3 rows (the orphan-events crash shape)",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&chain_path)
+                .unwrap()
+                .lines()
+                .count(),
+            2,
+            "chain file remains at K=2 rows after the simulated crash",
+        );
+
+        // record() must refuse the orphan-events state — that is the
+        // security-correct boundary that this whole subsystem exists to
+        // protect, and the security-policy hint "refusing to rebuild"
+        // pinned by audit_error_chain_corruption_display_message_pins_*
+        // is the operator-facing signal that this refusal is intentional.
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        match log2.record(dated(400)).await {
+            Err(AuditError::ChainCorruption { events, chain }) => {
+                assert_eq!(events, 3, "ChainCorruption.events reports the orphan-events row count");
+                assert_eq!(chain, 2, "ChainCorruption.chain reports the post-rename chain row count");
+            }
+            other => panic!("expected ChainCorruption on orphan-events shape, got {other:?}"),
+        }
+
+        // Rerun purge with the same cutoff — the documented self-heal.
+        // It re-derives the same K=2 kept events from the read-events of
+        // the restored events file, rewrites the chain to the same body
+        // (idempotent), and renames events to match.
+        let recovered = log2.purge_older_than(150).await.unwrap();
+        assert_eq!(recovered, 1, "self-heal purges the same orphan that the original purge would have dropped");
+
+        // Idempotency assertion: the chain file after self-heal must
+        // be byte-identical to the chain file the original purge
+        // produced. If a refactor changed chain-derivation between
+        // calls (e.g., a non-deterministic field, a timestamp added,
+        // a chain-hash seed perturbed) this would catch the drift.
+        let post_heal_chain = std::fs::read_to_string(&chain_path).unwrap();
+        assert_eq!(
+            post_heal_chain, post_purge_chain,
+            "self-heal must produce the same chain bytes the original purge produced — idempotency",
+        );
+
+        // After recovery, the log is consistent and record() works again.
+        log2.record(dated(400)).await.expect("record after self-heal");
+        let report = log2.verify_integrity().await.unwrap();
+        assert!(report.valid, "verify_integrity must pass after self-heal: {report:?}");
+        assert_eq!(report.events, 3, "post-heal events: 200, 300, plus the new 400");
+        assert_eq!(report.anchors, 3, "post-heal chain matches events length");
+    }
+
+    #[tokio::test]
+    async fn jsonl_record_refuses_events_lt_chain_shape_so_events_first_ordering_would_be_unsafe() {
+        // Asymmetry pin for audit-purge-atomicity. The chain-first
+        // ordering in purge_older_than is the safe choice because the
+        // REVERSE crash shape — events file shorter than the chain file
+        // — is indistinguishable from an attacker who truncated events
+        // under a valid chain (e.g., to drop a damning row), and the
+        // safe response is operator-mediated restore from a trusted
+        // backup, not silent self-heal. This test reproduces that
+        // dangerous shape directly and verifies record() refuses with
+        // ChainCorruption — without that refusal, the events-first
+        // ordering would be silently exploitable.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let chain_path = path.with_extension("chain.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dated(100)).await.unwrap();
+        log.record(dated(200)).await.unwrap();
+        log.record(dated(300)).await.unwrap();
+
+        // Truncate events to 2 rows; chain remains at 3. This is the
+        // shape a hypothetical events-first ordering would leave on a
+        // crash between the events rename and the chain rewrite.
+        let events_raw = std::fs::read_to_string(&path).unwrap();
+        let mut keep_lines = events_raw.lines().take(2).collect::<Vec<_>>().join("\n");
+        keep_lines.push('\n');
+        std::fs::write(&path, keep_lines).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&chain_path)
+                .unwrap()
+                .lines()
+                .count(),
+            3,
+        );
+
+        let log2 = JsonlAuditLog::open(path.clone()).await.unwrap();
+        match log2.record(dated(400)).await {
+            Err(AuditError::ChainCorruption { events, chain }) => {
+                assert_eq!(events, 2, "events count reflects the truncated body");
+                assert_eq!(chain, 3, "chain count reflects the unchanged body");
+                assert!(
+                    events < chain,
+                    "the dangerous shape — chain claims more events than the events file holds — must refuse, not self-heal",
+                );
+            }
+            other => panic!("expected ChainCorruption for events<chain, got {other:?}"),
+        }
+    }
+
     fn pin_audit_variant(kind: AuditKind, slug: &str, expected_keys: &[&str]) {
         let wire = serde_json::to_value(&kind).unwrap();
         let obj = wire
@@ -3480,6 +3954,20 @@ mod tests {
             },
             "hermes_approval_resolved",
             &["choice", "intent_id", "resolved", "run_id"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_hermes_file_written_serde_pins_four_field_variant() {
+        pin_audit_variant(
+            AuditKind::HermesFileWritten {
+                intent_id: Uuid::nil(),
+                run_id: "run_abc".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024u64,
+            },
+            "hermes_file_written",
+            &["bytes", "intent_id", "path", "run_id"],
         );
     }
 

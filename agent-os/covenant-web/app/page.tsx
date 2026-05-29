@@ -1,34 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { formatRelative, formatTimestamp } from "@/lib/format";
 import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
+import { Turnstile, turnstileEnabled } from "./components/Turnstile";
+import { Markdown } from "./components/Markdown";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
-// Sample prompts shown as chips beneath the dispatch box in demo mode.
-// The first entry is the default "Try a sample task" target; the env var
-// override is kept for ops who want to swap it without a code change.
+// One-click coding demos shown as chips beneath the dispatch box. These
+// showcase what the sandbox actually does — write and run real code — and are
+// ordered quick → ambitious. The first entry's env var override lets ops swap
+// the headline demo without a code change.
 const DEMO_SAMPLES: { label: string; intent: string }[] = [
   {
-    label: "Say hi",
+    label: "Snake game",
     intent:
       process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() ||
-      "Say hi and tell me what you can do.",
+      "Build a classic Snake game as a single self-contained index.html — HTML canvas, arrow-key controls, a score, and a game-over screen.",
   },
   {
-    label: "What is Covenant?",
-    intent: "Hi — explain Covenant in one short paragraph.",
-  },
-  {
-    label: "What just happened?",
+    label: "3D Rubik's cube",
     intent:
-      "Hi — walk me through what just happened when I sent this: capability check, dispatch, signing, audit log.",
+      "Build a Next.js app with an interactive 3D Rubik's cube using three.js — drag to rotate, with scramble and solve buttons.",
+  },
+  {
+    label: "Python: sudoku solver",
+    intent:
+      "Write a Python sudoku solver with a couple of example puzzles, and run it to print the solved grids.",
   },
 ];
 
@@ -51,6 +55,10 @@ export default function OverviewPage() {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastIntentId, setLastIntentId] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // Set while an async (coding) run is in flight: submit returned a
+  // `running` intent and we poll its outcome until it lands.
+  const [awaiting, setAwaiting] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [verifyOk, setVerifyOk] = useState<boolean>(true);
@@ -64,11 +72,16 @@ export default function OverviewPage() {
       setLastResult(null);
       setLastIntentId(null);
       try {
-        const r = await api.submitIntent(trimmed);
+        const r = await api.submitIntent(trimmed, turnstileToken ?? undefined);
         if (r.kind === "intent_result") {
-          setLastResult(r.text);
           setLastIntentId(r.intent_id);
-          saveReply(r.intent_id, r.text);
+          if (r.status === "running") {
+            // Long coding build — the outcome arrives via polling below.
+            setAwaiting(true);
+          } else {
+            setLastResult(r.text);
+            saveReply(r.intent_id, r.text);
+          }
         } else {
           setLastError(r.message);
         }
@@ -78,16 +91,66 @@ export default function OverviewPage() {
         setLastError(e instanceof Error ? e.message : String(e));
       } finally {
         setDispatching(false);
+        if (turnstileEnabled) window.__covTurnstileReset?.();
       }
     },
-    [refresh],
+    [refresh, turnstileToken],
   );
 
   const clearReply = useCallback(() => {
     setLastResult(null);
     setLastIntentId(null);
     setLastError(null);
+    setAwaiting(false);
   }, []);
+
+  // Poll a running coding build until it lands, then drop the reply inline.
+  // Bounded: past the sandbox wall (10 min) + buffer the run is gone or stuck,
+  // so we stop and say so rather than spin "building…" forever. A null result
+  // (daemon forgot the run, e.g. after a restart) also ends after a grace.
+  useEffect(() => {
+    if (!awaiting || !lastIntentId) return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const MAX_MS = 12 * 60 * 1000;
+    let missing = 0;
+    const tick = async () => {
+      if (Date.now() - startedAt > MAX_MS) {
+        setLastError("This run didn't finish in time — it may have been interrupted. Try again.");
+        setAwaiting(false);
+        return;
+      }
+      try {
+        const o = await api.intentResult(lastIntentId);
+        if (cancelled) return;
+        if (!o) {
+          // 404: unknown to the daemon. Transient at first; after a grace it's lost.
+          if (++missing >= 8) {
+            setLastError("This run was interrupted (the sandbox reset). Try again.");
+            setAwaiting(false);
+          }
+          return;
+        }
+        missing = 0;
+        if (o.status === "running") return;
+        if (o.status === "error" || o.status === "ignored") {
+          setLastError(o.text || "the run did not complete");
+        } else {
+          setLastResult(o.text);
+          saveReply(lastIntentId, o.text);
+        }
+        setAwaiting(false);
+      } catch {
+        // transient (proxy/daemon blip) — keep polling
+      }
+    };
+    tick();
+    const t = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [awaiting, lastIntentId]);
 
   const onDispatch = useCallback(
     (e: FormEvent) => {
@@ -121,6 +184,25 @@ export default function OverviewPage() {
 
   const events = data?.audit.events ?? [];
   const recent = events.slice().reverse();
+  // Collapse runs of the same activity (e.g. the page's own memory-read
+  // permission checks every poll) into one row with a count, newest first,
+  // so the feed shows distinct happenings instead of the same line repeated.
+  const dedupedRecent = (() => {
+    const out: { event: (typeof recent)[number]; count: number }[] = [];
+    const idx = new Map<string, number>();
+    for (const event of recent) {
+      const label = eventLabel(event);
+      const key = `${label.headline}|${label.body}|${event.issuer.pubkey}`;
+      const at = idx.get(key);
+      if (at !== undefined) {
+        out[at].count++;
+        continue;
+      }
+      idx.set(key, out.length);
+      out.push({ event, count: 1 });
+    }
+    return out.slice(0, 8);
+  })();
   const reviewRows = (() => {
     const seen = new Set<string>();
     const out = [];
@@ -154,7 +236,7 @@ export default function OverviewPage() {
         title="Overview"
         subhead={
           DEMO_MODE
-            ? "Send tasks to your agents, manage their permissions, and check that the activity log is intact. This is a shared public sandbox — state is visible to everyone and resets periodically."
+            ? "Describe an app or script and watch the agent write, run, and verify it in a live sandbox — every step signed and audited. Shared public sandbox; state is visible to everyone and resets periodically."
             : "Send tasks to your agents, manage their permissions, and check that the activity log is intact. Everything happens on this machine."
         }
         syncMs={lastSyncMs}
@@ -170,13 +252,6 @@ export default function OverviewPage() {
         <pre className={`result compact ${verifyOk ? "" : "error"}`}>{verifyMsg}</pre>
       )}
 
-      {DEMO_MODE && (
-        <p className="sandbox-intro">
-          This is a live Covenant daemon. Dispatch a task below and watch it get signed,
-          audited, and stored — everything runs in a safe sandbox.
-        </p>
-      )}
-
       <section className="dispatch-card">
         <form onSubmit={onDispatch}>
           <div className="row">
@@ -186,11 +261,16 @@ export default function OverviewPage() {
           <textarea
             value={intent}
             onChange={(e) => setIntent(e.target.value)}
-            placeholder="What should your agents do?"
+            placeholder="Describe something to build — a game, a script, a small web app…"
             rows={2}
           />
+          {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
           <div className="actions">
-            <button type="submit" className="btn primary" disabled={dispatching || !intent}>
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
+            >
               {dispatching ? "Sending" : "Send"}
             </button>
           </div>
@@ -212,14 +292,14 @@ export default function OverviewPage() {
           )}
         </form>
 
-        {(lastResult || lastError || dispatching) && (
+        {(lastResult || lastError || dispatching || awaiting) && (
           <div className={`reply ${lastError ? "error" : ""}`} aria-live="polite">
             <div className="reply-head">
               <p className="eyebrow">{lastError ? "error" : "reply"}</p>
               <div className="reply-head-actions">
                 {lastIntentId && !lastError && (
                   <Link className="btn ghost small" href={`/intents/${lastIntentId}`}>
-                    open task
+                    {awaiting ? "watch it work" : "open task"}
                   </Link>
                 )}
                 {(lastResult || lastError) && !dispatching && (
@@ -230,16 +310,23 @@ export default function OverviewPage() {
               </div>
             </div>
             <div className="reply-body">
-              {dispatching && !lastResult && !lastError ? (
-                <span className="reply-pending">waiting for the agent…</span>
+              {(dispatching || awaiting) && !lastResult && !lastError ? (
+                <span className="reply-pending">
+                  {awaiting
+                    ? "writing and running code in the sandbox — this can take a minute or two…"
+                    : "waiting for the agent…"}
+                </span>
+              ) : lastError ? (
+                <pre>{lastError}</pre>
               ) : (
-                <pre>{lastError ?? lastResult}</pre>
+                <Markdown>{lastResult ?? ""}</Markdown>
               )}
             </div>
           </div>
         )}
       </section>
 
+      {!DEMO_MODE && (
       <section className="metric-row">
         <article className="metric">
           <span className="eyebrow">connected agents</span>
@@ -270,6 +357,7 @@ export default function OverviewPage() {
           </span>
         </article>
       </section>
+      )}
 
       <section className="split-2">
         <div className="panel">
@@ -288,13 +376,14 @@ export default function OverviewPage() {
             <p className="empty">Nothing here yet. Your activity will appear as it happens.</p>
           ) : (
             <div className="records">
-              {recent.slice(0, 8).map((event) => {
+              {dedupedRecent.map(({ event, count }) => {
                 const label = eventLabel(event);
                 const RowInner = (
                   <>
                     <div className="ts">
                       {formatTimestamp(event.timestamp_ms)}
                       <em>{label.headline}</em>
+                      {count > 1 && <span className="dupe">×{count}</span>}
                     </div>
                     <div className="body">
                       <strong>{event.issuer.display}</strong>
@@ -464,6 +553,17 @@ export default function OverviewPage() {
 
         .metric-row {
           margin-bottom: 22px;
+        }
+
+        .records .dupe {
+          margin-left: 8px;
+          padding: 0 6px;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.04em;
         }
       `}</style>
     </>

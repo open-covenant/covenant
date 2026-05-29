@@ -90,7 +90,11 @@ async fn spawn_test_server() -> TestServer {
         peers,
         Arc::new(covenant_budget::InMemoryLedger::new()),
     );
-    let app = router(HttpState { server });
+    let (live_traces_tx, _) = tokio::sync::broadcast::channel(16);
+    let app = router(HttpState {
+        server,
+        live_traces_tx,
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let _handle = tokio::spawn(async move {
@@ -616,7 +620,14 @@ async fn spawn_test_server_with_origins(origins: Vec<&'static str>) -> TestServe
         Arc::new(covenant_budget::InMemoryLedger::new()),
     );
     let origins_hv: Vec<HeaderValue> = origins.into_iter().map(HeaderValue::from_static).collect();
-    let app = router_with_origins(HttpState { server }, origins_hv);
+    let (live_traces_tx, _) = tokio::sync::broadcast::channel(16);
+    let app = router_with_origins(
+        HttpState {
+            server,
+            live_traces_tx,
+        },
+        origins_hv,
+    );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let _handle = tokio::spawn(async move {

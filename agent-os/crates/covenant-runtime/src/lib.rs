@@ -2,13 +2,18 @@
 //!
 //! Spawns an agent as a subprocess, feeds the [`Intent`] as one JSON
 //! line on stdin, reads the [`AgentResult`] as one JSON line on
-//! stdout, and kills the process if it exceeds the wall-clock budget
-//! declared in the agent's manifest (`resources.cpu_ms_per_task`).
+//! stdout, and enforces the per-task budget declared in the agent's
+//! manifest (`resources.cpu_ms_per_task`) via two paths: the daemon's
+//! projection tick preempts subprocesses on projected overshoot through
+//! [`preempt_subprocess_pg`] (`SIGTERM` with grace, then `SIGKILL`), and
+//! a wall-clock kill at `cpu_ms_per_task` fires as the final backstop.
 //!
-//! The base implementation enforces only the wall-clock timeout. It is
-//! `trusted-local` execution, not sandbox-grade isolation. Stronger
-//! backends plug in via the [`Runner`] trait without changing the dispatch
-//! contract.
+//! The base implementation is `trusted-local` execution, not sandbox-grade
+//! isolation. Three concrete backends implement the [`Runner`] trait:
+//! [`SubprocessRunner`] for the trusted-local path, [`GvisorRunner`] for
+//! sandboxed dispatch via the `runsc` OCI runtime, and [`HermesRunner`]
+//! for the Hermes agent runtime. Additional backends plug in via the
+//! same trait without changing the dispatch contract.
 
 // Production builds reject unsafe code by default. Two narrowly scoped
 // surfaces hold a function-level `#[allow(unsafe_code)]`: the test that
@@ -22,7 +27,7 @@
 use async_trait::async_trait;
 use covenant_manifest::{FilesystemPolicy, NetworkPolicy, Runtime as RuntimeKind, SandboxBackend};
 use covenant_router::AgentCard;
-use covenant_types::Intent;
+use covenant_types::{AgentEvent, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -49,7 +54,39 @@ pub struct AgentResult {
     /// vec into the hash-chained audit log after the dispatch returns.
     #[serde(default)]
     pub runtime_events: Vec<RuntimeTrace>,
+    /// Workspace files captured at the end of a Hermes run (the gateway
+    /// snapshots them before the ephemeral sandbox is destroyed) so the UI
+    /// can show a file tree / preview of what was built. Empty for runners
+    /// that don't build in a sandbox.
+    #[serde(default)]
+    pub files: Vec<BuildFile>,
 }
+
+/// A single workspace file captured from a finished run. `content` is UTF-8
+/// (binaries are skipped) and may be `truncated` if the file was large.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildFile {
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// A [`RuntimeTrace`] streamed live during a run, tagged with the intent it
+/// belongs to (and its issuer) so the daemon can fold it into the audit chain
+/// the moment it arrives — turning the task page into a live "watch it work"
+/// view instead of dumping the whole trail when the run finishes.
+#[derive(Debug, Clone)]
+pub struct StreamedTrace {
+    pub intent_id: uuid::Uuid,
+    pub issuer: covenant_types::AgentId,
+    pub trace: RuntimeTrace,
+}
+
+/// Channel the daemon hands to the Hermes runner to receive [`StreamedTrace`]s
+/// as the run streams them. The daemon drains the receiver and writes each as
+/// an audit row.
+pub type RuntimeEventSink = tokio::sync::mpsc::UnboundedSender<StreamedTrace>;
 
 /// Mid-run signals from a runner. Distinct from `AuditKind` so the
 /// `covenant-runtime` crate stays free of an audit-log dependency; the
@@ -90,6 +127,82 @@ pub enum RuntimeTrace {
         choice: String,
         resolved: u64,
     },
+    /// Hermes wrote a file inside the sandbox workspace. Low-volume
+    /// and structural (distinct from `message.delta` / `reasoning.available`
+    /// which the runtime intentionally drops at the SSE seam in
+    /// `hermes::map_hermes_event` because they are too high-volume to
+    /// audit). `path` is the sandbox-relative path; `bytes` is the file
+    /// size as reported by the gateway, kept `u64` so a multi-GB write
+    /// never silently truncates.
+    HermesFileWritten {
+        run_id: String,
+        path: String,
+        bytes: u64,
+    },
+}
+
+/// Project a `RuntimeTrace` into the public [`AgentEvent`] taxonomy
+/// served on the SSE stream. The mapping folds runner-specific frames
+/// (Hermes tool / approval / file events) into the user-facing
+/// categories so the wire form stays stable when the runner is swapped.
+///
+/// Approval frames are surfaced as tool calls with `tool = "approval"`
+/// so the live UI shows the pause point without leaking runner-specific
+/// vocabulary; the durable approval record stays on the audit chain via
+/// the existing `HermesApprovalRequested` / `HermesApprovalResolved`
+/// `AuditKind` rows.
+impl From<&RuntimeTrace> for AgentEvent {
+    fn from(trace: &RuntimeTrace) -> Self {
+        match trace {
+            RuntimeTrace::HermesToolInvoked {
+                run_id,
+                tool,
+                preview,
+            } => AgentEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool: tool.clone(),
+                preview: preview.clone(),
+            },
+            RuntimeTrace::HermesToolCompleted {
+                run_id,
+                tool,
+                duration_ms,
+                error,
+            } => AgentEvent::ToolResult {
+                run_id: run_id.clone(),
+                tool: tool.clone(),
+                duration_ms: *duration_ms,
+                error: *error,
+            },
+            RuntimeTrace::HermesApprovalRequested { run_id, choices } => AgentEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool: "approval".to_string(),
+                preview: choices.join(", "),
+            },
+            // `choice` and `resolved` are dropped here: the public
+            // taxonomy keeps tool_result to four fields and the audit
+            // chain still has the full HermesApprovalResolved row.
+            RuntimeTrace::HermesApprovalResponded {
+                run_id,
+                choice: _,
+                resolved: _,
+            } => AgentEvent::ToolResult {
+                run_id: run_id.clone(),
+                tool: "approval".to_string(),
+                duration_ms: 0,
+                error: false,
+            },
+            RuntimeTrace::HermesFileWritten {
+                run_id,
+                path,
+                bytes,
+            } => AgentEvent::FileWrite {
+                run_id: run_id.clone(),
+                path: path.clone(),
+                bytes: *bytes,
+            },
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -132,6 +245,14 @@ pub enum RunnerError {
     HermesUnconfigured { agent: String },
     #[error("remote runtime: status={status} message={message}")]
     Remote { status: u16, message: String },
+    /// The remote run reached a terminal `failed` state — an agent
+    /// outcome, distinct from a transport/gateway fault ([`Self::Remote`]).
+    #[error("remote run failed: {message}")]
+    RunFailed { message: String },
+    /// The remote run was cancelled (by operator stop or upstream).
+    /// An outcome, not a transport fault.
+    #[error("remote run was cancelled")]
+    RunCancelled,
 }
 
 #[async_trait]
@@ -876,6 +997,7 @@ impl MockRunner {
                 text: text.into(),
                 sources: Vec::new(),
                 runtime_events: Vec::new(),
+                files: Vec::new(),
             },
         }
     }
@@ -998,11 +1120,12 @@ mod tests {
             text: "hi".into(),
             sources: vec![],
             runtime_events: vec![],
+            files: vec![],
         };
         let wire = serde_json::to_value(&empty).unwrap();
         assert_eq!(
             wire,
-            serde_json::json!({"text": "hi", "sources": [], "runtime_events": []}),
+            serde_json::json!({"text": "hi", "sources": [], "runtime_events": [], "files": []}),
             "empty sources must serialize as an explicit empty array; a future skip_serializing_if would silently drop the key",
         );
     }
@@ -1138,6 +1261,30 @@ mod tests {
              surface",
         );
 
+        let file_written = RuntimeTrace::HermesFileWritten {
+            run_id: "r1".into(),
+            path: "src/main.rs".into(),
+            bytes: 1_024,
+        };
+        let file_written_wire = serde_json::to_value(&file_written).unwrap();
+        assert_eq!(
+            file_written_wire,
+            serde_json::json!({
+                "type": "hermes_file_written",
+                "run_id": "r1",
+                "path": "src/main.rs",
+                "bytes": 1_024,
+            }),
+            "HermesFileWritten slug + field names must match the SSE decoder; \
+             a rename of bytes to size or a narrowing of bytes from u64 would \
+             surface here before it silently truncated a real audit row",
+        );
+        assert_eq!(
+            serde_json::from_value::<RuntimeTrace>(file_written_wire).unwrap(),
+            file_written,
+            "HermesFileWritten round-trip must reconstruct the original variant",
+        );
+
         // Negative slug rejection: a camelCase tag must NOT decode.
         // Pins that rename_all stays a whitelist so a future
         // #[serde(other)] arm cannot silently absorb mis-cased
@@ -1154,6 +1301,86 @@ mod tests {
              rename_all = snake_case stays a whitelist. A dropped or flipped \
              rename_all attribute would let this decode and the daemon would \
              ingest events with the wrong variant identity",
+        );
+    }
+
+    #[test]
+    fn runtime_trace_projects_into_public_agent_event_taxonomy() {
+        // `From<&RuntimeTrace> for AgentEvent` is the seam that keeps the
+        // public SSE wire form stable while the runner-side trace shape
+        // stays free to evolve. Pin the mapping per-variant so a future
+        // refactor of either enum surfaces here before it silently bends
+        // the live stream contract that browser clients destructure on.
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesToolInvoked {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            }),
+            AgentEvent::ToolCall {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesToolCompleted {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                duration_ms: 42,
+                error: true,
+            }),
+            AgentEvent::ToolResult {
+                run_id: "r1".into(),
+                tool: "terminal".into(),
+                duration_ms: 42,
+                error: true,
+            },
+        );
+
+        // Approval frames surface as tool calls with tool="approval" so
+        // the live UI shows the pause point without leaking Hermes
+        // vocabulary; the audit chain keeps the HermesApprovalRequested
+        // / HermesApprovalResolved rows separately for durable record.
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesApprovalRequested {
+                run_id: "r1".into(),
+                choices: vec!["approve".into(), "deny".into()],
+            }),
+            AgentEvent::ToolCall {
+                run_id: "r1".into(),
+                tool: "approval".into(),
+                preview: "approve, deny".into(),
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesApprovalResponded {
+                run_id: "r1".into(),
+                choice: "approve".into(),
+                resolved: 3,
+            }),
+            AgentEvent::ToolResult {
+                run_id: "r1".into(),
+                tool: "approval".into(),
+                duration_ms: 0,
+                error: false,
+            },
+        );
+
+        assert_eq!(
+            AgentEvent::from(&RuntimeTrace::HermesFileWritten {
+                run_id: "r1".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            }),
+            AgentEvent::FileWrite {
+                run_id: "r1".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            },
         );
     }
 

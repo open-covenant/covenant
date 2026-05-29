@@ -112,7 +112,3 @@ If any step cannot be made idempotent, the task must be classified as `operator_
 ## Relationship to manual repair
 
 Manual lease repair already requires an explicit duplicate-risk posture (`idempotent` vs `operator_accepted`). The retry gate is effectively a daemon-initiated requeue, so it must use task metadata and must never bypass the explicit classification above.
-
-## Follow-up work
-
-- Keep delegated repair automation blocked behind the internal release-review gate until a human accepts the release marker.

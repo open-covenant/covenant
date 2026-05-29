@@ -3,7 +3,7 @@
 ## Final image runs covenantd as a private HTTP gateway. The companion
 ## covenant-demo-web service proxies browser traffic to it.
 
-FROM rust:1.86-slim-bookworm AS builder
+FROM rust:1.90-slim-bookworm AS builder
 ENV CARGO_TERM_COLOR=always
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -37,6 +37,10 @@ COPY --from=builder /src/agent-os/target/release/covenant /usr/local/bin/covenan
 # for daemon readiness.
 COPY examples/demo-agent /opt/covenant/demo-agent
 COPY --from=builder /src/agent-os/target/release/demo /opt/covenant/demo-agent/demo
+
+# Coder agent manifest (runtime=hermes; no local binary). The entrypoint seeds
+# it into $COVENANT_HOME/agents only when HERMES_API_BASE_URL is configured.
+COPY examples/coder-agent /opt/covenant/coder-agent
 COPY deploy/entrypoint.sh /usr/local/bin/covenant-demo-entrypoint
 RUN chmod +x /usr/local/bin/covenant-demo-entrypoint
 

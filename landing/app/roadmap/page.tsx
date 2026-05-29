@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
-import Image from "next/image";
-import Link from "next/link";
-import { MobileMenu } from "../MobileMenu";
 import { SiteFooter } from "../SiteFooter";
-import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "../_brand";
+import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
   title: "Roadmap — Covenant",
@@ -36,8 +33,8 @@ const MILESTONES: Milestone[] = [
     intro:
       "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [
-      "Daemon, CLI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
-      "Subprocess runtime with timeout enforcement and an opt-in Linux isolation path",
+      "Daemon, CLI, TUI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
+      "Subprocess runtime with budget enforcement (projection-tick preempt and wall-clock backstop) and an opt-in Linux isolation path",
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records and commit-scoped provenance for every privileged action",
       "Public sandbox at sandbox.opencovenant.org",
@@ -55,7 +52,6 @@ const MILESTONES: Milestone[] = [
       "Unified model provider — plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
       "Plugin catalog — install vetted tools from a one-click catalog inside the console, starting with filesystem access",
       "Production-grade isolated runtime for untrusted agent code on Linux",
-      "Terminal user interface",
       "Mid-task save and resume when an agent reaches its resource budget",
       "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
       "Stable wire formats for SDK and integration compatibility",
@@ -116,78 +112,9 @@ const MILESTONES: Milestone[] = [
 export default function RoadmapPage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-[#030303]">
-      <header
-        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pt-[max(35px,env(safe-area-inset-top))] sm:pt-[max(59px,env(safe-area-inset-top))]"
-      >
-        <Link href="/" className="pointer-events-auto" aria-label="Covenant home">
-          <Image
-            src="/logo.svg"
-            alt="covenant"
-            width={255}
-            height={54}
-            priority
-            className="h-[42px] w-auto opacity-95 sm:h-[60px]"
-          />
-        </Link>
-      </header>
+      <SiteHeader />
 
-      <div
-        className="absolute left-2 z-20 sm:left-8 sm:top-10"
-        style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
-      >
-        <div className="sm:hidden">
-          <MobileMenu items={NAV_LINKS} />
-        </div>
-        <nav className="hidden items-center gap-3 sm:flex">
-          {NAV_LINKS.map((item) =>
-            item.external ? (
-              <a
-                key={item.href}
-                href={item.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
-              >
-                {item.label}
-              </a>
-            ) : (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
-              >
-                {item.label}
-              </Link>
-            ),
-          )}
-        </nav>
-      </div>
-
-      <nav
-        className="absolute right-2 z-20 flex items-center gap-1 sm:right-8 sm:top-10 sm:gap-3"
-        style={{ top: "max(0.5rem, env(safe-area-inset-top))" }}
-      >
-        <a
-          href={X_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Covenant on X"
-          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
-        >
-          <XIcon className="h-5 w-5" />
-        </a>
-        <a
-          href={GITHUB_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Covenant on GitHub"
-          className="p-3 text-neutral-400 transition-colors hover:text-neutral-50"
-        >
-          <GithubIcon className="h-5 w-5" />
-        </a>
-      </nav>
-
-      <div className="mx-auto max-w-2xl px-6 pb-32 pt-[180px] sm:max-w-3xl sm:px-8 sm:pt-[220px]">
+      <div className="page-container">
         <h1 className="mb-16 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-24">
           Roadmap
         </h1>

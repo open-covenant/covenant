@@ -13,8 +13,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-node ./scripts/validate-live-coverage.mjs
-printf '\n'
+if [ -f ./scripts/validate-live-coverage.mjs ]; then
+  node ./scripts/validate-live-coverage.mjs
+  printf '\n'
+else
+  printf 'test-stats.sh: skipped private live coverage matrix validation (script not present)\n\n'
+fi
 
 # State-machine over Rust source: when we see `#[test]` or `#[tokio::test]`
 # on a line, the next `fn <name>(...)` we see is a test. Works under BSD awk

@@ -11,6 +11,17 @@
 //! [`JsonlCapabilityStore`] for production and
 //! [`InMemoryCapabilityStore`] for tests. Both honour revocation
 //! tombstones written via [`CapabilityStore::revoke`].
+//!
+//! Scope predicates live in this crate, not above it. The daemon calls
+//! [`validate_scope`] at grant time and the dispatch-time predicates
+//! [`tool_call_scope_allows`], [`audit_purge_scope_allows`],
+//! [`capabilities_purge_scope_allows`], [`a2a_scope_allows`],
+//! [`peer_scope_allows`], [`chain_scope_allows`], and the
+//! `memory_*_scope_allows` family ([`memory_purge_scope_allows`],
+//! [`memory_read_scope_allows`], [`memory_read_record_scope_allows`],
+//! [`memory_write_scope_allows`], [`memory_repair_scope_allows`],
+//! [`memory_compaction_scope_allows`], [`memory_backfill_scope_allows`]),
+//! and [`settlement_backfill_scope_allows`] on every privileged action.
 
 #![deny(unsafe_code)]
 
@@ -83,6 +94,7 @@ enum ScopeNamespace {
     Peers,
     Identity,
     Chain,
+    Settlement,
 }
 
 impl ScopeNamespace {
@@ -105,6 +117,8 @@ impl ScopeNamespace {
             Some(Self::Identity)
         } else if action.starts_with("chain.") {
             Some(Self::Chain)
+        } else if action.starts_with("settlement.") {
+            Some(Self::Settlement)
         } else {
             None
         }
@@ -140,6 +154,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Audit => validate_audit_scope(action, obj),
         ScopeNamespace::Peers | ScopeNamespace::Identity => validate_peer_scope(action, obj),
         ScopeNamespace::Chain => validate_chain_scope(action, obj),
+        ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
     }
 }
 
@@ -474,6 +489,64 @@ pub fn memory_repair_scope_allows(
     }
 }
 
+/// Dispatch-time gate for the settlement-receipt backfill mutator. The
+/// action carries the mode (`settlement.backfill.apply` vs
+/// `settlement.backfill.dry_run`), so a dry-run-only grant cannot satisfy
+/// the apply action. An empty or `apply`-omitted scope authorizes both
+/// modes; `before_ms` bounds the backfill to receipts at or before a cutoff.
+pub fn settlement_backfill_scope_allows(
+    action: &str,
+    scope: &Value,
+    apply: bool,
+    before_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    let expected_action = if apply {
+        "settlement.backfill.apply"
+    } else {
+        "settlement.backfill.dry_run"
+    };
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
+}
+
+/// Dispatch-time gate for the memory-record receipt-backfill mutator. The
+/// action carries the mode (`memory.backfill.apply` vs
+/// `memory.backfill.dry_run`), so a dry-run-only grant cannot satisfy the
+/// apply action. An empty or `apply`-omitted scope authorizes both modes;
+/// `before_ms` bounds the backfill to records at or before a cutoff.
+pub fn memory_backfill_scope_allows(
+    action: &str,
+    scope: &Value,
+    apply: bool,
+    before_ms: u64,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    let expected_action = if apply {
+        "memory.backfill.apply"
+    } else {
+        "memory.backfill.dry_run"
+    };
+    if action != expected_action {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
+}
+
 pub fn memory_compaction_scope_allows(
     action: &str,
     scope: &Value,
@@ -598,6 +671,14 @@ fn scope_allows_optional_before_ms(obj: &Map<String, Value>, before_ms: Option<u
     }
 }
 
+// A `None` actual against a bound scope is accepted here, unlike the bool/
+// before_ms/duplicate_risk helpers. This is deliberate and load-bearing: the
+// chain read paths gather candidate capabilities with only the dimensions known
+// at query time and defer per-item fields (payer/resource/cluster/batch_id) to
+// chain_receipt_allowed. Flipping these to deny would drop legitimately
+// field-narrowed grants at the gather stage. Callers must therefore pass the real
+// runtime value for any dimension they intend to enforce here — e.g. covenantd
+// passes the environment mint, which receipts carry no field for.
 fn scope_allows_optional_limit(obj: &Map<String, Value>, actual: Option<usize>) -> bool {
     match obj.get("limit") {
         Some(value) => actual
@@ -676,6 +757,24 @@ fn validate_tool_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Per
 }
 
 fn validate_memory_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    // memory.backfill.* binds neither tiers nor record_id: the mutator applies
+    // to every record the planner classifies, so accepting these fields at
+    // grant time would silently mis-grant — memory_backfill_scope_allows
+    // ignores them at dispatch, leaving the grantor's intent unenforced.
+    if action.starts_with("memory.backfill.") {
+        if obj.contains_key("tiers") {
+            return Err(invalid_scope(
+                action,
+                "tiers is not allowed on memory.backfill scopes",
+            ));
+        }
+        if obj.contains_key("record_id") {
+            return Err(invalid_scope(
+                action,
+                "record_id is not allowed on memory.backfill scopes",
+            ));
+        }
+    }
     optional_string_array(action, obj, "tiers", &["working", "episodic", "longterm"])?;
     optional_string_or_null(action, obj, "record_id")?;
     optional_non_negative_integer_or_null(action, obj, "before_ms")?;
@@ -724,6 +823,15 @@ fn validate_chain_scope(action: &str, obj: &Map<String, Value>) -> Result<(), Pe
         &["compute", "memory", "tool", "message", "registration"],
     )?;
     optional_non_empty_string_or_null(action, obj, "batch_id")?;
+    Ok(())
+}
+
+fn validate_settlement_scope(
+    action: &str,
+    obj: &Map<String, Value>,
+) -> Result<(), PermissionError> {
+    optional_bool(action, obj, "apply")?;
+    optional_non_negative_integer_or_null(action, obj, "before_ms")?;
     Ok(())
 }
 
@@ -1559,6 +1667,13 @@ mod tests {
             ),
             "chain.* prefix must route to ScopeNamespace::Chain — the chain validator carries the load-bearing resource/mint/cluster/payer_pubkey_b58 contract for settlement audit",
         );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("settlement.backfill.apply"),
+                Some(ScopeNamespace::Settlement)
+            ),
+            "settlement.* prefix must route to ScopeNamespace::Settlement — a dropped arm sends settlement.backfill.* through the unknown-action fallthrough, where validate_scope no-ops and a junk scope is accepted at grant time on a destructive mutation gate",
+        );
 
         // Unknown-action fallthrough: an action without any documented
         // prefix must return None so validate_scope can pass it
@@ -1671,6 +1786,14 @@ mod tests {
                     "batch_id": null
                 }),
             ),
+            (
+                "settlement.backfill.apply",
+                serde_json::json!({
+                    "version": 1,
+                    "apply": true,
+                    "before_ms": null
+                }),
+            ),
         ];
 
         for (action, scope) in cases {
@@ -1740,6 +1863,14 @@ mod tests {
         assert_invalid_scope(
             "chain.flush",
             serde_json::json!({ "version": 1, "batch_id": "" }),
+        );
+        assert_invalid_scope(
+            "settlement.backfill.apply",
+            serde_json::json!({ "version": 1, "apply": "yes" }),
+        );
+        assert_invalid_scope(
+            "settlement.backfill.apply",
+            serde_json::json!({ "version": 1, "before_ms": -1 }),
         );
     }
 
@@ -1849,6 +1980,97 @@ mod tests {
             "memory.write",
             serde_json::json!({ "version": 1, "before_ms": -1 }),
         );
+    }
+
+    #[test]
+    fn validate_memory_scope_rejects_tiers_on_memory_backfill() {
+        // memory_backfill_scope_allows ignores tiers at dispatch; accepting
+        // them at grant time would mis-grant a tier-pinned capability that
+        // silently backfills every tier. Reject at validate_memory_scope.
+        assert_invalid_scope(
+            "memory.backfill.apply",
+            serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        );
+        assert_invalid_scope(
+            "memory.backfill.dry_run",
+            serde_json::json!({ "version": 1, "tiers": ["working", "episodic"] }),
+        );
+    }
+
+    #[test]
+    fn validate_memory_scope_rejects_record_id_on_memory_backfill() {
+        // Same shape-vs-dispatch asymmetry as tiers: the predicate ignores
+        // record_id, so a per-record grant would silently authorize a
+        // batch backfill instead of pinning to one record.
+        assert_invalid_scope(
+            "memory.backfill.apply",
+            serde_json::json!({ "version": 1, "record_id": "a1b2c3" }),
+        );
+        assert_invalid_scope(
+            "memory.backfill.dry_run",
+            serde_json::json!({ "version": 1, "record_id": null }),
+        );
+    }
+
+    #[test]
+    fn validate_memory_scope_pins_backfill_prefix_does_not_overfire_on_lookalikes() {
+        // The reject triggers on the "memory.backfill." prefix (trailing
+        // dot). A future namespace neighbor like memory.backfillextra.* —
+        // or memory.backfill on its own with no sub-action — must NOT
+        // inherit the reject, so the codebase is not constrained against
+        // future namespace growth. Today neither action exists; this is a
+        // boundary pin against an accidental starts_with("memory.backfill")
+        // (no trailing dot) regression.
+        assert!(validate_scope(
+            "memory.backfillextra.apply",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.backfill",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_memory_scope_keeps_tiers_and_record_id_on_other_memory_actions() {
+        // Regression guard: the backfill-prefix reject must not leak into
+        // the sibling memory.* actions. memory.read, memory.write,
+        // memory.repair, memory.compact, memory.purge all legitimately bind
+        // tiers and/or record_id.
+        assert!(validate_scope(
+            "memory.read",
+            &serde_json::json!({ "version": 1, "tiers": ["working"] }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.repair.apply",
+            &serde_json::json!({ "version": 1, "record_id": "abc-123" }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.compact.apply",
+            &serde_json::json!({ "version": 1, "tiers": ["episodic"], "record_id": null }),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_memory_scope_accepts_apply_and_before_ms_on_memory_backfill() {
+        // Positive case: the fields memory_backfill_scope_allows actually
+        // consumes (apply, before_ms) must stay accepted at grant time.
+        assert!(validate_scope(
+            "memory.backfill.apply",
+            &serde_json::json!({ "version": 1, "apply": true, "before_ms": 1_000 }),
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.backfill.dry_run",
+            &serde_json::json!({ "version": 1, "apply": false, "before_ms": null }),
+        )
+        .is_ok());
+        assert!(validate_scope("memory.backfill.apply", &serde_json::json!({})).is_ok());
     }
 
     #[test]
@@ -2903,6 +3125,231 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
+    fn settlement_backfill_scope_allows_apply_and_before_ms() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "apply": true,
+            "before_ms": 1_000
+        });
+        assert!(
+            settlement_backfill_scope_allows("settlement.backfill.apply", &scope, true, 999)
+                .unwrap()
+        );
+        // Past the recency bound -> denied.
+        assert!(!settlement_backfill_scope_allows(
+            "settlement.backfill.apply",
+            &scope,
+            true,
+            1_001
+        )
+        .unwrap());
+        // A scope pinned apply:true cannot satisfy the dry_run dispatch.
+        assert!(!settlement_backfill_scope_allows(
+            "settlement.backfill.dry_run",
+            &scope,
+            false,
+            999
+        )
+        .unwrap());
+        // The apply arg derives the expected action; passing apply:false against
+        // the apply action string mismatches and is denied.
+        assert!(
+            !settlement_backfill_scope_allows("settlement.backfill.apply", &scope, false, 999)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn settlement_backfill_scope_allows_pins_action_mismatch_dry_run_only_grant_and_unscoped_grants(
+    ) {
+        // Unrouted action string: validate_scope no-ops, the action-mismatch
+        // check returns Ok(false) before the scope shape matters.
+        assert!(
+            !settlement_backfill_scope_allows("settlement", &serde_json::json!([]), true, 0)
+                .unwrap()
+        );
+
+        // The core least-privilege property: a dry-run-only grant (apply:false)
+        // cannot satisfy the apply action but does satisfy dry_run.
+        let dry_run_only = serde_json::json!({ "version": 1, "apply": false });
+        assert!(!settlement_backfill_scope_allows(
+            "settlement.backfill.apply",
+            &dry_run_only,
+            true,
+            0
+        )
+        .unwrap());
+        assert!(settlement_backfill_scope_allows(
+            "settlement.backfill.dry_run",
+            &dry_run_only,
+            false,
+            0
+        )
+        .unwrap());
+
+        // Empty scope authorizes both modes at any cutoff.
+        let empty = serde_json::json!({});
+        assert!(
+            settlement_backfill_scope_allows("settlement.backfill.apply", &empty, true, 0).unwrap()
+        );
+        assert!(settlement_backfill_scope_allows(
+            "settlement.backfill.dry_run",
+            &empty,
+            false,
+            u64::MAX
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn settlement_backfill_scope_allows_pins_validate_scope_version_error_propagation() {
+        let err = settlement_backfill_scope_allows(
+            "settlement.backfill.apply",
+            &serde_json::json!({ "version": 0 }),
+            true,
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
+    fn settlement_backfill_scope_allows_pins_before_ms_equal_boundary_and_null_unbounded() {
+        let bound = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        // before_ms uses <= (inclusive), unlike memory.repair's strict <.
+        assert!(
+            settlement_backfill_scope_allows("settlement.backfill.apply", &bound, true, 1_000)
+                .unwrap()
+        );
+        assert!(!settlement_backfill_scope_allows(
+            "settlement.backfill.apply",
+            &bound,
+            true,
+            1_001
+        )
+        .unwrap());
+
+        let null_bound = serde_json::json!({ "version": 1, "before_ms": null });
+        assert!(settlement_backfill_scope_allows(
+            "settlement.backfill.apply",
+            &null_bound,
+            true,
+            u64::MAX
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn settlement_backfill_scope_allows_pins_apply_omitted_authorizes_both_modes() {
+        // scope_allows_apply returns true when the apply key is absent, so a
+        // version-1 scope with no apply key authorizes both modes. A future
+        // tightening that flipped this default would fail loud here.
+        let no_apply = serde_json::json!({ "version": 1 });
+        assert!(
+            settlement_backfill_scope_allows("settlement.backfill.apply", &no_apply, true, 0)
+                .unwrap()
+        );
+        assert!(settlement_backfill_scope_allows(
+            "settlement.backfill.dry_run",
+            &no_apply,
+            false,
+            0
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_apply_and_before_ms() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "apply": true,
+            "before_ms": 1_000
+        });
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &scope, true, 999).unwrap());
+        // Past the recency bound -> denied.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &scope, true, 1_001).unwrap()
+        );
+        // A scope pinned apply:true cannot satisfy the dry_run dispatch.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.dry_run", &scope, false, 999).unwrap()
+        );
+        // The apply arg derives the expected action; passing apply:false against
+        // the apply action string mismatches and is denied.
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &scope, false, 999).unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_action_mismatch_dry_run_only_grant_and_unscoped_grants() {
+        // Unrouted action string: validate_scope no-ops, the action-mismatch
+        // check returns Ok(false) before the scope shape matters.
+        assert!(!memory_backfill_scope_allows("memory", &serde_json::json!([]), true, 0).unwrap());
+
+        // The core least-privilege property: a dry-run-only grant (apply:false)
+        // cannot satisfy the apply action but does satisfy dry_run.
+        let dry_run_only = serde_json::json!({ "version": 1, "apply": false });
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &dry_run_only, true, 0).unwrap()
+        );
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &dry_run_only, false, 0)
+                .unwrap()
+        );
+
+        // Empty scope authorizes both modes at any cutoff.
+        let empty = serde_json::json!({});
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &empty, true, 0).unwrap());
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &empty, false, u64::MAX)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_validate_scope_version_error_propagation() {
+        let err = memory_backfill_scope_allows(
+            "memory.backfill.apply",
+            &serde_json::json!({ "version": 0 }),
+            true,
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(&err, PermissionError::InvalidScope(msg) if msg.contains("version")));
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_before_ms_equal_boundary_and_null_unbounded() {
+        let bound = serde_json::json!({ "version": 1, "before_ms": 1_000 });
+        // before_ms uses <= (inclusive), unlike memory.repair's strict <.
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.apply", &bound, true, 1_000).unwrap()
+        );
+        assert!(
+            !memory_backfill_scope_allows("memory.backfill.apply", &bound, true, 1_001).unwrap()
+        );
+
+        let null_bound = serde_json::json!({ "version": 1, "before_ms": null });
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.apply", &null_bound, true, u64::MAX)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn memory_backfill_scope_allows_pins_apply_omitted_authorizes_both_modes() {
+        // scope_allows_apply returns true when the apply key is absent, so a
+        // version-1 scope with no apply key authorizes both modes. A future
+        // tightening that flipped this default would fail loud here.
+        let no_apply = serde_json::json!({ "version": 1 });
+        assert!(memory_backfill_scope_allows("memory.backfill.apply", &no_apply, true, 0).unwrap());
+        assert!(
+            memory_backfill_scope_allows("memory.backfill.dry_run", &no_apply, false, 0).unwrap()
+        );
     }
 
     #[test]

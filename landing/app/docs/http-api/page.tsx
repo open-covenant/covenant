@@ -139,15 +139,19 @@ GET /version
       "protocol": "covenant.ipc",
       "version": 1,
       "min_supported": 1,
-      "max_supported": 1
+      "max_supported": 2
     }
   }`}</code>
       </pre>
       <p>
         <code>/version</code> mirrors the unauthenticated{" "}
-        <code>protocol_info</code> IPC probe. The response is intentionally
-        minimal and stable for protocol version 1; adding required fields
-        implies a protocol version bump.
+        <code>protocol_info</code> IPC probe. The response shape is stable
+        across protocol versions 1 and 2; <code>max_supported</code>
+        advertises the highest version the daemon understands, while the
+        top-level <code>version</code> reflects the negotiated wire version
+        (v1 unless a client opts into v2 streaming per request). Adding
+        required fields to the shape implies a future protocol version
+        bump.
       </p>
 
       <h3>Intents</h3>
@@ -215,12 +219,30 @@ POST /memory/repair
   Body: MemoryRepairRequest    # see /memory for command shape
 POST /memory/compact
   Body: MemoryCompactionRequest
+POST /memory/records/backfill
+  Body: { "dry_run": true }    # repair legacy memory-receipt correlations
 
 → 200 { "kind": "memories", "records": [ ... ] }
    or  { "kind": "memory_purged", "purged": 42 }
    or  { "kind": "memory_repaired", ... }
-   or  { "kind": "memory_compacted", ... }`}</code>
+   or  { "kind": "memory_compacted", ... }
+   or  { "schema": "covenant.memory.backfill.v1",
+         "row_count": 7,
+         "savepoint_name": "memory_backfill_sp_001",
+         "dry_run": true }`}</code>
       </pre>
+      <p>
+        <code>/memory/records/backfill</code> defaults to apply
+        (<code>dry_run: false</code>); pass <code>dry_run: true</code> to
+        plan without mutating. The <code>savepoint_name</code> is always a
+        non-null string — the daemon allocates one even in dry-run mode so
+        consumers can correlate planning runs against later mutation runs.
+        Apply wraps the row updates in a SQLite SAVEPOINT so a per-row
+        failure rolls the entire batch back to zero rows changed. The
+        envelope uses the versioned schema discriminator
+        (<code>schema</code>, not <code>kind</code>) — see the IPC docs
+        for the full pin.
+      </p>
       <p>
         With <code>Accept: text/event-stream</code>,{" "}
         <code>GET /memory/recent</code> streams one{" "}
@@ -251,6 +273,28 @@ data: { "kind": "stream_end", "stream_id": "…" }`}</code>
         <code>{`GET /receipts/recent?limit=10&since_ms=1714938000000
 → 200 { "kind": "receipts", "receipts": [ ... ] }`}</code>
       </pre>
+
+      <h3>Settlement</h3>
+      <pre>
+        <code>{`POST /settlement/receipts/backfill
+  Body: { "dry_run": true }    # repair legacy settlement-receipt rows
+→ 200 { "schema":       "covenant.settlement.backfill.v1",
+        "row_count":    12,
+        "rollback_path": null,
+        "dry_run":      true }`}</code>
+      </pre>
+      <p>
+        <code>/settlement/receipts/backfill</code> defaults to apply
+        (<code>dry_run: false</code>); pass <code>dry_run: true</code> to
+        plan without mutating. The <code>rollback_path</code> is{" "}
+        <code>null</code> in dry-run mode and a filesystem path on the
+        daemon&apos;s local host once an apply pass writes its rollback
+        evidence sibling file. <code>scope_pubkey</code> is reserved for
+        a future delegated mode and is not yet wired — a request that
+        sets it is rejected before the capability check. The envelope
+        uses the versioned schema discriminator (<code>schema</code>,
+        not <code>kind</code>) — see the IPC docs for the full pin.
+      </p>
 
       <h3>Budget</h3>
       <pre>

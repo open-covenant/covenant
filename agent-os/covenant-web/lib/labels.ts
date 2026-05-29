@@ -9,7 +9,7 @@
 // expand on each row, plus the Developer mode toggle in the sidebar which
 // re-surfaces technical names beside the friendly labels.
 
-import type { AuditEvent, AuditKind } from "./api";
+import type { AgentEvent, AuditEvent, AuditKind } from "./api";
 import { formatAgentId, formatHashStatus, formatPeerName, shortHash } from "./format";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -222,6 +222,19 @@ export type EventLabel = {
   intentId: string | null;
 };
 
+function friendlyTool(tool: string): string {
+  const m: Record<string, string> = {
+    write_file: "Wrote a file",
+    edit_file: "Edited a file",
+    read_file: "Read a file",
+    bash: "Ran a command",
+    terminal: "Ran a command",
+    web: "Fetched from the web",
+    approval: "Awaiting approval",
+  };
+  return m[tool] ?? `Used ${tool}`;
+}
+
 export function eventLabel(event: AuditEvent): EventLabel {
   const kind = event.kind;
   switch (kind.type) {
@@ -234,6 +247,38 @@ export function eventLabel(event: AuditEvent): EventLabel {
           ? `“${truncate(kind.intent_text, 80)}”. ${formatHashStatus(kind.result_hash_hex, "Result")}.`
           : `“${truncate(kind.intent_text, 80)}”. No agent is set up to handle this kind of task — Covenant returned a default response.`,
         tone: kind.matched_agent ? "ok" : "warn",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_tool_invoked":
+      return {
+        headline: friendlyTool(kind.tool),
+        body: "The agent took a step.",
+        tone: "neutral",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_tool_completed":
+      return {
+        headline: `${friendlyTool(kind.tool)}${kind.error ? " — failed" : ""}`,
+        body: `${kind.error ? "Failed" : "Done"} in ${kind.duration_ms} ms.`,
+        tone: kind.error ? "danger" : "ok",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_approval_requested":
+      return {
+        headline: "Awaiting approval",
+        body: "The agent paused for a decision.",
+        tone: "warn",
+        intentId: kind.intent_id,
+      };
+
+    case "hermes_approval_resolved":
+      return {
+        headline: "Approval answered",
+        body: `Chose “${kind.choice}”.`,
+        tone: "neutral",
         intentId: kind.intent_id,
       };
 
@@ -385,6 +430,17 @@ export function eventLabel(event: AuditEvent): EventLabel {
         intentId: null,
       };
   }
+
+  // Fallback for a kind not in this build's typed union (e.g. a newer daemon
+  // emits an audit kind this web build predates) — render a generic label
+  // instead of returning undefined and crashing every caller.
+  const t = String((event.kind as { type?: unknown }).type ?? "");
+  return {
+    headline: t ? t.replace(/_/g, " ") : "Activity",
+    body: "",
+    tone: "neutral",
+    intentId: null,
+  };
 }
 
 function formatActionList(actions: string[]): string {
@@ -418,10 +474,66 @@ function truncate(value: string, length: number): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// AgentEvent (live SSE) label vocabulary. Mirrors `eventLabel` for audit
+// events so the trace timeline can render an in-flight step the same way
+// it later renders the persisted audit row, with no jarring transition
+// when the SSE-pushed preview is replaced by the audit-chain redaction.
+
+export function agentEventLabel(event: AgentEvent): EventLabel {
+  switch (event.type) {
+    case "reasoning":
+      return {
+        headline: "Thinking",
+        body: event.summary ? truncate(event.summary, 160) : "The agent is reasoning.",
+        tone: "neutral",
+        intentId: null,
+      };
+    case "tool_call":
+      return {
+        headline: friendlyTool(event.tool),
+        body: event.preview ? truncate(event.preview, 120) : "The agent took a step.",
+        tone: "neutral",
+        intentId: null,
+      };
+    case "tool_result":
+      return {
+        headline:
+          event.tool === "approval"
+            ? "Approval resolved"
+            : `${friendlyTool(event.tool)}${event.error ? " — failed" : ""}`,
+        body:
+          event.tool === "approval"
+            ? "The agent received an answer and continued."
+            : `${event.error ? "Failed" : "Done"} in ${event.duration_ms} ms.`,
+        tone: event.error ? "danger" : "ok",
+        intentId: null,
+      };
+    case "file_write":
+      return {
+        headline: "Wrote a file",
+        body: `${event.path} · ${event.bytes} bytes.`,
+        tone: "ok",
+        intentId: null,
+      };
+  }
+}
+
+export const AGENT_EVENT_PILL_LABELS: Record<AgentEvent["type"], string> = {
+  reasoning: "Thinking",
+  tool_call: "Step",
+  tool_result: "Step",
+  file_write: "File",
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Audit kind → short pill label used in feed columns.
 
 export const KIND_PILL_LABELS: Record<AuditKind["type"], string> = {
   intent_dispatched: "Task",
+  hermes_tool_invoked: "Step",
+  hermes_tool_completed: "Step",
+  hermes_approval_requested: "Approval",
+  hermes_approval_resolved: "Approval",
   capability_check: "Permission check",
   capability_granted: "Permission granted",
   intent_ignored: "Task ignored",

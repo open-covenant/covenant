@@ -22,7 +22,8 @@ export default function CliPage() {
                                      agent's required capabilities (plus
                                      memory.write); idempotent — already
                                      granted actions are skipped.
-  intent [--json] <text>             Submit an intent and print the result.
+  intent [--json] [--stream] <text>  Submit an intent and print the result;
+                                     --stream opts into v2 streaming response framing.
   intents resume (<intent-id>|latest)
         [--json]                     Re-dispatch a budget-rejected intent.
   ping [--json]                      Check the daemon is responsive.
@@ -30,7 +31,8 @@ export default function CliPage() {
                                      (pre-auth; no operator token required).
 
   memory recent [--tier T] [-n N]
-        [--json]                     List recent memory records.
+        [--json] [--stream]          List recent memory records;
+                                     --stream opts into v2 streaming response framing.
   memory search <query>
         [--tier T] [-n N]
         [--min-relevance F] [--json] Cosine-similarity search via embeddings;
@@ -79,6 +81,51 @@ export default function CliPage() {
                                      Batch local receipts into a receipt root.
   chain receipt-batches [-n N] [--json]
                                      List local receipt batches.
+  chain register-agent
+        --program-id BASE58
+        --agent-key BASE58
+        --metadata-hash HEX64
+        --capability-hash HEX64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     register_agent transaction with the
+                                     operator keypair.
+  chain stake
+        --program-id BASE58
+        --agent-key BASE58
+        --owner-covnt BASE58
+        --stake-vault BASE58
+        --amount U64
+        --lock-until U64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     stake transaction with the operator
+                                     keypair.
+  chain buy-credits
+        --program-id BASE58
+        --owner-covnt BASE58
+        --treasury BASE58
+        --amount-covnt U64
+        [--keypair PATH]
+        [--cluster NAME]
+        [--rpc-url URL]
+        [--confirm-timeout-ms N]
+        [--json]                     Sign and submit a settlement
+                                     buy_credits transaction with the
+                                     operator keypair; --treasury MUST
+                                     equal config.treasury (fetch via
+                                     chain status if unknown).
+
+  settlement backfill-receipts
+        [--dry-run] [--json]         Repair legacy settlement-receipt
+                                     rows (--scope-pubkey reserved,
+                                     not yet supported).
 
   a2a status [-n N]
         [--min-lease-age-ms N]
@@ -108,11 +155,12 @@ export default function CliPage() {
   verify [--window N] [--json]       Cross-check audit log vs other state.
 
   audit recent [-n N]
-        [--since-ms <epoch_ms>] [--json]
-                                     List recent audit events as JSONL
+        [--since-ms <epoch_ms>]
+        [--json] [--stream]          List recent audit events as JSONL
                                      or one JSON envelope;
                                      --since-ms drops events older than epoch
-                                     before --limit is applied.
+                                     before --limit is applied;
+                                     --stream opts into v2 streaming response framing.
   audit verify [--json]              Verify the local audit hash-chain.
   audit purge
         (--before-ms M
@@ -223,10 +271,16 @@ echo (no agent matched): summarise recent work on agent memory`}</code>
 {"kind":"intents_resume","ok":false,"mode":"latest","intent_id":"...","error":{"code":"daemon_error","message":"budget exhausted; try again later"}}`}</code>
       </pre>
 
+      <h3>Resume a checkpointed intent successfully</h3>
+      <pre>
+        <code>{`$ covenant intents resume latest --json
+{"kind":"intents_resume","ok":true,"mode":"latest","intent_id":"...","status":"ok","text":"...","sources":[],"settlement":null}`}</code>
+      </pre>
+
       <h3>Inspect daemon protocol metadata</h3>
       <pre>
         <code>{`$ covenant version
-{"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":1}`}</code>
+{"protocol":"covenant.ipc","version":1,"min_supported":1,"max_supported":2}`}</code>
       </pre>
 
       <h3>Probe daemon health</h3>
@@ -394,6 +448,18 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
 {"kind":"tool_result","name":"echo","content":[{"type":"text","text":"hello"}],"is_error":false}`}</code>
       </pre>
 
+      <h3>Repair legacy settlement receipts</h3>
+      <pre>
+        <code>{`$ covenant settlement backfill-receipts --dry-run --json
+{"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
+      </pre>
+
+      <h3>Repair legacy memory-receipt correlations</h3>
+      <pre>
+        <code>{`$ covenant memory backfill-receipt-correlation --dry-run --json
+{"schema":"covenant.memory.backfill.v1","row_count":7,"savepoint_name":"memory_backfill_sp_001","dry_run":true}`}</code>
+      </pre>
+
       <h2>Environment</h2>
       <table>
         <thead>
@@ -410,7 +476,8 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
             </td>
             <td>
               Root of all on-disk state — socket, identity, memory,
-              receipts, audit, capabilities, agents.
+              receipts, audit, capabilities, peers, budget, a2a,
+              agents, and the runtime/gvisor scratch directory.
             </td>
             <td>
               <code>$HOME/.covenant</code>

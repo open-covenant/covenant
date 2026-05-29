@@ -1,7 +1,10 @@
-//! Covenant daemon library — Phase 0/1/2 listener wired to router + runner +
-//! memory + settlement + audit + capabilities. Per-dispatch we write a
-//! working-tier memory record, a settlement receipt, an audit event, AND a
-//! capability check (audit-only — observe-then-enforce migration path).
+//! Covenant daemon library. Local-first coordination layer exposing intent
+//! dispatch, agent runtime, memory, identity, permissions, audit, and
+//! settlement over a Unix socket and an HTTP gateway. Per-dispatch we
+//! write a working-tier memory record, a settlement receipt, an audit
+//! event, and a `CapabilityCheck` audit row that records the dispatch
+//! attribution alongside the dispatch-time scope predicates enforced in
+//! [`covenant_permissions`].
 
 #![deny(unsafe_code)]
 
@@ -25,7 +28,7 @@ use covenant_ipc::{
 };
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
-use covenant_memory::{IgnoreSet, MemoryStore};
+use covenant_memory::{memory_receipt_backfill_correlations, IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 #[cfg(test)]
 use covenant_permissions::verify_with_clock;
@@ -34,19 +37,22 @@ use covenant_permissions::{
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
     capabilities_purge_scope_allows as permission_capabilities_purge_scope_allows,
     chain_scope_allows as permission_chain_scope_allows,
+    memory_backfill_scope_allows as permission_memory_backfill_scope_allows,
     memory_compaction_scope_allows as permission_memory_compaction_scope_allows,
     memory_purge_scope_allows as permission_memory_purge_scope_allows,
     memory_read_record_scope_allows as permission_memory_read_record_scope_allows,
     memory_read_scope_allows as permission_memory_read_scope_allows,
     memory_repair_scope_allows as permission_memory_repair_scope_allows,
     memory_write_scope_allows as permission_memory_write_scope_allows,
-    peer_scope_allows as permission_peer_scope_allows, sign as sign_capability,
-    tool_call_scope_allows as permission_tool_call_scope_allows, validate_scope,
-    verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore, ChainScopeRequest,
-    MemoryCompactionScopeRequest, PeerScopeRequest,
+    peer_scope_allows as permission_peer_scope_allows,
+    settlement_backfill_scope_allows as permission_settlement_backfill_scope_allows,
+    sign as sign_capability, tool_call_scope_allows as permission_tool_call_scope_allows,
+    validate_scope, verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore,
+    ChainScopeRequest, MemoryCompactionScopeRequest, PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
+use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
     build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
     Settlement,
@@ -175,7 +181,7 @@ pub fn runtime_runner_from_config(
 }
 
 /// Gateway connection for the Hermes runtime backend
-/// (https://github.com/NousResearch/hermes-agent). Wraps the API base URL
+/// (<https://github.com/NousResearch/hermes-agent>). Wraps the API base URL
 /// and an optional bearer token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesGatewayConfig {
@@ -192,6 +198,16 @@ pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
         std::env::var("HERMES_API_BASE_URL").ok().as_deref(),
         std::env::var("HERMES_API_KEY").ok().as_deref(),
     )
+}
+
+/// Resolve the Synapse Agent Protocol bridge config from the same
+/// `COVENANT_SAP_*` environment the worker reads, so daemon and worker
+/// stay consistent. The returned config may be `enabled: false`
+/// (default); callers should still construct a [`SapBridge`] from it —
+/// disabled-bridge methods return `BridgeDisabledError` without
+/// touching the network.
+pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
+    SapBridgeConfig::from_env(std::env::vars())
 }
 
 pub fn hermes_gateway_config_from_values(
@@ -216,11 +232,20 @@ pub fn runtime_runner_composite(
     local: &RuntimeRunnerConfig,
     hermes: Option<&HermesGatewayConfig>,
     tracker: Arc<covenant_runtime::SubprocessTracker>,
+    events: Option<covenant_runtime::RuntimeEventSink>,
 ) -> Arc<dyn Runner> {
     let local_runner = runtime_runner_from_config(local, tracker);
-    let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(|cfg| {
+    let hermes_runner: Option<Arc<dyn Runner>> = hermes.and_then(move |cfg| {
         match covenant_runtime::HermesRunner::new(cfg.base_url.clone(), cfg.api_key.clone()) {
-            Ok(r) => Some(Arc::new(r) as Arc<dyn Runner>),
+            Ok(r) => {
+                // Wire the live event sink so the gateway's SSE trace stream
+                // folds into the audit chain as it arrives, not all at once.
+                let r = match events {
+                    Some(tx) => r.with_event_sink(tx),
+                    None => r,
+                };
+                Some(Arc::new(r) as Arc<dyn Runner>)
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -362,6 +387,16 @@ fn runtime_trace_to_audit_kind(
             choice,
             resolved,
         },
+        T::HermesFileWritten {
+            run_id,
+            path,
+            bytes,
+        } => AuditKind::HermesFileWritten {
+            intent_id,
+            run_id,
+            path,
+            bytes,
+        },
     }
 }
 
@@ -472,6 +507,39 @@ pub fn spawn_projection_tick_driver(
                     "budget projection tick preempted in-flight intents"
                 );
             }
+        }
+    })
+}
+
+/// Drains runtime traces the Hermes runner streams live and writes each into
+/// the audit chain the moment it arrives, so the task page shows the coding
+/// step-trail building in real time instead of all at once when the run ends.
+/// The matching `runtime_events` returned by the runner are empty in this mode,
+/// so the end-of-dispatch fold writes nothing (no double rows).
+///
+/// Each trace is also published to `broadcast_tx`, a fan-out channel any
+/// number of HTTP subscribers (the `/intents/:id/events` SSE endpoint, the
+/// operator UI) can join via `subscribe()` to receive a live copy without
+/// re-polling the audit log. `broadcast.send` returns `Err` only when there
+/// are no receivers — that's the steady state when nobody is watching, and
+/// it must be tolerated, not logged.
+pub fn spawn_runtime_event_drainer(
+    server: Server,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<covenant_runtime::StreamedTrace>,
+    broadcast_tx: tokio::sync::broadcast::Sender<covenant_runtime::StreamedTrace>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(st) = rx.recv().await {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: st.issuer.clone(),
+                kind: runtime_trace_to_audit_kind(st.intent_id, st.trace.clone()),
+            };
+            server.record_peer_event(&st.issuer, event).await;
+            // Best-effort live broadcast: subscribers (the SSE endpoint)
+            // get a copy; no subscribers = no-op.
+            let _ = broadcast_tx.send(st);
         }
     })
 }
@@ -702,6 +770,84 @@ fn a2a_entry_matches_state(
 /// distinct so a future `grep` resolves cleanly.
 const PEER_MATCH_LIMIT: usize = 16;
 
+/// Result of an async (hermes) dispatch, polled by the web client while a
+/// long coding run is in flight. Heavy builds (scaffold + npm install +
+/// compile) outlast the front-door LB's idle window, so the submit verb
+/// returns `status:"running"` immediately and the run finishes in a spawned
+/// task that writes its outcome here.
+#[derive(Clone)]
+struct IntentOutcome {
+    status: String,
+    intent_text: String,
+    matched_agent: Option<String>,
+    text: String,
+    result_hash_hex: Option<String>,
+    updated_ms: u64,
+    /// Workspace files captured from the run (for the UI file tree / preview).
+    /// Set via `set_files` during dispatch; `complete` leaves them untouched.
+    files: Vec<covenant_runtime::BuildFile>,
+}
+
+#[derive(Default)]
+struct OutcomeStore {
+    map: std::collections::HashMap<Uuid, IntentOutcome>,
+    order: std::collections::VecDeque<Uuid>,
+}
+
+impl OutcomeStore {
+    const CAP: usize = 512;
+
+    fn insert_running(&mut self, id: Uuid, intent_text: &str, matched_agent: Option<String>) {
+        self.map.insert(
+            id,
+            IntentOutcome {
+                status: "running".into(),
+                intent_text: intent_text.to_string(),
+                matched_agent,
+                text: String::new(),
+                result_hash_hex: None,
+                updated_ms: epoch_ms(),
+                files: Vec::new(),
+            },
+        );
+        self.order.push_back(id);
+        while self.order.len() > Self::CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+
+    fn set_files(&mut self, id: Uuid, files: Vec<covenant_runtime::BuildFile>) {
+        if let Some(o) = self.map.get_mut(&id) {
+            o.files = files;
+            o.updated_ms = epoch_ms();
+        }
+    }
+
+    fn complete(&mut self, id: Uuid, resp: &Response) {
+        let Some(o) = self.map.get_mut(&id) else {
+            return;
+        };
+        match resp {
+            Response::IntentResult { status, text, .. } => {
+                o.status = status.clone();
+                o.text = text.clone();
+                o.result_hash_hex = Some(hash_hex(text.as_bytes()));
+            }
+            Response::Error { message } => {
+                o.status = "error".into();
+                o.text = message.clone();
+            }
+            _ => {
+                o.status = "error".into();
+                o.text = "unexpected dispatch response".into();
+            }
+        }
+        o.updated_ms = epoch_ms();
+    }
+}
+
 #[derive(Clone)]
 pub struct Server {
     router: Arc<Router>,
@@ -725,9 +871,9 @@ pub struct Server {
     /// `Uuid::new_v4()` connection_id per accepted connection in
     /// `serve()` and the handler's `PurgeOnDrop` guard calls
     /// `purge_connection` on every exit path so a client disconnect
-    /// cleans up its in-flight streams. No production code path
-    /// currently writes to this tracker — per-verb streaming dispatch
-    /// slices will fill it in.
+    /// cleans up its in-flight streams. The per-verb streaming dispatch
+    /// forks (ADR 0010 slices 3.d–5.d) register an entry per opened
+    /// stream and unregister it on stream end or error.
     stream_tracker: Arc<stream_tracker::StreamTracker>,
     /// Daemon-shared in-flight subprocess tracker. `SubprocessRunner`
     /// and `GvisorRunner` register `intent_id → TrackedSubprocess`
@@ -754,6 +900,17 @@ pub struct Server {
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
     hyre: Option<Arc<hyre::HyreState>>,
+    /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
+    /// has wired it in (the default); a built [`SapBridge`] when
+    /// `Server::with_sap_bridge` was called at boot. Handlers that
+    /// need on-chain identity / attestation / discovery read this and
+    /// surface `BridgeDisabledError` when it's absent or
+    /// `enabled = false`.
+    sap_bridge: Option<SapBridge>,
+    /// Outcomes of in-flight async (hermes) dispatches, keyed by intent id.
+    /// `std::sync::Mutex` (not the tokio one used elsewhere) because the
+    /// critical section is a trivial map mutation never held across `.await`.
+    intent_outcomes: Arc<std::sync::Mutex<OutcomeStore>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -794,13 +951,34 @@ impl Server {
             home: None,
             x402_dispatch: None,
             hyre: None,
+            sap_bridge: None,
+            intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
+    }
+
+    /// JSON snapshot of an async dispatch's current state, or `None` if the
+    /// id is unknown (synchronous intent, evicted, or never submitted here).
+    pub fn intent_outcome(&self, id: &Uuid) -> Option<serde_json::Value> {
+        let store = self.intent_outcomes.lock().ok()?;
+        let o = store.map.get(id)?;
+        Some(serde_json::json!({
+            "kind": "intent_outcome",
+            "intent_id": id,
+            "status": o.status,
+            "intent_text": o.intent_text,
+            "matched_agent": o.matched_agent,
+            "text": o.text,
+            "result_hash_hex": o.result_hash_hex,
+            "updated_ms": o.updated_ms,
+            "files": o.files,
+        }))
     }
 
     /// Returns a clone of the shared in-flight stream tracker. Tests
     /// hold this Arc to pre-register synthetic entries and assert the
-    /// connection handler's purge-on-close behavior; production callers
-    /// will use it once per-verb streaming dispatch lands.
+    /// connection handler's purge-on-close behavior. Production dispatch
+    /// writes through the `stream_tracker` field directly; this accessor
+    /// is reserved for a future operator-facing in-flight-streams snapshot.
     pub fn stream_tracker(&self) -> Arc<stream_tracker::StreamTracker> {
         self.stream_tracker.clone()
     }
@@ -830,7 +1008,7 @@ impl Server {
         self
     }
 
-    /// Bind a `$COVENANT_HOME` path so [`Server::rotate_operator_token`]
+    /// Bind a `$COVENANT_HOME` path so `Server::rotate_operator_token`
     /// knows where to read the current token and where to rewrite it.
     /// Daemon `main` calls this once after [`Server::new`]. Without it,
     /// `RotateOperatorToken` returns `Response::Error`.
@@ -861,6 +1039,85 @@ impl Server {
     pub fn with_budget_checkpoints(mut self, store: Arc<JsonlPauseCheckpointStore>) -> Self {
         self.budget_checkpoints = Some(store);
         self
+    }
+
+    /// Attach an opt-in Synapse Agent Protocol bridge. Daemon `main`
+    /// calls this once at boot when [`sap_bridge_config_from_env`]
+    /// resolves an enabled config; otherwise the bridge stays `None`
+    /// and SAP-backed handlers surface `BridgeDisabledError`.
+    pub fn with_sap_bridge(mut self, bridge: SapBridge) -> Self {
+        self.sap_bridge = Some(bridge);
+        self
+    }
+
+    /// Returns the attached SAP bridge, if any. Handlers should treat
+    /// `None` the same as a disabled bridge — a soft no-op surfaced as
+    /// `BridgeDisabledError` to the caller.
+    pub fn sap_bridge(&self) -> Option<&SapBridge> {
+        self.sap_bridge.as_ref()
+    }
+
+    /// Resolve the SAP bridge status. Returns a disabled snapshot when
+    /// no bridge was wired in at boot — handlers must never panic on
+    /// `sap_bridge().is_none()`.
+    pub(crate) fn sap_status(&self) -> Response {
+        match self.sap_bridge.as_ref() {
+            Some(bridge) => {
+                let cfg = bridge.config();
+                Response::SapStatus {
+                    enabled: cfg.enabled,
+                    cluster: cfg.cluster.as_str().to_owned(),
+                    program_id: cfg.program_id.clone(),
+                    rpc_url: cfg.rpc_url.clone(),
+                    explorer_url: cfg.explorer_url.clone(),
+                    // Bridge config doesn't carry the keypair path; an
+                    // operator can read the daemon env directly. We
+                    // surface "configured" iff COVENANT_SAP_KEYPAIR is
+                    // set (the worker reads the same var).
+                    has_signer: std::env::var("COVENANT_SAP_KEYPAIR")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false),
+                }
+            }
+            None => Response::SapStatus {
+                enabled: false,
+                cluster: String::new(),
+                program_id: String::new(),
+                rpc_url: String::new(),
+                explorer_url: String::new(),
+                has_signer: false,
+            },
+        }
+    }
+
+    /// Publish an agent through the SAP bridge. Errors (disabled
+    /// bridge, RPC failure, missing signer, etc.) flatten onto
+    /// `Response::Error` with the bridge's own message so the CLI
+    /// renders them consistently with other failures.
+    pub(crate) async fn sap_publish_agent(&self, manifest_json: String) -> Response {
+        let Some(bridge) = self.sap_bridge.as_ref() else {
+            return Response::Error {
+                message: "sap bridge is not wired into this daemon".into(),
+            };
+        };
+        let manifest: covenant_sap_bridge::identity::AgentManifest =
+            match serde_json::from_str(&manifest_json) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("invalid manifest JSON: {e}"),
+                    }
+                }
+            };
+        match bridge.publish_agent(&manifest).await {
+            Ok(published) => Response::SapPublishedAgent {
+                agent_pda: published.agent_pda,
+                signature: published.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("sap publish_agent: {e}"),
+            },
+        }
     }
 
     /// Walk the router's registered agents and seed each one's budget
@@ -1051,10 +1308,10 @@ impl Server {
     async fn handle(&self, connection_id: Uuid, mut stream: UnixStream) -> Result<()> {
         // Drop guard: regardless of how this fn exits (success, error,
         // panic-unwinding), purge every StreamTracker entry the
-        // connection registered. No production code path writes to
-        // the tracker yet, so this is a no-op in v0; once per-verb
-        // streaming dispatch slices land it closes the
-        // disconnect-leaks-entries failure mode automatically.
+        // connection registered. The per-verb streaming dispatch forks
+        // register an entry while a stream is open, so this guard closes
+        // the disconnect-leaks-entries failure mode when a client drops
+        // mid-stream.
         struct PurgeOnDrop<'a> {
             tracker: &'a stream_tracker::StreamTracker,
             connection_id: Uuid,
@@ -1462,7 +1719,7 @@ impl Server {
             Request::SubmitIntent {
                 text,
                 prefer_stream: _,
-            } => self.dispatch_intent(text, peer).await,
+            } => self.dispatch_intent(Uuid::new_v4(), text, peer, true).await,
             Request::RecentMemory {
                 tier,
                 limit,
@@ -1472,6 +1729,10 @@ impl Server {
                 self.recent_receipts(limit, since_ms, peer).await
             }
             Request::ChainStatus => self.chain_status(),
+            Request::SapStatus => self.sap_status(),
+            Request::SapPublishAgent { manifest_json } => {
+                self.sap_publish_agent(manifest_json).await
+            }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::PayX402 {
@@ -1496,6 +1757,20 @@ impl Server {
                     peer,
                 )
                 .await
+            }
+            Request::BackfillSettlementReceipts {
+                dry_run,
+                scope_pubkey,
+            } => {
+                self.backfill_settlement_receipts(dry_run, scope_pubkey, peer)
+                    .await
+            }
+            Request::BackfillMemoryRecords {
+                dry_run,
+                scope_pubkey,
+            } => {
+                self.backfill_memory_records(dry_run, scope_pubkey, peer)
+                    .await
             }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
             Request::GrantCapability {
@@ -3236,8 +3511,53 @@ impl Server {
         }
     }
 
-    async fn dispatch_intent(&self, text: String, peer: &AgentId) -> Response {
-        let intent_id = Uuid::new_v4();
+    /// Entry point for intent dispatch. Hermes runs (sandboxed coding builds)
+    /// can take minutes — far past the front door's idle window — so when the
+    /// routed agent is hermes and `allow_async` is set, the slow work is moved
+    /// to a spawned task that records its outcome in `intent_outcomes`; the
+    /// verb returns `status:"running"` immediately and the client polls
+    /// `/intents/:id/result` while the audit step-trail accrues. Every other
+    /// agent (and resume) runs synchronously. Split from `dispatch_intent_run`
+    /// so the spawned task awaits a non-recursive future that resolves `Send`.
+    async fn dispatch_intent(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        peer: &AgentId,
+        allow_async: bool,
+    ) -> Response {
+        if allow_async {
+            let hermes_agent = self
+                .router
+                .route(&text)
+                .and_then(|m| self.router.find_by_id(&m.agent_id))
+                .filter(|c| c.manifest.agent.runtime == covenant_manifest::Runtime::Hermes)
+                .map(|c| c.id.clone());
+            if let Some(agent_id) = hermes_agent {
+                if let Ok(mut store) = self.intent_outcomes.lock() {
+                    store.insert_running(intent_id, &text, Some(agent_id));
+                }
+                let me = self.clone();
+                let peer = peer.clone();
+                tokio::spawn(async move {
+                    let resp = me.dispatch_intent_run(intent_id, text, &peer).await;
+                    if let Ok(mut store) = me.intent_outcomes.lock() {
+                        store.complete(intent_id, &resp);
+                    }
+                });
+                return Response::IntentResult {
+                    intent_id,
+                    status: "running".into(),
+                    text: String::new(),
+                    sources: Vec::new(),
+                    settlement: None,
+                };
+            }
+        }
+        self.dispatch_intent_run(intent_id, text, peer).await
+    }
+
+    async fn dispatch_intent_run(&self, intent_id: Uuid, text: String, peer: &AgentId) -> Response {
         // Pre-allocated so the budget debit's `paired_receipt` and the
         // settlement receipt's `id` agree — joining the budget log to
         // the receipt log on this UUID matches 1:1 instead of producing
@@ -3468,7 +3788,17 @@ impl Server {
             let run_result = self.runner.run(card, &intent).await;
             self.clear_active_budget_checkpoint(intent_id).await;
             match run_result {
-                Ok(result) => (result.text, result.sources, result.runtime_events),
+                Ok(result) => {
+                    // Stash captured workspace files on the async outcome (no-op
+                    // for the synchronous path, which has no outcome entry) so
+                    // the UI can show a file tree / preview.
+                    if !result.files.is_empty() {
+                        if let Ok(mut store) = self.intent_outcomes.lock() {
+                            store.set_files(intent_id, result.files);
+                        }
+                    }
+                    (result.text, result.sources, result.runtime_events)
+                }
                 Err(e) => {
                     warn!(agent = %card.id, error = %e, "agent run failed");
                     return Response::Error {
@@ -3642,7 +3972,7 @@ impl Server {
                         }
                     }
                 }
-                self.dispatch_intent(t, peer).await
+                self.dispatch_intent(Uuid::new_v4(), t, peer, false).await
             }
             None => Response::Error {
                 message: format!(
@@ -4054,7 +4384,7 @@ impl Server {
     }
 
     /// ADR 0010 streaming orchestrator for `Request::RecentMemory`
-    /// with `prefer_stream: Some(true)`. Wraps [`Self::recent_memory`]
+    /// with `prefer_stream: Some(true)`. Wraps `Self::recent_memory`
     /// so capability and scope checks stay defined in one place: on
     /// `Response::Memories { records }`, allocates a fresh
     /// `stream_id`, registers a [`stream_tracker::StreamEntry`] with
@@ -4081,11 +4411,10 @@ impl Server {
     /// is captured into a local so an `?`-propagated error from
     /// `write_frame` does not skip the unregister.
     ///
-    /// This method is not yet wired into [`Self::handle`]; the
-    /// per-verb dispatch fork lives in a follow-up slice. Keeping
-    /// the orchestrator method-level keeps it reachable from unit
+    /// Wired into `Self::handle` by the ADR 0010 slice 3.d dispatch
+    /// fork, which routes `RecentMemory { prefer_stream: Some(true) }`
+    /// here. Staying method-level also keeps it reachable from unit
     /// tests without requiring an IPC handshake.
-    #[allow(dead_code)]
     pub async fn stream_recent_memory<W>(
         &self,
         writer: &mut W,
@@ -4128,9 +4457,9 @@ impl Server {
     /// returned. This method performs the same capability check,
     /// tracker register/unregister bracketing, and chunk construction
     /// but returns the `StreamBegin` / `StreamChunk*` / `StreamEnd`
-    /// sequence as a `Vec<StreamEnvelope>`. The upcoming HTTP SSE
-    /// route handler encodes each entry with
-    /// [`crate::sse::encode_stream_envelope_as_sse`] and concatenates
+    /// sequence as a `Vec<StreamEnvelope>`. The HTTP SSE route
+    /// handlers encode each entry with
+    /// [`crate::sse::encode_stream_envelope_as_sse`] and concatenate
     /// the bytes into the response body.
     ///
     /// The error arm is the daemon's "streaming refused, render this
@@ -4141,7 +4470,6 @@ impl Server {
     /// unification slice can re-express the writer-based form as a
     /// wrapper around this method; for now the two methods coexist so
     /// integrated code is untouched.
-    #[allow(dead_code)]
     pub async fn recent_memory_envelopes(
         &self,
         tier: Option<MemoryTier>,
@@ -4198,7 +4526,7 @@ impl Server {
 
     /// ADR 0010 streaming orchestrator for `Request::RecentAudit`
     /// with `prefer_stream: Some(true)`. Symmetric with
-    /// [`Self::stream_recent_memory`]: wraps [`Self::recent_audit`]
+    /// [`Self::stream_recent_memory`]: wraps `Self::recent_audit`
     /// so the peer-scoped filter and `since_ms` truncation stay
     /// defined in one place, then forks on the response variant.
     ///
@@ -4218,9 +4546,8 @@ impl Server {
     /// begin+end pair. There is no audit equivalent of the memory
     /// capability-failure path.
     ///
-    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
-    /// fork lives in the follow-up wiring slice.
-    #[allow(dead_code)]
+    /// Wired into `Self::handle` by the ADR 0010 slice 4.d dispatch
+    /// fork, which routes `RecentAudit { prefer_stream: Some(true) }` here.
     pub async fn stream_recent_audit<W>(
         &self,
         writer: &mut W,
@@ -4262,14 +4589,13 @@ impl Server {
     ///
     /// Unlike memory, `recent_audit` has no capability gate — it
     /// filters by `peer.pubkey == event.issuer.pubkey` inside
-    /// [`Self::recent_audit`] — so the `Err(Response::Error)` arm is
+    /// `Self::recent_audit` — so the `Err(Response::Error)` arm is
     /// unreachable in practice on this verb. The Result shape stays
-    /// for symmetry so the upcoming HTTP route handler can use one
+    /// for symmetry so the HTTP route handlers use one
     /// common pattern across memory and audit. An empty page (no
     /// events visible to the peer) is a happy-path `Ok` with the
     /// begin+end pair (no chunks); a stream that never opens is never
     /// indistinguishable from a dead daemon at the protocol layer.
-    #[allow(dead_code)]
     pub async fn recent_audit_envelopes(
         &self,
         limit: usize,
@@ -4328,7 +4654,7 @@ impl Server {
     /// with `prefer_stream: Some(true)`. Symmetric with
     /// [`Self::stream_recent_memory`] and [`Self::stream_recent_audit`]
     /// in structure: dispatches the intent via
-    /// [`Self::dispatch_intent`] (which owns capability checks,
+    /// `Self::dispatch_intent` (which owns capability checks,
     /// ignore-rule enforcement, runner invocation, audit recording,
     /// memory writes, and budget metering), then forks on the
     /// response variant.
@@ -4352,9 +4678,8 @@ impl Server {
     /// ADR 0010 explicitly allows daemon-decides-not-to-stream by
     /// falling back to v1 shape.
     ///
-    /// Not yet wired into [`Self::handle`]; the per-verb dispatch
-    /// fork lives in slice 5.d.
-    #[allow(dead_code)]
+    /// Wired into `Self::handle` by the ADR 0010 slice 5.d dispatch
+    /// fork, which routes `SubmitIntent { prefer_stream: Some(true) }` here.
     pub async fn stream_submit_intent<W>(
         &self,
         writer: &mut W,
@@ -4365,7 +4690,7 @@ impl Server {
     where
         W: tokio::io::AsyncWriteExt + Unpin,
     {
-        let response = self.dispatch_intent(text, peer).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -4378,6 +4703,7 @@ impl Server {
                     text,
                     sources,
                     runtime_events: Vec::new(),
+                    files: Vec::new(),
                 };
                 let summary = serde_json::json!({
                     "intent_id": intent_id,
@@ -4428,14 +4754,13 @@ impl Server {
     /// chunk + end). A future streaming runtime extension that emits
     /// multiple partial `AgentResult` chunks is its own slice and
     /// updates this allocation accordingly.
-    #[allow(dead_code)]
     pub async fn submit_intent_envelopes(
         &self,
         text: String,
         peer: &AgentId,
         connection_id: Uuid,
     ) -> Result<Vec<StreamEnvelope>, Response> {
-        let response = self.dispatch_intent(text, peer).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -4448,6 +4773,7 @@ impl Server {
                     text,
                     sources,
                     runtime_events: Vec::new(),
+                    files: Vec::new(),
                 };
                 let summary = serde_json::json!({
                     "intent_id": intent_id,
@@ -4525,12 +4851,19 @@ impl Server {
                     .into(),
             };
         }
+        // The COVNT mint is environment-level (receipts carry no mint field), so
+        // a mint-bound scope can only be enforced here at the gather stage, the
+        // way flush_receipts does it. Per-item dimensions (payer/resource/cluster/
+        // batch_id) are enforced per receipt by chain_receipt_allowed below.
+        let status = chain_status_from_env();
+        let mint = status.covnt_mint.as_deref().unwrap_or("");
         let scopes = match self
             .chain_scopes(
                 "chain.receipts",
                 peer,
                 ChainScopeRequest {
                     limit: Some(limit),
+                    mint: Some(mint),
                     ..ChainScopeRequest::default()
                 },
             )
@@ -4538,7 +4871,7 @@ impl Server {
         {
             Ok(scopes) if !scopes.is_empty() => scopes,
             Ok(_) => {
-                let reason = format!("limit {limit} exceeds capability scope");
+                let reason = format!("limit {limit} or mint does not match capability scope");
                 self.record_capability_scope_rejected(
                     peer,
                     "chain:receipts",
@@ -4844,12 +5177,17 @@ impl Server {
                     .into(),
             };
         }
+        // See recent_receipts: mint is environment-level and must be enforced at
+        // the gather stage; per-item fields are filtered by chain_receipt_allowed.
+        let status = chain_status_from_env();
+        let mint = status.covnt_mint.as_deref().unwrap_or("");
         let scopes = match self
             .chain_scopes(
                 "chain.batches",
                 peer,
                 ChainScopeRequest {
                     limit: Some(limit),
+                    mint: Some(mint),
                     ..ChainScopeRequest::default()
                 },
             )
@@ -4857,7 +5195,7 @@ impl Server {
         {
             Ok(scopes) if !scopes.is_empty() => scopes,
             Ok(_) => {
-                let reason = format!("limit {limit} exceeds capability scope");
+                let reason = format!("limit {limit} or mint does not match capability scope");
                 self.record_capability_scope_rejected(
                     peer,
                     "chain:batches",
@@ -5741,6 +6079,279 @@ impl Server {
         }
     }
 
+    async fn backfill_settlement_receipts(
+        &self,
+        dry_run: bool,
+        scope_pubkey: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        if scope_pubkey.is_some() {
+            return Response::Error {
+                message: "settlement backfill --scope-pubkey is not yet supported; the operation evaluates the authenticated operator's own capability grants".into(),
+            };
+        }
+
+        let apply = !dry_run;
+        let mode = if apply { "apply" } else { "dry_run" };
+        let required = format!("settlement.backfill.{mode}");
+        let check = self
+            .check_capabilities("settlement-backfill".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "settlement backfill {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "settlement backfill requires the operator identity".into(),
+            };
+        }
+
+        // `backfill_receipts` repairs every legacy row with no recency
+        // filter, so probe the scope with `before_ms = u64::MAX`: only an
+        // unbounded grant (or one omitting `before_ms`) authorizes a full
+        // repair, while a recency-bounded grant correctly denies it.
+        match self
+            .settlement_backfill_scope_allows(&required, apply, u64::MAX, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "mode or before_ms bound does not match capability scope".to_string();
+                self.record_capability_scope_rejected(
+                    peer,
+                    "settlement-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("settlement backfill rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "settlement-backfill",
+                    &required,
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "settlement backfill rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "settlement backfill unavailable: server has no home directory configured"
+                    .into(),
+            };
+        };
+        let receipts_path = home.join("receipts").join("working.jsonl");
+
+        match covenant_settlement::backfill_receipts(&receipts_path, dry_run).await {
+            Ok(outcome) => {
+                let rollback_path = outcome.rollback_path.map(|path| path.display().to_string());
+                // Emitted only here, after backfill_receipts returned Ok —
+                // i.e. after the rollback checkpoint, the rewritten store
+                // contents, and the renamed store file are fsynced — so
+                // the audit log never claims a mutation whose data did
+                // not durably land.
+                // Issuer is the acting operator (peer), matching the
+                // MemoryRepairApplied audience: the row surfaces on the
+                // operator's own /audit feed under the issuer==peer filter.
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::SettlementReceiptBackfillApplied {
+                            row_count: outcome.row_count,
+                            rollback_path: rollback_path.clone(),
+                            dry_run: outcome.dry_run,
+                        },
+                    },
+                )
+                .await;
+                Response::SettlementReceiptsBackfilled {
+                    row_count: outcome.row_count,
+                    rollback_path,
+                    dry_run: outcome.dry_run,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("settlement: {e}"),
+            },
+        }
+    }
+
+    async fn settlement_backfill_scope_allows(
+        &self,
+        action: &str,
+        apply: bool,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_settlement_backfill_scope_allows(action, scope, apply, before_ms)
+        })
+        .await
+    }
+
+    async fn backfill_memory_records(
+        &self,
+        dry_run: bool,
+        scope_pubkey: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        if scope_pubkey.is_some() {
+            return Response::Error {
+                message: "memory backfill --scope-pubkey is not yet supported; the operation evaluates the authenticated operator's own capability grants".into(),
+            };
+        }
+
+        let apply = !dry_run;
+        let mode = if apply { "apply" } else { "dry_run" };
+        let required = format!("memory.backfill.{mode}");
+        let check = self
+            .check_capabilities("memory-backfill".into(), vec![required.clone()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: format!(
+                    "memory backfill {mode} requires capability {required:?}. Grant it with `covenant capabilities grant {required}`."
+                ),
+            };
+        }
+
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "memory backfill requires the operator identity".into(),
+            };
+        }
+
+        // memory_receipt_backfill_correlations runs against every row the
+        // store returns with no recency filter, so probe the scope with
+        // `before_ms = u64::MAX`: only an unbounded grant (or one
+        // omitting `before_ms`) authorizes the full repair window.
+        match self
+            .memory_backfill_scope_allows(&required, apply, u64::MAX, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = "mode or before_ms bound does not match capability scope".to_string();
+                self.record_capability_scope_rejected(peer, "memory-backfill", &required, &reason)
+                    .await;
+                return Response::Error {
+                    message: format!("memory backfill rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(peer, "memory-backfill", &required, &reason)
+                    .await;
+                return Response::Error {
+                    message: format!(
+                        "memory backfill rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
+        // Server-authoritative: fetch the operator's memory records and
+        // receipts directly from the stores (filtering to the operator's
+        // own pubkey so the same scoping that recent_memory/recent_receipts
+        // enforce applies) and recompute correlations with the shared
+        // covenant_memory planner. Never accept client-supplied
+        // correlations — a peer holding memory.backfill.apply could
+        // otherwise rewrite metadata.receipt_id on arbitrary memory_record
+        // ids by inventing pairings.
+        let memories = match self.memory.recent(None, usize::MAX).await {
+            Ok(records) => records
+                .into_iter()
+                .filter(|r| r.owner.pubkey == peer.pubkey)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("memory: {e}"),
+                };
+            }
+        };
+        let receipts = match self.settlement.recent(usize::MAX).await {
+            Ok(receipts) => receipts
+                .into_iter()
+                .filter(|r| r.payer.pubkey == peer.pubkey)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("settlement: {e}"),
+                };
+            }
+        };
+        let correlations = memory_receipt_backfill_correlations(&memories, &receipts);
+
+        match self
+            .memory
+            .backfill_receipt_correlation(dry_run, correlations)
+            .await
+        {
+            Ok(outcome) => {
+                // Emitted only here, after backfill_receipt_correlation
+                // returned Ok — i.e. after the SAVEPOINT released and
+                // the surrounding transaction committed — so the audit
+                // log never claims a mutation whose data did not durably
+                // land. Issuer is the acting operator (peer), matching
+                // the SettlementReceiptBackfillApplied audience: the row
+                // surfaces on the operator's own /audit feed under the
+                // issuer==peer filter.
+                self.record_peer_event(
+                    peer,
+                    AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::MemoryRecordBackfillApplied {
+                            row_count: outcome.row_count,
+                            savepoint_name: Some(outcome.savepoint_name.clone()),
+                            dry_run: outcome.dry_run,
+                        },
+                    },
+                )
+                .await;
+                Response::MemoryRecordsBackfilled {
+                    row_count: outcome.row_count,
+                    savepoint_name: outcome.savepoint_name,
+                    dry_run: outcome.dry_run,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("memory: {e}"),
+            },
+        }
+    }
+
+    async fn memory_backfill_scope_allows(
+        &self,
+        action: &str,
+        apply: bool,
+        before_ms: u64,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        self.memory_scope_allows(action, peer, |scope| {
+            permission_memory_backfill_scope_allows(action, scope, apply, before_ms)
+        })
+        .await
+    }
+
     async fn memory_repair_scope_allows(
         &self,
         action: &str,
@@ -6053,8 +6664,8 @@ fn read_operator_token_b58(path: &std::path::Path) -> std::io::Result<PeerToken>
 }
 
 /// Atomically write `token_b58` to `path` with mode 0600. Reused by
-/// daemon boot ([`crate::main`]'s `bootstrap_operator_token`) and
-/// [`Server::rotate_operator_token`].
+/// daemon boot (`crate::main`'s `bootstrap_operator_token`) and
+/// `Server::rotate_operator_token`.
 ///
 /// `OpenOptionsExt::mode` is honoured only on file creation. If the
 /// file already exists with a permissive mode, `O_CREAT|O_TRUNC` reuses
@@ -6222,7 +6833,7 @@ mod tests {
     use super::*;
     use covenant_ipc::StreamEnvelope;
     use covenant_manifest::Manifest;
-    use covenant_memory::InMemoryStore;
+    use covenant_memory::{InMemoryStore, MEMORY_BACKFILL_SAVEPOINT_NAME};
     use covenant_router::AgentCard;
     use covenant_runtime::MockRunner;
     use covenant_settlement::InMemorySettlement;
@@ -6236,6 +6847,24 @@ name = "{id}"
 version = "0.0.1"
 runtime = "rust-bin"
 entry = "./fake"
+
+[capabilities]
+required = {caps:?}
+"#,
+            caps = capabilities
+        );
+        let m = Manifest::parse(&toml).unwrap();
+        AgentCard::from_manifest_and_dir(m, PathBuf::from("/tmp/nope"))
+    }
+
+    fn hermes_stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {
+        let toml = format!(
+            r#"
+[agent]
+id = "{id}"
+name = "{id}"
+version = "0.0.1"
+runtime = "hermes"
 
 [capabilities]
 required = {caps:?}
@@ -6396,6 +7025,91 @@ required = {caps:?}
             other => panic!(
                 "HermesApprovalResponded trace must map to AuditKind::HermesApprovalResolved (note the rename: Responded → Resolved), got {other:?}. A refactor that 'aligned' the variant names by renaming AuditKind::HermesApprovalResolved back to HermesApprovalResponded would break every operator dashboard joining on the documented Resolved name",
             ),
+        }
+
+        // HermesFileWritten → AuditKind::HermesFileWritten passes path
+        // and bytes through verbatim — workspace writes are structural
+        // and the path is not redacted (unlike preview, which carries
+        // user input). A refactor that hashed `path` under a 'mirror the
+        // preview redaction' rationale would strand the operator file
+        // tree from its audit-row identity; this pin documents that
+        // path stays plain.
+        let file_written = runtime_trace_to_audit_kind(
+            intent_id,
+            RuntimeTrace::HermesFileWritten {
+                run_id: "run-5".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            },
+        );
+        match file_written {
+            AuditKind::HermesFileWritten {
+                intent_id: stamped,
+                run_id,
+                path,
+                bytes,
+            } => {
+                assert_eq!(stamped, intent_id);
+                assert_eq!(run_id, "run-5");
+                assert_eq!(
+                    path, "src/main.rs",
+                    "HermesFileWritten path must pass through verbatim — operator file-tree views key on it, and a redaction would break the join from audit row to the rendered file path",
+                );
+                assert_eq!(
+                    bytes, 1_024,
+                    "HermesFileWritten bytes must pass through verbatim as u64 — covenant_runtime::RuntimeTrace::HermesFileWritten::bytes documents the u64 width invariant; a refactor that narrowed to u32 here would silently truncate any write above 4 GiB",
+                );
+            }
+            other => panic!(
+                "HermesFileWritten trace must map to AuditKind::HermesFileWritten, got {other:?}",
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_runtime_event_drainer_publishes_each_trace_to_broadcast_subscribers() {
+        // The /intents/:id/events SSE handler subscribes to the broadcast
+        // sender owned by HttpState; the drainer publishes every trace it
+        // writes to audit, so a live subscriber sees the same events as the
+        // audit chain. A refactor that dropped the broadcast.send call would
+        // silently leave the SSE endpoint emitting nothing while audit kept
+        // working — this pin catches that regression.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+
+        let server = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<StreamedTrace>();
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<StreamedTrace>(16);
+        let mut subscriber = broadcast_tx.subscribe();
+        let _drainer = spawn_runtime_event_drainer(server, rx, broadcast_tx);
+
+        let trace = StreamedTrace {
+            intent_id: Uuid::new_v4(),
+            issuer: AgentId::new("agent@local", [0u8; 32]),
+            trace: RuntimeTrace::HermesFileWritten {
+                run_id: "run-bcast".into(),
+                path: "src/lib.rs".into(),
+                bytes: 4_096,
+            },
+        };
+        tx.send(trace.clone()).expect("send to drainer");
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+            .await
+            .expect("broadcast subscriber must receive a trace within 2s")
+            .expect("broadcast subscriber must not see a closed channel");
+        assert_eq!(received.intent_id, trace.intent_id);
+        assert_eq!(received.issuer, trace.issuer);
+        match received.trace {
+            RuntimeTrace::HermesFileWritten {
+                run_id,
+                path,
+                bytes,
+            } => {
+                assert_eq!(run_id, "run-bcast");
+                assert_eq!(path, "src/lib.rs");
+                assert_eq!(bytes, 4_096);
+            }
+            other => panic!("expected HermesFileWritten on the broadcast, got {other:?}"),
         }
     }
 
@@ -6699,6 +7413,69 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn hermes_intent_dispatches_async_and_records_outcome() {
+        let s = server_with(
+            vec![hermes_stub_card("coder", vec!["tool.code"])],
+            "built fizzbuzz.py and ran it",
+        );
+        grant_action(&s, "tool.code").await;
+        grant_action(&s, "memory.write").await;
+
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "create fizzbuzz.py that prints 1 to 100".into(),
+                prefer_stream: None,
+            })
+            .await;
+
+        // A hermes (coding) dispatch returns immediately with status
+        // "running" and an empty body — the build runs in a spawned task.
+        let intent_id = match resp {
+            Response::IntentResult {
+                intent_id,
+                status,
+                text,
+                ..
+            } => {
+                assert_eq!(
+                    status, "running",
+                    "hermes dispatch must be async; body was {text:?}"
+                );
+                assert!(text.is_empty(), "a running result carries no body yet");
+                intent_id
+            }
+            other => panic!("expected running IntentResult, got {other:?}"),
+        };
+
+        // The spawned run finishes and records its outcome; poll for it.
+        let mut done = None;
+        for _ in 0..300 {
+            match s.intent_outcome(&intent_id) {
+                Some(v) if v["status"] != "running" => {
+                    done = Some(v);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        let outcome = done.expect("async outcome never left running");
+        assert_eq!(outcome["status"], "ok");
+        assert_eq!(outcome["text"], "built fizzbuzz.py and ran it");
+        assert_eq!(outcome["matched_agent"], "coder");
+
+        // The same intent_id lands in the audit chain, so the task page can
+        // correlate the step trail back to the submitted intent.
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::IntentDispatched { intent_id: i, .. } if *i == intent_id
+            )),
+            "async run must still write an IntentDispatched row for the intent",
+        );
     }
 
     #[tokio::test]
@@ -7266,6 +8043,637 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    /// Seed `<home>/receipts/working.jsonl` with a single legacy-wire
+    /// receipt row that omits the default-bearing chain fields. A backfill
+    /// re-serializes those fields back as `null`, so the row counts as one
+    /// changed row — letting the daemon-level tests assert the apply and
+    /// dry-run outcomes without reaching into the settlement crate's
+    /// internals.
+    fn seed_legacy_receipt_row(home: &Path) -> String {
+        let receipt = SettlementReceipt {
+            id: Uuid::from_u128(0x5e7),
+            payer: AgentId::new("user@local", [0u8; 32]),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 7,
+            settled_at: 7,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        let mut value = serde_json::to_value(&receipt).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        for key in [
+            "chain",
+            "cluster",
+            "batch_id",
+            "merkle_root",
+            "tx_sig",
+            "slot",
+            "confirmed_at",
+            "onchain_sig",
+        ] {
+            obj.remove(key);
+        }
+        let line = format!("{}\n", serde_json::to_string(&value).unwrap());
+        let receipts_dir = home.join("receipts");
+        std::fs::create_dir_all(&receipts_dir).unwrap();
+        std::fs::write(receipts_dir.join("working.jsonl"), &line).unwrap();
+        line
+    }
+
+    fn rollback_checkpoint_files(home: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(home.join("receipts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".backfill-rollback-")
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_apply_repairs_rows_with_capability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::SettlementReceiptsBackfilled {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(!dry_run);
+                assert!(
+                    rollback_path.is_some(),
+                    "apply must write a rollback checkpoint"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_ne!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "apply must rewrite the store"
+        );
+        assert_eq!(rollback_checkpoint_files(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_dry_run_reports_without_writes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::SettlementReceiptsBackfilled {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(dry_run);
+                assert_eq!(rollback_path, None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "dry run must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_apply_emits_audit_row_on_operator_feed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        seed_legacy_receipt_row(dir.path());
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        let response_rollback = match resp {
+            Response::SettlementReceiptsBackfilled { rollback_path, .. } => {
+                rollback_path.expect("apply returns a rollback path")
+            }
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        // Read through the operator feed (issuer == peer filter), not the
+        // raw log, so the test pins the audience too: the row must be
+        // visible to the operator who ran the backfill.
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. }))
+            .expect("backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::SettlementReceiptBackfillApplied {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(
+                    rollback_path.as_deref(),
+                    Some(response_rollback.as_str()),
+                    "audit row must reference the same rollback checkpoint the operator received",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_dry_run_emits_audit_row_without_rollback_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        seed_legacy_receipt_row(dir.path());
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        s.op_respond(Request::BackfillSettlementReceipts {
+            dry_run: true,
+            scope_pubkey: None,
+        })
+        .await;
+
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. }))
+            .expect("dry-run backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::SettlementReceiptBackfillApplied {
+                row_count,
+                rollback_path,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(dry_run);
+                assert_eq!(
+                    *rollback_path, None,
+                    "dry run records no rollback checkpoint"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_rejects_without_capability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "chain.flush".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillSettlementReceipts {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("settlement.backfill.apply"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "a denied backfill must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_rejects_scope_pubkey_before_auth() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
+        let original = seed_legacy_receipt_row(dir.path());
+        let store_path = dir.path().join("receipts").join("working.jsonl");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: Some("othersubjectpubkeyb58".into()),
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("--scope-pubkey is not yet supported"),
+                    "scope_pubkey must be rejected on its own guard, not auth: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&store_path).unwrap(),
+            original,
+            "a scope_pubkey-rejected backfill must not touch the store"
+        );
+        assert!(rollback_checkpoint_files(dir.path()).is_empty());
+    }
+
+    /// Seed one operator-owned memory record (no `metadata.receipt_id`) and
+    /// one operator-paid legacy receipt (no `memory_record_id`) so the
+    /// planner pairs them on owner==payer pubkey. Returns the memory id
+    /// so tests can re-read the record after backfill.
+    async fn seed_legacy_memory_and_receipt(s: &Server) -> Uuid {
+        let op = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: op.clone(),
+                text: "legacy memory awaiting receipt".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({"note": "preserved on merge"}),
+                created_at: 1,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        let receipt = SettlementReceipt {
+            id: Uuid::new_v4(),
+            payer: op,
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        s.settlement.record(receipt).await.unwrap();
+        memory_id
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_apply_repairs_rows_with_capability() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::MemoryRecordsBackfilled {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(savepoint_name, MEMORY_BACKFILL_SAVEPOINT_NAME);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record
+                .metadata
+                .get("receipt_id")
+                .and_then(|v| v.as_str())
+                .is_some(),
+            "apply must merge receipt_id into the record metadata: {:?}",
+            record.metadata
+        );
+        assert_eq!(
+            record.metadata.get("note").and_then(|v| v.as_str()),
+            Some("preserved on merge"),
+            "apply must preserve pre-existing metadata keys: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_dry_run_reports_without_writes() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::MemoryRecordsBackfilled {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(row_count, 1);
+                assert!(dry_run);
+                assert_eq!(savepoint_name, MEMORY_BACKFILL_SAVEPOINT_NAME);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "dry run must not write metadata.receipt_id: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_apply_emits_audit_row_on_operator_feed() {
+        let s = server_with(vec![], "");
+        seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        let response_savepoint = match resp {
+            Response::MemoryRecordsBackfilled { savepoint_name, .. } => savepoint_name,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. }))
+            .expect("backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::MemoryRecordBackfillApplied {
+                row_count,
+                savepoint_name,
+                dry_run,
+            } => {
+                assert_eq!(*row_count, 1);
+                assert!(!dry_run);
+                assert_eq!(
+                    savepoint_name.as_deref(),
+                    Some(response_savepoint.as_str()),
+                    "audit row must reference the same SAVEPOINT name the operator received",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "memory.read".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillMemoryRecords {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory.backfill.apply"));
+                assert!(message.contains("requires capability"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "a denied backfill must not touch the store: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_non_operator_even_with_capability() {
+        // Guest holding memory.backfill.apply must still be rejected on the
+        // operator-identity gate. Mirrors the settlement-backfill
+        // operator-identity check; the cap alone is not enough.
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "memory.backfill.apply".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillMemoryRecords {
+                    dry_run: false,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("operator identity"),
+                    "memory backfill must reject non-operator peers even when they hold the cap: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "non-operator backfill must not touch the store: {:?}",
+            record.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_scope_pubkey_before_auth() {
+        let s = server_with(vec![], "");
+        let memory_id = seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: Some("othersubjectpubkeyb58".into()),
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("--scope-pubkey is not yet supported"),
+                    "scope_pubkey must be rejected on its own guard, not auth: {message}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let record = s.memory.get(memory_id).await.unwrap().expect("record");
+        assert!(
+            record.metadata.get("receipt_id").is_none(),
+            "scope_pubkey-rejected backfill must not touch the store: {:?}",
+            record.metadata
+        );
     }
 
     #[tokio::test]
@@ -10966,6 +12374,148 @@ required = {caps:?}
         );
     }
 
+    /// Writer that rejects every write with a broken-pipe error, used to
+    /// drive the streaming orchestrators' emit path to failure — it models
+    /// a client that disconnects the moment the daemon starts streaming.
+    struct FailingWriter;
+    impl tokio::io::AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected write failure",
+            )))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_recent_memory_write_failure_unregisters_tracker() {
+        // Capability granted and a record present, so the orchestrator
+        // takes the streaming path and registers a tracker entry. The
+        // writer then rejects the frame: emit returns Err, but the
+        // unregister must still run so the entry does not leak for the
+        // connection's lifetime. result.is_err() distinguishes this from
+        // the v1 capability-fallback path, which returns Ok.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.read").await;
+        let me = s.identity.agent_id();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::from_bytes([1; 16]),
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "memory 0".into(),
+                embedding: Vec::new(),
+                metadata: serde_json::json!({}),
+                created_at: 100,
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_recent_memory(&mut writer, connection_id, None, 10, &me)
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the tracker entry must be unregistered even when emit fails; the error path must not leak entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_recent_audit_write_failure_unregisters_tracker() {
+        // Audit has no capability gate; one recorded event puts the
+        // orchestrator on the streaming path. The writer rejects the
+        // frame, so emit fails — the tracker entry must still be cleared.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.record_peer_event(
+            &me,
+            AuditEvent {
+                id: Uuid::from_bytes([10; 16]),
+                timestamp_ms: 1_700_000_000_000,
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::from_bytes([20; 16]),
+                    intent_text: "intent 0".into(),
+                    matched_agent: Some("test-agent".into()),
+                    result_hash_hex: format!("{:064x}", 0u64),
+                    status: "ok".into(),
+                },
+            },
+        )
+        .await;
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_recent_audit(&mut writer, connection_id, 10, None, &me)
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the audit streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the audit tracker entry must be unregistered even when emit fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_submit_intent_write_failure_unregisters_tracker() {
+        // Card matches and the required caps are granted, so dispatch_intent
+        // returns an IntentResult and the orchestrator registers a tracker
+        // entry before emitting. The writer rejects the frame: emit fails,
+        // and the unregister must still clear the entry.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "mocked summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let me = s.identity.agent_id();
+
+        let connection_id = Uuid::new_v4();
+        let mut writer = FailingWriter;
+        let result = s
+            .stream_submit_intent(
+                &mut writer,
+                connection_id,
+                "find recent papers on agent memory".into(),
+                &me,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a rejected write on the intent streaming path must propagate as Err"
+        );
+        assert!(
+            s.stream_tracker.is_empty(),
+            "the intent tracker entry must be unregistered even when emit fails"
+        );
+    }
+
     #[tokio::test]
     async fn stream_recent_memory_two_calls_use_distinct_stream_ids() {
         // Two back-to-back calls on the same connection must emit
@@ -11292,8 +12842,8 @@ required = {caps:?}
     }
 
     #[tokio::test]
-    async fn stream_submit_intent_happy_path_emits_begin_chunk_end_with_summary_and_purges_tracker(
-    ) {
+    async fn stream_submit_intent_happy_path_emits_begin_chunk_end_with_summary_and_purges_tracker()
+    {
         // Agent card matches "find" + "papers", required caps granted.
         // dispatch_intent returns Response::IntentResult with a non-nil
         // intent_id, status="ok", and a paired settlement receipt. The
@@ -11552,7 +13102,9 @@ required = {caps:?}
             .expect_err("missing capability must produce Err(Response)");
         match err {
             Response::IntentResult { .. } => {
-                panic!("Err arm must NOT carry Response::IntentResult — that's the streamable variant")
+                panic!(
+                    "Err arm must NOT carry Response::IntentResult — that's the streamable variant"
+                )
             }
             other => {
                 let _ = other;
@@ -12023,6 +13575,66 @@ required = {caps:?}
             matches!(
                 &event.kind,
                 AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.flush"
+            )
+        }));
+    }
+
+    // The COVNT mint is environment-level; receipts carry no mint field, so a
+    // mint-bound chain.receipts/chain.batches scope can only be enforced at the
+    // gather stage. With COVNT_MINT unset in tests the gathered mint is "", which
+    // cannot satisfy a concrete mint scope — so the grant is rejected rather than
+    // leaking receipts across mints (the previous unwrap_or(true) behavior).
+    #[tokio::test]
+    async fn recent_receipts_rejects_unmatched_mint_scope_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.receipts",
+            serde_json::json!({
+                "version": 1,
+                "mint": "Mint1111111111111111111111111111111111111111"
+            }),
+        )
+        .await;
+        let resp = s
+            .op_respond(Request::RecentReceipts {
+                limit: 5,
+                since_ms: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected mint-scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.receipts"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn receipt_batches_rejects_unmatched_mint_scope_and_audits() {
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "chain.batches",
+            serde_json::json!({
+                "version": 1,
+                "mint": "Mint1111111111111111111111111111111111111111"
+            }),
+        )
+        .await;
+        let resp = s.op_respond(Request::ReceiptBatches { limit: 5 }).await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("capability scope")),
+            other => panic!("expected mint-scope rejection, got {other:?}"),
+        }
+        assert!(s.audit.recent(50).await.unwrap().iter().any(|event| {
+            matches!(
+                &event.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.batches"
             )
         }));
     }
@@ -12977,7 +14589,7 @@ budget_credits_per_hour = {credits}
         std::env::set_var("COVENANT_SOLANA_RPC_URL", "https://rpc.example/");
         std::env::set_var(
             "COVENANT_PROTOCOL_PROGRAM_ID",
-            "EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2",
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
         );
         std::env::set_var("COVNT_MINT", "4uTpj4kb8r1NbMGbTwNKoDPvrPpevGNZN2hP4FWUW58E");
         let ready = chain_status_from_env();
@@ -12990,7 +14602,7 @@ budget_credits_per_hour = {credits}
         assert_eq!(ready.rpc_url.as_deref(), Some("https://rpc.example/"));
         assert_eq!(
             ready.program_id.as_deref(),
-            Some("EUvV1vfsS5KwxHf6M6yLXKFwFKKSyxbjio7b5JH6DbX2")
+            Some("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y")
         );
         assert_eq!(
             ready.covnt_mint.as_deref(),
@@ -17089,7 +18701,10 @@ budget_credits_per_hour = {credits}
             }
         }
         let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
-        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+        assert!(matches!(
+            end,
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
 
         drop(client);
         let _ = server_task.await;
@@ -17242,7 +18857,10 @@ budget_credits_per_hour = {credits}
             }
         }
         let end: StreamEnvelope = read_frame(&mut client).await.expect("read stream_end");
-        assert!(matches!(end, StreamEnvelope::StreamEnd { summary: None, .. }));
+        assert!(matches!(
+            end,
+            StreamEnvelope::StreamEnd { summary: None, .. }
+        ));
 
         drop(client);
         let _ = server_task.await;

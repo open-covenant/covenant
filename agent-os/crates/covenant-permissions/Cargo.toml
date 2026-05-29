@@ -1,7 +1,7 @@
 [package]
 name = "covenant-permissions"
 version = "0.1.0"
-description = "Capability-token primitive for Covenant. ed25519-signed capabilities with persistent and in-memory stores; revocation tombstones; verify-with-clock for expiry."
+description = "Capability-token primitive for Covenant. ed25519-signed capabilities with persistent and in-memory stores; revocation tombstones; verify-with-clock for expiry. Grant-time scope validation plus dispatch-time scope predicates for tool.call argument allowlists, before-ms cutoffs, and per-namespace memory, A2A, peer, chain, and audit-purge enforcement."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

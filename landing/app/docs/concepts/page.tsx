@@ -77,9 +77,11 @@ export default function ConceptsPage() {
       <p>
         At dispatch the runtime spawns the agent binary, sends one JSON
         line containing the <code>Intent</code> on stdin, reads one JSON
-        line containing the <code>AgentResult</code> on stdout, and kills
-        the process if it exceeds <code>resources.cpu_ms_per_task</code>.
-        Stderr is streamed to the daemon&apos;s tracing log.
+        line containing the <code>AgentResult</code> on stdout, and
+        enforces the budget via projection-tick preempt on projected
+        overshoot, with a wall-clock kill at{" "}
+        <code>resources.cpu_ms_per_task</code> as the backstop. Stderr is
+        streamed to the daemon&apos;s tracing log.
       </p>
 
       <h2>Capability</h2>
@@ -179,7 +181,9 @@ export default function ConceptsPage() {
       <p>
         Every state-changing operation emits an <code>AuditEvent</code>:
         intent dispatch, capability check, capability grant, capability
-        revocation, ignored intent. Events are appended to{" "}
+        revoke rejection, ignored intent. Successful revocations are
+        tombstone writes to <code>capabilities/revoked.jsonl</code>, not
+        an audit row. Events are appended to{" "}
         <code>$COVENANT_HOME/audit/events.jsonl</code> under a deterministic
         schema. The audit log is the system of record;{" "}
         <code>covenant verify</code> cross-checks it against the other
@@ -199,8 +203,8 @@ export default function ConceptsPage() {
       <ul>
         <li>
           <strong>Unix socket</strong> at <code>$COVENANT_HOME/sock</code> —
-          the canonical, length-prefixed JSON IPC. The CLI uses this
-          transport.
+          the canonical, length-prefixed JSON IPC. The CLI and TUI use
+          this transport.
         </li>
         <li>
           <strong>HTTP gateway</strong> at <code>127.0.0.1:8421</code> —
@@ -239,10 +243,10 @@ export default function ConceptsPage() {
         A successful intent dispatch exercises every primitive. The daemon
         receives the intent, validates the issuer&apos;s capabilities,
         selects an agent through the router, executes the agent under a
-        wall-clock budget, captures the result, persists a memory record,
-        emits a settlement receipt, and writes the corresponding audit
-        events. Operational state is fully reconstructible from the audit
-        log.
+        wall-clock budget with hard-preempt on projected overshoot,
+        captures the result, persists a memory record, emits a settlement
+        receipt, and writes the corresponding audit events. Operational
+        state is fully reconstructible from the audit log.
       </p>
     </>
   );

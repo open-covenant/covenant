@@ -18,7 +18,13 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/capabilities", label: "Permissions" },
   { href: "/memory", label: "Memory" },
   { href: "/settlement", label: "Spending" },
+  { href: "/sap", label: "Synapse" },
 ];
+
+// The coding flow a public visitor needs: build (Overview) → watch it work
+// (Tasks) → verify (Activity). The operator pages (Agents/Permissions/Memory/
+// Spending/Messages/Synapse) stay one toggle away under Developer mode.
+const DEMO_CODING_NAV = new Set(["/", "/intents", "/audit"]);
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
@@ -28,6 +34,8 @@ function isActive(pathname: string, href: string): boolean {
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
   const [devMode, setDevMode] = useDeveloperMode();
+  const visibleNav =
+    DEMO_MODE && !devMode ? NAV.filter((item) => DEMO_CODING_NAV.has(item.href)) : NAV;
 
   return (
     <div className="shell">
@@ -38,12 +46,12 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
           <span>
             <strong>COVENANT</strong>
-            <em>control panel</em>
+            <em>{DEMO_MODE ? "coding sandbox" : "control panel"}</em>
           </span>
         </Link>
 
         <nav>
-          {NAV.map((item) => (
+          {visibleNav.map((item) => (
             <Link
               key={item.href}
               href={item.href}

@@ -45,6 +45,17 @@ async fn main() -> Result<()> {
     let home = covenantd::covenant_home()?;
     std::fs::create_dir_all(&home).with_context(|| format!("create {}", home.display()))?;
 
+    // Operator secrets that must not live in the repo — the SAP RPC api-key,
+    // funding-key paths — go in `$COVENANT_HOME/sap.env`. Load it before any
+    // COVENANT_SAP_* / COVENANT_SOLANA_* config is resolved. dotenvy does not
+    // override variables already set, so an explicit shell export still wins.
+    let sap_env = home.join("sap.env");
+    match dotenvy::from_path(&sap_env) {
+        Ok(()) => info!(path = %sap_env.display(), "loaded operator env"),
+        Err(dotenvy::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(error = %e, path = %sap_env.display(), "failed to load sap.env"),
+    }
+
     let agents_dir = home.join("agents");
     let cards = covenant_router::load_agents_from_dir(&agents_dir)
         .with_context(|| format!("load agents from {}", agents_dir.display()))?;
@@ -57,10 +68,17 @@ async fn main() -> Result<()> {
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
     let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    // Live audit step-trail (opt-in via COVENANT_LIVE_TRACE=1): the Hermes
+    // runner streams each tool trace through this channel and the drainer
+    // writes them into the chain as they arrive. Off by default — the proven
+    // path folds the runner's runtime_events into the chain when the run ends.
+    let live_trace = std::env::var("COVENANT_LIVE_TRACE").ok().as_deref() == Some("1");
+    let (runtime_event_tx, runtime_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let runner = covenantd::runtime_runner_composite(
         &runtime_config,
         hermes_config.as_ref(),
         subprocess_tracker.clone(),
+        live_trace.then_some(runtime_event_tx),
     );
     info!(
         backend = runtime_config.backend_name(),
@@ -257,6 +275,20 @@ async fn main() -> Result<()> {
     );
     info!(path = %budget_checkpoints_path.display(), "budget checkpoint log open");
 
+    // SAP bridge — opt-in, off by default. Building the bridge is
+    // cheap (no network) and we log the resolved status either way so
+    // operators can see at a glance whether the on-chain path is live.
+    let sap_config = covenantd::sap_bridge_config_from_env();
+    let sap_bridge =
+        covenant_sap_bridge::SapBridge::new(sap_config.clone()).context("build SAP bridge")?;
+    info!(
+        enabled = sap_config.enabled,
+        cluster = sap_config.cluster.as_str(),
+        program_id = %sap_config.program_id,
+        rpc_url = %redact_url(&sap_config.rpc_url),
+        "sap bridge ready"
+    );
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -274,7 +306,8 @@ async fn main() -> Result<()> {
     )
     .with_home(home.clone())
     .with_budget_checkpoints(budget_checkpoints)
-    .with_subprocess_tracker(subprocess_tracker);
+    .with_subprocess_tracker(subprocess_tracker)
+    .with_sap_bridge(sap_bridge);
 
     let server = match x402_dispatch_config_from_env() {
         Some(cfg) => {
@@ -352,6 +385,23 @@ async fn main() -> Result<()> {
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
 
+    // Fold live Hermes runtime traces into the audit chain as they stream in
+    // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
+    // Even when the drainer is off, the broadcast channel is created so the
+    // /intents/:id/events SSE handler in `covenantd::http` can still subscribe
+    // without an Option<> dance; it just receives nothing until live trace is
+    // enabled. Capacity is sized for a noisy run (Hermes can emit dozens of
+    // tool-completed events per second) without back-pressuring the drainer.
+    let (live_traces_tx, _) =
+        tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(1024);
+    let runtime_event_drainer_handle = live_trace.then(|| {
+        covenantd::spawn_runtime_event_drainer(
+            server.clone(),
+            runtime_event_rx,
+            live_traces_tx.clone(),
+        )
+    });
+
     // HTTP gateway for browser UIs. Every protected route requires
     // `Authorization: Bearer <token>` resolved via the same peer
     // registry the Unix socket uses; only `/health` is open. Operator
@@ -367,14 +417,26 @@ async fn main() -> Result<()> {
     let http_addr = std::net::SocketAddr::new(http_bind, http_port);
     let http_state = covenantd::http::HttpState {
         server: server.clone(),
+        live_traces_tx: live_traces_tx.clone(),
     };
     let http_router = covenantd::http::router(http_state);
     let http_listener = tokio::net::TcpListener::bind(http_addr)
         .await
         .with_context(|| format!("bind http {}", http_addr))?;
     info!(addr = %http_addr, "http gateway listening (bearer-auth enforced)");
+    // Broadcast channel so shutdown can fan a single signal out to the HTTP
+    // server (axum::serve's with_graceful_shutdown takes a future) without
+    // moving the receiver into the spawned task — the main select! still
+    // needs to send on it. Capacity 1 is enough: the only message is `()`,
+    // and a single SIGTERM coalescing into one wakeup is the correct shape.
+    let (shutdown_tx, mut shutdown_rx_http) = tokio::sync::broadcast::channel::<()>(1);
     let http_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(http_listener, http_router).await {
+        let serve = axum::serve(http_listener, http_router).with_graceful_shutdown(async move {
+            // Recv resolves either when shutdown_tx.send fires or when every
+            // sender is dropped; either way the server is meant to stop.
+            let _ = shutdown_rx_http.recv().await;
+        });
+        if let Err(e) = serve.await {
             tracing::warn!(error = %e, "http gateway exited");
         }
     });
@@ -389,8 +451,14 @@ async fn main() -> Result<()> {
     info!(path = %sock_path.display(), "covenantd listening");
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown_signal() => {
             info!("shutdown requested");
+            // Tell the HTTP server to stop accepting new connections and
+            // drain in-flight ones; broadcast::send errors only when
+            // there are zero subscribers, which the spawned http_handle
+            // is still — unless it already exited on its own, in which
+            // case the send error is correct to ignore.
+            let _ = shutdown_tx.send(());
             let saved = server.save_shutdown_budget_checkpoints().await;
             info!(saved, "shutdown budget checkpoints saved");
         }
@@ -399,15 +467,92 @@ async fn main() -> Result<()> {
         }
     }
 
-    http_handle.abort();
+    // Drain HTTP under a bounded deadline so a stuck in-flight request
+    // can't wedge the supervisor's SIGTERM→SIGKILL window (systemd
+    // defaults to 90s); the abort on timeout is the fallback, not the
+    // primary path the way it was before.
+    if !await_with_drain_timeout(http_handle, HTTP_DRAIN_DEADLINE).await {
+        tracing::warn!(
+            timeout_secs = HTTP_DRAIN_DEADLINE.as_secs(),
+            "http drain exceeded deadline; aborting outstanding requests"
+        );
+    }
     if let Some(handle) = a2a_retry_scheduler_handle {
         handle.abort();
     }
     projection_tick_handle.abort();
+    if let Some(h) = runtime_event_drainer_handle {
+        h.abort();
+    }
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }
     Ok(())
+}
+
+/// Maximum wall-clock budget for HTTP graceful-shutdown drain. systemd's
+/// default `TimeoutStopSec` is 90s; staying comfortably below that lets the
+/// rest of the shutdown path (budget checkpoint save, socket cleanup) finish
+/// before the supervisor escalates to SIGKILL.
+const HTTP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Resolve when the process should stop accepting work: SIGINT (ctrl-c on
+/// every target) or SIGTERM (systemd / Docker / Kubernetes `kill` on Unix).
+/// The previous shutdown path only awaited ctrl_c, so SIGTERM under any
+/// supervisor terminated the process immediately, skipping budget-checkpoint
+/// save and socket cleanup. Composing both means the same drain path runs
+/// regardless of which supervisor sent the signal.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!(error = %e, "ctrl-c handler failed; using SIGTERM only");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGTERM handler failed; using ctrl-c only");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Wait for `handle` to complete, bounded by `timeout`. Returns `true` if the
+/// handle finished within the deadline, `false` otherwise. On timeout the
+/// JoinHandle is explicitly aborted and awaited to completion — without the
+/// explicit abort, `tokio::time::timeout` would drop the JoinHandle and
+/// merely DETACH the task (tokio's drop semantic), so a stuck handler would
+/// keep running until the multi-thread runtime's drop discarded it. Aborting
+/// is the behaviour the warn-log promises: drain the task immediately, don't
+/// silently let it run on.
+async fn await_with_drain_timeout<T>(
+    mut handle: tokio::task::JoinHandle<T>,
+    timeout: std::time::Duration,
+) -> bool {
+    match tokio::time::timeout(timeout, &mut handle).await {
+        Ok(_) => true,
+        Err(_) => {
+            handle.abort();
+            // The abort signal propagates at the next yield point; awaiting
+            // here resolves to a JoinError::cancelled almost immediately and
+            // confirms the task is gone before the shutdown path moves on.
+            let _ = handle.await;
+            false
+        }
+    }
 }
 
 /// Mint an operator token on first start (or read the existing one) and
@@ -566,6 +711,24 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     Some(cfg)
 }
 
+/// Mask secret query params (api keys, tokens) in a URL before logging it,
+/// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
+fn redact_url(url: &str) -> String {
+    let mut out = url.to_string();
+    for key in ["api_key", "apikey", "token", "secret"] {
+        let needle = format!("{key}=");
+        if let Some(start) = out.find(&needle) {
+            let val_start = start + needle.len();
+            let val_end = out[val_start..]
+                .find('&')
+                .map(|i| val_start + i)
+                .unwrap_or(out.len());
+            out.replace_range(val_start..val_end, "***");
+        }
+    }
+    out
+}
+
 fn epoch_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -678,5 +841,93 @@ mod tests {
              assume CSV or fnmatch semantics and introduce broken \
              un-ignore rules that mask credential leaks",
         );
+    }
+
+    #[tokio::test]
+    async fn await_with_drain_timeout_reports_false_and_aborts_handle_when_deadline_exceeded() {
+        // The shutdown path replaces the prior `http_handle.abort()` with
+        // a bounded drain. Two contracts must hold for the warn-log to be
+        // honest: (a) `false` is returned on timeout so the caller emits
+        // the warning, and (b) the underlying task is actually aborted
+        // (not just detached, which is what `tokio::time::timeout` does
+        // when given the JoinHandle by value — the task would keep running
+        // until the runtime's drop discarded it, contradicting the warn
+        // log). A Drop guard on the spawned task pins this: the guard's
+        // Drop fires when the task itself terminates (normal completion OR
+        // abort), but not when only the JoinHandle is dropped.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        struct TerminationGuard(Arc<AtomicBool>);
+        impl Drop for TerminationGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let terminated = Arc::new(AtomicBool::new(false));
+        let probe = terminated.clone();
+        let handle = tokio::spawn(async move {
+            let _guard = TerminationGuard(probe);
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        let ok = await_with_drain_timeout(handle, std::time::Duration::from_millis(50)).await;
+        assert!(
+            !ok,
+            "await_with_drain_timeout must return false when the handle is still running past the deadline"
+        );
+        assert!(
+            terminated.load(Ordering::SeqCst),
+            "spawned task must be aborted-and-joined (TerminationGuard::drop \
+             fires) — a refactor that passed the JoinHandle by value to \
+             tokio::time::timeout without explicit abort would DETACH the \
+             task instead, leaving the guard alive in the background and \
+             failing this assertion"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_with_drain_timeout_reports_true_when_handle_completes_in_time() {
+        // The paired success case: a well-behaved task that finishes inside
+        // the deadline must return true so the shutdown log doesn't falsely
+        // warn about a drain timeout.
+        let handle = tokio::spawn(async {});
+        let ok = await_with_drain_timeout(handle, std::time::Duration::from_secs(2)).await;
+        assert!(
+            ok,
+            "await_with_drain_timeout must return true when the handle finishes inside the deadline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_signal_installs_sigterm_watcher_without_returning_immediately() {
+        // Smoke test: the unix branch of shutdown_signal installs a SIGTERM
+        // watcher via tokio::signal::unix::signal(SignalKind::terminate()).
+        // A refactor that returned the unit immediately from the SIGTERM
+        // arm (e.g., misuse of std::future::ready over std::future::pending
+        // in the error fallback) would make shutdown_signal resolve as
+        // soon as it starts, bypassing the supervisor drain entirely.
+        //
+        // Self-raising SIGTERM inside cargo test is unsafe — tokio installs
+        // signal handlers process-globally, but other in-flight test
+        // threads do not, so a real SIGTERM would either kill the harness
+        // (if delivered before our handler is registered) or be absorbed
+        // by a different test's watcher. Instead this test asserts the
+        // composition is await-blocking under normal conditions: spawn
+        // shutdown_signal in a task, yield long enough for any non-
+        // blocking arm to complete if it existed, then assert the task is
+        // still running. A regression that made shutdown_signal Ready
+        // immediately would fail here.
+        use std::time::Duration;
+        let signal_task = tokio::spawn(shutdown_signal());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !signal_task.is_finished(),
+            "shutdown_signal must await on the signal arms — a refactor that \
+             made either arm Ready immediately (e.g., std::future::ready in \
+             the SIGTERM error fallback instead of std::future::pending) \
+             would surface here. The supervisor drain depends on the future \
+             actually blocking until SIGINT or SIGTERM arrives."
+        );
+        signal_task.abort();
     }
 }

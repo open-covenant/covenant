@@ -11,7 +11,7 @@
 //!
 //! Splitting the helper from the dispatch wiring keeps the diff
 //! reviewable: this slice ships only the primitive, with unit tests
-//! that drive the helper through a Vec<u8>-backed writer and decode
+//! that drive the helper through a `Vec<u8>`-backed writer and decode
 //! every frame back via [`covenant_ipc::read_frame`]. The wiring
 //! slice (ipc-v2-stream-recent-memory-dispatch-wiring or similar)
 //! integrates this helper into the `Server::handle` loop and
@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 /// Per-chunk schema string ADR 0010 names for streamed memory
 /// records. Pinned here as a const so the emit helper, the tracker
-/// register call (in the future dispatch-wiring slice), and any
+/// register call in the streaming orchestrators, and any
 /// fixture validator stay in sync. A rename here is a v2 break —
 /// every v2-aware client that reads `stream_begin.schema` to route
 /// the subsequent chunks would mis-dispatch.
@@ -279,11 +279,7 @@ where
         .await?;
     }
 
-    write_frame(
-        writer,
-        &StreamEnvelope::StreamEnd { stream_id, summary },
-    )
-    .await?;
+    write_frame(writer, &StreamEnvelope::StreamEnd { stream_id, summary }).await?;
 
     Ok(())
 }
@@ -313,11 +309,8 @@ mod tests {
         let mut out = Vec::new();
         // Loop until the cursor hits EOF; read_frame returns
         // UnexpectedEof on a drained reader.
-        loop {
-            match read_frame::<_, StreamEnvelope>(&mut cursor).await {
-                Ok(env) => out.push(env),
-                Err(_) => break,
-            }
+        while let Ok(env) = read_frame::<_, StreamEnvelope>(&mut cursor).await {
+            out.push(env);
         }
         out
     }
@@ -629,6 +622,7 @@ mod tests {
                 tool: "terminal".into(),
                 preview: format!("preview-{seed}"),
             }],
+            files: vec![],
         }
     }
 
@@ -641,7 +635,9 @@ mod tests {
         // indistinguishable from a dead daemon.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None)
+            .await
+            .unwrap();
         let envelopes = drain_envelopes(&buf).await;
         assert_eq!(
             envelopes.len(),
@@ -671,8 +667,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emit_intent_stream_three_results_emits_begin_three_chunks_end_with_monotonic_sequence(
-    ) {
+    async fn emit_intent_stream_three_results_emits_begin_three_chunks_end_with_monotonic_sequence()
+    {
         // Symmetric to the memory/audit monotonic-sequence pins. ADR
         // 0010 requires sequence to count from 0 by 1; asserting
         // exact 0/1/2 catches a refactor that derived sequence from
@@ -759,7 +755,9 @@ mod tests {
         // break every v2-aware intent consumer at the routing layer.
         let stream_id = Uuid::new_v4();
         let mut buf = Vec::new();
-        emit_intent_stream(&mut buf, stream_id, &[], None).await.unwrap();
+        emit_intent_stream(&mut buf, stream_id, &[], None)
+            .await
+            .unwrap();
         let envelopes = drain_envelopes(&buf).await;
         match &envelopes[0] {
             StreamEnvelope::StreamBegin { response_kind, .. } => {

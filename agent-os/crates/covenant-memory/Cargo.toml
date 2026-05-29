@@ -1,7 +1,7 @@
 [package]
 name = "covenant-memory"
 version = "0.1.0"
-description = "Three-tier memory store (working, episodic, long-term) for Covenant. SQLite-backed persistence with an in-memory backend for tests and cosine similarity search over stored vectors."
+description = "Three-tier memory store (working, episodic, long-term) for Covenant. SQLite-backed persistence with an in-memory backend for tests, cosine similarity search over stored vectors, tier-scoped purge, bounded compaction, and scoped repair commands."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

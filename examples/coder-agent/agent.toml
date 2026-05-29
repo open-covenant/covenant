@@ -1,0 +1,42 @@
+## Coding agent for the public sandbox.
+##
+## Delegates execution to the coding gateway (Hermes /v1-compatible) via
+## runtime = "hermes". Set HERMES_API_BASE_URL on the daemon to point at the
+## gateway; until then dispatch surfaces RunnerError::HermesUnconfigured.
+##
+## Hermes-runtime agents have no on-disk binary — the gateway runs the
+## coding loop inside an ephemeral, secret-free, egress-capped sandbox and
+## streams tool/file events back through the daemon's audit chain.
+
+[agent]
+id      = "coder"
+name    = "Covenant Coder"
+version = "0.1.0"
+runtime = "hermes"
+# `entry` intentionally omitted — hermes runtime has nothing to exec locally.
+
+[capabilities]
+required = ["intent.subscribe", "tool.code", "memory.write"]
+optional = []
+
+[resources]
+# Wall-clock budget per coding run; the daemon stops the hermes run on
+# timeout. Real cpu/mem/disk limits are enforced by the gateway's sandbox,
+# not here.
+cpu_ms_per_task = 600_000
+memory_mb       = 0
+disk_mb         = 0
+network         = "outbound-https-only"
+
+[settlement]
+budget_credits_per_hour = 0
+priority                = "normal"
+
+[hermes]
+# Tools the gateway is expected to expose for software work. Documentary —
+# the gateway enforces the real allowlist. write_file/edit_file go beyond
+# stock Hermes and are provided by the coding gateway (WS1).
+tools_allowed   = ["read_file", "write_file", "edit_file", "terminal", "web"]
+# Reserved field. The ephemeral sandbox is the security boundary on a public
+# anonymous deployment, not a human approval prompt.
+approval_policy = "auto-once"

@@ -1,0 +1,8 @@
+{
+  "kind": "stream_chunk",
+  "stream_id": "00000000-0000-0000-0000-000000000000",
+  "sequence": 0,
+  "chunk": {
+    "record_id": "abc"
+  }
+}

@@ -13,11 +13,14 @@
 
 Covenant sits below agent applications and above the host operating system. It owns the state, authority, and accountability concerns that recur across agent frameworks — scoped capabilities, durable memory, runtime isolation, append-only audit, and commit-scoped provenance — so individual frameworks can stop reinventing them.
 
-**Status.** Local control plane is real and live-tested (19 Rust crates, ~98k lines, 1340 tests including 107 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+<!-- METRICS:START -->
+**Status.** Local control plane is real and live-tested (20 Rust crates, ~116k lines, 1723 source-discovered Rust tests including 132 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+<!-- METRICS:END -->
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
 - **Paper:** [DOI: 10.5281/zenodo.20134416](https://doi.org/10.5281/zenodo.20134416)
+- **Token:** $CVNT · [`2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`](https://pump.fun/coin/2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump)
 
 ## Quick start
 
@@ -67,7 +70,7 @@ Conventional developer environments assume a human operator is present at every 
 - **Continuity:** persistent memory, resumable task state, repair workflows, and structured handoff.
 - **Accountability:** append-only audit logs, integrity reports, signed actions, and commit-scoped provenance.
 - **Interoperability:** native tools, MCP integration, A2A messaging, local gateway APIs, and protocol adapters.
-- **Execution:** daemon-mediated runtime dispatch with timeout enforcement and sandbox-aware agent manifests.
+- **Execution:** daemon-mediated runtime dispatch with budget enforcement and sandbox-aware agent manifests.
 - **Settlement:** local receipts and protocol scaffolding for accountable resource use and agent coordination economics.
 
 ## Architecture
@@ -77,15 +80,15 @@ The system center is `covenantd`, a Rust daemon that owns local state and mediat
 | # | Primitive | Role |
 |---|---|---|
 | 1 | Intent | Normalized request shapes for CLI, IPC, HTTP, routing, and daemon dispatch. |
-| 2 | Runtime | Agent execution with timeout enforcement, manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
+| 2 | Runtime | Agent execution with budget enforcement (projection-tick preempt and wall-clock backstop at `cpu_ms_per_task`), manifest contracts, trusted-local subprocesses, and opt-in Linux gVisor runner support. |
 | 3 | Memory | SQLite-backed working, episodic, and long-term records with embedding hooks, ignore rules, drift reports, repair, and bounded compaction. |
 | 4 | Identity | Local ed25519 identity, peer registry, operator tokens, token rotation, and peer revocation. |
 | 5 | Permissions | Signed capabilities with known-scope validation, dispatch-time enforcement, expiry, and revocation tombstones. |
 | 6 | Comms | IPC frames, local HTTP gateway, MCP adapter, and A2A mailbox primitives. |
-| 7 | Compositor | Next.js web console (`agent-os/covenant-web`), public landing/docs surface, and `covenant-tui` terminal UI with submit, recent, and grant-editor views over the daemon IPC. |
+| 7 | Compositor | Next.js web console (`agent-os/covenant-web`), public landing/docs surface, and `covenant-tui` terminal UI with intent, memory, audit, capabilities, A2A, chain-receipts, and peer-registry views over the daemon IPC. |
 | 8 | Settlement | Local resource receipts and protocol scaffolding for agent coordination economics. |
 
-Audit underlies Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, protocol crates, runtime, memory, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
+Audit underlies Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations. The primary implementation lives in `agent-os/`, the Rust workspace containing the daemon, CLI, TUI, protocol crates, runtime, memory, identity, permissions, peer authentication, audit, MCP and A2A adapters, budget ledger, and settlement components. The surrounding monorepo contains public documentation, web surfaces, circuits, SDK packages, and supporting services.
 
 See [docs/audit-integrity.md](./docs/audit-integrity.md), [docs/capabilities.md](./docs/capabilities.md), and [agent-os/README.md](./agent-os/README.md) for implementation details and validation evidence.
 
@@ -106,7 +109,7 @@ Covenant includes:
 - Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
 - Source-built local installer for the daemon and CLI with a relative-path install manifest.
-- CI coverage for Rust, documentation, workflow linting, live coverage matrix validation, provenance verification, dependency audits, and CodeQL.
+- CI coverage for Rust, documentation, workflow linting, provenance verification, dependency audits, and CodeQL. Public live-test inventory comes from source; private workflow checkouts may add stricter matrix validation.
 
 ## Validation
 
@@ -148,7 +151,7 @@ cd agent-os
 cargo test --workspace --exclude covenant-settlement-program -- --ignored live_
 ```
 
-Inspect the live coverage inventory:
+Inspect the public live coverage inventory:
 
 ```bash
 bash agent-os/scripts/test-stats.sh
@@ -170,11 +173,11 @@ Covenant advances open infrastructure for:
 
 If you use Covenant in academic work or reference the design in a paper, please cite the whitepaper:
 
-> Wasque, A. (2026). *Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents*. Zenodo. https://doi.org/10.5281/zenodo.20134416
+> Covenant contributors. (2026). *Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents*. Zenodo. https://doi.org/10.5281/zenodo.20134416
 
 ```bibtex
-@misc{wasque2026covenant,
-  author    = {Wasque, Achille},
+@misc{covenant2026,
+  author    = {Covenant contributors},
   title     = {Covenant: A Capability-Based Operating Layer for Autonomous Software Engineering Agents},
   year      = {2026},
   publisher = {Zenodo},

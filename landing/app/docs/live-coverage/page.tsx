@@ -30,6 +30,9 @@ export default function LiveCoveragePage() {
         Covenant keeps default CI deterministic while tracking which surfaces
         have opt-in live coverage. Live tests are Rust tests named{" "}
         <code>live_*</code> and marked with <code>#[ignore]</code>.
+        Public checkouts derive the inventory from source; private workflow
+        checkouts may run an additional matrix validator when its local script
+        is present.
       </p>
 
       <h2>Commands</h2>

@@ -1,7 +1,7 @@
 [package]
 name = "covenant-peer-auth"
 version = "0.1.0"
-description = "Peer-token registry for binding ipc/http callers to AgentIds. Per-agent random 32-byte tokens; jsonl-backed event log; revocation tombstones; in-memory mock for tests."
+description = "Peer-token registry for binding ipc/http callers to AgentIds. Per-agent random 32-byte tokens with 6-char b58 prefix-only operator visibility (full tokens never leave the daemon), jsonl-backed event log, revocation tombstones with prefix-based discovery, live/revoked/all status-filter queries, and an in-memory mock for tests."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

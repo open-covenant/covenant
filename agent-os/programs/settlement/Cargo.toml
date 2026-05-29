@@ -16,7 +16,17 @@ no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Client-funded task escrow. Off by default: release_task is client-only with no
+# provider recourse, so it is not safe to ship until the trust model is redesigned.
+task-escrow = []
 
 [dependencies]
 anchor-lang = "0.31.1"
-anchor-spl = "1.0.2"
+anchor-spl = { version = "0.31.1", features = ["token_2022"] }
+solana-security-txt = "1.1"
+
+[dev-dependencies]
+litesvm = "0.6"
+solana-sdk = "2.2"
+spl-token = "7.0"
+spl-token-2022 = "6.0"

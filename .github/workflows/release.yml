@@ -28,9 +28,11 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: covenant-darwin-arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: covenant-darwin-x86_64
+          # x86_64-apple-darwin (macos-13, Intel) dropped from the alpha matrix:
+          # GitHub's Intel macOS runner pool is saturated (deprecating) and was
+          # leaving the release indefinitely queued. The alpha is a source-built
+          # release per docs/internal/alpha-release-contract.md — Intel-Mac users
+          # build from source. Re-add once a faster Intel runner is available.
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

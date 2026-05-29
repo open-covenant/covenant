@@ -88,7 +88,7 @@ export default function DocsIndexPage() {
       <p>
         Covenant is an open, agent-native operating layer. It runs locally on
         the host and exposes eight operating-layer primitives — intent,
-        runtime, memory, identity, permissions, comms, audit, and
+        runtime, memory, identity, permissions, comms, compositor, and
         settlement — through which human users, software agents, and tools
         coordinate work, share state, and settle usage.
       </p>
@@ -124,8 +124,8 @@ export default function DocsIndexPage() {
       <h2>Status</h2>
       <p>
         Covenant is pre-1.0 systems infrastructure. The local daemon, CLI,
-        identity, permissions, memory, audit, peer auth, and local receipt
-        ledger are implemented in the repository. MCP, A2A, the local web
+        TUI, identity, permissions, memory, audit, peer auth, budget, and
+        local receipt ledger are implemented in the repository. MCP, A2A, the local web
         console, autonomous workflow records, live coverage matrix, and
         provenance envelopes are actively hardening. Runtime isolation includes
         manifest-level requirements, trusted-local fail-closed behavior,

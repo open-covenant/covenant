@@ -9,8 +9,8 @@ export default function ArchitecturePage() {
       <h1>System architecture</h1>
       <p>
         Covenant is a single long-running daemon — <code>covenantd</code> —
-        plus a thin set of clients (the CLI, the web UI, third-party tooling
-        over HTTP) and a number of agent processes. The daemon is the only
+        plus a thin set of clients (the CLI, the TUI, the web UI, third-party
+        tooling over HTTP) and a number of agent processes. The daemon is the only
         component that holds state; everything else is replaceable.
       </p>
 
@@ -63,11 +63,8 @@ export default function ArchitecturePage() {
           <code>$COVENANT_HOME/memory.db</code>,
         </li>
         <li>
-          append-only JSONL stores at{" "}
-          <code>audit/events.jsonl</code>,{" "}
-          <code>capabilities/granted.jsonl</code>,{" "}
-          <code>capabilities/revoked.jsonl</code>, and{" "}
-          <code>receipts/working.jsonl</code>,
+          append-only JSONL stores under <code>$COVENANT_HOME</code> for
+          audit, capabilities, peers, receipts, budget, and a2a,
         </li>
         <li>
           the local ed25519 identity key.
@@ -77,21 +74,26 @@ export default function ArchitecturePage() {
       <p>
         Subprocess-style agents (<code>rust-bin</code>,{" "}
         <code>python3</code>, <code>node</code>) run as child processes
-        spawned on demand when an intent is dispatched; the runtime
-        wall-clocks each one against the budget declared in its manifest
-        and kills processes that overrun. <code>hermes</code>-runtime
-        agents are not subprocesses — the daemon delegates the intent to
-        a configured Hermes HTTP endpoint and treats the response as the
-        agent result. In either model, agents have no direct access to
-        the daemon&apos;s state; every interaction goes through the
-        daemon.
+        spawned on demand when an intent is dispatched. The runtime
+        registers each subprocess in an in-memory tracker, walks the
+        tracker on a periodic projection tick, and preempts via{" "}
+        <code>SIGTERM</code> with a grace window before{" "}
+        <code>SIGKILL</code> whenever <code>project_overshoot</code>{" "}
+        flags an in-flight process as on track to exceed its remaining
+        credit budget. The wall-clock kill at the agent-declared{" "}
+        <code>cpu_ms_per_task</code> remains as the final backstop.{" "}
+        <code>hermes</code>-runtime agents are not subprocesses — the
+        daemon delegates the intent to a configured Hermes HTTP endpoint
+        and treats the response as the agent result. In either model,
+        agents have no direct access to the daemon&apos;s state; every
+        interaction goes through the daemon.
       </p>
 
       <h2>Request lifecycle</h2>
 
       <ol>
         <li>
-          A client (CLI, web UI, third-party caller) sends a{" "}
+          A client (CLI, TUI, web UI, third-party caller) sends a{" "}
           <code>SubmitIntent</code> request over the Unix socket or HTTP.
         </li>
         <li>
@@ -113,8 +115,11 @@ export default function ArchitecturePage() {
         </li>
         <li>
           On success, the runtime spawns the agent, sends the intent on
-          stdin, reads the result on stdout, and enforces the
-          wall-clock budget.
+          stdin, reads the result on stdout, and enforces the budget
+          via both the wall-clock kill at <code>cpu_ms_per_task</code>{" "}
+          and the periodic projection tick that preempts via{" "}
+          <code>SIGTERM</code>/grace/<code>SIGKILL</code> on projected
+          overshoot.
         </li>
         <li>
           The daemon writes a working-tier <code>MemoryRecord</code>{" "}
@@ -170,6 +175,13 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>audit/events.chain.jsonl</code>
+            </td>
+            <td>JSONL, append-only hash-chain sidecar</td>
+            <td>covenant-audit</td>
+          </tr>
+          <tr>
+            <td>
               <code>capabilities/granted.jsonl</code>
             </td>
             <td>JSONL, append-only</td>
@@ -184,10 +196,45 @@ export default function ArchitecturePage() {
           </tr>
           <tr>
             <td>
+              <code>peers/registry.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-peer-auth</td>
+          </tr>
+          <tr>
+            <td>
+              <code>peers/operator.token</code>
+            </td>
+            <td>opaque token bytes, mode 0600</td>
+            <td>covenant-peer-auth</td>
+          </tr>
+          <tr>
+            <td>
               <code>receipts/working.jsonl</code>
             </td>
             <td>JSONL, append-only</td>
             <td>covenant-settlement</td>
+          </tr>
+          <tr>
+            <td>
+              <code>budget/ledger.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-budget</td>
+          </tr>
+          <tr>
+            <td>
+              <code>budget/checkpoints.jsonl</code>
+            </td>
+            <td>JSONL, append-only</td>
+            <td>covenant-budget</td>
+          </tr>
+          <tr>
+            <td>
+              <code>a2a/events.jsonl</code>
+            </td>
+            <td>JSONL, append-only (leased-queue mailbox)</td>
+            <td>covenant-a2a</td>
           </tr>
           <tr>
             <td>
@@ -209,6 +256,13 @@ export default function ArchitecturePage() {
             </td>
             <td>gitignore-style patterns</td>
             <td>covenant-memory</td>
+          </tr>
+          <tr>
+            <td>
+              <code>runtime/gvisor</code>
+            </td>
+            <td>scratch directory</td>
+            <td>covenant-runtime</td>
           </tr>
           <tr>
             <td>
@@ -245,7 +299,8 @@ export default function ArchitecturePage() {
             <td>
               Wire-level types shared by every other crate ({" "}
               <code>Intent</code>, <code>AgentId</code>,{" "}
-              <code>Capability</code>, <code>MemoryRecord</code>,{" "}
+              <code>Priority</code>, <code>MemoryRecord</code>,{" "}
+              <code>MemoryTier</code>, <code>Capability</code>,{" "}
               <code>SettlementReceipt</code>).
             </td>
           </tr>
@@ -254,7 +309,24 @@ export default function ArchitecturePage() {
               <code>covenant-manifest</code>
             </td>
             <td>
-              Parser and validator for <code>agent.toml</code>.
+              Parser and validator for <code>agent.toml</code> manifests.
+              Reads the <code>agent</code>, <code>capabilities</code>,{" "}
+              <code>resources</code>, <code>sandbox</code>,{" "}
+              <code>settlement</code>, and <code>hermes</code> sections;
+              parses <code>Runtime</code> (<code>python3</code>,{" "}
+              <code>node</code>, <code>rust-bin</code>, <code>hermes</code>),{" "}
+              <code>NetworkPolicy</code> (<code>off</code>,{" "}
+              <code>outbound-https-only</code>, <code>full</code>),{" "}
+              <code>SandboxBackend</code> (<code>trusted-local</code>,{" "}
+              <code>linux-gvisor</code>), <code>FilesystemPolicy</code>{" "}
+              (<code>read-only-package</code>, <code>ephemeral</code>,{" "}
+              <code>host</code>), and <code>HermesApprovalPolicy</code>{" "}
+              (<code>operator-prompt</code>, <code>auto-deny</code>,{" "}
+              <code>auto-once</code>); pins <code>RESERVED_NAMESPACES</code>{" "}
+              (<code>intent.</code>, <code>memory.</code>,{" "}
+              <code>identity.</code>, <code>tool.</code>, <code>agent.</code>)
+              for capability ids; and surfaces <code>ManifestError</code>{" "}
+              <code>Parse</code>, <code>Io</code>, and <code>Validation</code>.
             </td>
           </tr>
           <tr>
@@ -262,8 +334,23 @@ export default function ArchitecturePage() {
               <code>covenant-router</code>
             </td>
             <td>
-              Loads agent manifests and matches intents to agents via
-              keyword overlap.
+              <code>Router</code> over a <code>Vec</code> of{" "}
+              <code>AgentCard</code> with <code>route</code> doing
+              case-insensitive keyword-overlap matching and
+              insertion-order tie-breaking,{" "}
+              <code>find_by_id</code>/<code>register</code>/
+              <code>from_cards</code> helpers, and the{" "}
+              <code>RouteMatch</code> result type (<code>agent_id</code>{" "}
+              plus <code>score</code>); <code>load_agents_from_dir</code>{" "}
+              walks <code>$COVENANT_HOME/agents/</code> for{" "}
+              <code>agent.toml</code> manifests and returns cards sorted
+              by manifest id for deterministic routing across hosts;{" "}
+              <code>RouterError::Io</code> and{" "}
+              <code>RouterError::Manifest</code> preserve the inner{" "}
+              <code>std::io::Error</code> and{" "}
+              <code>covenant_manifest::ManifestError</code> via{" "}
+              <code>#[source]</code> for downstream retry-policy
+              downcasts.
             </td>
           </tr>
           <tr>
@@ -271,8 +358,11 @@ export default function ArchitecturePage() {
               <code>covenant-runtime</code>
             </td>
             <td>
-              Subprocess agent runner with stdin/stdout JSON protocol
-              and a wall-clock budget.
+              <code>Runner</code> trait with <code>SubprocessRunner</code>,{" "}
+              <code>GvisorRunner</code>, and <code>HermesRunner</code>{" "}
+              implementations, a stdin/stdout JSON protocol, and per-task
+              budget enforcement via projection-tick preempt and a
+              wall-clock backstop.
             </td>
           </tr>
           <tr>
@@ -280,8 +370,11 @@ export default function ArchitecturePage() {
               <code>covenant-memory</code>
             </td>
             <td>
-              Three-tier memory store (SQLite + in-memory) with cosine
-              similarity search over stored vectors.
+              Three-tier memory store (working, episodic, long-term):{" "}
+              <code>MemoryStore</code> trait with SQLite-backed
+              persistence and an in-memory backend for tests, cosine
+              similarity search over embedded vectors, tier-scoped
+              purge, bounded compaction, and scoped repair commands.
             </td>
           </tr>
           <tr>
@@ -289,7 +382,10 @@ export default function ArchitecturePage() {
               <code>covenant-identity</code>
             </td>
             <td>
-              ed25519 identity, on-disk persistence, signing helpers.
+              ed25519 identity: keypair generation, on-disk persistence,
+              signing, and verification helpers — the same key signs
+              on-chain settlement transactions, so there is no second
+              keypair system.
             </td>
           </tr>
           <tr>
@@ -297,8 +393,13 @@ export default function ArchitecturePage() {
               <code>covenant-peer-auth</code>
             </td>
             <td>
-              Peer registry, peer tokens with prefixed visibility, token
-              rotation, and revocation tombstones.
+              Peer-token registry binding ipc/http callers to{" "}
+              <code>AgentId</code>s: per-agent random 32-byte tokens
+              with 6-char b58 prefix-only operator visibility (full
+              tokens never leave the daemon), jsonl-backed event log,
+              revocation tombstones with prefix-based discovery, and
+              live/revoked/all status-filter queries — plus an
+              in-memory backend for tests.
             </td>
           </tr>
           <tr>
@@ -306,7 +407,15 @@ export default function ArchitecturePage() {
               <code>covenant-permissions</code>
             </td>
             <td>
-              Capability tokens — sign, verify, persist, revoke.
+              Capability-token primitive: ed25519-signed{" "}
+              <code>SignedCapability</code>s over a deterministic
+              canonical message, persistent JSONL and in-memory{" "}
+              <code>CapabilityStore</code> backends, revocation
+              tombstones, and verify-with-clock for expiry. Plus
+              grant-time scope validation and dispatch-time scope
+              predicates for tool-call argument allowlists, before-ms
+              cutoffs, and per-namespace memory, A2A, peer, chain, and
+              audit-purge enforcement.
             </td>
           </tr>
           <tr>
@@ -314,7 +423,14 @@ export default function ArchitecturePage() {
               <code>covenant-audit</code>
             </td>
             <td>
-              Append-only audit log with JSONL and in-memory backends.
+              Append-only audit log: <code>AuditLog</code> trait with
+              JSONL and in-memory backends, per-event hash-chain
+              integrity verification surfaced via{" "}
+              <code>verify_integrity</code>, and recorded event kinds
+              spanning intent dispatch, capability checks/grants/rejections,
+              budget enforcement, agent-to-agent messaging, tool approval
+              and invocation, memory maintenance, peer and operator
+              administration, and authentication failures.
             </td>
           </tr>
           <tr>
@@ -322,8 +438,12 @@ export default function ArchitecturePage() {
               <code>covenant-settlement</code>
             </td>
             <td>
-              Settlement primitive: receipts, credits, off-chain
-              accounting that pairs with the on-chain program.
+              Settlement primitive implementing the credits-and-buyback
+              model: <code>Settlement</code> trait with in-memory and
+              JSONL receipt-store backends; receipts accumulate in a
+              local JSONL log until batched and flushed to the on-chain
+              settlement program, at which point each receipt&apos;s{" "}
+              <code>onchain_sig</code> is populated.
             </td>
           </tr>
           <tr>
@@ -331,9 +451,12 @@ export default function ArchitecturePage() {
               <code>covenant-budget</code>
             </td>
             <td>
-              Token-bucket budget ledger with debit records, exhaustion
-              signals, and pause/resume checkpoints used by{" "}
-              <code>covenantd</code>.
+              Per-agent token-bucket budget ledger:{" "}
+              <code>BudgetLedger</code> trait with in-memory and
+              JSONL-backed event-log backends, a separate pause/resume
+              checkpoint store, and bounded compaction that emits
+              per-agent Snapshot events at the cutoff alongside debit
+              records and exhaustion signals.
             </td>
           </tr>
           <tr>
@@ -341,8 +464,18 @@ export default function ArchitecturePage() {
               <code>covenant-llm</code>
             </td>
             <td>
-              Provider trait with mock, Ollama, Anthropic, and
-              OpenAI-compatible implementations.
+              <code>Provider</code> trait with <code>MockProvider</code>,{" "}
+              <code>OllamaProvider</code>, <code>AnthropicProvider</code>,
+              and an OpenAI-compatible implementation, a separate{" "}
+              <code>Embedder</code> trait with <code>MockEmbedder</code>{" "}
+              and <code>OllamaEmbedder</code>, a{" "}
+              <code>ProviderConfig</code> reader for{" "}
+              <code>~/.covenant/secrets.toml</code> and an{" "}
+              <code>EmbedderConfig</code> reader over the same file, and
+              a <code>pick_provider</code> helper that returns the
+              highest-priority configured backend, falling back to
+              Ollama if reachable and to <code>MockProvider</code>{" "}
+              otherwise.
             </td>
           </tr>
           <tr>
@@ -350,8 +483,13 @@ export default function ArchitecturePage() {
               <code>covenant-tools</code>
             </td>
             <td>
-              Tool provider trait with mock, Brave, and SerpAPI search
-              implementations.
+              <code>SearchProvider</code> trait with{" "}
+              <code>MockSearch</code>, <code>BraveSearch</code>, and{" "}
+              <code>SerpApiSearch</code> implementations, a{" "}
+              <code>SearchConfig</code> reader for the{" "}
+              <code>[search]</code> section of <code>secrets.toml</code>,
+              and a <code>pick_search</code> helper that falls back to{" "}
+              <code>MockSearch</code> when nothing is configured.
             </td>
           </tr>
           <tr>
@@ -359,9 +497,13 @@ export default function ArchitecturePage() {
               <code>covenant-mcp</code>
             </td>
             <td>
-              Model Context Protocol integration — tool trait, registry,
-              native tools, stdio JSON-RPC transport for external
-              servers.
+              Model Context Protocol integration — tool trait following
+              the public MCP wire shapes (<code>name</code>,{" "}
+              <code>description</code>, <code>inputSchema</code>,{" "}
+              <code>Content</code> blocks, <code>isError</code>) so the
+              same trait backs native Rust implementations and external
+              MCP servers, in-process registry, native tools, stdio
+              JSON-RPC 2.0 transport for external servers.
             </td>
           </tr>
           <tr>
@@ -369,8 +511,11 @@ export default function ArchitecturePage() {
               <code>covenant-a2a</code>
             </td>
             <td>
-              Agent-to-agent task and result envelopes; in-process
-              mailbox.
+              Agent-to-agent task and result envelopes; async Mailbox
+              trait with an in-memory backend and a durable JSONL-backed
+              implementation over a leased task queue, plus a
+              receiver-side idempotency cache, operator-facing repair
+              commands, and an opt-in auto-retry policy.
             </td>
           </tr>
           <tr>
@@ -378,7 +523,10 @@ export default function ArchitecturePage() {
               <code>covenant-ipc</code>
             </td>
             <td>
-              Length-prefixed JSON IPC protocol for the local socket.
+              Length-prefixed JSON IPC for the local socket: 4-byte
+              big-endian length prefix, frames bounded at 8 MB via{" "}
+              <code>MAX_FRAME</code>, and a versioned protocol shape (v1
+              baseline, v2 reserved for streaming responses).
             </td>
           </tr>
           <tr>
@@ -386,8 +534,10 @@ export default function ArchitecturePage() {
               <code>covenantd</code>
             </td>
             <td>
-              The daemon binary. Wires the primitives together; exposes
-              the IPC and HTTP surfaces.
+              The daemon binary. Wires the primitives together and
+              exposes intent dispatch, agent runtime, memory, identity,
+              permissions, audit, and settlement over a Unix socket and
+              an HTTP gateway.
             </td>
           </tr>
           <tr>
@@ -395,7 +545,9 @@ export default function ArchitecturePage() {
               <code>covenant</code>
             </td>
             <td>
-              The CLI binary.
+              The CLI binary. Submits intents and drives memory,
+              capabilities, receipts, chain, audit, tools, A2A, and
+              peer-registry surfaces over the local IPC socket.
             </td>
           </tr>
           <tr>
@@ -403,8 +555,9 @@ export default function ArchitecturePage() {
               <code>covenant-tui</code>
             </td>
             <td>
-              Terminal UI binary with submit, recent, and grant-editor
-              views over the daemon IPC.
+              Terminal UI binary with intent, memory, audit, capabilities,
+              A2A, chain-receipts, and peer-registry views over the daemon
+              IPC.
             </td>
           </tr>
         </tbody>

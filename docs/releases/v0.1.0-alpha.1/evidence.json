@@ -1,0 +1,107 @@
+{
+  "schema": "covenant.alpha-release-evidence.v1",
+  "kind": "alpha_release_evidence",
+  "generated_at": "2026-05-28T08:41:32.418Z",
+  "commit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+  "commit_short": "94e7af53",
+  "branch": "main",
+  "dirty_files": 0,
+  "readiness": {
+    "kind": "alpha_release_readiness",
+    "generated_at": "2026-05-28T08:41:45.698Z",
+    "ready": true,
+    "blockers": [],
+    "checks": [
+      {
+        "id": "clean-working-tree",
+        "title": "Working tree is clean",
+        "severity": "blocker",
+        "ok": true,
+        "command": "git status --porcelain"
+      },
+      {
+        "id": "commit-rotation",
+        "title": "Commit rotation policy validates",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-commit-rotation.mjs"
+      },
+      {
+        "id": "current-git-identity",
+        "title": "Current Git author and committer are neutral",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-current-git-identity.mjs"
+      },
+      {
+        "id": "git-write-access",
+        "title": "Git metadata is writable for staging and commits",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-git-write-access.mjs"
+      },
+      {
+        "id": "outgoing-git-identity",
+        "title": "Outgoing commits use approved identity metadata",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-git-identity.mjs --rev origin/main..HEAD"
+      },
+      {
+        "id": "autonomy-records",
+        "title": "Autonomy records validate",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-autonomy.mjs"
+      },
+      {
+        "id": "autonomy-handoff-toolchain",
+        "title": "Autonomy handoff toolchain validates",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-autonomy-handoff.mjs"
+      },
+      {
+        "id": "autonomy-review-artifacts",
+        "title": "Unsigned autonomy review artifacts validate",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-autonomy-review-artifacts.mjs"
+      },
+      {
+        "id": "live-coverage-metadata",
+        "title": "Live coverage metadata validates",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-live-coverage.mjs"
+      },
+      {
+        "id": "provenance-attestations",
+        "title": "Committed provenance attestations verify",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/provenance.mjs verify-all"
+      },
+      {
+        "id": "github-push-identity",
+        "title": "GitHub push attribution uses an approved project account",
+        "severity": "blocker",
+        "ok": true,
+        "command": "node agent-os/scripts/validate-github-push-identity.mjs"
+      }
+    ]
+  },
+  "commands": [
+    "node agent-os/scripts/alpha-release-readiness.mjs --strict",
+    "bash agent-os/scripts/validate.sh --quick",
+    "pnpm --dir landing build",
+    "node agent-os/scripts/model-availability.mjs",
+    "cd agent-os && cargo test --workspace --exclude covenant-settlement-program -- --ignored live_"
+  ],
+  "notes": [
+    "Read-only helper: does not tag, push, or publish.",
+    "Human approval required before tagging or publishing release artifacts.",
+    "Accepted release evidence requires alpha readiness to report ready=true.",
+    "Live tests are opt-in and may require external services (e.g. Ollama, Linux runsc)."
+  ]
+}

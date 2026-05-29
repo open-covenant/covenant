@@ -35,4 +35,4 @@ cosign verify-blob \
   <artifact>
 ```
 
-Provenance envelopes recorded under `provenance/` are consistency evidence (commit + build inputs + audit chain head), complementary to the cosign signature.
+Provenance envelopes recorded under `docs/provenance/` are consistency evidence (commit + build inputs + audit chain head), complementary to the cosign signature.

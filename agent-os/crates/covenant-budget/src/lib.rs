@@ -33,9 +33,9 @@
 //!
 //! ## Compaction
 //!
-//! [`BudgetLedger::compact_older_than`] drops [`BudgetEvent::Debit`]
+//! [`BudgetLedger::compact_older_than`] drops `BudgetEvent::Debit`
 //! events older than the cutoff and emits one per-agent
-//! [`BudgetEvent::Snapshot`] capturing the bucket's `(capacity,
+//! `BudgetEvent::Snapshot` capturing the bucket's `(capacity,
 //! tokens_remaining, last_refill_ms)` at the cutoff. Replay treats
 //! Snapshot as authoritative for that agent, so reopening a compacted
 //! ledger reconstructs the same bucket state as before the rewrite —
@@ -128,7 +128,7 @@ pub enum BudgetProjectionPolicy {
 /// Returns `true` when the in-flight subprocess for an intent is on
 /// track to exceed its `remaining` budget under the chosen
 /// [`BudgetProjectionPolicy`]. The daemon-side projection tick
-/// (deferred to sub-slice B2) walks the [`SubprocessTracker`] entries
+/// (deferred to sub-slice B2) walks the `SubprocessTracker` entries
 /// and pushes overshooting `intent_id`s into the preempt-queue.
 ///
 /// The function is intentionally pure and `u64`-typed so the projection

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata } from "../_meta";
 
-export const metadata = buildDocsMetadata("primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, audit, settlement — the OS-level vocabulary Covenant exposes.');
+export const metadata = buildDocsMetadata("primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, compositor, settlement — the OS-level vocabulary Covenant exposes.');
 
 export default function PrimitivesPage() {
   return (
@@ -12,8 +12,10 @@ export default function PrimitivesPage() {
         operations required for human users, software agents, and
         external tools to share a host system: dispatch of work, isolated
         execution, persistent context, identity, authorization,
-        communication, auditability, and economic settlement. Every
+        communication, surfacing, and economic settlement. Every
         higher-level behavior in the system is composed from these eight.
+        Audit underlies identity, permissions, and settlement as a
+        cross-cutting evidence layer rather than a primitive of its own.
       </p>
 
       <h2>Intent</h2>
@@ -35,9 +37,10 @@ export default function PrimitivesPage() {
       <p>
         The mechanism for actually executing an agent. Today the runtime
         spawns each agent as a child process and shuttles JSON over
-        stdin/stdout under a wall-clock budget. The trait is small and
-        designed to back stricter isolation — gVisor, Firecracker —
-        without changing the dispatch contract.
+        stdin/stdout under a wall-clock budget with hard-preempt on
+        projected overshoot. The trait is small and designed to back
+        stricter isolation — gVisor, Firecracker — without changing the
+        dispatch contract.
       </p>
       <p>
         Agents declare their runtime in{" "}
@@ -110,7 +113,7 @@ export default function PrimitivesPage() {
       <ul>
         <li>
           <strong>Local IPC</strong> — length-prefixed JSON over a Unix
-          socket. The CLI uses this. Documented in{" "}
+          socket. The CLI and TUI use this. Documented in{" "}
           <Link href="/ipc">Local IPC</Link>.
         </li>
         <li>
@@ -127,17 +130,20 @@ export default function PrimitivesPage() {
         </li>
       </ul>
 
-      <h2>Audit</h2>
+      <h2>Compositor</h2>
       <p>
-        The evidence layer for privileged actions. Audit events are
-        append-only JSONL rows with structured kinds, issuers, timestamps,
-        and local hash-chain integrity reports. The audit surface supports
-        recent reads, bounded purges, integrity verification, and unsigned
-        or locally signed audit-root attestations.
+        How agent state, decisions, and results are surfaced back to a
+        human operator. The compositor primitive covers the operator
+        console (<code>agent-os/covenant-web</code>, a Next.js UI over the
+        local HTTP gateway), this public landing and documentation
+        surface, and the <code>covenant-tui</code> terminal binary with
+        intent, memory, audit, capabilities, A2A, chain-receipts, and
+        peer-registry views over the daemon IPC.
       </p>
       <p>
-        See <Link href="/audit">Audit log</Link> and{" "}
-        <Link href="/audit-integrity">Audit integrity</Link>.
+        Every visualization reads from the same daemon — there is no
+        duplicated state and no privileged shortcut around the IPC and
+        HTTP surfaces.
       </p>
 
       <h2>Settlement</h2>
@@ -150,6 +156,20 @@ export default function PrimitivesPage() {
       </p>
       <p>
         See <Link href="/settlement">Settlement</Link>.
+      </p>
+
+      <h2>Audit (cross-cutting)</h2>
+      <p>
+        Audit is the evidence layer that underlies identity, permissions,
+        and settlement rather than a standalone primitive. Audit events are
+        append-only JSONL rows with structured kinds, issuers, timestamps,
+        and local hash-chain integrity reports. The audit surface supports
+        recent reads, bounded purges, integrity verification, and unsigned
+        or locally signed audit-root attestations.
+      </p>
+      <p>
+        See <Link href="/audit">Audit log</Link> and{" "}
+        <Link href="/audit-integrity">Audit integrity</Link>.
       </p>
 
       <h2>Design rationale</h2>

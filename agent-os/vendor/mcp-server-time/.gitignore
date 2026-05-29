@@ -1,0 +1,5 @@
+# Build artifacts from opt-in live-test runs (uv virtualenv, Python bytecode).
+# Only the vendored source tree and VENDOR.md are tracked here.
+**/.venv/
+**/__pycache__/
+*.pyc

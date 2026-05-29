@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { RELEASE_DATE, TAGLINE } from "./_brand";
+import { RELEASE_STATUS, TAGLINE } from "./_brand";
 
 type SiteFooterProps = {
   /** Extra classes for the outer <footer>. Pages own positioning. */
@@ -10,7 +10,7 @@ type SiteFooterProps = {
 
 /**
  * Site-wide footer. Single source of truth — update the tagline or
- * release date in `_brand.tsx` and every page that mounts <SiteFooter />
+ * release status in `_brand.tsx` and every page that mounts <SiteFooter />
  * picks it up. Pages control positioning via `className` (e.g. add
  * `border-t mt-24 pt-6` for the docs layout, or `absolute inset-x-0
  * bottom-6` for the landing hero).
@@ -34,7 +34,7 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
         className="h-auto w-[30px] opacity-70"
       />
       <span>
-        Covenant · {TAGLINE} · {RELEASE_DATE.toLowerCase()}
+        Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
       </span>
     </footer>
   );

@@ -274,6 +274,22 @@ export default function OverviewPage() {
               {dispatching ? "Sending" : "Send"}
             </button>
           </div>
+          {turnstileEnabled && (
+            // Required when running Turnstile in invisible / interaction-only mode:
+            // visitors must be able to find the privacy policy that references
+            // Cloudflare's Turnstile Privacy Addendum.
+            <p className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>
+              Protected by Cloudflare Turnstile.{" "}
+              <a
+                href="https://opencovenant.org/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Privacy
+              </a>
+              .
+            </p>
+          )}
           {DEMO_MODE && (
             <div className="sample-chips">
               <span className="eyebrow text-muted">try</span>

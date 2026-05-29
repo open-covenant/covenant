@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { RELEASE_STATUS, TAGLINE } from "./_brand";
 
 type SiteFooterProps = {
@@ -19,23 +20,31 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
   return (
     <footer
       className={[
-        "flex items-center justify-center gap-2.5 px-4 text-center text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]",
+        "flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 px-4 text-center text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]",
         className ?? "",
       ]
         .filter(Boolean)
         .join(" ")}
       style={style}
     >
-      <Image
-        src="/logomark.svg"
-        alt="covenant"
-        width={30}
-        height={15}
-        className="h-auto w-[30px] opacity-70"
-      />
-      <span>
-        Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
+      <span className="inline-flex items-center gap-2.5">
+        <Image
+          src="/logomark.svg"
+          alt="covenant"
+          width={30}
+          height={15}
+          className="h-auto w-[30px] opacity-70"
+        />
+        <span>
+          Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
+        </span>
       </span>
+      <Link
+        href="/privacy"
+        className="text-neutral-500 transition-colors hover:text-neutral-200"
+      >
+        Privacy
+      </Link>
     </footer>
   );
 }

@@ -15,6 +15,7 @@ declare global {
           callback: (token: string) => void;
           "expired-callback"?: () => void;
           "error-callback"?: () => void;
+          appearance?: "always" | "execute" | "interaction-only";
         },
       ) => string;
       reset: (id?: string) => void;
@@ -47,6 +48,13 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
         callback: (token) => onToken(token),
         "expired-callback": () => onToken(null),
         "error-callback": () => onToken(null),
+        // Hide the widget unless Cloudflare's risk check actually decides a
+        // human interaction is needed. The background pass still runs, so the
+        // submit-disabled gate still resolves on the token callback within a
+        // few hundred ms for legitimate visitors. Requires the site key to be
+        // configured for "Managed" (or "Non-Interactive") in Cloudflare —
+        // a key set to "Always Interactive" overrides this and stays visible.
+        appearance: "interaction-only",
       });
       window.__covTurnstileReset = () => {
         if (widgetId.current) window.turnstile?.reset(widgetId.current);

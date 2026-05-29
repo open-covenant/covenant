@@ -25,6 +25,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+solana-account-decoder = "2"
 solana-client = "2"
 solana-sdk = { workspace = true }
 tokio = { workspace = true }
@@ -43,3 +44,7 @@ path = "examples/devnet_smoke.rs"
 [[example]]
 name = "mainnet_bootstrap"
 path = "examples/mainnet_bootstrap.rs"
+
+[[example]]
+name = "mainnet_stake_e2e"
+path = "examples/mainnet_stake_e2e.rs"

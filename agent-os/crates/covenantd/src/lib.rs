@@ -1284,6 +1284,53 @@ impl Server {
         preempted
     }
 
+    /// Best-effort outbound error frame on the read-side failures the
+    /// IPC loop terminates on (frame-size violation, malformed JSON).
+    /// Without this the client sees a bare EOF and cannot distinguish a
+    /// protocol-level fault from a transport reset. The Response::Error
+    /// message is generic on purpose — concrete byte counts or serde
+    /// position context would be info-disclosure if the frame came from
+    /// an unauthenticated peer. Transport-level `IpcError::Io` skips the
+    /// write because the socket is already torn.
+    async fn write_frame_error<W>(connection_id: Uuid, stream: &mut W, err: &IpcError)
+    where
+        W: tokio::io::AsyncWriteExt + Unpin,
+    {
+        let message: &'static str = match err {
+            IpcError::FrameTooLarge { got } => {
+                warn!(
+                    ?connection_id,
+                    got_bytes = got,
+                    "ipc frame exceeded MAX_FRAME; closing connection"
+                );
+                "frame too large"
+            }
+            IpcError::Serde(serde_err) => {
+                warn!(
+                    ?connection_id,
+                    error = %serde_err,
+                    "ipc frame failed to deserialize; closing connection"
+                );
+                "malformed frame"
+            }
+            IpcError::Io(_) => return,
+        };
+        if let Err(write_err) = write_frame(
+            stream,
+            &Response::Error {
+                message: message.into(),
+            },
+        )
+        .await
+        {
+            debug!(
+                ?connection_id,
+                error = %write_err,
+                "failed to write frame-error response before closing"
+            );
+        }
+    }
+
     pub async fn serve(&self, listener: UnixListener) -> Result<()> {
         loop {
             let (stream, _peer) = listener.accept().await?;
@@ -1334,7 +1381,10 @@ impl Server {
                 Err(IpcError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return Ok(());
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    Self::write_frame_error(connection_id, &mut stream, &e).await;
+                    return Err(e.into());
+                }
             };
             match first {
                 Request::ProtocolInfo => {
@@ -1394,7 +1444,10 @@ impl Server {
                 Err(IpcError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return Ok(());
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    Self::write_frame_error(connection_id, &mut stream, &e).await;
+                    return Err(e.into());
+                }
             };
             // ADR 0010 slice 3.d streaming dispatch fork. v1 clients
             // never set prefer_stream; v2 clients that explicitly
@@ -19143,5 +19196,78 @@ budget_credits_per_hour = {credits}
             ),
             other => panic!("expected Error, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn write_frame_error_writes_generic_message_for_frame_too_large() {
+        // Client-distinguishability guard: handle() used to close the
+        // connection on FrameTooLarge with no payload, so the client
+        // could not tell a protocol violation from a transport reset.
+        // write_frame_error now emits a Response::Error frame with a
+        // generic message — generic so an unauthenticated peer cannot
+        // probe internal byte counts via the wire shape.
+        use covenant_ipc::read_frame;
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let err = IpcError::FrameTooLarge { got: 16_000_000 };
+        Server::write_frame_error(Uuid::nil(), &mut server, &err).await;
+        drop(server);
+        let resp: Response = read_frame(&mut client)
+            .await
+            .expect("client must receive a framed Response::Error before EOF");
+        match resp {
+            Response::Error { message } => {
+                assert_eq!(
+                    message, "frame too large",
+                    "frame-too-large arm must surface the generic message"
+                );
+                assert!(
+                    !message.contains("16000000"),
+                    "wire message must not echo the byte count: {message}"
+                );
+            }
+            other => panic!("expected Response::Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_frame_error_writes_generic_message_for_serde_failure() {
+        // Sibling guard: malformed-JSON failures also surface a
+        // generic Response::Error so the client side branches the same
+        // way the frame-size branch does, without leaking parse
+        // position context.
+        use covenant_ipc::read_frame;
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let serde_err = serde_json::from_str::<Request>("not json").expect_err("parse must fail");
+        let err = IpcError::Serde(serde_err);
+        Server::write_frame_error(Uuid::nil(), &mut server, &err).await;
+        drop(server);
+        let resp: Response = read_frame(&mut client)
+            .await
+            .expect("client must receive a framed Response::Error before EOF");
+        match resp {
+            Response::Error { message } => {
+                assert_eq!(message, "malformed frame");
+                assert!(!message.contains("expected"));
+            }
+            other => panic!("expected Response::Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_frame_error_skips_write_on_transport_io_failure() {
+        // Io errors mean the socket is already torn — writing back
+        // would be wasted work and could panic on a closed half. The
+        // helper must short-circuit silently so the caller's error
+        // propagates without a follow-on panic.
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "peer reset");
+        let err = IpcError::Io(io_err);
+        Server::write_frame_error(Uuid::nil(), &mut server, &err).await;
+        drop(server);
+        let mut buf = [0u8; 1];
+        let n = tokio::io::AsyncReadExt::read(&mut client, &mut buf)
+            .await
+            .expect("read should succeed");
+        assert_eq!(n, 0, "no frame must have been written on the Io arm");
     }
 }

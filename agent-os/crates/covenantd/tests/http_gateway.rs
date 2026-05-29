@@ -702,3 +702,200 @@ async fn cors_actual_request_carries_allow_origin_for_configured_origin() {
         .map(|v| v.to_str().unwrap().to_string());
     assert_eq!(allow_origin.as_deref(), Some("http://localhost:3000"));
 }
+
+#[tokio::test]
+async fn protected_route_accepts_body_up_to_ipc_max_frame() {
+    // Transport-parity guard: HTTP and IPC must accept the same payload
+    // size. axum's 2 MiB default would silently 413 intents that the
+    // IPC daemon would happily process; the explicit DefaultBodyLimit
+    // bumps it to covenant_ipc::MAX_FRAME (8 MiB).
+    let s = spawn_test_server().await;
+    // Fits inside the IPC cap; the per-route handler will reject the
+    // shape, but axum must NOT reject on size first.
+    let body = serde_json::json!({
+        "text": "x".repeat(4 * 1024 * 1024)
+    })
+    .to_string();
+    let r = reqwest::Client::new()
+        .post(format!("{}/intent", s.base))
+        .bearer_auth(&s.token)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        r.status(),
+        413,
+        "DefaultBodyLimit must accept 4 MiB; got 413"
+    );
+}
+
+#[tokio::test]
+async fn protected_route_rejects_body_above_ipc_max_frame() {
+    // Symmetric to the accept test: a payload above the cap must 413
+    // before the route handler runs, matching what IPC's FrameTooLarge
+    // returns at the same byte threshold.
+    let s = spawn_test_server().await;
+    let oversize_text = "x".repeat(9 * 1024 * 1024);
+    let body = serde_json::json!({ "text": oversize_text }).to_string();
+    let r = reqwest::Client::new()
+        .post(format!("{}/intent", s.base))
+        .bearer_auth(&s.token)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        413,
+        "body above MAX_FRAME must 413; got {}",
+        r.status()
+    );
+}
+
+struct FailingPeerRegistry;
+
+fn outage_err() -> covenant_peer_auth::PeerError {
+    covenant_peer_auth::PeerError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "registry storage outage (test fixture)",
+    ))
+}
+
+#[async_trait::async_trait]
+impl covenant_peer_auth::PeerRegistry for FailingPeerRegistry {
+    async fn register(
+        &self,
+        _entry: covenant_peer_auth::PeerEntry,
+    ) -> Result<(), covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn resolve(
+        &self,
+        _token: &covenant_peer_auth::PeerToken,
+    ) -> Result<Option<covenant_types::AgentId>, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn revoke(
+        &self,
+        _token: &covenant_peer_auth::PeerToken,
+    ) -> Result<bool, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn recent(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn list_summaries(
+        &self,
+        _limit: usize,
+        _pubkey_prefix: Option<&str>,
+        _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+    ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn purge_revoked_older_than(
+        &self,
+        _before_ms: u64,
+    ) -> Result<u64, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn revoke_by_token_prefix(
+        &self,
+        _prefix: &str,
+        _limit: usize,
+    ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+    async fn find_unique_live_by_token_prefix(
+        &self,
+        _prefix: &str,
+    ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError> {
+        Err(outage_err())
+    }
+}
+
+async fn spawn_test_server_with_failing_registry() -> TestServer {
+    let identity = Arc::new(LocalIdentity::generate("user@local"));
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(FailingPeerRegistry);
+    let agent_id = covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes());
+    let audit = Arc::new(InMemoryAuditLog::new());
+    let memory = Arc::new(InMemoryStore::new());
+    let server = Server::new(
+        Arc::new(Router::from_cards(vec![stub_card()])),
+        Arc::new(MockRunner::new("mocked summary")),
+        memory.clone(),
+        Arc::new(InMemorySettlement::new()),
+        audit.clone(),
+        Arc::new(InMemoryCapabilityStore::new()),
+        Arc::new(MockEmbedder::new(64)),
+        identity,
+        Arc::new(covenant_memory::IgnoreSet::default()),
+        Arc::new(covenant_mcp::ToolRegistry::from_tools(vec![Arc::new(
+            covenant_mcp::native::EchoTool,
+        )])),
+        Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        peers,
+        Arc::new(covenant_budget::InMemoryLedger::new()),
+    );
+    let (live_traces_tx, _) = tokio::sync::broadcast::channel(16);
+    let app = router(HttpState {
+        server,
+        live_traces_tx,
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let _handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    TestServer {
+        base: format!("http://{addr}"),
+        token: covenant_peer_auth::PeerToken::generate().to_b58(),
+        agent_id,
+        audit,
+        memory,
+        _handle,
+    }
+}
+
+#[tokio::test]
+async fn bearer_auth_surfaces_peer_registry_outage_as_503_with_distinct_audit() {
+    // Audit-triage guard: a storage outage in the peer registry used
+    // to be silently rolled into "unknown or revoked token" 401s.
+    // After the fix, the wire response is 503 and the audit row has a
+    // distinct reason so operators triaging probe storms can split the
+    // two failure classes.
+    let s = spawn_test_server_with_failing_registry().await;
+    let any_token = covenant_peer_auth::PeerToken::generate().to_b58();
+    let r = reqwest::Client::new()
+        .get(format!("{}/tools", s.base))
+        .bearer_auth(&any_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        503,
+        "storage outage must surface as 503, not 401"
+    );
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["kind"], "error");
+    assert_eq!(body["message"], "peer registry unavailable");
+
+    let events = s.audit.recent(20).await.unwrap();
+    let saw_outage_reason = events.iter().any(|e| {
+        matches!(
+            &e.kind,
+            covenant_audit::AuditKind::AuthenticationFailed { transport, reason }
+                if transport == "http" && reason == "peer registry unavailable"
+        )
+    });
+    assert!(
+        saw_outage_reason,
+        "expected an 'peer registry unavailable' audit entry; got: {events:?}"
+    );
+}

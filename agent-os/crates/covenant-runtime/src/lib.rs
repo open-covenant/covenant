@@ -219,6 +219,12 @@ pub enum RunnerError {
     MalformedStdout {
         #[source]
         source: serde_json::Error,
+        /// Truncated stderr captured from the subprocess at the time
+        /// of the parse failure. Empty if stderr could not be read.
+        /// Operators triage exit-0 malformed-stdout incidents against
+        /// this — without it the only diagnostic is the parse position
+        /// from the serde error.
+        stderr: String,
     },
     #[error("agent {0} has no manifest or package_dir set; cannot execute")]
     NotExecutable(String),
@@ -260,12 +266,30 @@ pub trait Runner: Send + Sync {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError>;
 }
 
-fn parse_result(stdout_buf: &[u8]) -> Result<AgentResult, RunnerError> {
+fn parse_result(stdout_buf: &[u8], stderr: String) -> Result<AgentResult, RunnerError> {
     let line = stdout_buf
         .split(|b| *b == b'\n')
         .find(|l| !l.is_empty())
         .unwrap_or(stdout_buf);
-    serde_json::from_slice(line).map_err(|source| RunnerError::MalformedStdout { source })
+    serde_json::from_slice(line).map_err(|source| RunnerError::MalformedStdout { source, stderr })
+}
+
+/// Cap stderr payloads attached to [`RunnerError::MalformedStdout`] so
+/// a chatty agent cannot push multi-megabyte buffers into the audit
+/// log. Keeps the tail because the final stderr lines are usually the
+/// fault story; the head, if any, gets a `...(truncated)` marker so
+/// operators can see the buffer was clipped.
+fn truncate_stderr_for_diagnostics(mut stderr: String) -> String {
+    const MAX_LEN: usize = 4096;
+    if stderr.len() <= MAX_LEN {
+        return stderr;
+    }
+    let drop_until = stderr.len() - MAX_LEN;
+    let boundary = (drop_until..stderr.len())
+        .find(|&i| stderr.is_char_boundary(i))
+        .unwrap_or(stderr.len());
+    stderr.drain(..boundary);
+    format!("...(truncated)\n{stderr}")
 }
 
 fn workspace_entry(entry: &str) -> String {
@@ -651,16 +675,16 @@ impl Runner for SubprocessRunner {
         };
 
         let status = child.wait().await?;
+        let mut stderr_buf = String::new();
+        let _ = stderr.read_to_string(&mut stderr_buf).await;
         if !status.success() {
-            let mut err = String::new();
-            let _ = stderr.read_to_string(&mut err).await;
             return Err(RunnerError::NonZeroExit {
                 status: status.code().unwrap_or(-1),
-                stderr: err,
+                stderr: stderr_buf,
             });
         }
 
-        parse_result(&stdout_buf)
+        parse_result(&stdout_buf, truncate_stderr_for_diagnostics(stderr_buf))
     }
 }
 
@@ -772,11 +796,10 @@ impl GvisorRunner {
     }
 
     fn bundle_id(card: &AgentCard) -> String {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default();
-        format!("covenant-{}-{nanos}", card.id)
+        // Uuid::new_v4 instead of SystemTime nanos: under clock
+        // coalescing, two concurrent same-agent dispatches could read
+        // the same nanos and clobber each other's config.json.
+        format!("covenant-{}-{}", card.id, Uuid::new_v4())
     }
 
     fn oci_config(&self, card: &AgentCard) -> Result<Value, RunnerError> {
@@ -843,12 +866,22 @@ impl GvisorRunner {
     fn write_bundle(&self, card: &AgentCard, bundle_id: &str) -> Result<PathBuf, RunnerError> {
         let bundle_dir = self.scratch_root.join(bundle_id);
         std::fs::create_dir_all(&bundle_dir)?;
+        match self.populate_bundle(card, &bundle_dir) {
+            Ok(()) => Ok(bundle_dir),
+            Err(e) => {
+                Self::cleanup_bundle(&bundle_dir);
+                Err(e)
+            }
+        }
+    }
+
+    fn populate_bundle(&self, card: &AgentCard, bundle_dir: &Path) -> Result<(), RunnerError> {
         let config = self.oci_config(card)?;
         std::fs::write(
             bundle_dir.join("config.json"),
             serde_json::to_vec_pretty(&config)?,
         )?;
-        Ok(bundle_dir)
+        Ok(())
     }
 
     fn redact_stderr(stderr: &str, paths: &[&Path]) -> String {
@@ -969,19 +1002,20 @@ impl Runner for GvisorRunner {
                 return Err(RunnerError::Io(e));
             }
         };
+        let mut stderr_buf = String::new();
+        let _ = stderr.read_to_string(&mut stderr_buf).await;
+        let stderr_buf =
+            Self::redact_stderr(&stderr_buf, &[&bundle_dir, &card.package_dir, &self.rootfs]);
         if !status.success() {
-            let mut err = String::new();
-            let _ = stderr.read_to_string(&mut err).await;
-            let err = Self::redact_stderr(&err, &[&bundle_dir, &card.package_dir, &self.rootfs]);
             Self::cleanup_bundle(&bundle_dir);
             return Err(RunnerError::NonZeroExit {
                 status: status.code().unwrap_or(-1),
-                stderr: err,
+                stderr: stderr_buf,
             });
         }
 
         Self::cleanup_bundle(&bundle_dir);
-        parse_result(&stdout_buf)
+        parse_result(&stdout_buf, truncate_stderr_for_diagnostics(stderr_buf))
     }
 }
 
@@ -1388,7 +1422,7 @@ mod tests {
     fn parse_result_pins_first_non_empty_line_fallback_and_malformed_stdout() {
         let leading_blank =
             b"\n{\"text\":\"hello\",\"sources\":[]}\nthen garbage that must be ignored\n";
-        let parsed = parse_result(leading_blank).expect(
+        let parsed = parse_result(leading_blank, String::new()).expect(
             "the first non-empty line must be picked even when the buffer starts with a blank newline; otherwise agents that flush a leading newline are silently broken",
         );
         assert_eq!(
@@ -1397,7 +1431,7 @@ mod tests {
         );
 
         let no_newline = b"{\"text\":\"single-line\",\"sources\":[]}";
-        let parsed = parse_result(no_newline).expect(
+        let parsed = parse_result(no_newline, String::new()).expect(
             "a buffer with no newline at all must still decode via the single-slice split; dropping this would break agents that omit a trailing newline",
         );
         assert_eq!(
@@ -1406,7 +1440,7 @@ mod tests {
         );
 
         let only_newlines = b"\n\n";
-        let err = parse_result(only_newlines)
+        let err = parse_result(only_newlines, String::new())
             .expect_err("a buffer made of only newline separators leaves every split slice empty; find() returns None and the fallback returns the whole buffer, which is not valid AgentResult JSON");
         match err {
             RunnerError::MalformedStdout { .. } => {}
@@ -1416,7 +1450,7 @@ mod tests {
         }
 
         let not_json = b"not-json";
-        let err = parse_result(not_json).expect_err(
+        let err = parse_result(not_json, String::new()).expect_err(
             "a non-JSON single line must error: parse_result must never silently coerce arbitrary stdout into a default AgentResult",
         );
         match err {
@@ -1672,7 +1706,7 @@ cpu_ms_per_task = 5000
         let card = card_for(manifest_toml, dir.path().to_path_buf());
         let result = SubprocessRunner::new().run(&card, &dummy_intent()).await;
         match result {
-            Err(RunnerError::MalformedStdout { source }) => {
+            Err(RunnerError::MalformedStdout { source, .. }) => {
                 assert!(source.is_syntax() || source.is_data());
             }
             other => panic!("unexpected: {other:?}"),
@@ -2833,7 +2867,10 @@ cpu_ms_per_task = 5000
     ) {
         let source =
             serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
-        let err = RunnerError::MalformedStdout { source };
+        let err = RunnerError::MalformedStdout {
+            source,
+            stderr: String::new(),
+        };
         let message = format!("{err}");
         assert!(
             message.starts_with("agent stdout was not a valid AgentResult JSON line: "),
@@ -2864,7 +2901,10 @@ cpu_ms_per_task = 5000
         let source =
             serde_json::from_str::<serde_json::Value>("not json").expect_err("parse must fail");
         let expected_display = format!("{source}");
-        let err = RunnerError::MalformedStdout { source };
+        let err = RunnerError::MalformedStdout {
+            source,
+            stderr: String::new(),
+        };
         let inner = err.source().expect(
             "RunnerError::MalformedStdout must surface the inner serde_json::Error via std::error::Error::source so anyhow chain printers, tracing's source-walking emitters, and daemon audit-log emitters that downcast source() to serde_json::Error to extract line/column can render the wrapper context AND the inner cause; a thiserror refactor that dropped the #[source] attribute on the source field (e.g., field rename without re-annotation, or removing the explicit #[source] attribute under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
         );
@@ -3308,5 +3348,107 @@ cpu_ms_per_task = 5000
         // no signal was ever sent.
         let outcome = preempt_subprocess_pg(0, Duration::from_millis(10)).await;
         assert_eq!(outcome, PreemptOutcome::UnsupportedPlatform);
+    }
+
+    #[test]
+    fn gvisor_write_bundle_removes_bundle_dir_when_oci_config_fails() {
+        // Disk-leak guard: oci_config() canonicalizes the configured
+        // rootfs, which fails on a nonexistent path. Before the fix,
+        // write_bundle created the bundle dir and then bailed out with
+        // a stranded empty directory; the cleanup pass now must remove
+        // it on every post-create_dir_all error path.
+        let dir = tempdir().unwrap();
+        let scratch = tempdir().unwrap();
+        let missing_rootfs = scratch.path().join("does-not-exist");
+        std::fs::write(dir.path().join("agent.sh"), "#!/bin/sh\n").unwrap();
+        let runner = GvisorRunner::with_paths("runsc", &missing_rootfs, scratch.path());
+        let card = card_for(&sandbox_manifest(""), dir.path().to_path_buf());
+
+        let bundle_id = GvisorRunner::bundle_id(&card);
+        let err = runner
+            .write_bundle(&card, &bundle_id)
+            .expect_err("missing rootfs must surface as oci_config canonicalize failure");
+        assert!(
+            matches!(err, RunnerError::Io(_)),
+            "missing rootfs surfaces through std::fs::canonicalize as RunnerError::Io"
+        );
+        assert!(
+            !scratch.path().join(&bundle_id).exists(),
+            "the bundle dir must not survive an oci_config failure; otherwise repeated dispatch against a misconfigured rootfs leaks one directory per call"
+        );
+    }
+
+    #[test]
+    fn gvisor_bundle_id_is_unique_across_back_to_back_calls() {
+        // Concurrency-safety guard: SystemTime nanos used to be the ID
+        // input, which collides under clock coalescing — two same-agent
+        // dispatches could clobber each other's config.json in the
+        // same scratch dir. Uuid::new_v4 makes the collision risk
+        // negligible.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("agent.sh"), "#!/bin/sh\n").unwrap();
+        let card = card_for(&sandbox_manifest(""), dir.path().to_path_buf());
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            let id = GvisorRunner::bundle_id(&card);
+            assert!(
+                id.starts_with(&format!("covenant-{}-", card.id)),
+                "bundle id must keep the agent-id prefix so the scratch dir is human-greppable: {id}"
+            );
+            assert!(
+                seen.insert(id.clone()),
+                "bundle id must be unique across back-to-back calls; a duplicate ({id}) re-opens the clock-coalescing bug"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_result_malformed_stdout_carries_provided_stderr() {
+        // Diagnostic-loss guard: before the fix, MalformedStdout
+        // dropped stderr on exit-0 parse failures. parse_result now
+        // takes the (already-truncated) stderr buffer the runner
+        // captured and threads it into the variant so operators see
+        // the agent's diagnostics next to the parse error.
+        let stderr = "rust panic at main.rs:42: assertion failed\n".to_string();
+        let err = parse_result(b"not-json", stderr.clone())
+            .expect_err("non-JSON stdout must surface MalformedStdout");
+        match err {
+            RunnerError::MalformedStdout {
+                stderr: captured, ..
+            } => {
+                assert_eq!(
+                    captured, stderr,
+                    "MalformedStdout must thread the runner-provided stderr verbatim so operator triage can read the agent's last diagnostics"
+                );
+            }
+            other => panic!("expected MalformedStdout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_stderr_keeps_short_buffers_intact_and_tails_long_ones() {
+        // Truncation invariants: under the cap, return as-is; over the
+        // cap, keep the tail (final lines are usually the fault story)
+        // and mark the head as clipped so operators know the buffer
+        // was capped.
+        let short = "panic: short\n".to_string();
+        assert_eq!(truncate_stderr_for_diagnostics(short.clone()), short);
+
+        let long = "a".repeat(8000) + "TAIL-MARKER";
+        let truncated = truncate_stderr_for_diagnostics(long);
+        assert!(
+            truncated.ends_with("TAIL-MARKER"),
+            "the tail must survive — that's the operator-actionable end of the buffer"
+        );
+        assert!(
+            truncated.starts_with("...(truncated)"),
+            "operators must see that the head was clipped: {truncated}"
+        );
+        assert!(
+            truncated.len() < 8000,
+            "truncate must actually shrink: got {} bytes",
+            truncated.len()
+        );
     }
 }

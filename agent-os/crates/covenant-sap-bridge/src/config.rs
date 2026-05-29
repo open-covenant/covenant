@@ -6,6 +6,7 @@
 //! daemon.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +73,15 @@ fn parse_bool(value: Option<&str>) -> bool {
     }
 }
 
+/// Maximum wall-clock budget for one worker subprocess invocation. The
+/// previous code awaited `wait_with_output` with no timeout, so a hung
+/// SAP worker (network stalls, RPC saturation, a deadlocked SDK call)
+/// blocked the daemon reconciliation/attestation task indefinitely —
+/// violating the contract that the SAP bridge must never block the
+/// offline daemon. 30s is comfortably above a healthy round-trip and
+/// well below any supervisor-level deadline.
+pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Resolved bridge configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -86,6 +96,12 @@ pub struct Config {
     /// bridge worker. Defaults to the installed `covenant-sap-worker`
     /// bin; override via `COVENANT_SAP_WORKER_CMD`.
     pub worker_command: Vec<String>,
+    /// Per-call wall-clock budget for `worker::invoke`. Override via
+    /// `COVENANT_SAP_WORKER_TIMEOUT_SECS`. Set high enough to cover a
+    /// healthy `attest-root` round-trip (~5s on devnet) but low enough
+    /// that a stalled subprocess can't pin the daemon's reconciliation
+    /// task across a maintenance window.
+    pub worker_timeout: Duration,
 }
 
 /// Default command used to invoke the TypeScript bridge worker. The
@@ -107,6 +123,7 @@ impl Config {
             rpc_url: String::new(),
             explorer_url: String::new(),
             worker_command: default_worker_command(),
+            worker_timeout: DEFAULT_WORKER_TIMEOUT,
         }
     }
 
@@ -155,6 +172,12 @@ impl Config {
             .filter(|parts| !parts.is_empty())
             .unwrap_or_else(default_worker_command);
 
+        let worker_timeout = get("COVENANT_SAP_WORKER_TIMEOUT_SECS")
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_WORKER_TIMEOUT);
+
         Self {
             enabled,
             cluster,
@@ -162,6 +185,7 @@ impl Config {
             rpc_url,
             explorer_url,
             worker_command,
+            worker_timeout,
         }
     }
 }

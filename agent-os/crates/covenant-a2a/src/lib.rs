@@ -836,11 +836,47 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn compact(&self) -> Result<u64, A2AError> {
-        // No on-disk event log to compact. The senders map could in
-        // principle be pruned for fully-resolved tasks, but this impl
-        // is for tests and short-lived in-process orchestrators where
-        // the map's growth is bounded by the test's lifetime.
-        Ok(0)
+        // Hold every relevant lock for the whole call so a concurrent
+        // send/recv cannot reach a state where a task ID is briefly
+        // absent from in_flight before its result lands in results,
+        // which would let the drop step strand an orphan result.
+        // Lock order: senders → attempts → in_flight → tasks →
+        // results → result_cache. senders-first matches
+        // try_recv_result_for, the only other multi-lock holder.
+        let mut senders = self.senders.lock();
+        let mut attempts = self.attempts.lock();
+        let in_flight = self.in_flight.lock();
+        let tasks = self.tasks.lock();
+        let results = self.results.lock();
+        let mut result_cache = self.result_cache.lock();
+
+        let pending_tasks: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
+        let in_flight_ids: HashSet<Uuid> = in_flight.keys().copied().collect();
+        let pending_results: HashSet<Uuid> = results.iter().map(|r| r.task_id).collect();
+
+        let droppable: HashSet<Uuid> = senders
+            .keys()
+            .copied()
+            .filter(|id| {
+                !pending_tasks.contains(id)
+                    && !in_flight_ids.contains(id)
+                    && !pending_results.contains(id)
+            })
+            .collect();
+
+        if droppable.is_empty() {
+            return Ok(0);
+        }
+
+        let mut dropped = 0u64;
+        for tid in &droppable {
+            if senders.remove(tid).is_some() {
+                dropped += 1;
+            }
+            attempts.remove(tid);
+        }
+        result_cache.retain(|_, v| !droppable.contains(&v.source_task_id));
+        Ok(dropped)
     }
 }
 
@@ -1416,6 +1452,8 @@ impl Mailbox for JsonlMailbox {
             s.in_flight.remove(tid);
             s.attempts.remove(tid);
         }
+        s.result_cache
+            .retain(|_, v| !droppable.contains(&v.source_task_id));
         Ok(dropped)
     }
 }
@@ -1473,7 +1511,13 @@ fn event_belongs_to_droppable(ev: &MailboxEvent, droppable: &HashSet<Uuid>) -> b
         MailboxEvent::TaskLeased { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::TaskRequeued { task_id, .. } => droppable.contains(task_id),
         MailboxEvent::TaskForceErrored { task_id, .. } => droppable.contains(task_id),
-        MailboxEvent::IdempotencyResultCached { .. } => false,
+        // Drop the cache entry alongside its source task. Idempotency
+        // replay only protects against duplicates that arrive before
+        // compaction; once the source is fully drained, the cache
+        // entry's memory footprint must be reclaimable.
+        MailboxEvent::IdempotencyResultCached { result, .. } => {
+            droppable.contains(&result.source_task_id)
+        }
         MailboxEvent::IdempotencyResultReplayed { task, .. } => droppable.contains(&task.id),
         MailboxEvent::ResultPosted { result } => droppable.contains(&result.task_id),
         MailboxEvent::ResultRecv { task_id } => droppable.contains(task_id),
@@ -4696,20 +4740,32 @@ mod tests {
             );
         }
 
-        // IdempotencyResultCached must never be droppable even when the
-        // underlying replayed task_id is in the set; the cache row is
-        // operator-visible replay provenance and a compaction pass that
-        // dropped it would silently break the audit trail.
-        let cached = MailboxEvent::IdempotencyResultCached {
+        // IdempotencyResultCached keys off the embedded result's
+        // source_task_id, NOT off any outer task_id. The cache row is
+        // droppable exactly when its source task is in the droppable
+        // set; otherwise the cache row survives compaction even though
+        // every TaskSent/Recv/etc. with that id is also non-droppable.
+        // This caps result_cache memory at the size of the still-live
+        // workload and accepts that a duplicate idempotent send arriving
+        // after a compact sweep will re-execute instead of replaying.
+        let cached_in = MailboxEvent::IdempotencyResultCached {
             cache_key: make_cache_key(),
             result: make_cached_result(),
         };
-        assert!(!event_belongs_to_droppable(&cached, &droppable));
-        assert!(!event_belongs_to_droppable(&cached, &disjoint));
+        assert!(
+            event_belongs_to_droppable(&cached_in, &droppable),
+            "cached entry whose source_task_id is droppable must drop",
+        );
+        assert!(
+            !event_belongs_to_droppable(&cached_in, &disjoint),
+            "cached entry whose source_task_id is NOT droppable must survive",
+        );
 
-        // Re-use task to anchor the suppression check on a fresh id so a
-        // future refactor that introduced any droppable.contains lookup
-        // for the cached variant would fail this assertion.
+        // Build a fresh cache entry whose source_task_id is the
+        // disjoint set's id, so the lookup is driven only by
+        // source_task_id (not the surrounding task's id) — guards
+        // against a future refactor that accidentally swapped the
+        // lookup field.
         task.id = other_id;
         let cached_other = MailboxEvent::IdempotencyResultCached {
             cache_key: make_cache_key(),
@@ -4720,7 +4776,8 @@ mod tests {
                 error_message: None,
             },
         };
-        assert!(!event_belongs_to_droppable(&cached_other, &disjoint));
+        assert!(event_belongs_to_droppable(&cached_other, &disjoint));
+        assert!(!event_belongs_to_droppable(&cached_other, &droppable));
     }
 
     #[test]
@@ -5781,7 +5838,10 @@ mod tests {
             .await
             .unwrap();
             let _ = m.try_recv_result_for(&first.sender).await.unwrap().unwrap();
-            assert_eq!(m.compact().await.unwrap(), 4);
+            // Intentionally no compact() here. Compact prunes the
+            // cache entry along with the rest of the source task's
+            // events; the post-compact behavior lives in
+            // jsonl_compact_drops_idempotency_cache_for_drained_source.
         }
 
         let reopened = JsonlMailbox::open(path).await.unwrap();
@@ -6403,5 +6463,165 @@ mod tests {
         // Surviving event still on disk and still replays.
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains(&orphan_task_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_drops_idempotency_cache_for_drained_source() {
+        // Memory regression guard: result_cache used to grow forever
+        // because IdempotencyResultCached was never droppable. Compact
+        // must reclaim cache entries whose source task is fully
+        // drained, both on disk and in the in-memory mirror.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let mut t = task_between(alice.clone(), bob.clone());
+        t.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory",
+        ));
+        drive_round_trip(&m, &t).await;
+
+        // Pre-compact: five events (TaskSent, TaskLeased, ResultPosted,
+        // IdempotencyResultCached, ResultRecv).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let count = raw.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(count, 5);
+
+        let dropped = m.compact().await.unwrap();
+        assert_eq!(
+            dropped, 5,
+            "all five events drop, including the cache entry whose source task is drained"
+        );
+
+        // On-disk log is empty.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.lines().find(|l| !l.is_empty()).is_none());
+
+        // Reopen — a duplicate idempotency send must queue (cache miss)
+        // rather than replay, proving the in-memory cache was pruned
+        // alongside the on-disk event.
+        let reopened = JsonlMailbox::open(path).await.unwrap();
+        let mut duplicate = t.clone();
+        duplicate.id = Uuid::new_v4();
+        reopened.send_task(duplicate.clone()).await.unwrap();
+
+        assert!(
+            reopened
+                .try_recv_result_for(&duplicate.sender)
+                .await
+                .unwrap()
+                .is_none(),
+            "no cached replay after compact pruned the cache"
+        );
+        let queued = reopened
+            .try_recv_task_for(&duplicate.recipient)
+            .await
+            .unwrap();
+        assert_eq!(
+            queued.map(|q| q.id),
+            Some(duplicate.id),
+            "duplicate falls through to the task queue once the cache is gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_compact_drops_drained_task_state_and_cache() {
+        // Real InMemoryMailbox compaction: every long-running daemon
+        // backed by this mailbox used to retain senders, attempts, and
+        // result_cache entries forever. compact() now reclaims state
+        // for tasks that are no longer queued, in-flight, or
+        // result-pending.
+        let m = InMemoryMailbox::new();
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let mut t = task_between(alice.clone(), bob.clone());
+        t.idempotency = Some(A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "research:agent-memory",
+        ));
+
+        m.send_task(t.clone()).await.unwrap();
+        let _ = m.try_recv_task_for(&t.recipient).await.unwrap().unwrap();
+        m.send_result(A2ATaskResult::ok(
+            t.id,
+            vec![Content::text("cached answer")],
+        ))
+        .await
+        .unwrap();
+        let _ = m.try_recv_result_for(&t.sender).await.unwrap().unwrap();
+
+        // Sender entry exists before compact, gets dropped after.
+        assert_eq!(
+            m.lookup_task_sender(t.id).await.unwrap(),
+            Some(alice.clone()),
+        );
+        assert_eq!(m.compact().await.unwrap(), 1);
+        assert!(m.lookup_task_sender(t.id).await.unwrap().is_none());
+
+        // A second task with the same idempotency key now queues —
+        // cache was pruned alongside the drained source task.
+        let mut duplicate = t.clone();
+        duplicate.id = Uuid::new_v4();
+        m.send_task(duplicate.clone()).await.unwrap();
+        let queued = m.try_recv_task_for(&duplicate.recipient).await.unwrap();
+        assert_eq!(
+            queued.map(|q| q.id),
+            Some(duplicate.id),
+            "duplicate must reach the task queue once the cache is pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_compact_preserves_unfinished_tasks() {
+        // A second compact-time invariant: tasks that are queued or
+        // in-flight or have a pending undelivered result are NOT
+        // droppable. Distinct recipients so try_recv_task_for picks
+        // up the specific task we want to lease.
+        let m = InMemoryMailbox::new();
+
+        let alice = dummy_agent("alice@local");
+        let bob = dummy_agent("bob@local");
+        let carol = dummy_agent("carol@local");
+        let dave = dummy_agent("dave@local");
+        let queued = task_between(alice.clone(), bob.clone());
+        let in_flight = task_between(alice.clone(), carol.clone());
+        let result_pending = task_between(alice.clone(), dave.clone());
+
+        m.send_task(queued.clone()).await.unwrap();
+        m.send_task(in_flight.clone()).await.unwrap();
+        m.send_task(result_pending.clone()).await.unwrap();
+
+        let _ = m
+            .try_recv_task_for(&in_flight.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        let _ = m
+            .try_recv_task_for(&result_pending.recipient)
+            .await
+            .unwrap()
+            .unwrap();
+        m.send_result(A2ATaskResult::ok(result_pending.id, vec![]))
+            .await
+            .unwrap();
+
+        assert_eq!(m.compact().await.unwrap(), 0);
+
+        assert_eq!(
+            m.lookup_task_sender(queued.id).await.unwrap(),
+            Some(alice.clone()),
+        );
+        assert_eq!(
+            m.lookup_task_sender(in_flight.id).await.unwrap(),
+            Some(alice.clone()),
+        );
+        assert_eq!(
+            m.lookup_task_sender(result_pending.id).await.unwrap(),
+            Some(alice.clone()),
+        );
     }
 }

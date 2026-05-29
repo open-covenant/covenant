@@ -309,6 +309,52 @@ async fn main() -> Result<()> {
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);
 
+    let server = match x402_dispatch_config_from_env() {
+        Some(cfg) => {
+            info!(
+                signer = %cfg.signer_binary.display(),
+                "x402 outbound dispatch enabled"
+            );
+            server.with_x402_dispatch(cfg)
+        }
+        None => server,
+    };
+
+    let server = match hyre_config_from_env() {
+        Some(cfg) => {
+            // Prefer the live manifest so a restart picks up Hyre's
+            // current endpoints; fall back to the vendored copy offline.
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let catalog = match covenant_hyre::HyreCatalog::refresh(&client, &cfg).await {
+                Ok(c) => {
+                    info!(source = "manifest", base_url = %cfg.base_url, "hyre catalog loaded");
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "hyre manifest refresh failed; using vendored catalog");
+                    covenant_hyre::HyreCatalog::from_vendored(&cfg).ok()
+                }
+            };
+            match catalog {
+                Some(catalog) => {
+                    info!(
+                        endpoints = catalog.endpoints().len(),
+                        "hyre provider enabled"
+                    );
+                    server.with_hyre(covenantd::hyre::HyreState::new(catalog, cfg))
+                }
+                None => {
+                    tracing::warn!("hyre catalog unavailable; provider disabled");
+                    server
+                }
+            }
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -381,8 +427,19 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind http {}", http_addr))?;
     info!(addr = %http_addr, "http gateway listening (bearer-auth enforced)");
+    // Broadcast channel so shutdown can fan a single signal out to the HTTP
+    // server (axum::serve's with_graceful_shutdown takes a future) without
+    // moving the receiver into the spawned task — the main select! still
+    // needs to send on it. Capacity 1 is enough: the only message is `()`,
+    // and a single SIGTERM coalescing into one wakeup is the correct shape.
+    let (shutdown_tx, mut shutdown_rx_http) = tokio::sync::broadcast::channel::<()>(1);
     let http_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(http_listener, http_router).await {
+        let serve = axum::serve(http_listener, http_router).with_graceful_shutdown(async move {
+            // Recv resolves either when shutdown_tx.send fires or when every
+            // sender is dropped; either way the server is meant to stop.
+            let _ = shutdown_rx_http.recv().await;
+        });
+        if let Err(e) = serve.await {
             tracing::warn!(error = %e, "http gateway exited");
         }
     });
@@ -397,8 +454,14 @@ async fn main() -> Result<()> {
     info!(path = %sock_path.display(), "covenantd listening");
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown_signal() => {
             info!("shutdown requested");
+            // Tell the HTTP server to stop accepting new connections and
+            // drain in-flight ones; broadcast::send errors only when
+            // there are zero subscribers, which the spawned http_handle
+            // is still — unless it already exited on its own, in which
+            // case the send error is correct to ignore.
+            let _ = shutdown_tx.send(());
             let saved = server.save_shutdown_budget_checkpoints().await;
             info!(saved, "shutdown budget checkpoints saved");
         }
@@ -407,7 +470,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    http_handle.abort();
+    // Drain HTTP under a bounded deadline so a stuck in-flight request
+    // can't wedge the supervisor's SIGTERM→SIGKILL window (systemd
+    // defaults to 90s); the abort on timeout is the fallback, not the
+    // primary path the way it was before.
+    if !await_with_drain_timeout(http_handle, HTTP_DRAIN_DEADLINE).await {
+        tracing::warn!(
+            timeout_secs = HTTP_DRAIN_DEADLINE.as_secs(),
+            "http drain exceeded deadline; aborting outstanding requests"
+        );
+    }
     if let Some(handle) = a2a_retry_scheduler_handle {
         handle.abort();
     }
@@ -419,6 +491,71 @@ async fn main() -> Result<()> {
         let _ = std::fs::remove_file(&sock_path);
     }
     Ok(())
+}
+
+/// Maximum wall-clock budget for HTTP graceful-shutdown drain. systemd's
+/// default `TimeoutStopSec` is 90s; staying comfortably below that lets the
+/// rest of the shutdown path (budget checkpoint save, socket cleanup) finish
+/// before the supervisor escalates to SIGKILL.
+const HTTP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Resolve when the process should stop accepting work: SIGINT (ctrl-c on
+/// every target) or SIGTERM (systemd / Docker / Kubernetes `kill` on Unix).
+/// The previous shutdown path only awaited ctrl_c, so SIGTERM under any
+/// supervisor terminated the process immediately, skipping budget-checkpoint
+/// save and socket cleanup. Composing both means the same drain path runs
+/// regardless of which supervisor sent the signal.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!(error = %e, "ctrl-c handler failed; using SIGTERM only");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGTERM handler failed; using ctrl-c only");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Wait for `handle` to complete, bounded by `timeout`. Returns `true` if the
+/// handle finished within the deadline, `false` otherwise. On timeout the
+/// JoinHandle is explicitly aborted and awaited to completion — without the
+/// explicit abort, `tokio::time::timeout` would drop the JoinHandle and
+/// merely DETACH the task (tokio's drop semantic), so a stuck handler would
+/// keep running until the multi-thread runtime's drop discarded it. Aborting
+/// is the behaviour the warn-log promises: drain the task immediately, don't
+/// silently let it run on.
+async fn await_with_drain_timeout<T>(
+    mut handle: tokio::task::JoinHandle<T>,
+    timeout: std::time::Duration,
+) -> bool {
+    match tokio::time::timeout(timeout, &mut handle).await {
+        Ok(_) => true,
+        Err(_) => {
+            handle.abort();
+            // The abort signal propagates at the next yield point; awaiting
+            // here resolves to a JoinError::cancelled almost immediately and
+            // confirms the task is gone before the shutdown path moves on.
+            let _ = handle.await;
+            false
+        }
+    }
 }
 
 /// Mint an operator token on first start (or read the existing one) and
@@ -478,6 +615,105 @@ async fn bootstrap_operator_token(
     peers.register(entry).await?;
     info!(path = %token_path.display(), display = %identity.display(), "operator token minted and registered");
     Ok(())
+}
+
+/// Build the outbound x402 dispatch config from env, or return None
+/// when the operator hasn't opted in. Returning None keeps the daemon
+/// running fully offline-from-payments — every `Request::PayX402`
+/// will surface "not configured" until the operator sets these vars
+/// and restarts.
+///
+/// Required when opted in:
+/// - `COVENANT_X402_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_X402_SIGNER_BINARY` — path to a built
+///   `covenant-x402-signer` binary
+///
+/// Forwarded to the sidecar via its env:
+/// - `COVENANT_X402_FUNDING_KEYPAIR` — funding keypair JSON path
+/// - `COVENANT_X402_RPC_URL` — Solana RPC URL
+fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
+    let enabled = std::env::var("COVENANT_X402_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let signer_binary = match std::env::var("COVENANT_X402_SIGNER_BINARY") {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => {
+            tracing::warn!(
+                "COVENANT_X402_ENABLED is set but COVENANT_X402_SIGNER_BINARY is not; outbound x402 dispatch will remain disabled"
+            );
+            return None;
+        }
+    };
+    let mut signer_env = Vec::new();
+    for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
+        if let Ok(v) = std::env::var(key) {
+            signer_env.push((key.to_string(), v));
+        }
+    }
+    Some(covenantd::x402::X402Config {
+        enabled: true,
+        signer_binary,
+        signer_env,
+    })
+}
+
+/// Build the Hyre provider config from env, or None when the operator
+/// hasn't opted in. The catalog itself loads from the vendored manifest;
+/// these vars only tune the rail and the spend policy.
+///
+/// - `COVENANT_HYRE_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_HYRE_BASE_URL` — override the API host (optional)
+/// - `COVENANT_HYRE_NETWORK` / `COVENANT_HYRE_ASSET` — override the
+///   settlement rail if Hyre's challenge ever diverges (optional)
+/// - `COVENANT_HYRE_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
+/// - `COVENANT_HYRE_ALLOW` — comma-separated endpoint slug allowlist (optional)
+/// - `COVENANT_HYRE_MARKUP_BPS` — resale markup in basis points (optional)
+fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
+    let enabled = std::env::var("COVENANT_HYRE_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_hyre::HyreConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_HYRE_BASE_URL") {
+        cfg.base_url = url;
+    }
+    if let Ok(network) = std::env::var("COVENANT_HYRE_NETWORK") {
+        cfg.network = network;
+    }
+    if let Ok(asset) = std::env::var("COVENANT_HYRE_ASSET") {
+        cfg.asset = asset;
+    }
+    if let Ok(cap) = std::env::var("COVENANT_HYRE_PER_CALL_CAP") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.per_call_cap = n,
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_HYRE_PER_CALL_CAP")
+            }
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_HYRE_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(bps) = std::env::var("COVENANT_HYRE_MARKUP_BPS") {
+        match bps.trim().parse() {
+            Ok(n) => cfg.markup_bps = n,
+            Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_HYRE_MARKUP_BPS"),
+        }
+    }
+    Some(cfg)
 }
 
 /// Mask secret query params (api keys, tokens) in a URL before logging it,
@@ -610,5 +846,93 @@ mod tests {
              assume CSV or fnmatch semantics and introduce broken \
              un-ignore rules that mask credential leaks",
         );
+    }
+
+    #[tokio::test]
+    async fn await_with_drain_timeout_reports_false_and_aborts_handle_when_deadline_exceeded() {
+        // The shutdown path replaces the prior `http_handle.abort()` with
+        // a bounded drain. Two contracts must hold for the warn-log to be
+        // honest: (a) `false` is returned on timeout so the caller emits
+        // the warning, and (b) the underlying task is actually aborted
+        // (not just detached, which is what `tokio::time::timeout` does
+        // when given the JoinHandle by value — the task would keep running
+        // until the runtime's drop discarded it, contradicting the warn
+        // log). A Drop guard on the spawned task pins this: the guard's
+        // Drop fires when the task itself terminates (normal completion OR
+        // abort), but not when only the JoinHandle is dropped.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        struct TerminationGuard(Arc<AtomicBool>);
+        impl Drop for TerminationGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let terminated = Arc::new(AtomicBool::new(false));
+        let probe = terminated.clone();
+        let handle = tokio::spawn(async move {
+            let _guard = TerminationGuard(probe);
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        let ok = await_with_drain_timeout(handle, std::time::Duration::from_millis(50)).await;
+        assert!(
+            !ok,
+            "await_with_drain_timeout must return false when the handle is still running past the deadline"
+        );
+        assert!(
+            terminated.load(Ordering::SeqCst),
+            "spawned task must be aborted-and-joined (TerminationGuard::drop \
+             fires) — a refactor that passed the JoinHandle by value to \
+             tokio::time::timeout without explicit abort would DETACH the \
+             task instead, leaving the guard alive in the background and \
+             failing this assertion"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_with_drain_timeout_reports_true_when_handle_completes_in_time() {
+        // The paired success case: a well-behaved task that finishes inside
+        // the deadline must return true so the shutdown log doesn't falsely
+        // warn about a drain timeout.
+        let handle = tokio::spawn(async {});
+        let ok = await_with_drain_timeout(handle, std::time::Duration::from_secs(2)).await;
+        assert!(
+            ok,
+            "await_with_drain_timeout must return true when the handle finishes inside the deadline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_signal_installs_sigterm_watcher_without_returning_immediately() {
+        // Smoke test: the unix branch of shutdown_signal installs a SIGTERM
+        // watcher via tokio::signal::unix::signal(SignalKind::terminate()).
+        // A refactor that returned the unit immediately from the SIGTERM
+        // arm (e.g., misuse of std::future::ready over std::future::pending
+        // in the error fallback) would make shutdown_signal resolve as
+        // soon as it starts, bypassing the supervisor drain entirely.
+        //
+        // Self-raising SIGTERM inside cargo test is unsafe — tokio installs
+        // signal handlers process-globally, but other in-flight test
+        // threads do not, so a real SIGTERM would either kill the harness
+        // (if delivered before our handler is registered) or be absorbed
+        // by a different test's watcher. Instead this test asserts the
+        // composition is await-blocking under normal conditions: spawn
+        // shutdown_signal in a task, yield long enough for any non-
+        // blocking arm to complete if it existed, then assert the task is
+        // still running. A regression that made shutdown_signal Ready
+        // immediately would fail here.
+        use std::time::Duration;
+        let signal_task = tokio::spawn(shutdown_signal());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !signal_task.is_finished(),
+            "shutdown_signal must await on the signal arms — a refactor that \
+             made either arm Ready immediately (e.g., std::future::ready in \
+             the SIGTERM error fallback instead of std::future::pending) \
+             would surface here. The supervisor drain depends on the future \
+             actually blocking until SIGINT or SIGTERM arrives."
+        );
+        signal_task.abort();
     }
 }

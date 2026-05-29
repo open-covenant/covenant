@@ -1,0 +1,31 @@
+[package]
+name = "covenant-x402-signer"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Covenant contributors"]
+repository = "https://github.com/open-covenant/covenant"
+description = "Standalone x402 funding-key signer. Runs as a sidecar to covenantd so the Solana dep tree and the funding key stay out of the daemon."
+
+# Standalone workspace on purpose. Resolving solana-sdk v4 in isolation
+# avoids the five8/solana-keypair conflict that the agent-os workspace
+# hits when anchor's older solana stack unifies with v4. Keeping the
+# funding key in a separate process also bounds its blast radius.
+[workspace]
+
+[[bin]]
+name = "covenant-x402-signer"
+path = "src/main.rs"
+
+[dependencies]
+covenant-x402 = { path = "../covenant-x402", features = ["solana"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Pinned transitively in Cargo.lock: solana-zero-copy = "=1.0.0". 1.1.0
+# adds `impl PartialOrd<PodI64> for i64`, which makes a `.into()` in
+# spl-token-2022-interface 2.1.0 ambiguous (E0283). The committed
+# lockfile holds the working resolution — run `cargo update` here with
+# care and re-verify the build.
+solana-zero-copy = "=1.0.0"

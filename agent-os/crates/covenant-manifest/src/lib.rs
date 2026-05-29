@@ -292,6 +292,26 @@ impl Manifest {
                 "sandbox.required=true requires a sandbox-grade backend".into(),
             ));
         }
+        // Zero cpu budget collapses every runner's deadline to 0ms,
+        // which preempts the dispatch before the agent ever runs and
+        // surfaces as Timeout(0ms) — an operator-facing bug that looks
+        // like a runtime defect, not a config error.
+        if self.resources.cpu_ms_per_task == 0 {
+            return Err(ManifestError::Validation(
+                "resources.cpu_ms_per_task must be > 0; a zero budget preempts every dispatch as Timeout(0ms)".into(),
+            ));
+        }
+        // memory_mb=0 only matters when it reaches an OCI memory limit
+        // (linux-gvisor); trusted-local does not enforce a memory cap
+        // and passing 0 there is a separately-tracked config sloppiness,
+        // not a bug. For sandbox-grade backends, 0 either means
+        // unlimited or deny-all depending on the kernel — either way,
+        // not what an operator intends.
+        if self.sandbox.backend.is_sandbox_grade() && self.resources.memory_mb == 0 {
+            return Err(ManifestError::Validation(
+                "resources.memory_mb must be > 0 for sandbox-grade backends; memory_mb=0 maps to an ambiguous OCI memory limit:0".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -1812,5 +1832,103 @@ cpu_ms_per_task = 1000
             source.downcast_ref::<toml::de::Error>().is_some(),
             "covenant_manifest::ManifestError::Parse source() must downcast_ref to toml::de::Error so daemon-side router/manifest-load diagnostics can inspect rendered line/column span context for malformed-agent-toml identification, including any future RouterError::Manifest source chain consumer; a refactor that wrapped the inner in a project-local newtype (e.g., ManifestParseError(toml::de::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies TOML parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    fn validate_rejects_zero_cpu_budget_unconditionally() {
+        // Runtime-defect-masquerade guard: cpu_ms_per_task=0 collapses
+        // every runner's deadline to Duration::from_millis(0), so every
+        // dispatch returns Timeout(0ms) before the agent ever runs. The
+        // operator sees a runtime failure that's actually a config
+        // typo. Validation must catch it at parse time.
+        let toml = r#"
+[agent]
+id = "zerocpu"
+name = "Zero CPU"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./zero"
+
+[resources]
+cpu_ms_per_task = 0
+memory_mb = 512
+"#;
+        match Manifest::parse(toml) {
+            Err(ManifestError::Validation(message)) => {
+                assert!(
+                    message.contains("cpu_ms_per_task"),
+                    "validation message must name the field so operators can find it: {message}"
+                );
+                assert!(
+                    message.contains("must be > 0"),
+                    "validation message must state the lower bound: {message}"
+                );
+            }
+            other => panic!("expected Validation rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_zero_memory_under_sandbox_grade_backend() {
+        // OCI-ambiguity guard: memory_mb=0 under linux-gvisor passes a
+        // limit:0 into the OCI config, which the kernel renders as
+        // either unlimited (cgroup v2 with no parent constraint) or
+        // deny-all (parent-constrained), neither of which is what an
+        // operator who wrote memory_mb=0 intended.
+        let toml = r#"
+[agent]
+id = "zeromem"
+name = "Zero Memory Sandbox"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./zero"
+
+[resources]
+cpu_ms_per_task = 5000
+memory_mb = 0
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+"#;
+        match Manifest::parse(toml) {
+            Err(ManifestError::Validation(message)) => {
+                assert!(
+                    message.contains("memory_mb"),
+                    "validation message must name the field: {message}"
+                );
+                assert!(
+                    message.contains("sandbox-grade"),
+                    "validation message must explain WHY the check fires only for sandbox-grade backends: {message}"
+                );
+            }
+            other => panic!("expected Validation rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_zero_memory_under_trusted_local_backend() {
+        // Backend-scope guard: trusted-local doesn't pass memory into a
+        // kernel limit, so memory_mb=0 there is at worst sloppy config
+        // and not a runtime-defect masquerade. Rejecting it would block
+        // existing manifests that omit memory_mb entirely (Resources
+        // default fills 512 in, but a hand-written 0 must still parse
+        // under trusted-local).
+        let toml = r#"
+[agent]
+id = "zeromem"
+name = "Zero Memory Local"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./zero"
+
+[resources]
+cpu_ms_per_task = 5000
+memory_mb = 0
+"#;
+        let m =
+            Manifest::parse(toml).expect("memory_mb=0 under trusted-local must pass validation");
+        assert_eq!(m.resources.memory_mb, 0);
+        assert_eq!(m.sandbox.backend, SandboxBackend::TrustedLocal);
     }
 }

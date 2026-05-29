@@ -79,10 +79,14 @@ impl Router {
     }
 
     pub fn from_cards(cards: Vec<AgentCard>) -> Self {
+        for card in &cards {
+            warn_unmapped_capabilities(card);
+        }
         Self { agents: cards }
     }
 
     pub fn register(&mut self, card: AgentCard) {
+        warn_unmapped_capabilities(&card);
         self.agents.push(card);
     }
 
@@ -104,16 +108,11 @@ impl Router {
             for cap in &agent.capabilities {
                 let kws = capability_keywords(cap);
                 if kws.is_empty() {
-                    // Capability has no entry in the keyword table — the
-                    // agent declared it but routing can't match anything
-                    // to it. Surface as warn! so the operator sees the
-                    // silent drop instead of wondering why their agent
-                    // never receives intents.
-                    warn!(
-                        agent = %agent.id,
-                        capability = %cap,
-                        "router: capability has no keyword bridge; intents will not match this agent on it"
-                    );
+                    // The operator-visible warn for unmapped capabilities
+                    // fires once per card at register/from_cards time, not
+                    // here. route() is the per-intent hot path; warning
+                    // here once produced one log row per dispatch and
+                    // buried real routing-failure signal.
                     continue;
                 }
                 for kw in kws {
@@ -133,6 +132,24 @@ impl Router {
             }
         }
         best
+    }
+}
+
+/// Surface a one-time warn at registration when a card declares a
+/// capability with no keyword bridge. Without this the operator only
+/// learns about the misconfiguration through the silent symptom of
+/// "this agent never receives intents". One warn per card per unmapped
+/// capability is loud enough to investigate and quiet enough to leave
+/// real routing-failure signal visible.
+fn warn_unmapped_capabilities(card: &AgentCard) {
+    for cap in &card.capabilities {
+        if capability_keywords(cap).is_empty() {
+            warn!(
+                agent = %card.id,
+                capability = %cap,
+                "router: capability has no keyword bridge; intents will not match this agent on it"
+            );
+        }
     }
 }
 
@@ -905,5 +922,59 @@ required = ["tool.web_search"]
             Some(std::io::ErrorKind::PermissionDenied),
             "covenant_router::RouterError::Io source() must downcast_ref to std::io::Error so daemon-side router-load retry-policy classifiers can extract io::ErrorKind for retry decisions on agents-directory IO; a refactor that wrapped the inner in a project-local newtype (e.g., RouterIoError(std::io::Error) under a 'tag router IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies router agents-directory walk faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    fn route_returns_none_for_all_unknown_capability_agent() {
+        // route() must silently skip unmapped capabilities — no warn,
+        // no panic, no spurious match. The agent simply never wins a
+        // candidate so the dispatch surface returns None to the
+        // caller. The warn that used to fire here at line 112 moved to
+        // register/from_cards (see warn_unmapped_capabilities); the
+        // hot path stays quiet. The `tool.` prefix passes manifest
+        // namespace validation while the suffix is not in the keyword
+        // table, exercising the unmapped-cap branch.
+        let card = build_card("unmapped", vec!["tool.unmapped_a", "tool.unmapped_b"]);
+        let r = Router::from_cards(vec![card]);
+        assert!(
+            r.route("any intent text").is_none(),
+            "an agent whose every capability is unmapped must contribute zero score and the route must collapse to None — otherwise an unmapped capability bug could silently promote the agent to a winning candidate via the keyword catch-all"
+        );
+    }
+
+    #[test]
+    fn route_does_not_warn_for_known_capability_agent() {
+        // Defence-in-depth: route() over a fully-mapped agent must not
+        // hit the unmapped branch at all. This locks the post-fix
+        // shape — the per-cap loop body's only unmapped-capability
+        // logic is `continue;` — so a future refactor that resurrects
+        // the warn! inside route() will conflict with this test's
+        // structural intent.
+        let r = Router::from_cards(vec![build_card("search", vec!["tool.web_search"])]);
+        let m = r.route("search for recent papers").expect("must match");
+        assert_eq!(m.agent_id, "search");
+    }
+
+    #[test]
+    fn register_handles_mixed_known_and_unknown_capabilities() {
+        // Registration is the operator-action moment where a config
+        // mistake surfaces — not every subsequent dispatch.
+        // warn_unmapped_capabilities runs from both register() and
+        // from_cards(), so a card with an unmapped capability fires
+        // exactly one warn per capability at that boundary. Exercise
+        // both entry points; the known-cap arm still routes, the
+        // all-unknown arm still collapses to None.
+        let mut r = Router::new();
+        r.register(build_card(
+            "mixed",
+            vec!["tool.unmapped_x", "tool.web_search"],
+        ));
+        assert!(
+            r.route("search").is_some(),
+            "the known tool.web_search capability must still win — the unmapped sibling must not poison the score"
+        );
+
+        let r2 = Router::from_cards(vec![build_card("mixed2", vec!["tool.unmapped_y"])]);
+        assert!(r2.route("anything").is_none());
     }
 }

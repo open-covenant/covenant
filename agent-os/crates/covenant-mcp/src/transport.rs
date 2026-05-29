@@ -73,6 +73,7 @@ pub struct JsonRpcError {
 
 const TRANSPORT_CLOSED_CODE: i64 = -32099;
 const TRANSPORT_CLOSED_MESSAGE: &str = "transport closed";
+const SERVER_CRASHED_MESSAGE: &str = "server crashed";
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpClientError {
@@ -92,8 +93,13 @@ pub enum McpClientError {
 
 impl From<JsonRpcError> for McpClientError {
     fn from(e: JsonRpcError) -> Self {
-        if e.code == TRANSPORT_CLOSED_CODE && e.message == TRANSPORT_CLOSED_MESSAGE {
-            return McpClientError::Closed;
+        if e.code == TRANSPORT_CLOSED_CODE {
+            if e.message == TRANSPORT_CLOSED_MESSAGE {
+                return McpClientError::Closed;
+            }
+            if e.message == SERVER_CRASHED_MESSAGE {
+                return McpClientError::ServerCrashed;
+            }
         }
         McpClientError::Rpc {
             code: e.code,
@@ -190,10 +196,23 @@ pub struct StdioMcpClient {
     pending: Pending,
     next_id: AtomicU64,
     request_timeout: Duration,
-    // Holding `Child` keeps the process alive. `kill_on_drop(true)` on the
-    // builder means dropping this struct also reaps the subprocess.
-    _child: Mutex<Option<Child>>,
-    _reader: JoinHandle<()>,
+    // Holding `Child` keeps the process alive. `kill_on_drop(true)` on
+    // the builder means dropping the last Arc here reaps the
+    // subprocess. The Arc is shared with the reader so the EOF branch
+    // can `try_wait()` and decide whether to surface ServerCrashed.
+    // Self's `Drop` aborts the reader so its Arc clone releases and the
+    // child can drop here without the reader holding it alive.
+    _child: Arc<Mutex<Option<Child>>>,
+    reader: JoinHandle<()>,
+}
+
+impl Drop for StdioMcpClient {
+    fn drop(&mut self) {
+        // Abort first so the reader's clone of `child` releases at the
+        // next yield point; then our own clone drops, the Mutex<Option>
+        // drops, the Child drops, and kill_on_drop fires.
+        self.reader.abort();
+    }
 }
 
 impl StdioMcpClient {
@@ -227,6 +246,8 @@ impl StdioMcpClient {
 
         let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
         let reader_pending = pending.clone();
+        let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
+        let reader_child = child.clone();
         let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             loop {
@@ -247,12 +268,29 @@ impl StdioMcpClient {
                     }
                 }
             }
-            // EOF or read error: surface to anything still waiting.
+            // EOF or read error: try_wait the child so callers can
+            // distinguish a crash (non-zero exit / signal) from a clean
+            // close. Best-effort: if the child has not yet been reaped
+            // by the time stdout closes, we fall through to Closed —
+            // that's the existing failure mode, and we don't want to
+            // block draining pending responses on a slow wait.
+            let crashed = {
+                let mut guard = reader_child.lock().await;
+                match guard.as_mut().and_then(|c| c.try_wait().ok().flatten()) {
+                    Some(status) => !status.success(),
+                    None => false,
+                }
+            };
+            let message = if crashed {
+                SERVER_CRASHED_MESSAGE
+            } else {
+                TRANSPORT_CLOSED_MESSAGE
+            };
             let mut map = reader_pending.lock();
             for (_, tx) in map.drain() {
                 let _ = tx.send(Err(JsonRpcError {
-                    code: -32099,
-                    message: "transport closed".into(),
+                    code: TRANSPORT_CLOSED_CODE,
+                    message: message.into(),
                     data: None,
                 }));
             }
@@ -263,8 +301,8 @@ impl StdioMcpClient {
             pending,
             next_id: AtomicU64::new(1),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            _child: Mutex::new(Some(child)),
-            _reader: reader,
+            _child: child,
+            reader,
         }))
     }
 
@@ -1233,5 +1271,56 @@ mod tests {
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_mcp::transport::McpClientError::Serde source() must downcast_ref to serde_json::Error so daemon-side MCP transport diagnostics can call serde_json::Error::line/column/classify for JSON-RPC frame-boundary failure reports; a refactor that wrapped the inner in a project-local newtype (e.g., McpWireError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies JSON-RPC frame-parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    #[test]
+    fn server_crashed_sentinel_routes_to_server_crashed_variant() {
+        // Crash-vs-clean-close guard: the reader's EOF branch can now
+        // emit two sentinels under TRANSPORT_CLOSED_CODE — "transport
+        // closed" for clean exits, "server crashed" for non-zero /
+        // signalled exits. The From impl must keep them separable so
+        // operator retry policy can treat a crash distinctly from a
+        // clean shutdown.
+        let crashed = JsonRpcError {
+            code: TRANSPORT_CLOSED_CODE,
+            message: SERVER_CRASHED_MESSAGE.to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = crashed.into();
+        assert!(
+            matches!(mapped, McpClientError::ServerCrashed),
+            "the (TRANSPORT_CLOSED_CODE, SERVER_CRASHED_MESSAGE) tuple must route to ServerCrashed, not Closed or Rpc — collapsing the two would erase the retry-policy signal"
+        );
+
+        // Defence in depth: the code-only boundary still falls through
+        // to Rpc. A SERVER_CRASHED_MESSAGE under any other code is not
+        // the reader sentinel and must NOT be treated as a crash.
+        let off_code = JsonRpcError {
+            code: -32601,
+            message: SERVER_CRASHED_MESSAGE.to_string(),
+            data: None,
+        };
+        let mapped: McpClientError = off_code.into();
+        match mapped {
+            McpClientError::Rpc { code, message } => {
+                assert_eq!(code, -32601);
+                assert_eq!(message, SERVER_CRASHED_MESSAGE);
+            }
+            other => panic!(
+                "off-code SERVER_CRASHED_MESSAGE must fall through to Rpc — a refactor that matched on message alone would silently classify unrelated rpc errors as crashes; got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn server_crashed_message_constant_pins_literal() {
+        // Producer/consumer drift guard: the reader emits a literal
+        // "server crashed" string at the JsonRpcError construction
+        // site; the From impl matches against the constant. If the
+        // constant drifts without the literal updating, the consumer
+        // stops routing crash events to ServerCrashed. Pin the
+        // constant to the literal here so a one-sided rename trips
+        // this test.
+        assert_eq!(SERVER_CRASHED_MESSAGE, "server crashed");
     }
 }

@@ -28,13 +28,21 @@ covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
+# Default features only — the solana signer + its dep tree stay out of
+# the daemon build until the funding-key path lands behind its own
+# feature in a separate change.
+covenant-x402 = { path = "../covenant-x402" }
+covenant-hyre = { path = "../covenant-hyre" }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 axum = { workspace = true }
 bs58 = { workspace = true }
 dotenvy = "0.15"
 futures = "0.3"
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
@@ -51,3 +59,7 @@ covenant-permissions = { path = "../covenant-permissions" }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+# test-util enables `#[tokio::test(start_paused = true)]` so the SSE
+# heartbeat test can advance virtual time instead of sleeping for 15s.
+tokio = { workspace = true, features = ["test-util"] }
+wiremock = "0.6"

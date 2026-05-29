@@ -77,6 +77,14 @@ pub enum ProviderError {
     Status { status: u16, body: String },
     #[error("missing api key for provider {0}")]
     MissingKey(&'static str),
+    /// The provider's stop reason was the configured token ceiling, so the
+    /// response was cut mid-output. `partial` carries the concatenated text
+    /// blocks that landed before the truncation so the operator can still
+    /// inspect (or hand-merge) what arrived before retrying with a higher
+    /// `max_tokens`; treating Truncated as Empty would silently drop long
+    /// plans / compaction summaries entirely.
+    #[error("provider response truncated at max_tokens={max_tokens} ({partial_len} chars partial)", partial_len = partial.len())]
+    Truncated { max_tokens: u32, partial: String },
 }
 
 #[async_trait]
@@ -190,8 +198,15 @@ impl Provider for OllamaProvider {
 pub struct AnthropicProvider {
     pub api_key: String,
     pub model: String,
+    pub max_tokens: u32,
     client: reqwest::Client,
 }
+
+/// Default token ceiling for an Anthropic response. 4096 is the practical
+/// floor for chain-of-thought plans and compaction summaries; the prior
+/// 1024 silently truncated those outputs without surfacing a Truncated
+/// error to the caller.
+pub const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 impl AnthropicProvider {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
@@ -202,8 +217,16 @@ impl AnthropicProvider {
         Self {
             api_key: api_key.into(),
             model: model.into(),
+            max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
             client,
         }
+    }
+
+    /// Override the per-request `max_tokens` cap. Returns `Self` so the
+    /// caller can chain it onto `new`.
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
     }
 }
 
@@ -224,11 +247,59 @@ struct AnthropicMessage<'a> {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    #[serde(default)]
+    stop_reason: Option<String>,
 }
 
+/// Anthropic content blocks are tagged on `type`. Production responses can
+/// interleave `text` with `tool_use`, `tool_result`, `thinking`, and future
+/// block kinds; only the text payload is consumed here, but every other
+/// kind must be silently skipped — the prior `{text}` struct hard-errored
+/// the whole response on any tool_use block and dropped the text that came
+/// with it.
 #[derive(Deserialize)]
-struct AnthropicContent {
-    text: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicContent {
+    Text {
+        text: String,
+    },
+    /// Catchall for tool_use, tool_result, thinking, server_tool_use, and
+    /// any future block type Anthropic adds. The deserializer consumes the
+    /// remaining fields silently so an unknown block can't crash the
+    /// response decode.
+    #[serde(other)]
+    Other,
+}
+
+/// Post-process a parsed Anthropic response: surface a Truncated error when
+/// `stop_reason == "max_tokens"`, concatenate text blocks, and skip every
+/// non-text block. Extracted from `complete` so the truncation and
+/// content-block-filtering contracts can be unit-tested without a live
+/// HTTP path.
+fn process_anthropic_response(
+    response: AnthropicResponse,
+    max_tokens: u32,
+) -> Result<String, ProviderError> {
+    let truncated = response.stop_reason.as_deref() == Some("max_tokens");
+    let text = response
+        .content
+        .into_iter()
+        .filter_map(|c| match c {
+            AnthropicContent::Text { text } => Some(text),
+            AnthropicContent::Other => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if truncated {
+        return Err(ProviderError::Truncated {
+            max_tokens,
+            partial: text,
+        });
+    }
+    if text.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(text)
 }
 
 #[async_trait]
@@ -264,7 +335,7 @@ impl Provider for AnthropicProvider {
         let system = (!system_buf.is_empty()).then_some(system_buf.as_str());
         let body = AnthropicRequest {
             model: &self.model,
-            max_tokens: 1024,
+            max_tokens: self.max_tokens,
             system,
             messages: chat,
         };
@@ -285,16 +356,7 @@ impl Provider for AnthropicProvider {
             });
         }
         let parsed: AnthropicResponse = resp.json().await?;
-        let text = parsed
-            .content
-            .into_iter()
-            .map(|c| c.text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.is_empty() {
-            return Err(ProviderError::Empty);
-        }
-        Ok(text)
+        process_anthropic_response(parsed, self.max_tokens)
     }
 }
 
@@ -2056,6 +2118,123 @@ model = "nomic-embed-text"
         assert!(
             source.downcast_ref::<toml::de::Error>().is_some(),
             "covenant_llm::ProviderError::Toml source() must downcast_ref to toml::de::Error so daemon-side llm.toml diagnostics can inspect rendered line/column span context for malformed-llm-config identification; a refactor that wrapped the inner in a project-local newtype (e.g., ProviderTomlError(toml::de::Error) under a 'tag LLM-config TOML faults distinctly from sibling Toml variants in other crates' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies LLM provider config TOML parse faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[test]
+    fn anthropic_content_skips_tool_use_and_unknown_blocks_keeping_text() {
+        // Anthropic responses interleave text with tool_use, tool_result,
+        // thinking, and future block kinds. The prior `struct
+        // AnthropicContent { text: String }` hard-errored the WHOLE
+        // response on any non-text block, dropping the text that came
+        // alongside. The tagged-enum + #[serde(other)] catchall lets the
+        // deserializer skip every non-text block silently so the text
+        // payload still reaches the caller.
+        let raw = r#"{
+            "content": [
+                {"type": "text", "text": "first line", "citations": [{"type": "web_search_result_location", "url": "https://example.com"}]},
+                {"type": "tool_use", "id": "tu_1", "name": "lookup", "input": {"q": "x"}},
+                {"type": "text", "text": "second line"},
+                {"type": "thinking", "thinking": "scratch", "signature": "..."},
+                {"type": "server_tool_use", "id": "stu_1", "name": "future_block"}
+            ],
+            "stop_reason": "end_turn"
+        }"#;
+        let response: AnthropicResponse =
+            serde_json::from_str(raw).expect("non-text blocks must not error the decode");
+        let out = process_anthropic_response(response, 4096).expect("non-truncated must surface");
+        assert_eq!(
+            out, "first line\nsecond line",
+            "text blocks must concatenate verbatim with the existing newline separator; \
+             tool_use/thinking/server_tool_use must be silently skipped (not rendered as \
+             empty lines, not surfaced as errors), and a text block with an extra \
+             'citations' field (already shipping on Anthropic web_search responses) must \
+             also decode without losing its text — a refactor adding \
+             #[serde(deny_unknown_fields)] to the Text variant under any 'stricter \
+             parsing' rationale would regress on day-1 citation responses and fail here.",
+        );
+    }
+
+    #[test]
+    fn anthropic_provider_surfaces_truncated_when_stop_reason_is_max_tokens() {
+        // Anthropic returns stop_reason="max_tokens" when the response was
+        // cut at the configured ceiling. The prior parser ignored
+        // stop_reason and returned the partial body as if it were
+        // complete, so plans / compaction summaries silently lost their
+        // tail — exactly the silent-truncation failure mode tracked in
+        // llm-anthropic-provider-hardening. The Truncated error gives
+        // callers a signal to raise max_tokens and retry.
+        let raw = r#"{
+            "content": [
+                {"type": "text", "text": "step 1: identify the regression"},
+                {"type": "text", "text": "step 2"},
+                {"type": "tool_use", "id": "tu_1", "name": "lookup", "input": {}}
+            ],
+            "stop_reason": "max_tokens"
+        }"#;
+        let response: AnthropicResponse = serde_json::from_str(raw).unwrap();
+        let err = process_anthropic_response(response, 4096).expect_err("must error");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(max_tokens, 4096);
+                assert_eq!(
+                    partial, "step 1: identify the regression\nstep 2",
+                    "Truncated.partial must carry the concatenated text that landed \
+                     before truncation so the operator can inspect what arrived and \
+                     decide whether to retry with a higher cap; dropping the partial \
+                     would silently re-introduce the data-loss failure mode for the \
+                     compaction-summary / plan workloads this task targets",
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_provider_default_max_tokens_is_at_least_4096_to_avoid_silent_truncation() {
+        // The prior hard-coded 1024 ceiling truncated any chain-of-thought
+        // plan or compaction summary that exceeded 1024 output tokens.
+        // 4096 is the documented practical floor for those workloads.
+        // A refactor that lowered the default below 4096 under any
+        // "tighten the safety belt" rationale would silently re-introduce
+        // the truncation failure mode this task closes.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(
+                ANTHROPIC_DEFAULT_MAX_TOKENS >= 4096,
+                "ANTHROPIC_DEFAULT_MAX_TOKENS must remain at least 4096 — lowering it \
+                 re-introduces the silent truncation regression; got {ANTHROPIC_DEFAULT_MAX_TOKENS}"
+            );
+        }
+        let p = AnthropicProvider::new("k", "claude-sonnet-4-6");
+        assert_eq!(p.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS);
+        let p = p.with_max_tokens(16_384);
+        assert_eq!(
+            p.max_tokens, 16_384,
+            "with_max_tokens must override the default"
+        );
+    }
+
+    #[test]
+    fn anthropic_response_empty_text_still_errors_with_empty_not_truncated() {
+        // A non-truncated response that contained only non-text blocks
+        // (e.g., a tool_use-only turn before any model text) must surface
+        // ProviderError::Empty, not Truncated. Truncated is reserved for
+        // the explicit max_tokens stop reason so callers can distinguish
+        // "raise the cap and retry" (Truncated) from "model produced no
+        // text" (Empty).
+        let raw = r#"{
+            "content": [{"type": "tool_use", "id": "tu_1", "name": "x", "input": {}}],
+            "stop_reason": "tool_use"
+        }"#;
+        let response: AnthropicResponse = serde_json::from_str(raw).unwrap();
+        let err = process_anthropic_response(response, 4096).expect_err("must error");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "non-text-only response must be Empty, not Truncated: {err:?}"
         );
     }
 }

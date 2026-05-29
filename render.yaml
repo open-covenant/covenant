@@ -47,6 +47,8 @@ services:
         sync: false  # coding gateway ephemeral sandbox provider; set value in dashboard
       - key: HERMES_API_BASE_URL
         value: http://covenant-coding-gateway:10000/v1  # gateway binds Render's $PORT=10000; delegates + seeds the coder agent
+      - key: COVENANT_LIVE_TRACE
+        value: "1"  # publish runtime traces to the broadcast fan-out the web SSE endpoint (`/intents/:id/events`) subscribes to; without this the watch-it-work view sees zero frames and flips to "disconnected" when an upstream proxy timeout closes the silent stream
       - fromGroup: covenant-sandbox-shared
 
   - type: web

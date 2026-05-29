@@ -75,6 +75,11 @@ pub struct BackfillReceiptCorrelationOutcome {
 /// audit row's savepoint_name field is stable across releases.
 pub const MEMORY_BACKFILL_SAVEPOINT_NAME: &str = "backfill_receipt_correlation";
 
+/// SAVEPOINT identifier wrapping every SqliteStore compact apply. Mirrors
+/// the backfill name so an operator inspecting the SQLite trace sees a
+/// stable, audit-grade label for each transactional boundary.
+pub const MEMORY_COMPACT_SAVEPOINT_NAME: &str = "compact_apply";
+
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
     async fn put(&self, record: MemoryRecord) -> Result<(), MemoryError>;
@@ -1090,6 +1095,131 @@ impl MemoryStore for SqliteStore {
                 }
             },
         )
+        .await
+        .map_err(|e| MemoryError::Worker(e.to_string()))?
+    }
+
+    /// SQLite-native [`MemoryStore::compact`] override. The trait default
+    /// runs N delete() + M put() calls as separate spawn_blocking ops with
+    /// no transaction, so a mid-apply failure (full disk, SQLITE_CORRUPT, a
+    /// trigger ABORT) leaves the store half-compacted: some records
+    /// deleted, some parent refs detached, some stale-context writes
+    /// missing — an audit-invisible inconsistency that contaminates
+    /// downstream tier-lifecycle and drift reports. This override mirrors
+    /// the backfill pattern: BEGIN IMMEDIATE + a named SAVEPOINT
+    /// ([`MEMORY_COMPACT_SAVEPOINT_NAME`]) before any mutation, RELEASE +
+    /// COMMIT on full success, ROLLBACK on any error so zero rows change
+    /// on failure.
+    ///
+    /// The plan read uses a projection — id, tier, created_at, parent,
+    /// metadata — instead of `all()`, which fetches every embedding BLOB
+    /// `plan_compaction` never inspects. Saves a per-record allocation
+    /// proportional to the embedding dimension on every compact pass.
+    ///
+    /// Apply is two surgical SQL statements per affected row: DELETE for
+    /// the deleted set, UPDATE metadata + parent for the updates set.
+    /// Neither path rewrites embedding bytes or text, which keeps the
+    /// transaction small and preserves the costly columns verbatim.
+    async fn compact(
+        &self,
+        request: MemoryCompactionRequest,
+    ) -> Result<MemoryCompactionOutcome, MemoryError> {
+        validate_compaction_request(&request)?;
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || -> Result<MemoryCompactionOutcome, MemoryError> {
+            let g = conn
+                .lock()
+                .map_err(|e| MemoryError::Worker(e.to_string()))?;
+
+            // Projection read: only the columns plan_compaction reads.
+            // Other MemoryRecord fields (owner, text, embedding) are
+            // filled with cheap placeholders since plan_compaction
+            // ignores them; the apply path never writes back through
+            // those fields, so the placeholders never reach disk.
+            let mut stmt = g.prepare(
+                "SELECT id, tier, created_at, parent, metadata
+                     FROM memories ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let id_s: String = row.get(0)?;
+                let tier_s: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let parent_s: Option<String> = row.get(3)?;
+                let metadata_s: String = row.get(4)?;
+                Ok((id_s, tier_s, created_at, parent_s, metadata_s))
+            })?;
+            let mut records = Vec::new();
+            for r in rows {
+                let (id_s, tier_s, created_at, parent_s, metadata_s) = r?;
+                let id = Uuid::parse_str(&id_s).map_err(|e| MemoryError::Worker(e.to_string()))?;
+                let tier = SqliteStore::parse_tier(&tier_s);
+                let parent = parent_s
+                    .map(|s| Uuid::parse_str(&s).map_err(|e| MemoryError::Worker(e.to_string())))
+                    .transpose()?;
+                let metadata = serde_json::from_str(&metadata_s)?;
+                records.push(MemoryRecord {
+                    id,
+                    tier,
+                    owner: covenant_types::AgentId::new("", [0u8; 32]),
+                    text: String::new(),
+                    embedding: Vec::new(),
+                    metadata,
+                    created_at: created_at as u64,
+                    parent,
+                });
+            }
+            drop(stmt);
+
+            let (outcome, updates) = plan_compaction(&records, &request);
+
+            if request.mode != MemoryRepairMode::Apply || !outcome.would_change {
+                return Ok(outcome);
+            }
+
+            g.execute_batch("BEGIN IMMEDIATE")?;
+            g.execute_batch(&format!("SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"))?;
+
+            let apply_result: Result<(), MemoryError> = (|| {
+                for id in &outcome.deleted {
+                    g.execute(
+                        "DELETE FROM memories WHERE id = ?1",
+                        rusqlite::params![id.to_string()],
+                    )?;
+                }
+                for update in &updates {
+                    let metadata_str = serde_json::to_string(&update.metadata)?;
+                    g.execute(
+                        "UPDATE memories SET metadata = ?1, parent = ?2 WHERE id = ?3",
+                        rusqlite::params![
+                            metadata_str,
+                            update.parent.as_ref().map(|u| u.to_string()),
+                            update.id.to_string(),
+                        ],
+                    )?;
+                }
+                Ok(())
+            })();
+
+            match apply_result {
+                Ok(()) => {
+                    g.execute_batch(&format!(
+                        "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ))?;
+                    g.execute_batch("COMMIT")?;
+                    Ok(outcome)
+                }
+                Err(e) => {
+                    let _ = g.execute_batch(&format!(
+                        "ROLLBACK TO SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ));
+                    let _ = g.execute_batch(&format!(
+                        "RELEASE SAVEPOINT {MEMORY_COMPACT_SAVEPOINT_NAME}"
+                    ));
+                    let _ = g.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
+        })
         .await
         .map_err(|e| MemoryError::Worker(e.to_string()))?
     }
@@ -3950,6 +4080,153 @@ mod tests {
         assert!(
             correlations.is_empty(),
             "a memory record already bound by a prior correlated receipt must not be re-paired by the legacy backfill — the second receipt has no other candidate so the apply path must leave both unchanged: got {correlations:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_compact_apply_rolls_back_when_mid_apply_update_fails() {
+        // SqliteStore::compact wraps every apply-mode mutation in a single
+        // BEGIN IMMEDIATE + SAVEPOINT compact_apply, so a mid-apply error
+        // (full disk, SQLITE_CORRUPT, a trigger ABORT, etc.) leaves the
+        // store byte-identical to its pre-call state. The trait default
+        // ran each delete/put through a separate spawn_blocking with no
+        // shared transaction, so the same failure would leave the store
+        // half-compacted: some rows deleted, some parent refs detached,
+        // others not — exactly the audit-invisible inconsistency this
+        // task closes.
+        //
+        // Simulating a real mid-apply error: install a SQLite BEFORE
+        // UPDATE trigger on memories that ABORTs whenever the new
+        // metadata contains "stale_context" (i.e., exactly the stale-
+        // marking write the compact plan emits for the long-term row).
+        // The compact apply path runs deletes first, then updates; the
+        // trigger fires on the first update and forces a rollback that
+        // must undo the prior deletes.
+        let id_working = Uuid::new_v4();
+        let id_episodic = Uuid::new_v4();
+        let id_longterm = Uuid::new_v4();
+        let s = store_with_records(&[
+            record(id_working, MemoryTier::Working, "w", 1),
+            record(id_episodic, MemoryTier::Episodic, "e", 2),
+            record(id_longterm, MemoryTier::LongTerm, "l", 3),
+        ])
+        .await;
+
+        // Install the failure trigger after the rows are seeded so put()
+        // for the seed doesn't trip on it.
+        {
+            let g = s.conn.lock().expect("conn lock");
+            g.execute_batch(
+                "CREATE TRIGGER fail_compact_stale_mark
+                 BEFORE UPDATE ON memories
+                 WHEN NEW.metadata LIKE '%stale_context%'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'simulated mid-apply failure');
+                 END;",
+            )
+            .expect("install trigger");
+        }
+
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            reason: "rollback-test".into(),
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(10),
+                delete_episodic_before_ms: Some(10),
+                mark_longterm_stale_before_ms: Some(10),
+                marked_at_ms: Some(10),
+                detach_stale_parents: false,
+            },
+        };
+        let err = s
+            .compact(request)
+            .await
+            .expect_err("trigger ABORT must surface as a compact() error");
+        match err {
+            MemoryError::Sqlite(_) => {}
+            other => panic!("expected MemoryError::Sqlite from the trigger ABORT, got {other:?}"),
+        }
+
+        // The savepoint must roll back EVERY prior delete — without the
+        // wrap, id_working + id_episodic would be gone here and only
+        // the long-term update would have failed. With the wrap, every
+        // pre-call row is still present.
+        let after = s.all().await.expect("all after rollback");
+        assert_eq!(
+            after.len(),
+            3,
+            "rollback must restore every pre-call row — a refactor that \
+             escalated each delete or update to its own autocommit \
+             transaction would leave 1 or 2 rows here (the deletes \
+             that landed before the failing update)"
+        );
+        let mut ids: Vec<Uuid> = after.iter().map(|r| r.id).collect();
+        ids.sort();
+        let mut expected = vec![id_working, id_episodic, id_longterm];
+        expected.sort();
+        assert_eq!(
+            ids, expected,
+            "rolled-back state must contain exactly the original ids; any \
+             drift implies the savepoint didn't bracket the full mutation \
+             set"
+        );
+        // And the long-term row's metadata must NOT carry stale_context
+        // — the update that triggered the failure must have been rolled
+        // back too.
+        let lt = after
+            .iter()
+            .find(|r| r.id == id_longterm)
+            .expect("longterm row");
+        assert!(
+            lt.metadata.get("stale_context").is_none(),
+            "long-term row's metadata must NOT carry stale_context after \
+             rollback — pins that the failing UPDATE was undone, not \
+             merely caught"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_compact_apply_persists_full_plan_on_success() {
+        // Counterpart to the rollback test: the happy path must commit
+        // every delete and every update, with the SAVEPOINT released and
+        // the IMMEDIATE transaction COMMITted before compact returns.
+        let id_working = Uuid::new_v4();
+        let id_episodic = Uuid::new_v4();
+        let id_longterm = Uuid::new_v4();
+        let s = store_with_records(&[
+            record(id_working, MemoryTier::Working, "w", 1),
+            record(id_episodic, MemoryTier::Episodic, "e", 2),
+            record(id_longterm, MemoryTier::LongTerm, "l", 3),
+        ])
+        .await;
+
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            reason: "happy-path".into(),
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(10),
+                delete_episodic_before_ms: Some(10),
+                mark_longterm_stale_before_ms: Some(10),
+                marked_at_ms: Some(10),
+                detach_stale_parents: false,
+            },
+        };
+        let outcome = s.compact(request).await.expect("compact must succeed");
+        assert!(outcome.would_change);
+        assert!(outcome.changed);
+        assert_eq!(outcome.deleted.len(), 2);
+        assert_eq!(outcome.stale_marked.len(), 1);
+
+        let after = s.all().await.expect("all after compact");
+        assert_eq!(after.len(), 1, "two rows must be deleted");
+        let lt = after
+            .iter()
+            .find(|r| r.id == id_longterm)
+            .expect("longterm row must survive");
+        assert!(
+            lt.metadata.get("stale_context").is_some(),
+            "stale-mark UPDATE must persist on success — counterpart to \
+             the rollback assertion"
         );
     }
 }

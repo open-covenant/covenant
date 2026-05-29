@@ -57,7 +57,12 @@ where
         .arg(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // A timeout fires by dropping the wait_with_output future, which drops
+        // the Child. Without kill_on_drop a dropped Child leaves the worker
+        // running detached — defeating the timeout entirely. With it, the
+        // subprocess is reaped automatically.
+        .kill_on_drop(true);
 
     let body = serde_json::to_vec(payload).map_err(|e| BridgeError::Invalid(e.to_string()))?;
 
@@ -77,10 +82,15 @@ where
             .map_err(|e| BridgeError::Worker(format!("close stdin: {e}")))?;
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| BridgeError::Worker(format!("wait: {e}")))?;
+    let output = match tokio::time::timeout(config.worker_timeout, child.wait_with_output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return Err(BridgeError::Worker(format!("wait: {e}"))),
+        Err(_) => {
+            return Err(BridgeError::Timeout {
+                secs: config.worker_timeout.as_secs(),
+            });
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // The worker may emit diagnostics before the result; the envelope

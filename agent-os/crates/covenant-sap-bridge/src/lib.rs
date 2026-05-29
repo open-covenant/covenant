@@ -59,6 +59,14 @@ pub enum BridgeError {
     /// reported after running.
     #[error("worker: {0}")]
     Worker(String),
+    /// The worker subprocess did not return an envelope within the
+    /// configured wall-clock budget (`Config::worker_timeout`). The
+    /// subprocess has been killed via `Command::kill_on_drop`, so the
+    /// caller can retry without leaking a stalled child. Distinct from
+    /// `Worker` so reconciliation loops can apply a different backoff
+    /// (e.g. open-circuit) for hangs vs spawn / decode failures.
+    #[error("worker timed out after {secs}s")]
+    Timeout { secs: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, BridgeError>;

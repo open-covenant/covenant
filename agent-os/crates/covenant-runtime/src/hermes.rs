@@ -136,8 +136,11 @@ impl HermesRunner {
                 message: truncate(&text, 512),
             });
         }
-        let body: HermesRunCreated = serde_json::from_str(&text)
-            .map_err(|source| RunnerError::MalformedStdout { source })?;
+        let body: HermesRunCreated =
+            serde_json::from_str(&text).map_err(|source| RunnerError::MalformedStdout {
+                source,
+                stderr: String::new(),
+            })?;
         Ok(body.run_id)
     }
 
@@ -156,7 +159,10 @@ impl HermesRunner {
                 message: truncate(&text, 512),
             });
         }
-        serde_json::from_str(&text).map_err(|source| RunnerError::MalformedStdout { source })
+        serde_json::from_str(&text).map_err(|source| RunnerError::MalformedStdout {
+            source,
+            stderr: String::new(),
+        })
     }
 
     /// Probe `GET /v1/capabilities` and return the advertised feature

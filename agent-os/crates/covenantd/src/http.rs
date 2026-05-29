@@ -24,7 +24,7 @@
 use crate::{sse, Server};
 use axum::{
     body::Body,
-    extract::{Extension, Path, Query, Request as AxumRequest, State},
+    extract::{DefaultBodyLimit, Extension, Path, Query, Request as AxumRequest, State},
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE},
         HeaderMap, HeaderValue, Method, StatusCode,
@@ -34,7 +34,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use covenant_ipc::{protocol_info, Request, Response};
+use covenant_ipc::{protocol_info, Request, Response, MAX_FRAME};
 use covenant_peer_auth::PeerToken;
 use covenant_runtime::StreamedTrace;
 use covenant_types::{AgentEvent, AgentId, MemoryTier};
@@ -163,11 +163,17 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
         .route("/chain/receipt-batches", get(chain_receipt_batches))
+        .route("/x402/pay", post(pay_x402_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
         )
         .route("/memory/records/backfill", post(memory_backfill_records))
+        // Match the IPC frame cap exactly so a payload that flows over
+        // the unix socket also flows over HTTP. axum's default body cap
+        // is 2 MiB, which silently 413s intents that the IPC daemon
+        // would have accepted.
+        .layer(DefaultBodyLimit::max(MAX_FRAME as usize))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -211,7 +217,29 @@ async fn require_bearer(
             req.extensions_mut().insert(agent_id);
             Ok(next.run(req).await)
         }
-        _ => Err(reject(&s, "unknown or revoked token").await),
+        Ok(None) => Err(reject(&s, "unknown or revoked token").await),
+        Err(e) => {
+            // Storage outage on the peer-registry read — distinct from
+            // a credential probe. The underlying error (file path,
+            // errno, etc.) goes to the operator log; the audit row
+            // gets a distinct reason so triage can separate "probe
+            // storm" from "registry down"; the wire response uses 503
+            // because the fault is server-side, not the client's
+            // credential.
+            tracing::warn!(error = %e, "peer registry resolve failed during bearer auth");
+            let _ = s
+                .server
+                .record_auth_failure("http", "peer registry unavailable")
+                .await;
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "kind": "error",
+                    "message": "peer registry unavailable",
+                })),
+            )
+                .into_response())
+        }
     }
 }
 
@@ -945,6 +973,17 @@ async fn intent_result(
     }
 }
 
+/// SSE keep-alive cadence. Render and Cloudflare both close idle HTTP/1.1
+/// streams around the 100s mark; emitting a comment frame well under that
+/// window keeps the EventSource alive between tool calls so the watch-it-
+/// work page does not flip to "disconnected" during quiet stretches.
+const SSE_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// SSE comment frame — lines starting with `:` are discarded silently by
+/// EventSource per the spec, so the client just sees a byte flush from
+/// the server. Cheaper than synthesizing a real `data:` event.
+const SSE_KEEPALIVE: &[u8] = b": keepalive\n\n";
+
 /// Live [`AgentEvent`] stream for one intent, framed as
 /// `text/event-stream`.
 ///
@@ -953,7 +992,10 @@ async fn intent_result(
 /// [`AgentEvent`] JSON object (`tool_call`, `tool_result`, `file_write`,
 /// or the reserved `reasoning` slot) projected from the runner-side
 /// `RuntimeTrace`, so browser clients render the live trail without
-/// reaching into runner-specific vocabulary.
+/// reaching into runner-specific vocabulary. A keep-alive comment frame
+/// fires every [`SSE_HEARTBEAT_INTERVAL`] of idle so platform edges
+/// (Render, Cloudflare) do not silently kill the connection between
+/// tool calls.
 ///
 /// Audience model mirrors [`intent_result`]: any authenticated peer can
 /// stream any intent. Tighten with an intent-owner check before exposing
@@ -968,15 +1010,35 @@ async fn intent_events(
     Path(id): Path<uuid::Uuid>,
 ) -> AxumResponse {
     let rx = s.live_traces_tx.subscribe();
-    let stream = tokio_broadcast_stream(rx).filter_map(move |trace| async move {
-        let trace = trace?;
-        agent_event_sse_frame(&trace, id).map(Ok::<_, std::io::Error>)
-    });
+    let stream = intent_event_stream(rx, id);
     let mut response = AxumResponse::new(Body::from_stream(stream));
     for (name, value) in sse::sse_response_headers() {
         response.headers_mut().insert(name, value);
     }
     response
+}
+
+/// Merge the live-trace projection with a heartbeat tick into one byte
+/// stream of SSE frames. Factored out of [`intent_events`] so the merge
+/// logic (and the heartbeat-on-idle invariant) is exercised directly in
+/// unit tests without spinning up an axum router.
+fn intent_event_stream(
+    rx: tokio::sync::broadcast::Receiver<StreamedTrace>,
+    id: uuid::Uuid,
+) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send + 'static {
+    let events = tokio_broadcast_stream(rx).filter_map(move |trace| async move {
+        let trace = trace?;
+        agent_event_sse_frame(&trace, id).map(Ok::<_, std::io::Error>)
+    });
+    let heartbeat = futures::stream::unfold((), |()| async {
+        tokio::time::sleep(SSE_HEARTBEAT_INTERVAL).await;
+        Some((Ok::<_, std::io::Error>(SSE_KEEPALIVE.to_vec()), ()))
+    });
+    // Box-pin both halves so `futures::stream::select` (which requires
+    // Unpin) can merge them; an idle stream now emits a keep-alive
+    // comment instead of holding silent until the upstream proxy kills
+    // the connection.
+    futures::stream::select(Box::pin(events), Box::pin(heartbeat))
 }
 
 /// Build the SSE frame bytes for one trace. Returns `None` when the
@@ -1127,6 +1189,47 @@ struct CallToolBody {
     arguments: serde_json::Value,
 }
 
+/// HTTP body shape for `POST /x402/pay`. Mirrors the [`Request::PayX402`]
+/// fields except for the `kind` discriminator (the HTTP layer fills
+/// that in). `per_call_cap` is a decimal string so atomic u128
+/// amounts above JSON's 53-bit integer ceiling survive the wire.
+#[derive(Deserialize)]
+struct PayX402Body {
+    provider: String,
+    endpoint: String,
+    method: String,
+    #[serde(default)]
+    body: Option<serde_json::Value>,
+    network: String,
+    asset: String,
+    per_call_cap: String,
+    credits: u64,
+}
+
+async fn pay_x402_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PayX402Body>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::PayX402 {
+                    provider: b.provider,
+                    endpoint: b.endpoint,
+                    method: b.method,
+                    body: b.body,
+                    network: b.network,
+                    asset: b.asset,
+                    per_call_cap: b.per_call_cap,
+                    credits: b.credits,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
 async fn call_tool(
     State(s): State<HttpState>,
     Extension(peer): Extension<AgentId>,
@@ -1269,6 +1372,90 @@ mod tests {
              tool=\"approval\"; the audit chain keeps the durable \
              HermesApprovalResolved row with the choice and resolved \
              count, so dropping them on the wire is intentional",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn intent_event_stream_emits_keepalive_when_no_traces_arrive() {
+        // The watch-it-work page shows "disconnected" whenever the
+        // browser EventSource fires onerror. The most common cause on
+        // managed platforms is the upstream HTTP idle timeout (Render
+        // and Cloudflare both sit around 100s) closing a silent SSE
+        // response. A keep-alive comment frame at SSE_HEARTBEAT_INTERVAL
+        // keeps the connection live across quiet stretches between tool
+        // calls. A refactor that dropped the heartbeat — or moved it
+        // behind a feature flag without keeping the production default
+        // on — would silently regress to the old behavior.
+        use futures::StreamExt;
+
+        let (_tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(16);
+        let mut stream = Box::pin(intent_event_stream(rx, uuid::Uuid::nil()));
+        // Paused tokio time auto-advances when every task is parked on a
+        // timer, so `next().await` resolves the moment the heartbeat
+        // sleep's virtual deadline passes.
+        let frame = stream
+            .next()
+            .await
+            .expect("an idle SSE stream must emit a heartbeat instead of staying silent")
+            .expect("the heartbeat side never yields an io::Error");
+        assert_eq!(
+            frame, SSE_KEEPALIVE,
+            "the heartbeat frame must be the SSE comment form `: keepalive\\n\\n` — \
+             EventSource silently ignores comments, so the byte flush keeps the \
+             connection alive without surfacing as a synthetic AgentEvent in the UI",
+        );
+
+        let second = stream
+            .next()
+            .await
+            .expect("the heartbeat side is infinite and must yield again")
+            .expect("the heartbeat side never yields an io::Error");
+        assert_eq!(
+            second, SSE_KEEPALIVE,
+            "the heartbeat must keep firing — a refactor that emitted exactly one \
+             tick would let the connection die on the second platform-edge timeout",
+        );
+    }
+
+    #[tokio::test]
+    async fn intent_event_stream_forwards_a_published_trace_before_a_heartbeat() {
+        // The real-traffic path: when a trace arrives before the heartbeat
+        // deadline, the merged stream yields the trace frame first.
+        // Without start_paused, the heartbeat's 15s sleep stays unfired
+        // for the duration of this test, so whatever next() returns must
+        // be the broadcast-side frame.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+        use covenant_types::AgentId;
+        use futures::StreamExt;
+
+        let id = uuid::Uuid::new_v4();
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(16);
+        let mut stream = Box::pin(intent_event_stream(rx, id));
+        tx.send(StreamedTrace {
+            intent_id: id,
+            issuer: AgentId::new("agent@local", [0u8; 32]),
+            trace: RuntimeTrace::HermesFileWritten {
+                run_id: "run-merge".into(),
+                path: "src/main.rs".into(),
+                bytes: 1_024,
+            },
+        })
+        .expect("send to broadcast");
+
+        let frame = stream
+            .next()
+            .await
+            .expect("the trace must arrive before the heartbeat")
+            .expect("agent_event_sse_frame never yields an io::Error");
+        let text = std::str::from_utf8(&frame).expect("SSE frame must be utf8");
+        assert!(
+            text.starts_with("data: "),
+            "a real trace must emit a `data:` frame; got {text:?}",
+        );
+        assert!(
+            text.contains("\"type\":\"file_write\""),
+            "the trace must project through agent_event_sse_frame's AgentEvent \
+             taxonomy and not be replaced by a heartbeat comment; got {text:?}",
         );
     }
 

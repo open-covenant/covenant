@@ -2201,11 +2201,14 @@ model = "nomic-embed-text"
         // A refactor that lowered the default below 4096 under any
         // "tighten the safety belt" rationale would silently re-introduce
         // the truncation failure mode this task closes.
-        assert!(
-            ANTHROPIC_DEFAULT_MAX_TOKENS >= 4096,
-            "ANTHROPIC_DEFAULT_MAX_TOKENS must remain at least 4096 — lowering it \
-             re-introduces the silent truncation regression; got {ANTHROPIC_DEFAULT_MAX_TOKENS}"
-        );
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(
+                ANTHROPIC_DEFAULT_MAX_TOKENS >= 4096,
+                "ANTHROPIC_DEFAULT_MAX_TOKENS must remain at least 4096 — lowering it \
+                 re-introduces the silent truncation regression; got {ANTHROPIC_DEFAULT_MAX_TOKENS}"
+            );
+        }
         let p = AnthropicProvider::new("k", "claude-sonnet-4-6");
         assert_eq!(p.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS);
         let p = p.with_max_tokens(16_384);

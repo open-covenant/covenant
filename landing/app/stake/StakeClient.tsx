@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useAppKitAccount, useAppKitProvider } from "@reown/appkit/react";
-import {
-  useAppKitConnection,
-  type Provider,
-} from "@reown/appkit-adapter-solana/react";
+import { type Provider } from "@reown/appkit-adapter-solana/react";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { ConnectButton } from "./ConnectButton";
-import { explorerTxUrl, getClusterConfig } from "../../lib/stake/env";
+import {
+  explorerTxUrl,
+  getClusterConfig,
+  getReadConnection,
+} from "../../lib/stake/env";
 import {
   TIER_30D_BPS,
   TIER_OPTIONS,
@@ -32,7 +33,7 @@ type TxState =
   | { phase: "error"; message: string };
 
 export function StakeClient() {
-  const { connection } = useAppKitConnection();
+  const connection = useMemo(() => getReadConnection(), []);
   const { address } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider<Provider>("solana");
   const cluster = getClusterConfig();

@@ -3,12 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useAppKitAccount, useAppKitProvider } from "@reown/appkit/react";
-import {
-  useAppKitConnection,
-  type Provider,
-} from "@reown/appkit-adapter-solana/react";
+import { type Provider } from "@reown/appkit-adapter-solana/react";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { ConnectButton } from "../stake/ConnectButton";
+import { getReadConnection } from "../../lib/stake/env";
 import {
   buildClaimIx,
   buildClosePositionIx,
@@ -36,7 +34,7 @@ type TxState =
   | { kind: "error"; message: string };
 
 export function PositionsClient() {
-  const { connection } = useAppKitConnection();
+  const connection = useMemo(() => getReadConnection(), []);
   const { address } = useAppKitAccount();
   const { walletProvider } = useAppKitProvider<Provider>("solana");
   const publicKey = useMemo(

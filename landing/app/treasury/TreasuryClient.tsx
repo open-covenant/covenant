@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useAppKitConnection } from "@reown/appkit-adapter-solana/react";
+import { useEffect, useMemo, useState } from "react";
+import { getReadConnection } from "../../lib/stake/env";
 import {
   fetchConfig,
   fetchRewardVaultLamports,
@@ -24,7 +24,7 @@ interface TreasuryState {
 }
 
 export function TreasuryClient() {
-  const { connection } = useAppKitConnection();
+  const connection = useMemo(() => getReadConnection(), []);
   const cluster = getClusterConfig();
   const [state, setState] = useState<TreasuryState | null>(null);
 

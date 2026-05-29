@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 export const STAKE_PROGRAM_ID = new PublicKey(
   "CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED",
@@ -51,6 +51,13 @@ export function getClusterConfig(): ClusterConfig {
     process.env.NEXT_PUBLIC_COVENANT_SOLANA_CLUSTER ?? "mainnet"
   ).toLowerCase();
   return env === "mainnet" || env === "mainnet-beta" ? MAINNET : DEVNET;
+}
+
+let _readConnection: Connection | null = null;
+export function getReadConnection(): Connection {
+  if (_readConnection) return _readConnection;
+  _readConnection = new Connection(getClusterConfig().rpcUrl, "confirmed");
+  return _readConnection;
 }
 
 export function explorerTxUrl(sig: string): string {

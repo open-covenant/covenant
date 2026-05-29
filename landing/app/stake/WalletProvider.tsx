@@ -26,6 +26,18 @@ const solanaAdapter = new SolanaAdapter({
   wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
 });
 
+// Reown WalletConnect registry IDs. Pinning these makes Phantom + Solflare
+// land in the featured slots of the AppKit modal on every viewport, and on
+// mobile this is also the path that deep-links into the Phantom / Solflare
+// apps via WalletConnect v2 — the injected PhantomWalletAdapter above only
+// fires when the desktop browser extension is present.
+const FEATURED_WALLET_IDS = [
+  // Phantom
+  "a797aa35c0fadbfc1a53e7f675162ed5226968b44a19ee3d24385c64d1d3c393",
+  // Solflare
+  "1ca0bdd4747578705b1939af023d120677c64fe6ca76add81fda36e350605e79",
+];
+
 let appKitInitialized = false;
 function ensureAppKit() {
   if (appKitInitialized) return;
@@ -37,6 +49,7 @@ function ensureAppKit() {
     networks: cluster === "mainnet-beta" ? [solana] : [solanaDevnet],
     defaultNetwork: cluster === "mainnet-beta" ? solana : solanaDevnet,
     metadata,
+    featuredWalletIds: FEATURED_WALLET_IDS,
     features: { analytics: true },
     themeMode: "dark",
     themeVariables: {

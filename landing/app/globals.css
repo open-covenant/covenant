@@ -38,14 +38,14 @@ label[for] {
   width: 100%;
   max-width: 80rem;
   padding-inline: 1.5rem;
-  padding-top: 180px;
+  padding-top: 120px;
   padding-bottom: 8rem;
 }
 
 @media (min-width: 640px) {
   .page-container {
     padding-inline: 2rem;
-    padding-top: 220px;
+    padding-top: 200px;
   }
 }
 

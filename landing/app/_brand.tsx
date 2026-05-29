@@ -21,6 +21,14 @@ export const FOOTER_LINKS = [
   { label: "Contact", href: "/contact", external: false as const },
 ];
 
+// Socials live in the right side of the header on sm+ and fold into the
+// mobile menu drawer (alongside nav links) on small viewports so the
+// header doesn't collide with the centered logo.
+export const SOCIAL_LINKS = [
+  { label: "X", href: "https://x.com/OpenCovenant", external: true as const },
+  { label: "GitHub", href: "https://github.com/open-covenant/covenant", external: true as const },
+];
+
 export function XIcon({ className }: { className?: string }) {
   return (
     <svg

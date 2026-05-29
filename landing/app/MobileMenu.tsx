@@ -6,7 +6,13 @@ import { Menu, X } from "lucide-react";
 
 type NavItem = { label: string; href: string; external?: boolean };
 
-export function MobileMenu({ items }: { items: NavItem[] }) {
+export function MobileMenu({
+  items,
+  socials,
+}: {
+  items: NavItem[];
+  socials?: NavItem[];
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -67,6 +73,23 @@ export function MobileMenu({ items }: { items: NavItem[] }) {
                 {item.label}
               </Link>
             ),
+          )}
+          {socials && socials.length > 0 && (
+            <>
+              <div className="my-2 border-t border-neutral-800/60" />
+              {socials.map((item) => (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setOpen(false)}
+                  className="block px-4 py-2 text-[13px] text-neutral-400 transition-colors hover:text-neutral-50"
+                >
+                  {item.label}
+                </a>
+              ))}
+            </>
           )}
         </div>
       )}

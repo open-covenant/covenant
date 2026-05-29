@@ -1,7 +1,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { MobileMenu } from "./MobileMenu";
-import { GithubIcon, GITHUB_URL, NAV_LINKS, XIcon, X_URL } from "./_brand";
+import {
+  GithubIcon,
+  GITHUB_URL,
+  NAV_LINKS,
+  SOCIAL_LINKS,
+  XIcon,
+  X_URL,
+} from "./_brand";
 
 /**
  * Site-wide header: centered logo, left nav, right socials. Single source
@@ -28,7 +35,7 @@ export function SiteHeader() {
 
       <div className="absolute left-2 z-20 flex h-[30px] items-center top-[max(18px,env(safe-area-inset-top))] sm:left-8 sm:h-[42px] sm:top-[max(28px,env(safe-area-inset-top))]">
         <div className="sm:hidden">
-          <MobileMenu items={NAV_LINKS} />
+          <MobileMenu items={NAV_LINKS} socials={SOCIAL_LINKS} />
         </div>
         <nav className="hidden items-center gap-3 sm:flex">
           {NAV_LINKS.map((item) =>
@@ -55,7 +62,7 @@ export function SiteHeader() {
         </nav>
       </div>
 
-      <nav className="absolute right-2 z-20 flex h-[30px] items-center gap-1 top-[max(18px,env(safe-area-inset-top))] sm:right-8 sm:h-[42px] sm:top-[max(28px,env(safe-area-inset-top))] sm:gap-3">
+      <nav className="absolute right-2 z-20 hidden h-[30px] items-center gap-1 top-[max(18px,env(safe-area-inset-top))] sm:right-8 sm:flex sm:h-[42px] sm:top-[max(28px,env(safe-area-inset-top))] sm:gap-3">
         <a
           href={X_URL}
           target="_blank"

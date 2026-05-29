@@ -40,12 +40,18 @@ pub const DEFAULT_MIN_SWEEP_LAMPORTS: u64 = 10_000_000;
 pub const DEFAULT_RESERVE_LAMPORTS: u64 = 50_000_000;
 pub const DEFAULT_MIN_ACCRUE_LAMPORTS: u64 = 1_000_000;
 
+/// Hardcoded treasury recipient. Compile-time const so an attacker with
+/// write access to the keeper's env can't redirect the 30% sweep cut.
+/// Rotation requires a keeper redeploy.
+pub const TREASURY_RECIPIENT: &str = "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
+
+/// Hardcoded subsidy recipient. Same rationale as TREASURY_RECIPIENT.
+pub const SUBSIDY_RECIPIENT: &str = "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct KeeperConfig {
     pub rpc_url: String,
     pub creator_keypair_path: String,
-    pub treasury_recipient: String,
-    pub subsidy_recipient: String,
     #[serde(default = "default_stakers_bps")]
     pub stakers_bps: u16,
     #[serde(default = "default_buylock_bps")]
@@ -100,8 +106,6 @@ impl KeeperConfig {
     pub fn from_env() -> Result<Self> {
         let rpc_url = required_env("COVENANT_STAKE_KEEPER_RPC_URL")?;
         let creator_keypair_path = required_env("COVENANT_STAKE_KEEPER_CREATOR_KEYPAIR")?;
-        let treasury_recipient = required_env("COVENANT_STAKE_KEEPER_TREASURY_RECIPIENT")?;
-        let subsidy_recipient = required_env("COVENANT_STAKE_KEEPER_SUBSIDY_RECIPIENT")?;
         let stakers_bps = optional_env_u16("COVENANT_STAKE_KEEPER_STAKERS_BPS")?
             .unwrap_or_else(default_stakers_bps);
         let buylock_bps = optional_env_u16("COVENANT_STAKE_KEEPER_BUYLOCK_BPS")?
@@ -128,8 +132,6 @@ impl KeeperConfig {
         let cfg = Self {
             rpc_url,
             creator_keypair_path,
-            treasury_recipient,
-            subsidy_recipient,
             stakers_bps,
             buylock_bps,
             treasury_bps,
@@ -156,10 +158,10 @@ impl KeeperConfig {
         if self.sweep_interval_secs == 0 || self.accrual_interval_secs == 0 {
             bail!("interval secs must be > 0");
         }
-        Pubkey::from_str(&self.treasury_recipient)
-            .with_context(|| format!("invalid treasury_recipient: {}", self.treasury_recipient))?;
-        Pubkey::from_str(&self.subsidy_recipient)
-            .with_context(|| format!("invalid subsidy_recipient: {}", self.subsidy_recipient))?;
+        Pubkey::from_str(TREASURY_RECIPIENT)
+            .with_context(|| format!("invalid hardcoded TREASURY_RECIPIENT: {TREASURY_RECIPIENT}"))?;
+        Pubkey::from_str(SUBSIDY_RECIPIENT)
+            .with_context(|| format!("invalid hardcoded SUBSIDY_RECIPIENT: {SUBSIDY_RECIPIENT}"))?;
         Ok(())
     }
 }
@@ -187,8 +189,8 @@ impl Keeper {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stake_config"], &program_id);
         let (fee_router_pda, _) = Pubkey::find_program_address(&[b"fee_router"], &program_id);
         let (reward_vault_pda, _) = Pubkey::find_program_address(&[b"reward_vault"], &program_id);
-        let treasury = Pubkey::from_str(&cfg.treasury_recipient)?;
-        let subsidy = Pubkey::from_str(&cfg.subsidy_recipient)?;
+        let treasury = Pubkey::from_str(TREASURY_RECIPIENT)?;
+        let subsidy = Pubkey::from_str(SUBSIDY_RECIPIENT)?;
         Ok(Self {
             cfg,
             program_id,
@@ -466,8 +468,6 @@ mod tests {
         KeeperConfig {
             rpc_url: "http://localhost:8899".into(),
             creator_keypair_path: "/tmp/none.json".into(),
-            treasury_recipient: "11111111111111111111111111111111".into(),
-            subsidy_recipient: "11111111111111111111111111111111".into(),
             stakers_bps: 2500,
             buylock_bps: 2500,
             treasury_bps: 3000,
@@ -508,10 +508,11 @@ mod tests {
     }
 
     #[test]
-    fn config_validates_recipient_pubkeys() {
-        let mut cfg = base_cfg();
-        cfg.treasury_recipient = "not-a-pubkey".into();
-        assert!(cfg.validate().is_err());
+    fn hardcoded_recipients_parse_to_valid_pubkeys() {
+        let cfg = base_cfg();
+        cfg.validate().expect("hardcoded recipient consts must parse");
+        Pubkey::from_str(TREASURY_RECIPIENT).expect("TREASURY_RECIPIENT valid");
+        Pubkey::from_str(SUBSIDY_RECIPIENT).expect("SUBSIDY_RECIPIENT valid");
     }
 
     #[test]

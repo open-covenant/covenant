@@ -16,10 +16,6 @@ services:
         sync: false
       - key: COVENANT_STAKE_KEEPER_CREATOR_KEYPAIR
         value: /etc/secrets/covenant-creator-wallet.json
-      - key: COVENANT_STAKE_KEEPER_TREASURY_RECIPIENT
-        sync: false
-      - key: COVENANT_STAKE_KEEPER_SUBSIDY_RECIPIENT
-        sync: false
       - key: COVENANT_STAKE_KEEPER_DRY_RUN
         value: "1"
       - key: COVENANT_STAKE_KEEPER_SWEEP_INTERVAL_SECS

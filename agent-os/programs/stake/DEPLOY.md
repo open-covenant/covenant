@@ -230,7 +230,7 @@ Deploy the keeper to Render via `agent-os/crates/covenant-stake-keeper/render.ya
 1. New Render service → "Background Worker" → connect this repo
 2. Render reads `render.yaml` and creates the service with `DRY_RUN=1`
 3. Upload `~/.config/solana/covenant-creator-wallet.json` as a Render Secret File (path `/etc/secrets/covenant-creator-wallet.json`)
-4. Fill the `sync: false` env vars in the Render dashboard: `COVENANT_STAKE_KEEPER_RPC_URL`, `_TREASURY_RECIPIENT`, `_SUBSIDY_RECIPIENT`
+4. Fill the `sync: false` env var in the Render dashboard: `COVENANT_STAKE_KEEPER_RPC_URL`. Treasury and subsidy recipients are **compile-time constants** in `src/lib.rs` (`TREASURY_RECIPIENT`, `SUBSIDY_RECIPIENT`) — env tampering cannot redirect either leg; rotation requires a keeper redeploy.
 5. Deploy. Tail logs for one full sweep cycle (1h):
 
 ```

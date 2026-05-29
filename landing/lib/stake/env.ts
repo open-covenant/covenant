@@ -27,7 +27,8 @@ export interface ClusterConfig {
 const MAINNET: ClusterConfig = {
   cluster: "mainnet-beta",
   rpcUrl:
-    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
+    process.env.NEXT_PUBLIC_COVENANT_SOLANA_MAINNET_RPC_URL ??
+    process.env.NEXT_PUBLIC_COVENANT_SOLANA_RPC_URL ??
     "https://api.mainnet-beta.solana.com",
   cvntMint: new PublicKey("2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump"),
   tokenProgramId: TOKEN_2022_PROGRAM_ID,
@@ -37,7 +38,8 @@ const MAINNET: ClusterConfig = {
 const DEVNET: ClusterConfig = {
   cluster: "devnet",
   rpcUrl:
-    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
+    process.env.NEXT_PUBLIC_COVENANT_SOLANA_DEVNET_RPC_URL ??
+    process.env.NEXT_PUBLIC_COVENANT_SOLANA_RPC_URL ??
     "https://api.devnet.solana.com",
   cvntMint: new PublicKey("12zLnQiqHLosp4GpAG4b1ZyrcyHJK8863FiDcQZ5Drmd"),
   tokenProgramId: SPL_TOKEN_PROGRAM_ID,
@@ -46,7 +48,7 @@ const DEVNET: ClusterConfig = {
 
 export function getClusterConfig(): ClusterConfig {
   const env = (
-    process.env.NEXT_PUBLIC_SOLANA_CLUSTER ?? "devnet"
+    process.env.NEXT_PUBLIC_COVENANT_SOLANA_CLUSTER ?? "mainnet"
   ).toLowerCase();
   return env === "mainnet" || env === "mainnet-beta" ? MAINNET : DEVNET;
 }

@@ -3,6 +3,44 @@
 Program ID: `CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED`
 Keypair: `~/.config/solana/covenant-stake-program.json`
 
+## Devnet status — LIVE
+
+Deployed and initialized on devnet 2026-05-29. End-to-end smoke confirms the
+.so behaves identically to the litesvm suite on a real validator.
+
+| Artifact | Address |
+|---|---|
+| Program | `CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED` |
+| Config PDA | `CNrBUGqrdj5WDTqfBPwyzURBmVThTfWTejqxSqme8EyC` |
+| FeeRouter PDA | `x5dMA3DariqtYRc9XMkGhPTMWiXQRjAFZTS9QZLif33` |
+| RewardVault PDA | `Bh3YKatgy4Sug1g24uFMHrgTQJ8tPFNqKQUqp4sPd4pn` |
+| locked_vault_authority PDA | `BfKVwAzAGpQnwWe5vTkHDnYUKsnjWR4F7CpZcUbgeFrz` |
+| buylock_vault_authority PDA | `D9ceemTHkfha5QPgnLjxnaTCtdNLvuPo3fP5g6kZTJK5` |
+| Test $CVNT mint (SPL legacy, 6 dec) | `12zLnQiqHLosp4GpAG4b1ZyrcyHJK8863FiDcQZ5Drmd` |
+| Locked-CVNT vault | `EJTKsop7y9hoZupZhxu51sWCDsabKubdwxenmC7yEfEd` |
+| Buy-and-lock vault | `Drh3yZYHDekF1i3PFLH1JcVUkcNeJsc51YD6bvL8vy3j` |
+| Authority + pause + fee_router (smoke) | `8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM` |
+
+Smoke transactions:
+- Deploy: `45gtgGHfUEuB6nBtMfVSfAGQt2EqQoya2kXYWypCEBGuFpNQtGtzEWRjB6kXtxWCFpx9C6YLxfMBgK73jgxHFwAW`
+- Initialize: `4htTj2GMbdQ1oEh1JDkbDtnseNrzj3C3juZBMUwidXWv6neUSvREmo1Hb3noWZXTWzJdJxbNUPP1VtHVsCA6tQ1W`
+- create_position: `54qSP8S4vo6fwWccAk4RPTfy5ej24XQXsRrtMXnt8BcnzVKGJBZ4n8qCy96MW76FWvbtMjZptgFGkMANYAPYhjoA`
+- deposit_sol_fees: `25ub2vt6ekhYMJsHjrgdqZW1xiysuuYSZexC678hkmrNF2i6QzfdjhprjrX7fCKyTsxZY8nCc1Y2F1MpVoYNZAW3`
+- claim: `3t1v5FCfNNfEjZsXzozruQC3r2GdAmgsmEUgs63Ef41UUmHJ7DfBBGNUYhucP1AGDKs1yQB8b1CTKSFckQuBAMBt`
+
+Single locker absorbed 1_000_000 lamports of a 1_000_000-lamport deposit
+exactly — accumulator math matches litesvm.
+
+Reproduce the smoke locally with:
+
+```bash
+cd agent-os
+cargo run --example devnet_smoke -p covenant-stake-keeper -- pdas
+# create mint + vaults via spl-token CLI, then:
+cargo run --example devnet_smoke -p covenant-stake-keeper -- initialize <mint> <locked_vault> <buylock_vault>
+cargo run --example devnet_smoke -p covenant-stake-keeper -- smoke <mint> <locked_vault>
+```
+
 This program is excluded from `cargo test --workspace` per `agent-os/scripts/validate.sh`. Build and test it directly with `cargo build-sbf` and `cargo test -p covenant-stake-program`.
 
 ## Prerequisites

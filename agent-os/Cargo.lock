@@ -1375,6 +1375,8 @@ dependencies = [
  "sha2 0.10.9",
  "solana-client",
  "solana-sdk",
+ "spl-associated-token-account",
+ "spl-token",
  "tempfile",
  "tokio",
  "tracing",

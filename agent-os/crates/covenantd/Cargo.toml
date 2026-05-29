@@ -59,4 +59,7 @@ covenant-permissions = { path = "../covenant-permissions" }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+# test-util enables `#[tokio::test(start_paused = true)]` so the SSE
+# heartbeat test can advance virtual time instead of sleeping for 15s.
+tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"

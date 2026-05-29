@@ -1,12 +1,16 @@
+import type { Metadata } from "next";
 import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { WalletProvider } from "../stake/WalletProvider";
 import { NetworkBanner } from "../stake/NetworkBanner";
 import { PositionsClient } from "./PositionsClient";
 
-export const metadata = {
-  title: "Your positions — Covenant Stake",
-  description: "Manage your locked $CVNT positions, claim SOL rewards, and close vested positions.",
+export const metadata: Metadata = {
+  title: "Positions — Covenant Stake",
+  description:
+    "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
+  alternates: { canonical: "/positions" },
+  robots: { index: false, follow: false },
 };
 
 export default function PositionsPage() {

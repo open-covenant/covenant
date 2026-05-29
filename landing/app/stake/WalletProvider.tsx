@@ -17,7 +17,7 @@ const projectId = "25ff9d8aeef329151de0bf83bd83a38b";
 
 const metadata = {
   name: "Covenant Stake",
-  description: "Lock $CVNT, earn SOL — real-yield staking on Solana",
+  description: "Lock $CVNT and share in Covenant protocol revenue, paid in SOL.",
   url: "https://opencovenant.org",
   icons: ["https://opencovenant.org/icon.png"],
 };

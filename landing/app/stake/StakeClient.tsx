@@ -116,10 +116,13 @@ export function StakeClient() {
   const positionWeight = parsedAmount !== null
     ? (parsedAmount * BigInt(tierBps)) / 10_000n
     : 0n;
+  const capReached =
+    !!config && config.activeLockCount >= config.maxActiveLocks;
   const canSubmit =
     !!publicKey &&
     !!config &&
     !!stakeSource &&
+    !capReached &&
     meetsMin &&
     sufficientInSource &&
     tx.phase !== "submitting";
@@ -249,7 +252,12 @@ export function StakeClient() {
 
             <div className="mt-3 min-h-[1.25rem] text-center text-[11px]">
               {!publicKey && <span className="text-neutral-500">Connect a wallet to open a position.</span>}
-              {publicKey && accounts !== null && accounts.length === 0 && (
+              {publicKey && capReached && (
+                <span className="text-amber-300">
+                  The protocol position cap has been reached. New positions can be opened after an existing position closes.
+                </span>
+              )}
+              {publicKey && !capReached && accounts !== null && accounts.length === 0 && (
                 <span className="text-amber-300">This wallet holds no CVNT.</span>
               )}
               {publicKey && parsedAmount !== null && !meetsMin && (
@@ -343,7 +351,7 @@ export function StakeClient() {
               <Step
                 index="02"
                 title="Earn a pro-rata share of distributions"
-                body="The protocol routes 25% of its revenue to lockers in SOL. Your share of each distribution equals your position weight divided by the total weight of all open positions."
+                body="A fixed share of protocol revenue is allocated to stakers in SOL. Your portion of each distribution equals your position weight divided by the total weight of all open positions."
               />
               <Step
                 index="03"
@@ -369,7 +377,7 @@ export function StakeClient() {
 
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div className="mb-10 flex items-end justify-between gap-6 border-b border-neutral-900 pb-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
         <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">

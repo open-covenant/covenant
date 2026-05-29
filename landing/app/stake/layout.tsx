@@ -1,13 +1,22 @@
+import type { Metadata } from "next";
 import { ReactNode } from "react";
 import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { WalletProvider } from "./WalletProvider";
 import { NetworkBanner } from "./NetworkBanner";
 
-export const metadata = {
-  title: "Covenant Stake — lock $CVNT, earn SOL",
+export const metadata: Metadata = {
+  title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
   description:
-    "Lock $CVNT for 30, 90, 180, or 365 days and earn pro-rata SOL from pump.fun creator-fee revenue. Real yield, no inflation.",
+    "Lock $CVNT for 30, 90, 180, or 365 days and receive a pro-rata share of protocol revenue distributed in SOL. Amounts depend on actual revenue and are not guaranteed.",
+  alternates: { canonical: "/stake" },
+  openGraph: {
+    type: "website",
+    url: "https://opencovenant.org/stake",
+    title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
+    description:
+      "Lock $CVNT for 30, 90, 180, or 365 days and receive a pro-rata share of protocol revenue distributed in SOL.",
+  },
 };
 
 export default function StakeLayout({ children }: { children: ReactNode }) {

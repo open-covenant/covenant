@@ -1,12 +1,22 @@
+import type { Metadata } from "next";
 import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { WalletProvider } from "../stake/WalletProvider";
 import { NetworkBanner } from "../stake/NetworkBanner";
 import { TreasuryClient } from "./TreasuryClient";
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "Treasury — Covenant Stake",
-  description: "Public read-only dashboard of cumulative SOL distributed to stakers and locked $CVNT in the buyback vault.",
+  description:
+    "Public read-only dashboard of the Covenant staking program's on-chain state. Cumulative SOL distributed to stakers, protocol-held CVNT, and active position count.",
+  alternates: { canonical: "/treasury" },
+  openGraph: {
+    type: "website",
+    url: "https://opencovenant.org/treasury",
+    title: "Treasury — Covenant Stake",
+    description:
+      "Public read-only dashboard of the Covenant staking program's on-chain state.",
+  },
 };
 
 export default function TreasuryPage() {

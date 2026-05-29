@@ -110,7 +110,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
           unit="CVNT"
         />
         <KpiCard
-          label="Buyback vault"
+          label="Protocol-held CVNT"
           value={formatCvnt(buylockVaultCvnt, { maxFrac: 0 })}
           unit="CVNT"
         />
@@ -125,18 +125,18 @@ function Dashboard({ state }: { state: TreasuryState }) {
         <Panel>
           <PanelEyebrow>Distribution mechanics</PanelEyebrow>
           <h2 className="mt-4 text-xl font-extralight tracking-tight text-neutral-50 sm:text-2xl">
-            Real protocol revenue, allocated by weight
+            Protocol revenue, allocated by position weight
           </h2>
           <p className="mt-4 text-[13px] leading-relaxed text-neutral-400">
             Each protocol revenue tick is split four ways at the keeper layer.
-            The locker share is then folded into a per-weight accumulator,
+            The staker share is then folded into a per-weight accumulator,
             ensuring every open position earns a strictly pro-rata share of
             every distribution since it was opened.
           </p>
 
           <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <SplitCard label="Lockers" value="25%" detail="Distributed as SOL, claimable continuously." />
-            <SplitCard label="Buy and lock" value="25%" detail="Swapped to CVNT and routed into the buyback vault." />
+            <SplitCard label="Stakers" value="25%" detail="Distributed as SOL, claimable continuously." />
+            <SplitCard label="Protocol CVNT" value="25%" detail="Swapped to CVNT and held by the protocol." />
             <SplitCard label="Treasury" value="30%" detail="Funds protocol operations and reserves." />
             <SplitCard label="Operator subsidy" value="20%" detail="Covers infrastructure and operational costs." />
           </div>
@@ -212,7 +212,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
             <li>All values on this page are read directly from the program&apos;s on-chain state at the most recent confirmed slot.</li>
             <li>Distribution amounts reflect actual protocol revenue and are not guaranteed. Past distributions do not predict future amounts.</li>
             <li>Locked principal is non-transferable. Positions cannot be withdrawn before their lock period elapses.</li>
-            <li>The buyback vault holds CVNT acquired with protocol revenue. It has no withdraw path in the current program version.</li>
+            <li>Protocol-held CVNT is acquired with protocol revenue. The current program version has no path to remove it.</li>
           </ul>
         </Panel>
       </div>
@@ -222,7 +222,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
 
 function PageHeader() {
   return (
-    <div className="mb-10 flex items-end justify-between gap-6 border-b border-neutral-900 pb-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
         <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">

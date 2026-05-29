@@ -24,7 +24,7 @@ export default function ContactPage() {
       <SiteHeader />
 
       <div className="page-container">
-        <div className="mb-10 flex items-end justify-between gap-6 border-b border-neutral-900 pb-6">
+        <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
           <div>
             <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant</div>
             <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">

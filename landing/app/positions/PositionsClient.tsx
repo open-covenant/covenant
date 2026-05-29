@@ -10,7 +10,10 @@ import { explorerAddressUrl, explorerTxUrl, getReadConnection } from "../../lib/
 import {
   buildClaimIx,
   buildClosePositionIx,
+  buildCreateAtaIx,
 } from "../../lib/stake/txBuilder";
+import { deriveAta } from "../../lib/stake/pdas";
+import { getClusterConfig } from "../../lib/stake/env";
 import {
   computePendingLamports,
   fetchConfig,
@@ -89,15 +92,22 @@ export function PositionsClient() {
     if (!publicKey || !walletProvider || !connection) return;
     setTx({ kind: "submitting", positionPubkey: pos.pubkey.toBase58(), action: "close" });
     try {
+      const cluster = getClusterConfig();
+      const ownerAta = deriveAta(publicKey, cluster.cvntMint, cluster.tokenProgramId);
+      const ataInfo = await connection.getAccountInfo(ownerAta, "confirmed");
+      const ixs = [];
+      if (!ataInfo) {
+        ixs.push(buildCreateAtaIx({ payer: publicKey, owner: publicKey }));
+      }
+      ixs.push(buildClosePositionIx({ owner: publicKey, nonce: pos.nonce }));
+
       const { blockhash, lastValidBlockHeight } =
         await connection.getLatestBlockhash("confirmed");
       const transaction = new Transaction({
         feePayer: publicKey,
         recentBlockhash: blockhash,
       });
-      transaction.add(
-        buildClosePositionIx({ owner: publicKey, nonce: pos.nonce }),
-      );
+      transaction.add(...ixs);
       const sig = await walletProvider.sendTransaction(transaction, connection);
       await connection.confirmTransaction(
         { signature: sig, blockhash, lastValidBlockHeight },
@@ -151,7 +161,7 @@ export function PositionsClient() {
                 />
                 <StatRow
                   label="Total weight"
-                  value={formatCvnt(totalWeight, { maxFrac: 0 })}
+                  value={`${formatCvnt(totalWeight, { maxFrac: 0 })} CVNT-weighted`}
                 />
                 <StatRow
                   label="Claimable now"
@@ -267,7 +277,7 @@ export function PositionsClient() {
 
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div className="mb-10 flex items-end justify-between gap-6 border-b border-neutral-900 pb-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
         <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
@@ -345,7 +355,7 @@ function PositionCard({
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
             <span>{tierLabel(position.multiplierBps)}</span>
             <span className="text-neutral-700">·</span>
-            <span>Weight {formatCvnt(position.weight, { maxFrac: 0 })}</span>
+            <span>Weight {formatCvnt(position.weight, { maxFrac: 0 })} CVNT-weighted</span>
           </div>
         </div>
         <div className="text-right">

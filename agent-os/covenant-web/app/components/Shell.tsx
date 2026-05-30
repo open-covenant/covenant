@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
 import { useDeveloperMode } from "@/lib/developerMode";
+import { useRightRailContent } from "@/lib/rightRail";
 import { CommandPalette } from "./CommandPalette";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
@@ -34,11 +35,13 @@ function isActive(pathname: string, href: string): boolean {
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
   const [devMode, setDevMode] = useDeveloperMode();
+  const railContent = useRightRailContent();
+  const hasRail = railContent !== null;
   const visibleNav =
     DEMO_MODE && !devMode ? NAV.filter((item) => DEMO_CODING_NAV.has(item.href)) : NAV;
 
   return (
-    <div className="shell">
+    <div className={hasRail ? "shell with-rail" : "shell"}>
       <aside className="sidebar" aria-label="navigation">
         <Link href="/" className="brand">
           <span className="mark" aria-hidden>
@@ -98,6 +101,12 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <main className="surface">{children}</main>
 
+      {hasRail && (
+        <aside className="context-rail" aria-label="page context">
+          {railContent}
+        </aside>
+      )}
+
       <CommandPalette />
 
       <style jsx global>{`
@@ -106,6 +115,24 @@ export function Shell({ children }: { children: ReactNode }) {
           grid-template-columns: 248px minmax(0, 1fr);
           min-height: 100vh;
           background: var(--bg);
+        }
+
+        .shell.with-rail {
+          grid-template-columns: 248px minmax(0, 1fr) minmax(0, 320px);
+        }
+
+        .context-rail {
+          position: sticky;
+          top: 0;
+          align-self: start;
+          height: 100vh;
+          padding: 40px 22px 28px;
+          border-left: 1px solid var(--border);
+          background: var(--bg);
+          overflow: auto;
+          display: grid;
+          gap: 22px;
+          align-content: start;
         }
 
         .sidebar {
@@ -283,7 +310,8 @@ export function Shell({ children }: { children: ReactNode }) {
         }
 
         @media (max-width: 900px) {
-          .shell {
+          .shell,
+          .shell.with-rail {
             grid-template-columns: 1fr;
           }
 
@@ -308,6 +336,14 @@ export function Shell({ children }: { children: ReactNode }) {
 
           .sidebar-foot {
             display: none;
+          }
+
+          .context-rail {
+            position: static;
+            height: auto;
+            padding: 4px 22px 32px;
+            border-left: 0;
+            border-top: 1px solid var(--border);
           }
         }
       `}</style>

@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
-import { formatRelative, formatTimestamp } from "@/lib/format";
+import { formatTimestamp } from "@/lib/format";
 import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
+import { useRightRail } from "@/lib/rightRail";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "./components/PageHeader";
 import { Turnstile, turnstileEnabled } from "./components/Turnstile";
@@ -225,9 +226,92 @@ export default function OverviewPage() {
   const livePeers = peers.filter((p) => p.revoked_at === null);
   const caps = data?.caps.capabilities ?? [];
   const memory = data?.memory.records ?? [];
-  const lastEvent =
-    recent.find((e) => e.kind.type !== "authentication_failed") ?? recent[0] ?? null;
-  const lastLabel = lastEvent ? eventLabel(lastEvent) : null;
+  // Right-context rail: in control-plane mode shows recent activity + the
+  // operator's review queue; in demo mode shows only the recent feed so
+  // public sandbox visitors see the agent's work without operator-only
+  // gates. Built as JSX so it closes over the current poll snapshot —
+  // the useRightRail hook re-mounts it on every commit.
+  const rail = (
+    <>
+      <div className="rail-section">
+        <div className="rail-head">
+          <p className="eyebrow">recent activity</p>
+          <Link className="rail-link" href="/audit">
+            see all
+          </Link>
+        </div>
+        {recent.length === 0 ? (
+          <p className="empty">Nothing here yet. Your activity will appear as it happens.</p>
+        ) : (
+          <div className="records">
+            {dedupedRecent.map(({ event, count }) => {
+              const label = eventLabel(event);
+              const RowInner = (
+                <>
+                  <div className="ts">
+                    {formatTimestamp(event.timestamp_ms)}
+                    <em>{label.headline}</em>
+                    {count > 1 && <span className="dupe">×{count}</span>}
+                  </div>
+                  <div className="body">
+                    <strong>{event.issuer.display}</strong>
+                    <p>{label.body}</p>
+                  </div>
+                </>
+              );
+              if (label.intentId) {
+                return (
+                  <Link
+                    key={event.id}
+                    href={`/intents/${label.intentId}`}
+                    className={`record clickable tone-${label.tone} fade-up`}
+                  >
+                    {RowInner}
+                  </Link>
+                );
+              }
+              return (
+                <article key={event.id} className={`record tone-${label.tone} fade-up`}>
+                  {RowInner}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {!DEMO_MODE && (
+        <div className="rail-section">
+          <div className="rail-head">
+            <p className="eyebrow">needs your review</p>
+            <span className="rail-count">{reviewRows.length}</span>
+          </div>
+          {reviewRows.length === 0 ? (
+            <p className="empty">All clear. Nothing needs your attention.</p>
+          ) : (
+            <div className="records">
+              {reviewRows.map((event) => {
+                const label = eventLabel(event);
+                return (
+                  <article key={event.id} className={`record tone-${label.tone}`}>
+                    <div className="ts">
+                      {formatTimestamp(event.timestamp_ms)}
+                      <em>{label.headline}</em>
+                    </div>
+                    <div className="body">
+                      <strong>{event.issuer.display}</strong>
+                      <p>{label.body}</p>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+  useRightRail(rail);
 
   return (
     <>
@@ -258,54 +342,58 @@ export default function OverviewPage() {
             <p className="eyebrow">send a task</p>
             <span className="text-muted text-mono kbd-hint">⌘K to open the palette</span>
           </div>
-          <textarea
-            value={intent}
-            onChange={(e) => setIntent(e.target.value)}
-            placeholder="Describe something to build — a game, a script, a small web app…"
-            rows={2}
-          />
-          {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
-          <div className="actions">
-            <button
-              type="submit"
-              className="btn primary"
-              disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
-            >
-              {dispatching ? "Sending" : "Send"}
-            </button>
-          </div>
-          {turnstileEnabled && (
-            // Required when running Turnstile in invisible / interaction-only mode:
-            // visitors must be able to find the privacy policy that references
-            // Cloudflare's Turnstile Privacy Addendum.
-            <p className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>
-              Protected by Cloudflare Turnstile.{" "}
-              <a
-                href="https://opencovenant.org/privacy"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Privacy policy
-              </a>
-              .
-            </p>
-          )}
-          {DEMO_MODE && (
-            <div className="sample-chips">
-              <span className="eyebrow text-muted">try</span>
-              {DEMO_SAMPLES.map((s) => (
+          <div className={DEMO_MODE ? "dispatch-grid" : "dispatch-grid solo"}>
+            <div className="dispatch-main">
+              <textarea
+                value={intent}
+                onChange={(e) => setIntent(e.target.value)}
+                placeholder="Describe something to build — a game, a script, a small web app…"
+                rows={2}
+              />
+              {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
+              <div className="actions">
                 <button
-                  key={s.label}
-                  type="button"
-                  className="btn chip"
-                  onClick={() => sendIntent(s.intent)}
-                  disabled={dispatching}
+                  type="submit"
+                  className="btn primary"
+                  disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
                 >
-                  {s.label}
+                  {dispatching ? "Sending" : "Send"}
                 </button>
-              ))}
+              </div>
+              {turnstileEnabled && (
+                // Required when running Turnstile in invisible / interaction-only mode:
+                // visitors must be able to find the privacy policy that references
+                // Cloudflare's Turnstile Privacy Addendum.
+                <p className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>
+                  Protected by Cloudflare Turnstile.{" "}
+                  <a
+                    href="https://opencovenant.org/privacy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Privacy policy
+                  </a>
+                  .
+                </p>
+              )}
             </div>
-          )}
+            {DEMO_MODE && (
+              <div className="dispatch-aside">
+                <span className="eyebrow text-muted">try</span>
+                {DEMO_SAMPLES.map((s) => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    className="btn chip"
+                    onClick={() => sendIntent(s.intent)}
+                    disabled={dispatching}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </form>
 
         {(lastResult || lastError || dispatching || awaiting) && (
@@ -343,123 +431,50 @@ export default function OverviewPage() {
       </section>
 
       {!DEMO_MODE && (
-      <section className="metric-row">
-        <article className="metric">
-          <span className="eyebrow">connected agents</span>
-          <span className="value">{livePeers.length}</span>
-          <span className="caption">
-            {peers.length - livePeers.length} revoked
-          </span>
-        </article>
-        <article className="metric">
-          <span className="eyebrow">permissions</span>
-          <span className="value">{caps.length}</span>
-          <span className="caption">currently granted</span>
-        </article>
-        <article className="metric">
-          <span className="eyebrow">memories</span>
-          <span className="value">{memory.length}</span>
-          <span className="caption">
-            {memory.filter((m) => m.tier === "working").length} {memoryTierLabel("working").toLowerCase()} ·{" "}
-            {memory.filter((m) => m.tier === "episodic").length} {memoryTierLabel("episodic").toLowerCase()} ·{" "}
-            {memory.filter((m) => m.tier === "longterm").length} {memoryTierLabel("longterm").toLowerCase()}
-          </span>
-        </article>
-        <article className="metric">
-          <span className="eyebrow">last activity</span>
-          <span className="value small">{lastLabel ? lastLabel.headline : "—"}</span>
-          <span className="caption">
-            {lastEvent ? formatRelative(lastEvent.timestamp_ms) : "nothing yet"}
-          </span>
-        </article>
-      </section>
+        <section className="state-tiles">
+          <Link href="/peers" className="state-tile">
+            <span className="eyebrow">agents</span>
+            <span className="value">{livePeers.length}</span>
+            <span className="caption">
+              {peers.length - livePeers.length === 0
+                ? "connected"
+                : `${peers.length - livePeers.length} revoked`}
+            </span>
+          </Link>
+          <Link href="/capabilities" className="state-tile">
+            <span className="eyebrow">permissions</span>
+            <span className="value">{caps.length}</span>
+            <span className="caption">granted</span>
+          </Link>
+          <Link href="/memory" className="state-tile">
+            <span className="eyebrow">memory</span>
+            <span className="value">{memory.length}</span>
+            <span className="caption">
+              {memory.filter((m) => m.tier === "working").length}{" "}
+              {memoryTierLabel("working").toLowerCase()} ·{" "}
+              {memory.filter((m) => m.tier === "episodic").length}{" "}
+              {memoryTierLabel("episodic").toLowerCase()} ·{" "}
+              {memory.filter((m) => m.tier === "longterm").length}{" "}
+              {memoryTierLabel("longterm").toLowerCase()}
+            </span>
+          </Link>
+          <Link href="/settlement" className="state-tile">
+            <span className="eyebrow">spending</span>
+            <span className="value">—</span>
+            <span className="caption">open ledger</span>
+          </Link>
+          <Link href="/queues" className="state-tile">
+            <span className="eyebrow">messages</span>
+            <span className="value">—</span>
+            <span className="caption">open queues</span>
+          </Link>
+          <Link href="/sap" className="state-tile">
+            <span className="eyebrow">synapse</span>
+            <span className="value">—</span>
+            <span className="caption">agent protocol</span>
+          </Link>
+        </section>
       )}
-
-      <section className="split-2">
-        <div className="panel">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">recent activity</p>
-              <h2>
-                What&apos;s been happening <span className="count">{recent.length}</span>
-              </h2>
-            </div>
-            <Link className="btn ghost" href="/audit">
-              see all
-            </Link>
-          </div>
-          {recent.length === 0 ? (
-            <p className="empty">Nothing here yet. Your activity will appear as it happens.</p>
-          ) : (
-            <div className="records">
-              {dedupedRecent.map(({ event, count }) => {
-                const label = eventLabel(event);
-                const RowInner = (
-                  <>
-                    <div className="ts">
-                      {formatTimestamp(event.timestamp_ms)}
-                      <em>{label.headline}</em>
-                      {count > 1 && <span className="dupe">×{count}</span>}
-                    </div>
-                    <div className="body">
-                      <strong>{event.issuer.display}</strong>
-                      <p>{label.body}</p>
-                    </div>
-                  </>
-                );
-                if (label.intentId) {
-                  return (
-                    <Link
-                      key={event.id}
-                      href={`/intents/${label.intentId}`}
-                      className={`record clickable tone-${label.tone} fade-up`}
-                    >
-                      {RowInner}
-                    </Link>
-                  );
-                }
-                return (
-                  <article key={event.id} className={`record tone-${label.tone} fade-up`}>
-                    {RowInner}
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="panel">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">attention</p>
-              <h2>
-                Needs your review <span className="count">{reviewRows.length}</span>
-              </h2>
-            </div>
-          </div>
-          {reviewRows.length === 0 ? (
-            <p className="empty">All clear. Nothing needs your attention.</p>
-          ) : (
-            <div className="records">
-              {reviewRows.map((event) => {
-                const label = eventLabel(event);
-                return (
-                  <article key={event.id} className={`record tone-${label.tone}`}>
-                    <div className="ts">
-                      {formatTimestamp(event.timestamp_ms)}
-                      <em>{label.headline}</em>
-                    </div>
-                    <div className="body">
-                      <strong>{event.issuer.display}</strong>
-                      <p>{label.body}</p>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </section>
 
       <style jsx>{`
         .sandbox-intro {
@@ -567,8 +582,140 @@ export default function OverviewPage() {
           font-size: 11px;
         }
 
-        .metric-row {
-          margin-bottom: 22px;
+        /* Dispatch card: textarea + sample-chips column side by side on
+           md+, single column on mobile. The .solo variant collapses to a
+           single column even on md+ (control-plane mode, no chips). */
+        .dispatch-grid {
+          display: grid;
+          gap: 18px;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+        }
+
+        .dispatch-grid.solo {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .dispatch-main {
+          display: grid;
+          gap: 12px;
+          align-content: start;
+          min-width: 0;
+        }
+
+        .dispatch-aside {
+          display: grid;
+          align-content: start;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .dispatch-aside .eyebrow {
+          margin: 0 0 4px;
+        }
+
+        @media (max-width: 900px) {
+          .dispatch-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+        }
+
+        /* State-tile grid (control-plane mode): six clickable section
+           tiles in a 3-col rhythm on desktop, 2-col on tablet, 1-col on
+           narrow. Each tile is a thin-bordered surface with eyebrow +
+           value + caption — same vocabulary as the old metric-row, with
+           navigation baked in. */
+        .state-tiles {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          margin: 22px 0;
+        }
+
+        .state-tile {
+          display: grid;
+          align-content: start;
+          gap: 6px;
+          padding: 16px 18px;
+          border: 1px solid var(--border-soft);
+          border-radius: 8px;
+          background: var(--panel);
+          color: inherit;
+          text-decoration: none;
+          transition: border-color 120ms ease, background 120ms ease;
+        }
+
+        .state-tile:hover {
+          border-color: var(--border);
+          background: var(--panel-hover);
+        }
+
+        .state-tile .eyebrow {
+          margin: 0;
+        }
+
+        .state-tile .value {
+          font-family: var(--font-mono);
+          font-size: 22px;
+          font-weight: 400;
+          letter-spacing: -0.01em;
+          color: var(--fg);
+        }
+
+        .state-tile .caption {
+          color: var(--muted);
+          font-size: 11.5px;
+          letter-spacing: 0.02em;
+        }
+
+        @media (max-width: 1100px) {
+          .state-tiles {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 600px) {
+          .state-tiles {
+            grid-template-columns: minmax(0, 1fr);
+          }
+        }
+
+        /* Right-rail section chrome (consumed by Shell's .context-rail).
+           Layout-only — colors and font sizes match existing rail-row
+           tokens used elsewhere. */
+        .rail-section {
+          display: grid;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .rail-head {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .rail-head .eyebrow {
+          margin: 0;
+        }
+
+        .rail-link {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.18em;
+          text-transform: uppercase;
+          transition: color 120ms ease;
+        }
+
+        .rail-link:hover {
+          color: var(--fg);
+        }
+
+        .rail-count {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 11px;
         }
 
         .records .dupe {

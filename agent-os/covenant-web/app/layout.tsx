@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { RightRailProvider } from "@/lib/rightRail";
 import { DemoBanner } from "./components/DemoBanner";
 import { Shell } from "./components/Shell";
 import "./globals.css";
@@ -25,8 +26,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <DemoBanner />
-        <Shell>{children}</Shell>
+        <RightRailProvider>
+          <DemoBanner />
+          <Shell>{children}</Shell>
+        </RightRailProvider>
       </body>
     </html>
   );

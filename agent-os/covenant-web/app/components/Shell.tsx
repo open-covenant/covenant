@@ -341,7 +341,7 @@ export function Shell({ children }: { children: ReactNode }) {
           .context-rail {
             position: static;
             height: auto;
-            padding: 4px 22px 32px;
+            padding: 28px 22px 40px;
             border-left: 0;
             border-top: 1px solid var(--border);
           }

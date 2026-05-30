@@ -769,3 +769,58 @@ select {
   border-top: 1px solid var(--border-soft);
   margin: 12px 0;
 }
+
+/* ─── Mobile pass ─────────────────────────────────────────────────
+   Layout-only adjustments for phones. No font / color / token
+   changes — only padding, stacking, and tap-target sizing on the
+   surfaces that don't already collapse cleanly.                     */
+
+@media (max-width: 900px) {
+  /* Tap targets — desktop .btn lands around 33px tall, below the
+     44px iOS / Android minimum. Bump y-padding on mobile only. */
+  .btn {
+    padding: 12px 14px;
+  }
+
+  .btn.small {
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  /* Task list rows: the agent + hash column on the right squeezes
+     the intent title on narrow phones. Stack right under left and
+     let the title use the full row width. */
+  .intent-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 16px 18px;
+  }
+
+  .intent-row .right {
+    justify-items: start;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* Dispatch card padding eats too much canvas on phones. */
+  .dispatch-card {
+    padding: 16px;
+  }
+
+  /* Record rows already break long strings via overflow-wrap. Tighten
+     the grid to two columns (ts / body) and drop the trailing auto
+     column under itself to keep the body readable. */
+  .record {
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: 12px;
+    padding: 10px 12px;
+  }
+
+  .record .right {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}

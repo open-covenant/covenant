@@ -627,9 +627,13 @@ select {
 }
 
 .surface {
+  /* Fill the grid column. Shell already structures the canvas via the
+     fixed 248px sidebar (and optional 320px right rail), so the surface
+     gets the remaining space at every viewport size. Prose readability
+     is bounded per-element (subhead 60ch, empty-state 64ch); the
+     surface itself should not cap so large desktops + laptops use the
+     full available width. */
   min-width: 0;
-  max-width: 1440px;
-  margin: 0 auto;
   padding: 40px 36px 96px;
 }
 

@@ -438,7 +438,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
 
         .trace-step {
           display: grid;
-          grid-template-columns: 22px 1fr;
+          grid-template-columns: 22px minmax(0, 1fr);
           gap: 12px;
         }
 
@@ -482,11 +482,17 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         }
 
         .step-card {
+          /* min-width:0 + overflow-wrap keep long unbreakable strings
+             (signatures, URLs, paths in tool args/results) inside the
+             step column so the surrounding layout can't shift wider
+             when a run happens to emit different content. */
+          min-width: 0;
           padding: 12px 16px 14px;
           margin-bottom: 8px;
           border: 1px solid var(--border-soft);
           border-radius: 8px;
           background: var(--panel);
+          overflow-wrap: anywhere;
         }
 
         .trace-overflow {

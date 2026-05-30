@@ -190,7 +190,7 @@ export default function MemoryPage() {
 
         .search-card .row.controls {
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: minmax(0, 1fr) auto;
         }
       `}</style>
     </>

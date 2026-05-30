@@ -315,7 +315,7 @@ export default function AgentsPage() {
 
         .peer dl {
           display: grid;
-          grid-template-columns: repeat(2, 1fr);
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 10px;
           margin: 0;
         }

@@ -222,7 +222,7 @@ export default function PermissionsPage() {
 
         .grant-card .row {
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: minmax(0, 1fr) auto;
           gap: 8px;
         }
 
@@ -311,7 +311,7 @@ export default function PermissionsPage() {
 
         .perm-row {
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: minmax(0, 1fr) auto;
           gap: 18px;
           padding: 18px 22px;
           border-top: 1px solid var(--border-soft);

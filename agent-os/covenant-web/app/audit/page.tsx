@@ -307,7 +307,7 @@ export default function ActivityLogPage() {
 
         .explorer {
           display: grid;
-          grid-template-columns: 1fr 380px;
+          grid-template-columns: minmax(0, 1fr) 380px;
           gap: 16px;
           align-items: start;
         }

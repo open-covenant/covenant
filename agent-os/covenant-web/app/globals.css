@@ -249,7 +249,7 @@ a {
 
 .record {
   display: grid;
-  grid-template-columns: 96px 1fr auto;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
   align-items: start;
   gap: 16px;
   padding: 12px 14px;
@@ -616,7 +616,7 @@ select {
 
 .split-2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 

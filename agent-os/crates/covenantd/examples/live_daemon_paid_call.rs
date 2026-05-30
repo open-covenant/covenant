@@ -6,10 +6,10 @@
 //! Where `live_paid_call` in `covenant-hyre` only exercises the inner
 //! 402-then-pay loop, this also exercises the daemon's budget
 //! pre-check, the `record_paid_call` receipt write, the audit event,
-//! and the issuer-vs-payer split — i.e. everything that lands on top
+//! and the issuer-vs-payer split, i.e. everything that lands on top
 //! of the signed transfer.
 //!
-//! Dry-run by default. Pass `--confirm` to actually pay.
+//! Dry-run by default. Pass `--confirm` (or set `COVENANT_HYRE_CONFIRM=1`) to actually pay.
 //!
 //!     COVENANT_X402_FUNDING_KEYPAIR=~/.config/solana/some.json \
 //!     COVENANT_X402_RPC_URL=https://api.mainnet-beta.solana.com \
@@ -33,7 +33,8 @@ const PRICE_MICRO_USDC: u128 = 10_000;
 
 #[tokio::main]
 async fn main() {
-    let confirm = std::env::args().any(|a| a == "--confirm");
+    let confirm = std::env::args().any(|a| a == "--confirm")
+        || std::env::var("COVENANT_HYRE_CONFIRM").ok().as_deref() == Some("1");
     let cfg = HyreConfig::default();
 
     let signer_bin = std::env::var("COVENANT_X402_SIGNER_BIN")
@@ -92,7 +93,9 @@ async fn main() {
     println!("network:       {}", req.network);
 
     if !confirm {
-        println!("\nDRY RUN — pass --confirm to actually pay (spends $0.01 USDC).");
+        println!(
+            "\nDRY RUN, pass --confirm (or COVENANT_HYRE_CONFIRM=1) to actually pay (spends $0.01 USDC)."
+        );
         return;
     }
 
@@ -127,13 +130,13 @@ async fn main() {
     println!("settlement receipts: {} written", settled.len());
     for r in &settled {
         println!(
-            "  - id={} resource={:?} credits_consumed={} payer={:?}",
+            "  - id={} resource={:?} credits_consumed={} payer={}",
             r.id, r.resource, r.credits_consumed, r.payer
         );
     }
     println!("audit events:        {} written", audit_events.len());
     for e in &audit_events {
-        println!("  - kind={:?} issuer={:?}", e.kind, e.issuer);
+        println!("  - kind={:?} issuer={}", e.kind, e.issuer);
     }
     println!("payer remaining:     {payer_remaining} credits (was 100000)");
 
@@ -144,5 +147,5 @@ async fn main() {
     assert!(response.receipt_id.is_some(), "no receipt id");
     assert!(!settled.is_empty(), "no settlement receipt written");
     assert!(!audit_events.is_empty(), "no audit event written");
-    println!("\nOK — daemon-path end-to-end verified.");
+    println!("\nOK: daemon-path end-to-end verified.");
 }

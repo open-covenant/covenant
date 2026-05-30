@@ -150,8 +150,7 @@ fn pause_guards_each_mutating_user_ix() {
 fn close_position_works_during_pause_after_lock_expires() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     advance_clock(&mut env, TIER_30D_SECS + 1);
 
@@ -167,8 +166,7 @@ fn close_position_works_during_pause_after_lock_expires() {
 fn accrue_works_during_pause() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit");
     let pause_kp = env.pause_keypair.insecure_clone();
     pause(&mut env, &pause_kp).expect("pause");
@@ -179,8 +177,7 @@ fn accrue_works_during_pause() {
 fn update_min_lock_amount_enforces_floor() {
     let mut env = boot();
     let authority = env.payer.insecure_clone();
-    update_min_lock_amount(&mut env, &authority, 5 * MIN_LOCK_AMOUNT)
-        .expect("raise minimum");
+    update_min_lock_amount(&mut env, &authority, 5 * MIN_LOCK_AMOUNT).expect("raise minimum");
     assert_eq!(config_state(&env).min_lock_amount, 5 * MIN_LOCK_AMOUNT);
 
     // New lower amount now rejected.
@@ -194,8 +191,8 @@ fn update_min_lock_amount_enforces_floor() {
 fn update_min_lock_amount_rejects_zero() {
     let mut env = boot();
     let authority = env.payer.insecure_clone();
-    let err = update_min_lock_amount(&mut env, &authority, 0)
-        .expect_err("zero min must be rejected");
+    let err =
+        update_min_lock_amount(&mut env, &authority, 0).expect_err("zero min must be rejected");
     assert_eq!(custom_error(&err), Some(E_INVALID_PARAMETER));
 }
 

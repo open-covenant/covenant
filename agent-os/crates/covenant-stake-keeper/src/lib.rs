@@ -192,8 +192,9 @@ impl KeeperConfig {
         if self.sweep_interval_secs == 0 || self.accrual_interval_secs == 0 {
             bail!("interval secs must be > 0");
         }
-        Pubkey::from_str(TREASURY_RECIPIENT)
-            .with_context(|| format!("invalid hardcoded TREASURY_RECIPIENT: {TREASURY_RECIPIENT}"))?;
+        Pubkey::from_str(TREASURY_RECIPIENT).with_context(|| {
+            format!("invalid hardcoded TREASURY_RECIPIENT: {TREASURY_RECIPIENT}")
+        })?;
         Pubkey::from_str(SUBSIDY_RECIPIENT)
             .with_context(|| format!("invalid hardcoded SUBSIDY_RECIPIENT: {SUBSIDY_RECIPIENT}"))?;
         Ok(())
@@ -324,7 +325,9 @@ impl Keeper {
         if split.stakers > 0 {
             match self.send_deposit_sol_fees(split.stakers).await {
                 Ok(sig) => info!(sig = %sig, lamports = split.stakers, "deposited stakers SOL"),
-                Err(e) => warn!(error = ?e, lamports = split.stakers, "stakers leg failed; continuing"),
+                Err(e) => {
+                    warn!(error = ?e, lamports = split.stakers, "stakers leg failed; continuing")
+                }
             }
         }
         if split.treasury > 0 || split.subsidy > 0 {
@@ -350,7 +353,11 @@ impl Keeper {
                 );
             } else {
                 match self.run_buylock_leg(split.buylock).await {
-                    Ok(BuylockResult { swap_sig, deposit_sig, cvnt_received }) => info!(
+                    Ok(BuylockResult {
+                        swap_sig,
+                        deposit_sig,
+                        cvnt_received,
+                    }) => info!(
                         swap_sig = %swap_sig,
                         deposit_sig = %deposit_sig,
                         sol_in = split.buylock,
@@ -436,9 +443,13 @@ impl Keeper {
     }
 
     async fn send_deposit_buylock_cvnt(&self, amount: u64) -> Result<String> {
-        let depositor_ata = derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
-        let buylock_vault =
-            derive_ata(&self.buylock_vault_authority_pda, &self.cvnt_mint, &self.token_program);
+        let depositor_ata =
+            derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
+        let buylock_vault = derive_ata(
+            &self.buylock_vault_authority_pda,
+            &self.cvnt_mint,
+            &self.token_program,
+        );
         let mut data = anchor_discriminator("deposit_buylock_cvnt").to_vec();
         amount.serialize(&mut data)?;
         let ix = Instruction {
@@ -609,27 +620,28 @@ fn required_env(key: &str) -> Result<String> {
 
 fn optional_env_u64(key: &str) -> Result<Option<u64>> {
     match std::env::var(key) {
-        Ok(v) => Ok(Some(
-            v.parse()
-                .with_context(|| format!("env {} not a u64: {}", key, v))?,
-        )),
+        Ok(v) => {
+            Ok(Some(v.parse().with_context(|| {
+                format!("env {} not a u64: {}", key, v)
+            })?))
+        }
         Err(_) => Ok(None),
     }
 }
 
 fn optional_env_u16(key: &str) -> Result<Option<u16>> {
     match std::env::var(key) {
-        Ok(v) => Ok(Some(
-            v.parse()
-                .with_context(|| format!("env {} not a u16: {}", key, v))?,
-        )),
+        Ok(v) => {
+            Ok(Some(v.parse().with_context(|| {
+                format!("env {} not a u16: {}", key, v)
+            })?))
+        }
         Err(_) => Ok(None),
     }
 }
 
 fn load_keypair(path: &str) -> Result<Keypair> {
-    read_keypair_file(Path::new(path))
-        .map_err(|e| anyhow!("read keypair {}: {}", path, e))
+    read_keypair_file(Path::new(path)).map_err(|e| anyhow!("read keypair {}: {}", path, e))
 }
 
 #[cfg(test)]
@@ -659,7 +671,10 @@ mod tests {
     fn split_sums_to_surplus() {
         let cfg = base_cfg();
         let s = SweepSplit::compute(1_000_000_000, &cfg);
-        assert_eq!(s.stakers + s.buylock + s.treasury + s.subsidy, 1_000_000_000);
+        assert_eq!(
+            s.stakers + s.buylock + s.treasury + s.subsidy,
+            1_000_000_000
+        );
         assert_eq!(s.stakers, 250_000_000);
         assert_eq!(s.buylock, 250_000_000);
         assert_eq!(s.treasury, 300_000_000);
@@ -684,7 +699,8 @@ mod tests {
     #[test]
     fn hardcoded_recipients_parse_to_valid_pubkeys() {
         let cfg = base_cfg();
-        cfg.validate().expect("hardcoded recipient consts must parse");
+        cfg.validate()
+            .expect("hardcoded recipient consts must parse");
         Pubkey::from_str(TREASURY_RECIPIENT).expect("TREASURY_RECIPIENT valid");
         Pubkey::from_str(SUBSIDY_RECIPIENT).expect("SUBSIDY_RECIPIENT valid");
     }

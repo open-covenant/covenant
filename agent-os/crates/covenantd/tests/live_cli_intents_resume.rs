@@ -110,6 +110,11 @@ budget_credits_per_hour = 1
     let mut child = Command::new(daemon_exe)
         .env("COVENANT_HOME", home.path())
         .env("COVENANT_HTTP_PORT", "0")
+        // The budget projection tick would otherwise fire mid-dispatch and
+        // SIGKILL the first, validly-admitted single-credit run before it can
+        // exhaust the budget. Push its period past the test window so it does
+        // not race the admission path under test (see live_budget_enforcement).
+        .env("COVENANT_BUDGET_PROJECTION_TICK_MS", "3600000")
         .env("HOME", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

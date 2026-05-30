@@ -2,8 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useDeveloperMode } from "@/lib/developerMode";
 import { useRightRailContent } from "@/lib/rightRail";
 import { CommandPalette } from "./CommandPalette";
@@ -27,6 +27,18 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
 // Spending/Messages/Synapse) stay one toggle away under Developer mode.
 const DEMO_CODING_NAV = new Set(["/", "/intents", "/audit"]);
 
+// g-prefix navigation: hit `g` then the second letter within 1.5s to jump
+// to a section. Mirrors GitHub/Linear style. Visible subset is rendered
+// in the shortcuts list below; the full map handles every nav target.
+const GO_SHORTCUTS: ReadonlyArray<{ keys: string; href: string; label: string }> = [
+  { keys: "g o", href: "/", label: "overview" },
+  { keys: "g t", href: "/intents", label: "tasks" },
+  { keys: "g a", href: "/audit", label: "activity" },
+  { keys: "g p", href: "/capabilities", label: "permissions" },
+  { keys: "g m", href: "/memory", label: "memory" },
+  { keys: "g r", href: "/peers", label: "agents" },
+];
+
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -34,11 +46,49 @@ function isActive(pathname: string, href: string): boolean {
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
+  const router = useRouter();
   const [devMode, setDevMode] = useDeveloperMode();
   const railContent = useRightRailContent();
   const hasRail = railContent !== null;
   const visibleNav =
     DEMO_MODE && !devMode ? NAV.filter((item) => DEMO_CODING_NAV.has(item.href)) : NAV;
+  const goVisible = DEMO_MODE && !devMode
+    ? GO_SHORTCUTS.filter((s) => DEMO_CODING_NAV.has(s.href))
+    : GO_SHORTCUTS;
+
+  // g-prefix nav: `g` arms the next keypress; within 1.5s a matching
+  // letter jumps to that section. Skipped while the user is typing into
+  // a form field or holding a modifier.
+  const gArmedAt = useRef(0);
+  useEffect(() => {
+    const map = new Map(GO_SHORTCUTS.map((s) => [s.keys.split(" ")[1], s.href]));
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "g") {
+        gArmedAt.current = Date.now();
+        return;
+      }
+      if (Date.now() - gArmedAt.current > 1500) return;
+      const href = map.get(e.key);
+      if (href) {
+        e.preventDefault();
+        gArmedAt.current = 0;
+        router.push(href);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [router]);
 
   return (
     <div className={hasRail ? "shell with-rail" : "shell"}>
@@ -73,14 +123,12 @@ export function Shell({ children }: { children: ReactNode }) {
               <dt>⌘K</dt>
               <dd>quick actions</dd>
             </div>
-            <div>
-              <dt>g o</dt>
-              <dd>overview</dd>
-            </div>
-            <div>
-              <dt>g t</dt>
-              <dd>tasks</dd>
-            </div>
+            {goVisible.map((s) => (
+              <div key={s.keys}>
+                <dt>{s.keys}</dt>
+                <dd>{s.label}</dd>
+              </div>
+            ))}
           </dl>
           <button
             type="button"
@@ -119,6 +167,17 @@ export function Shell({ children }: { children: ReactNode }) {
 
         .shell.with-rail {
           grid-template-columns: 248px minmax(0, 1fr) minmax(0, 320px);
+        }
+
+        /* Wider sidebar on large screens so the shortcuts dl + dev
+           toggle + hint copy can breathe and surface more entries. */
+        @media (min-width: 1280px) {
+          .shell {
+            grid-template-columns: 288px minmax(0, 1fr);
+          }
+          .shell.with-rail {
+            grid-template-columns: 288px minmax(0, 1fr) minmax(0, 320px);
+          }
         }
 
         .context-rail {

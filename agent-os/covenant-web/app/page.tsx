@@ -342,58 +342,54 @@ export default function OverviewPage() {
             <p className="eyebrow">send a task</p>
             <span className="text-muted text-mono kbd-hint">⌘K to open the palette</span>
           </div>
-          <div className={DEMO_MODE ? "dispatch-grid" : "dispatch-grid solo"}>
-            <div className="dispatch-main">
-              <textarea
-                value={intent}
-                onChange={(e) => setIntent(e.target.value)}
-                placeholder="Describe something to build — a game, a script, a small web app…"
-                rows={2}
-              />
-              {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
-              <div className="actions">
-                <button
-                  type="submit"
-                  className="btn primary"
-                  disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
-                >
-                  {dispatching ? "Sending" : "Send"}
-                </button>
-              </div>
-              {turnstileEnabled && (
-                // Required when running Turnstile in invisible / interaction-only mode:
-                // visitors must be able to find the privacy policy that references
-                // Cloudflare's Turnstile Privacy Addendum.
-                <p className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>
-                  Protected by Cloudflare Turnstile.{" "}
-                  <a
-                    href="https://opencovenant.org/privacy"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Privacy policy
-                  </a>
-                  .
-                </p>
-              )}
-            </div>
-            {DEMO_MODE && (
-              <div className="dispatch-aside">
-                <span className="eyebrow text-muted">try</span>
-                {DEMO_SAMPLES.map((s) => (
-                  <button
-                    key={s.label}
-                    type="button"
-                    className="btn chip"
-                    onClick={() => sendIntent(s.intent)}
-                    disabled={dispatching}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            )}
+          <textarea
+            value={intent}
+            onChange={(e) => setIntent(e.target.value)}
+            placeholder="Describe something to build — a game, a script, a small web app…"
+            rows={2}
+          />
+          {turnstileEnabled && <Turnstile onToken={setTurnstileToken} />}
+          <div className="actions">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={dispatching || !intent || (turnstileEnabled && !turnstileToken)}
+            >
+              {dispatching ? "Sending" : "Send"}
+            </button>
           </div>
+          {turnstileEnabled && (
+            // Required when running Turnstile in invisible / interaction-only mode:
+            // visitors must be able to find the privacy policy that references
+            // Cloudflare's Turnstile Privacy Addendum.
+            <p className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>
+              Protected by Cloudflare Turnstile.{" "}
+              <a
+                href="https://opencovenant.org/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Privacy policy
+              </a>
+              .
+            </p>
+          )}
+          {DEMO_MODE && (
+            <div className="sample-chips">
+              <span className="eyebrow text-muted">try</span>
+              {DEMO_SAMPLES.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  className="btn chip"
+                  onClick={() => sendIntent(s.intent)}
+                  disabled={dispatching}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
         </form>
 
         {(lastResult || lastError || dispatching || awaiting) && (
@@ -580,43 +576,6 @@ export default function OverviewPage() {
         .btn.small {
           padding: 4px 10px;
           font-size: 11px;
-        }
-
-        /* Dispatch card: textarea + sample-chips column side by side on
-           md+, single column on mobile. The .solo variant collapses to a
-           single column even on md+ (control-plane mode, no chips). */
-        .dispatch-grid {
-          display: grid;
-          gap: 18px;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
-        }
-
-        .dispatch-grid.solo {
-          grid-template-columns: minmax(0, 1fr);
-        }
-
-        .dispatch-main {
-          display: grid;
-          gap: 12px;
-          align-content: start;
-          min-width: 0;
-        }
-
-        .dispatch-aside {
-          display: grid;
-          align-content: start;
-          gap: 6px;
-          min-width: 0;
-        }
-
-        .dispatch-aside .eyebrow {
-          margin: 0 0 4px;
-        }
-
-        @media (max-width: 900px) {
-          .dispatch-grid {
-            grid-template-columns: minmax(0, 1fr);
-          }
         }
 
         /* State-tile grid (control-plane mode): six clickable section

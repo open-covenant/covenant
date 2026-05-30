@@ -199,12 +199,12 @@ The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/cra
 - `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:6317-6320`) — never a string-of-integer. Filter semantics live with the daemon's `Request::RecentReceipts` handler; this surface only echoes the operator's input.
 - `receipts` (array of `SettlementReceipt`): the matched receipts in the order returned by the daemon. The array is empty when no receipts fall in the window; the unsuffixed CLI prints `(no receipts)` for that case at `main.rs:2866`. Pinned as an array by `main.rs:6321-6324` — never null or a string.
 
-The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:392`:
+The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:404`:
 
 - `id` (string) — receipt UUID, serialized as the canonical hyphenated string form.
-- `payer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
+- `payer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:189`.
 - `resource` (string) — `ResourceKind` slug, exactly one of `"compute"`, `"memory"`, `"tool"`, `"message"`, `"registration"` (lowercase per `#[serde(rename_all = "lowercase")]` at `covenant-types/src/lib.rs:35`). Consumers must route on the lowercase wire form, **not** the Rust enum names (`"Compute"`, `"Memory"`, etc.) — those never appear on the wire.
-- `memory_record_id` (string, omitted when null) — record identifier when the receipt settled a memory write. Serialized via `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-types/src/lib.rs:396-397` — so **absent rather than null** when unbound. This is the single asymmetry among the Option fields: every other optional field below carries `#[serde(default)]` without `skip_serializing_if`, so those keys are **always emitted** (as `null` when absent). JSON consumers must check `memory_record_id` with key-existence, not null-vs-value.
+- `memory_record_id` (string, omitted when null) — record identifier when the receipt settled a memory write. Serialized via `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-types/src/lib.rs:408-409` — so **absent rather than null** when unbound. This is the single asymmetry among the Option fields: every other optional field below carries `#[serde(default)]` without `skip_serializing_if`, so those keys are **always emitted** (as `null` when absent). JSON consumers must check `memory_record_id` with key-existence, not null-vs-value.
 - `credits_consumed` (u64) — USD-pegged credits destroyed at this event.
 - `settled_at` (u64) — Unix-epoch milliseconds when the receipt was issued locally.
 - `chain` (string or null) — chain family identifier (e.g. `"solana"`) once the receipt has been batched and confirmed on-chain; `null` until then. Always present on the wire.
@@ -214,7 +214,7 @@ The inner `SettlementReceipt` shape, defined at `agent-os/crates/covenant-types/
 - `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; `null` until then. Always present on the wire.
 - `slot` (u64 or null) — confirmation slot once available; `null` until then. Always present on the wire.
 - `confirmed_at` (u64 or null) — Unix-epoch milliseconds when the on-chain transaction confirmed; `null` until then. Always present on the wire.
-- `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:388-390`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:3549-3552` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
+- `onchain_sig` (string or null) — backwards-compatible alias for `tx_sig` (per the struct doc-comment at `covenant-types/src/lib.rs:400-402`) that older clients still consume; new consumers should prefer `tx_sig`. Always present on the wire. Both fields carry the same value once the receipt confirms; the unsuffixed CLI's `(local-only)` fallback at `main.rs:3549-3552` reads `tx_sig` first and falls back to `onchain_sig` for exactly that reason.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:6296` (`receipt_list_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, populated without `since_ms`, and empty without `since_ms`.
 
@@ -236,7 +236,7 @@ The envelope source-of-truth lives at `ping_json` in `agent-os/crates/covenant/s
 - `status` (string): the outcome status (e.g., `"ok"`). The string shape is pinned by `main.rs:6612-6615`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2075` (a single-line `println!("{text}")`), so `covenant intent --json` and `covenant intent` share the result payload but only `--json` wraps it in the envelope. Pinned as a string by `main.rs:6616` — never an object or array.
 - `sources` (array of strings): source labels that contributed to the result (e.g., `["research"]`). Pinned as an array of strings by `main.rs:6617-6620` — never a comma-joined string. Empty when no sources are attached.
-- `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:392`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:6621-6624` — never an integer or array.
+- `settlement` (object or null): an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:404`) carrying the on-chain or local settlement evidence when the intent consumed credits. `null` when the intent did not settle (e.g., a phase-0 echo that does not charge). Pinned as object-or-null by `main.rs:6621-6624` — never an integer or array.
 
 Top-level keys are pinned to exactly these six by the test at `agent-os/crates/covenant/src/main.rs:6584` (`intent_result_json_pins_top_level_schema`), exercised against both a populated `Some(SettlementReceipt)` case and an empty unsettled case.
 
@@ -248,7 +248,7 @@ The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/c
 
 - `kind`: literal string `"capability_list"` — verb-name asymmetry: the CLI verb is `recent` but the envelope discriminator is `capability_list`. Consumers routing on `kind` must match the latter literal exactly rather than reusing the verb token. Pinned at the value level by `main.rs:6741` (asserts `value["kind"].as_str() == Some("capability_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:3247`). Pinned at the type level by the schema test (`main.rs:6742-6745`) — JSON consumers must never receive a string here.
-- `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:224` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:6746-6749` — never null or a string.
+- `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:236` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:6746-6749` — never null or a string.
 
 The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:6449-6465`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
@@ -301,7 +301,7 @@ The envelope source-of-truth lives at `capabilities_purge_json` in `agent-os/cra
 
 The inner `PeerSummary` shape, defined at `agent-os/crates/covenant-peer-auth/src/lib.rs:140`:
 
-- `agent_id` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
+- `agent_id` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:189`.
 - `token_prefix` (string) — 6-character redacted token prefix, the same value `peers revoke <token-prefix>` accepts. The full token bytes are never on the wire — same invariant as `Response::PeerList`.
 - `registered_at` (u64) — Unix-epoch milliseconds when the peer registered.
 - `revoked_at` (u64 or null) — Unix-epoch milliseconds when the peer was tombstoned; `null` for live entries. Composes with the `--live-only`/`--revoked-only` flags (and the equivalent `status_filter` query parameter described above) for filtering — the filter runs before the registry's truncation peek.
@@ -361,7 +361,7 @@ The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib
 
 - `id` (string) — event UUID.
 - `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
-- `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
+- `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:189`.
 - `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:71` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7206` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
@@ -418,16 +418,16 @@ The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/co
 - `min_relevance` (number or null): for `mode="search"`, the float echoed from `--min-relevance` (validated to a finite `f32` in `[0.0, 1.0]` at `main.rs:2516-2520`), or `null` when the flag was omitted. For `mode="recent"`, always `null`. Pinned as f64-or-null by the schema test (`main.rs:7669-7672`) — never a string.
 - `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1631`. Pinned as an array by `main.rs:7673-7676` — never null or a string.
 
-The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:236`:
+The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:248`:
 
 - `id` (string) — record UUID, serialized as the canonical hyphenated string form.
 - `tier` (string) — lowercase `MemoryTier` slug (same enumeration as the top-level `tier` above; always present, never null).
-- `owner` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
+- `owner` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:189`.
 - `text` (string) — the stored memory text.
 - `embedding` (array of numbers) — the record's embedding vector as a JSON array of f32 values. The array is always present (empty when no embedding was attached); consumers must not assume the field is omitted.
 - `metadata` (JSON value) — an arbitrary `serde_json::Value` (object, array, primitive, or null). The daemon emits whatever metadata the writer attached; consumers must not assume an object shape.
 - `created_at` (u64) — Unix-epoch milliseconds when the record was written.
-- `parent` (string or null) — parent record UUID for derived memories. Carries `#[serde(default)]` at `covenant-types/src/lib.rs:245-246` **without** `skip_serializing_if`, so the field is **always emitted** (as `null` when the record has no parent), not omitted. JSON consumers must read it with null-vs-value, not key-existence.
+- `parent` (string or null) — parent record UUID for derived memories. Carries `#[serde(default)]` at `covenant-types/src/lib.rs:257-258` **without** `skip_serializing_if`, so the field is **always emitted** (as `null` when the record has no parent), not omitted. JSON consumers must read it with null-vs-value, not key-existence.
 
 Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7631` (`memory_read_json_pins_top_level_schema`), exercised against both a `mode="search"` case (populated `query`, `min_relevance`, non-empty `records`) and a `mode="recent"` case (null `query`, null `min_relevance`, empty `records`).
 
@@ -540,13 +540,13 @@ The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/cov
 `covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits the outcome of a memory-store compaction pass. Envelope shape:
 
 - `kind`: literal string `"memory_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"memory_compact"`) or guessing a noun form (`"memory_compaction"`). Pinned at the value level by `main.rs:7423` (asserts `value["kind"].as_str() == Some("memory_compacted")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `outcome` (object): a structured `MemoryCompactionOutcome` (defined at `agent-os/crates/covenant-types/src/lib.rs:350`), never a string blob. The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:7424-7427` to be a JSON object.
+- `outcome` (object): a structured `MemoryCompactionOutcome` (defined at `agent-os/crates/covenant-types/src/lib.rs:362`), never a string blob. The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:7424-7427` to be a JSON object.
 
 **Dry-run by default, mutates only with `--apply`**: the CLI defaults to `MemoryRepairMode::DryRun` (per `main.rs:2948-2956`) and `--reason <text>` is mandatory regardless of mode (the CLI bails with `"missing --reason"` at `main.rs:2955` when omitted). Without `--apply`, the daemon evaluates the policy and reports what *would* change but does not mutate the store.
 
 The inner `MemoryCompactionOutcome` shape:
 
-- `mode` (string) — `MemoryRepairMode` slug, exactly `"dry_run"` or `"apply"` (snake_case, per `MemoryRepairMode`'s `#[serde(rename_all = "snake_case")]` at `covenant-types/src/lib.rs:249-254`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
+- `mode` (string) — `MemoryRepairMode` slug, exactly `"dry_run"` or `"apply"` (snake_case, per `MemoryRepairMode`'s `#[serde(rename_all = "snake_case")]` at `covenant-types/src/lib.rs:261-266`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
 - `would_change` (bool) — the policy identified at least one mutation that would land. Reliable in both modes — `true` whenever the policy matched records.
 - `changed` (bool) — the store was actually mutated by this call. In `mode: "dry_run"` this is **always `false`** even when `would_change` is `true`; only `mode: "apply"` can set it. JSON consumers branching on `changed` alone will silently treat dry-run planning runs as no-ops; route on the `(mode, would_change, changed)` triple instead.
 - `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode). The empty-case is pinned by the stable-shape test at `main.rs:7394-7397` (asserts `value["outcome"]["deleted"].as_array().map(Vec::len) == Some(0)`).
@@ -615,7 +615,7 @@ Both branches share these fields:
 - `status` (string) — the daemon-returned outcome status (typically `"ok"`). The string shape is pinned at `main.rs:6203-6206`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.
 - `text` (string) — the result text the daemon returned for the resumed intent. The unsuffixed CLI prints this value directly at `main.rs:3944`. Pinned as a string by `main.rs:6207` — never an object or array.
 - `sources` (array of strings) — source labels that contributed to the result. Pinned as an array of strings by `main.rs:6208-6211` — never a comma-joined string. Empty when no sources are attached; the unsuffixed CLI prints a `sources:` block followed by `  - <label>` lines at `main.rs:4624-4627` only when the array is non-empty.
-- `settlement` (object or null) — an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:392` and documented in the `receipt_list` block above) carrying the on-chain or local settlement evidence when the resumed intent consumed credits. `null` when the resume did not settle. Pinned as object-or-null by `main.rs:6212-6215` — never an integer or array.
+- `settlement` (object or null) — an optional `SettlementReceipt` (defined at `agent-os/crates/covenant-types/src/lib.rs:404` and documented in the `receipt_list` block above) carrying the on-chain or local settlement evidence when the resumed intent consumed credits. `null` when the resume did not settle. Pinned as object-or-null by `main.rs:6212-6215` — never an integer or array.
 
 **Error branch (`ok=false`)** carries these five top-level keys per the test EXPECTED_KEYS at `main.rs:6021`:
 

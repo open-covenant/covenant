@@ -123,11 +123,20 @@ impl Signer for SubprocessSigner {
             .map_err(|e| X402Error::Sign(format!("await signer: {e}")))?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let raw = String::from_utf8_lossy(&output.stderr);
+            // Sidecar stderr starts with "covenant-x402-signer: <X402Error display>",
+            // which the X402Error::Sign Display below then prefixes with another
+            // "sign: ". Strip both so the operator sees the actual cause once,
+            // not "sign: signer exited N: covenant-x402-signer: sign: ...".
+            let mut inner = raw.trim();
+            for prefix in ["covenant-x402-signer: ", "sign: "] {
+                if let Some(stripped) = inner.strip_prefix(prefix) {
+                    inner = stripped;
+                }
+            }
             return Err(X402Error::Sign(format!(
                 "signer exited {}: {}",
-                output.status,
-                stderr.trim()
+                output.status, inner
             )));
         }
 

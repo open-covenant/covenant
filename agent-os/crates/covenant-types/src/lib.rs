@@ -132,6 +132,18 @@ impl AgentId {
     }
 }
 
+/// Compact, log-friendly form: `<display> (<first 8 of pubkey base58>)`.
+/// The Debug derive prints the raw 32-byte array; Display gives operators
+/// a readable identifier with enough pubkey to disambiguate display-name
+/// collisions across peers without dumping the full key on every log line.
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let b58 = self.pubkey_base58();
+        let short = &b58[..b58.len().min(8)];
+        write!(f, "{} ({short})", self.display)
+    }
+}
+
 /// Whitelist for `AgentId.display`: `<local>@<host>` where each side is
 /// a non-empty run of `[A-Za-z0-9_.-]`. Returns an error for any other
 /// shape so the value can't smuggle whitespace, control bytes, or

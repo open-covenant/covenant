@@ -60,8 +60,7 @@ fn unauthorized_signer_cannot_pause() {
 fn increase_amount_rejected_after_lock_expiry() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, 5 * MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
     advance_clock(&mut env, TIER_30D_SECS + 1);
     let err = increase_amount(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT)
         .expect_err("locked window closed");
@@ -72,10 +71,8 @@ fn increase_amount_rejected_after_lock_expiry() {
 fn close_position_rejected_before_lock_expiry() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
-    let err = close_position(&mut env, &owner, &ata, 1)
-        .expect_err("cannot close before lock_end");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
+    let err = close_position(&mut env, &owner, &ata, 1).expect_err("cannot close before lock_end");
     assert_eq!(custom_error(&err), Some(E_LOCK_NOT_EXPIRED));
 }
 
@@ -83,8 +80,7 @@ fn close_position_rejected_before_lock_expiry() {
 fn claim_rejects_when_nothing_to_claim() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
     let err = claim(&mut env, &owner, 1).expect_err("no fees deposited");
     assert_eq!(custom_error(&err), Some(E_NOTHING_TO_CLAIM));
 }
@@ -93,8 +89,15 @@ fn claim_rejects_when_nothing_to_claim() {
 fn other_owner_cannot_claim_position() {
     let mut env = boot();
     let (alice, alice_ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &alice, &alice_ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(
+        &mut env,
+        &alice,
+        &alice_ata,
+        1,
+        MIN_LOCK_AMOUNT,
+        TIER_30D_BPS,
+    )
+    .expect("create");
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit");
 
     let bob = Keypair::new();

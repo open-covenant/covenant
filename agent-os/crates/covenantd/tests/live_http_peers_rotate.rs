@@ -132,7 +132,10 @@ async fn live_http_peers_rotate_mints_and_authenticates_new_bearer_over_http() {
     let new_token = rotated["token_b58"]
         .as_str()
         .expect("rotated body must carry token_b58");
-    assert!(!new_token.is_empty(), "rotated token must not be empty: {rotated:?}");
+    assert!(
+        !new_token.is_empty(),
+        "rotated token must not be empty: {rotated:?}"
+    );
     assert_ne!(new_token, bootstrap, "rotation must mint a fresh token");
 
     // The on-disk file is the daemon's contract with the next process start:
@@ -140,7 +143,11 @@ async fn live_http_peers_rotate_mints_and_authenticates_new_bearer_over_http() {
     // response returns.
     let token_path = home.path().join("peers").join("operator.token");
     let on_disk = std::fs::read_to_string(&token_path).expect("read operator.token");
-    assert_eq!(on_disk.trim(), new_token, "disk must hold the rotated token");
+    assert_eq!(
+        on_disk.trim(),
+        new_token,
+        "disk must hold the rotated token"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

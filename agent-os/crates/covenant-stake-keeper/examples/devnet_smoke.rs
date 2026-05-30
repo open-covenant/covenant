@@ -29,7 +29,8 @@ use solana_sdk::signer::Signer;
 use solana_sdk::system_instruction;
 use solana_sdk::transaction::Transaction;
 
-const DEVNET_RPC: &str = "https://devnet.helius-rpc.com/?api-key=96047715-56a7-4ac4-aaa2-41fba9797a90";
+const DEVNET_RPC: &str =
+    "https://devnet.helius-rpc.com/?api-key=96047715-56a7-4ac4-aaa2-41fba9797a90";
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -62,7 +63,10 @@ fn main() -> Result<()> {
             let locked_vault = Pubkey::from_str(&args[2])?;
             let buylock_vault = Pubkey::from_str(&args[3])?;
 
-            let rpc = RpcClient::new_with_commitment(DEVNET_RPC.to_string(), CommitmentConfig::confirmed());
+            let rpc = RpcClient::new_with_commitment(
+                DEVNET_RPC.to_string(),
+                CommitmentConfig::confirmed(),
+            );
             let deployer = load_default_keypair()?;
             println!("deployer = {}", deployer.pubkey());
             println!("mint     = {mint}");
@@ -112,15 +116,20 @@ fn main() -> Result<()> {
             println!("initialize tx = {sig}");
 
             // Verify Config exists by reading it.
-            let cfg = rpc
-                .get_account(&config_pda)
-                .context("fetch config")?;
+            let cfg = rpc.get_account(&config_pda).context("fetch config")?;
             println!("config owner   = {}", cfg.owner);
             println!("config len     = {}", cfg.data.len());
-            let fr = rpc.get_account(&fee_router_pda).context("fetch fee_router")?;
+            let fr = rpc
+                .get_account(&fee_router_pda)
+                .context("fetch fee_router")?;
             println!("fee_router owner = {}", fr.owner);
-            let rv = rpc.get_account(&reward_vault_pda).context("fetch reward_vault")?;
-            println!("reward_vault owner = {}, lamports = {}", rv.owner, rv.lamports);
+            let rv = rpc
+                .get_account(&reward_vault_pda)
+                .context("fetch reward_vault")?;
+            println!(
+                "reward_vault owner = {}, lamports = {}",
+                rv.owner, rv.lamports
+            );
             Ok(())
         }
         "smoke" => {
@@ -130,7 +139,10 @@ fn main() -> Result<()> {
             let mint = Pubkey::from_str(&args[1])?;
             let locked_vault = Pubkey::from_str(&args[2])?;
 
-            let rpc = RpcClient::new_with_commitment(DEVNET_RPC.to_string(), CommitmentConfig::confirmed());
+            let rpc = RpcClient::new_with_commitment(
+                DEVNET_RPC.to_string(),
+                CommitmentConfig::confirmed(),
+            );
             let deployer = load_default_keypair()?;
 
             // Create a fresh user, fund them, give them an ATA.
@@ -141,16 +153,15 @@ fn main() -> Result<()> {
             send(&rpc, &deployer, &[fund_ix], &[])?;
 
             // Create user's $CVNT ATA. Use legacy SPL associated_token_account.
-            let ata = spl_associated_token_account::get_associated_token_address(
-                &user.pubkey(),
-                &mint,
-            );
-            let create_ata = spl_associated_token_account::instruction::create_associated_token_account(
-                &deployer.pubkey(),
-                &user.pubkey(),
-                &mint,
-                &spl_token::ID,
-            );
+            let ata =
+                spl_associated_token_account::get_associated_token_address(&user.pubkey(), &mint);
+            let create_ata =
+                spl_associated_token_account::instruction::create_associated_token_account(
+                    &deployer.pubkey(),
+                    &user.pubkey(),
+                    &mint,
+                    &spl_token::ID,
+                );
             send(&rpc, &deployer, &[create_ata], &[])?;
             println!("user ata = {ata}");
 
@@ -169,10 +180,7 @@ fn main() -> Result<()> {
             // collide on the [b"stake_v2", user, nonce] PDA. We generate a
             // random user above so the seed combination stays unique either
             // way, but explicit args.get(3) lets the operator override.
-            let nonce: u64 = args
-                .get(3)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
+            let nonce: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
             let amount: u64 = 2_000_000_000;
             let tier_bps: u16 = 10_000;
             let (position_pda, _) = Pubkey::find_program_address(
@@ -252,7 +260,10 @@ fn main() -> Result<()> {
             )?;
             let user_after = rpc.get_balance(&user.pubkey()).unwrap();
             println!("claim tx = {sig}");
-            println!("user SOL delta = {} lamports (expected ~1_000_000 less tx fee)", user_after as i64 - user_before as i64);
+            println!(
+                "user SOL delta = {} lamports (expected ~1_000_000 less tx fee)",
+                user_after as i64 - user_before as i64
+            );
             Ok(())
         }
         other => bail!("unknown subcommand: {other}"),

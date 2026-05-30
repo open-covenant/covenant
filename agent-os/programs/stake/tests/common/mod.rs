@@ -67,11 +67,7 @@ pub fn buylock_vault_auth_pda() -> Pubkey {
 }
 
 pub fn position_pda(owner: &Pubkey, nonce: u64) -> Pubkey {
-    Pubkey::find_program_address(
-        &[b"stake_v2", owner.as_ref(), &nonce.to_le_bytes()],
-        &ID,
-    )
-    .0
+    Pubkey::find_program_address(&[b"stake_v2", owner.as_ref(), &nonce.to_le_bytes()], &ID).0
 }
 
 pub fn boot() -> Env {
@@ -521,7 +517,13 @@ pub fn funded_owner(env: &mut Env, amount: u64) -> (Keypair, Pubkey) {
     env.svm.airdrop(&owner.pubkey(), 10_000_000_000).unwrap();
     let payer = env.payer.insecure_clone();
     let ata = create_token_account(&mut env.svm, &payer, &env.mint, &owner.pubkey());
-    mint_to(&mut env.svm, &env.payer.insecure_clone(), &env.mint, &ata, amount);
+    mint_to(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &ata,
+        amount,
+    );
     (owner, ata)
 }
 
@@ -532,7 +534,10 @@ pub fn config_state(env: &Env) -> Config {
 }
 
 pub fn fee_router_state(env: &Env) -> FeeRouter {
-    let acc = env.svm.get_account(&env.fee_router).expect("fee_router exists");
+    let acc = env
+        .svm
+        .get_account(&env.fee_router)
+        .expect("fee_router exists");
     let mut data = acc.data();
     FeeRouter::try_deserialize(&mut data).expect("fee_router")
 }

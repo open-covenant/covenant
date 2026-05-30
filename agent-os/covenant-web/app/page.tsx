@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { formatTimestamp } from "@/lib/format";
@@ -50,6 +51,7 @@ async function loadOverview() {
 }
 
 export default function OverviewPage() {
+  const router = useRouter();
   const { data, error, lastSyncMs, refresh } = usePoll<OverviewSnapshot>(loadOverview, 3000);
   const [intent, setIntent] = useState("");
   const [dispatching, setDispatching] = useState(false);
@@ -398,7 +400,19 @@ export default function OverviewPage() {
               <p className="eyebrow">{lastError ? "error" : "reply"}</p>
               <div className="reply-head-actions">
                 {lastIntentId && !lastError && (
-                  <Link className="btn ghost small" href={`/intents/${lastIntentId}`}>
+                  <Link
+                    className="btn ghost small"
+                    href={`/intents/${lastIntentId}`}
+                    prefetch={false}
+                    onClick={(e) => {
+                      // Imperative push as a defensive belt-and-suspenders:
+                      // ensures the click navigates even if a stale prefetch
+                      // or a global keyboard handler somewhere swallows the
+                      // default Link click before Next's router runs.
+                      e.preventDefault();
+                      router.push(`/intents/${lastIntentId}`);
+                    }}
+                  >
                     {awaiting ? "watch it work" : "open task"}
                   </Link>
                 )}

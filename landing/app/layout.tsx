@@ -34,14 +34,37 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: TITLE,
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
+    images: [
+      {
+        url: "/twitter-image.jpg",
+        alt: "Covenant — open agent-native operating layer",
+      },
+    ],
   },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Covenant",
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: { telephone: false, address: false, email: false },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#030303",
+  colorScheme: "dark",
   viewportFit: "cover",
 };
 
@@ -53,9 +76,17 @@ function SiteJsonLd() {
         "@type": "Organization",
         "@id": `${SITE_URL}/#org`,
         name: SITE_NAME,
+        alternateName: "The Covenant Project",
         url: SITE_URL,
         logo: `${SITE_URL}/logomark.svg`,
         description: DESCRIPTION,
+        foundingDate: "2026",
+        founder: {
+          "@type": "Person",
+          name: "Achille Wasque",
+          email: "aw@opencovenant.org",
+          affiliation: "The Covenant Project",
+        },
         sameAs: [
           "https://x.com/OpenCovenant",
           "https://github.com/open-covenant/covenant",
@@ -83,11 +114,29 @@ function SiteJsonLd() {
         description: DESCRIPTION,
         url: SITE_URL,
         applicationCategory: "DeveloperApplication",
+        applicationSubCategory: "Agent operating layer",
         operatingSystem: "Linux, macOS",
         codeRepository: "https://github.com/open-covenant/covenant",
         programmingLanguage: "Rust",
         license: "https://www.apache.org/licenses/LICENSE-2.0",
         downloadUrl: "https://github.com/open-covenant/covenant/releases",
+        softwareVersion: "0.1.0-alpha.1",
+        datePublished: "2026-05-28",
+        releaseNotes:
+          "https://github.com/open-covenant/covenant/releases/tag/v0.1.0-alpha.1",
+        isAccessibleForFree: true,
+        featureList: [
+          "Intent dispatch",
+          "Sandboxed runtime",
+          "Tiered semantic memory",
+          "ed25519 identity",
+          "Capability tokens",
+          "MCP and A2A comms",
+          "Audit log",
+          "On-chain settlement scaffold",
+        ],
+        citation: "https://doi.org/10.5281/zenodo.20134416",
+        maintainer: { "@id": `${SITE_URL}/#org` },
         author: { "@id": `${SITE_URL}/#org` },
         publisher: { "@id": `${SITE_URL}/#org` },
         offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },

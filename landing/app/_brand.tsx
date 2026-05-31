@@ -11,6 +11,10 @@ export const RELEASE_STATUS = "ALPHA LIVE";
 // emitting a fresh request-time clock (which churns lastmod on every crawl).
 export const SITE_BUILD_DATE = "2026-05-31";
 
+// Docs went live with the 0.1.0 release. Feeds TechArticle datePublished;
+// dateModified tracks SITE_BUILD_DATE — only bump that on real content change.
+export const DOCS_PUBLISHED_DATE = "2026-05-13";
+
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },

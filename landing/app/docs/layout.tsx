@@ -10,10 +10,11 @@ export const metadata: Metadata = {
   },
   description:
     "Reference, concepts, and operational guides for Covenant — the open, agent-native operating layer.",
-  alternates: { canonical: "/" },
+  // No canonical here: each docs page declares its own absolute canonical via buildDocsMetadata.
   openGraph: {
     type: "website",
     siteName: "Covenant docs",
+    locale: "en_US",
     images: [
       {
         url: "https://opencovenant.org/opengraph-image.jpg",

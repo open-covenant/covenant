@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SITE_BUILD_DATE, DOCS_PUBLISHED_DATE } from "../_brand";
 
 const DOCS_HOST = "https://docs.opencovenant.org";
 const SITE_HOST = "https://opencovenant.org";
@@ -44,7 +45,9 @@ export function buildDocsMetadata(
       creator: "@OpenCovenant",
       title: fullTitle,
       description,
-      images: OG_IMAGE,
+      images: [
+        { url: OG_IMAGE, alt: "Covenant — open agent-native operating layer" },
+      ],
     },
   };
 }
@@ -82,6 +85,8 @@ export function buildDocsJsonLd(
         description,
         url,
         inLanguage: "en",
+        datePublished: DOCS_PUBLISHED_DATE,
+        dateModified: SITE_BUILD_DATE,
         isPartOf: { "@id": `${DOCS_HOST}/#website` },
         author: { "@id": `${SITE_HOST}/#org` },
         publisher: { "@id": `${SITE_HOST}/#org` },

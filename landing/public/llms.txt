@@ -1,0 +1,45 @@
+# Covenant
+
+> Covenant is an open, local-first, agent-native operating layer. It runs as a local daemon on the host and exposes eight operating-layer primitives — intent, runtime, memory, identity, permissions, comms, compositor, and settlement — through which human users, software agents, and tools coordinate work, share state, and account for resource usage. License Apache-2.0. Version 0.1.0-alpha.1.
+
+Covenant sits between the host OS and agentic applications. Agents are package directories with an agent.toml manifest; permissions are ed25519-signed capability tokens; every state change is appended to a hash-linked audit log; resource usage produces local settlement receipts. The canonical vocabulary is: intent, agent, capability, memory record, audit event, settlement receipt.
+
+## Docs
+
+- [Overview](https://docs.opencovenant.org/): What Covenant is and where it sits in the stack.
+- [Getting started](https://docs.opencovenant.org/getting-started): Build from source, run the daemon, dispatch a first intent.
+- [Concepts](https://docs.opencovenant.org/concepts): The data model — intents, agents, capabilities, memory, audit, settlement.
+- [The eight primitives](https://docs.opencovenant.org/primitives): Definitions of all eight host-level primitives.
+- [Glossary](https://docs.opencovenant.org/glossary): Canonical one-line definitions of the eight primitives and core artifacts.
+- [System architecture](https://docs.opencovenant.org/architecture): Daemon, runtime, local control plane, settlement scaffold.
+- [CLI reference](https://docs.opencovenant.org/cli): Every covenant subcommand.
+- [HTTP API](https://docs.opencovenant.org/http-api): Local gateway routes and schemas.
+- [Agent manifest](https://docs.opencovenant.org/agent-manifest): Full agent.toml schema and validation.
+- [Capability tokens](https://docs.opencovenant.org/capabilities): ed25519 permission token structure, encoding, verification, revocation.
+- [Security model](https://docs.opencovenant.org/security): Trust boundaries, threat model, defaults.
+
+## Protocols
+
+- [MCP integration](https://docs.opencovenant.org/mcp): Tool trait and external MCP servers over JSON-RPC.
+- [Agent-to-agent](https://docs.opencovenant.org/a2a): A2A transport.
+- [Settlement](https://docs.opencovenant.org/settlement): Local receipt model and the on-chain scaffold.
+
+## Research
+
+- [Technical whitepaper](https://doi.org/10.5281/zenodo.20134416): Covenant — a capability-based operating layer for autonomous software-engineering agents.
+- [Source repository](https://github.com/open-covenant/covenant)
+
+## Optional
+
+- [Autonomous workflow](https://docs.opencovenant.org/autonomy)
+- [Validation profile](https://docs.opencovenant.org/validation)
+- [Alpha release contract](https://docs.opencovenant.org/alpha-release)
+- [A2A idempotency](https://docs.opencovenant.org/a2a-idempotency)
+- [Audit log](https://docs.opencovenant.org/audit)
+- [Audit integrity](https://docs.opencovenant.org/audit-integrity)
+- [Identity and keys](https://docs.opencovenant.org/identity)
+- [Memory tiers](https://docs.opencovenant.org/memory)
+- [Local IPC](https://docs.opencovenant.org/ipc)
+- [Live coverage](https://docs.opencovenant.org/live-coverage)
+- [Linux gVisor runner](https://docs.opencovenant.org/gvisor-live-runner)
+- [Provenance](https://docs.opencovenant.org/provenance)

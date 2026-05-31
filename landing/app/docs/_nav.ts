@@ -18,6 +18,7 @@ export const DOCS_NAV: DocsSection[] = [
     items: [
       { href: "/architecture", label: "System architecture" },
       { href: "/primitives", label: "The eight primitives" },
+      { href: "/glossary", label: "Glossary" },
     ],
   },
   {

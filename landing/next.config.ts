@@ -13,11 +13,13 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "img-src 'self' data: blob:",
+      // walletconnect/web3modal serve wallet logos over https for the AppKit modal
+      "img-src 'self' data: blob: https://api.web3modal.org https://*.walletconnect.com",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       "script-src 'self' 'unsafe-inline'",
-      "connect-src 'self' https://docs.opencovenant.org https://api.opencovenant.org https://*.helius-rpc.com https://api.mainnet-beta.solana.com https://api.devnet.solana.com wss://*.helius-rpc.com wss://api.mainnet-beta.solana.com wss://api.devnet.solana.com",
+      // Solana RPC + Jupiter price + Reown AppKit/WalletConnect (config, relay, analytics)
+      "connect-src 'self' https://docs.opencovenant.org https://api.opencovenant.org https://*.helius-rpc.com https://api.mainnet-beta.solana.com https://api.devnet.solana.com https://lite-api.jup.ag https://api.web3modal.org https://*.walletconnect.org https://*.walletconnect.com wss://*.helius-rpc.com wss://api.mainnet-beta.solana.com wss://api.devnet.solana.com wss://*.walletconnect.org wss://*.walletconnect.com",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -27,8 +29,31 @@ const securityHeaders = [
 
 const config: NextConfig = {
   reactStrictMode: true,
+  productionBrowserSourceMaps: false,
+  images: {
+    formats: ["image/avif", "image/webp"],
+    deviceSizes: [320, 640, 1280],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256],
+    minimumCacheTTL: 31536000,
+  },
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      {
+        source: "/hero-bg.(jpg|webp|avif)",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+      },
+      {
+        source: "/(logo|logomark).svg",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+      },
+      {
+        source: "/(sitemap.xml|docs/sitemap.xml)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600, stale-while-revalidate=86400" },
+        ],
+      },
+      { source: "/:path*", headers: securityHeaders },
+    ];
   },
 };
 

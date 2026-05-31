@@ -1545,6 +1545,76 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn mailbox_open_rejects_malformed_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mailbox.jsonl");
+        // A non-empty row that is not a valid MailboxEvent must abort the
+        // replay loudly; a silent skip would drop queued task/result state.
+        tokio::fs::write(&path, b"{bad}\n")
+            .await
+            .expect("seed mailbox");
+        let err = JsonlMailbox::open(path)
+            .await
+            .err()
+            .expect("malformed row must abort replay");
+        assert!(
+            matches!(err, A2AError::Serde(_)),
+            "a malformed row must surface as A2AError::Serde, not a skipped or defaulted event: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn mailbox_open_rejects_truncated_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mailbox.jsonl");
+        tokio::fs::write(&path, b"{\"task_\n")
+            .await
+            .expect("seed mailbox");
+        let err = JsonlMailbox::open(path)
+            .await
+            .err()
+            .expect("truncated frame must abort replay");
+        assert!(
+            matches!(err, A2AError::Serde(_)),
+            "a truncated JSON frame must surface as A2AError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn mailbox_open_rejects_malformed_after_valid_rows() {
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mailbox.jsonl");
+        // Produce a genuinely valid event row via the real append path, then
+        // corrupt the log with a trailing malformed row.
+        {
+            let mailbox = JsonlMailbox::open(path.clone())
+                .await
+                .expect("open empty mailbox");
+            mailbox
+                .send_task(dummy_task())
+                .await
+                .expect("enqueue seeds one valid event row");
+        }
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .expect("reopen log to corrupt it");
+        f.write_all(b"{bad}\n").await.expect("append malformed row");
+        f.flush().await.expect("flush");
+
+        let err = JsonlMailbox::open(path)
+            .await
+            .err()
+            .expect("a malformed row after valid rows must abort replay");
+        assert!(
+            matches!(err, A2AError::Serde(_)),
+            "replay must fail on the malformed row even after a valid row: {err:?}",
+        );
+    }
+
     #[test]
     fn task_round_trips_through_json() {
         let t = dummy_task();

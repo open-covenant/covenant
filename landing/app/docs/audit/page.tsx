@@ -1012,6 +1012,46 @@ export default function AuditPage() {
       </p>
 
       <h3>
+        <code>HermesFileWritten</code>
+      </h3>
+      <pre>
+        <code>{`{
+  "type":      "hermes_file_written",
+  "intent_id": "uuid",
+  "run_id":    "run_abc",
+  "path":      "src/main.rs",
+  "bytes":     4096
+}`}</code>
+      </pre>
+      <p>
+        Emitted when the Hermes runner observes an SSE{" "}
+        <code>file.written</code> event during a run and the daemon folds
+        the resulting <code>RuntimeTrace::HermesFileWritten</code> into the
+        audit chain — the workspace-mutation counterpart to the tool- and
+        approval-lifecycle Hermes rows. <code>intent_id</code> stamps the
+        parent intent so a file write stays attributable to the originating{" "}
+        <code>IntentDispatched</code> even after the run terminates; the
+        trace itself carries only <code>run_id</code>, <code>path</code>,
+        and <code>bytes</code>, and the daemon supplies{" "}
+        <code>intent_id</code> from the dispatch context as it does for the
+        other Hermes rows, so the wire form is always five keys.{" "}
+        <code>run_id</code> is the same Hermes-side run identifier the tool
+        and approval rows carry, joining every write to its run.{" "}
+        <code>path</code> is the sandbox-relative path of the written file
+        and passes through verbatim: operator file-tree views key on it, so
+        a redaction would break the join from the audit row to the rendered
+        file path. <code>bytes</code> is the file size as a{" "}
+        <code>u64</code> — the width is load-bearing, since a narrowing to{" "}
+        <code>u32</code> would silently truncate any write above 4 GiB — and
+        it serializes as a JSON number, not a string, so size-based client
+        logic does not break on a quoted value that never appears on the
+        wire. Distinct from <code>HermesToolInvoked</code> and{" "}
+        <code>HermesToolCompleted</code> (a file write is not a tool call —
+        there is no <code>tool</code>, <code>duration_ms</code>, or{" "}
+        <code>error</code> field).
+      </p>
+
+      <h3>
         <code>SettlementReceiptBackfillApplied</code>
       </h3>
       <pre>

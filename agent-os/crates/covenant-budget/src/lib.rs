@@ -1949,6 +1949,75 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn ledger_open_rejects_malformed_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ledger.jsonl");
+        // A non-empty row that is not a valid budget event must abort the
+        // replay loudly; a silent skip would corrupt reconstructed buckets.
+        tokio::fs::write(&path, b"{bad}\n").await.expect("seed log");
+        let err = JsonlLedger::open(path)
+            .await
+            .err()
+            .expect("malformed row must abort replay");
+        assert!(
+            matches!(err, BudgetError::Serde(_)),
+            "a malformed row must surface as BudgetError::Serde, not a skipped event: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn ledger_open_rejects_truncated_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ledger.jsonl");
+        tokio::fs::write(&path, b"{\"type\":\"cap\n")
+            .await
+            .expect("seed log");
+        let err = JsonlLedger::open(path)
+            .await
+            .err()
+            .expect("truncated frame must abort replay");
+        assert!(
+            matches!(err, BudgetError::Serde(_)),
+            "a truncated JSON frame must surface as BudgetError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn ledger_open_rejects_malformed_after_valid_rows() {
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ledger.jsonl");
+        let agent = AgentId::new("agent@local", [7u8; 32]);
+        // Produce a genuinely valid CapacitySet row via the real write path,
+        // then corrupt the log with a trailing malformed row.
+        {
+            let ledger = JsonlLedger::open(path.clone())
+                .await
+                .expect("open empty ledger");
+            ledger
+                .set_capacity(&agent, 10)
+                .await
+                .expect("set_capacity seeds one valid event row");
+        }
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .expect("reopen log to corrupt it");
+        f.write_all(b"{bad}\n").await.expect("append malformed row");
+        f.flush().await.expect("flush");
+
+        let err = JsonlLedger::open(path)
+            .await
+            .err()
+            .expect("a malformed row after valid rows must abort replay");
+        assert!(
+            matches!(err, BudgetError::Serde(_)),
+            "replay must fail on the malformed row even after a valid row: {err:?}",
+        );
+    }
+
     #[test]
     fn refill_zero_capacity_is_noop() {
         let mut b = Bucket {

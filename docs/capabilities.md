@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` `before_ms` cutoff, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, and the `settlement.backfill.*` predicate for receipt backfill at dispatch.
 
 ## Scope Envelope
 
@@ -113,6 +113,23 @@ Rules:
 - `before_ms` narrows purge authority. When present on `audit.purge`, the requested purge cutoff must be less than or equal to the scoped value.
 - `include_integrity` records whether the grant covers hash-chain verification, not only event reads.
 
+### `capabilities.*`
+
+Use for revoked-capability retention. `capabilities.purge` gates `covenant capabilities purge` (IPC `Request::PurgeCapabilities`, HTTP `POST /capabilities/purge`), the garbage collection that removes revoked-capability rows by a millisecond cutoff.
+
+```json
+{
+  "version": 1,
+  "before_ms": null
+}
+```
+
+Rules:
+
+- `before_ms` narrows purge authority: when present on `capabilities.purge`, the requested cutoff must be less than or equal to the scoped value; `null` or an absent field is unbounded. The dispatch predicate is the same `before_ms` cutoff enforced for `audit.purge` and the `peers.purge` retention sweep.
+- The operator identity remains the root authority for capability-registry control. A scoped `capabilities.purge` grant is delegated retention authority for a non-operator peer.
+- Grant-time validation does not yet bind the `capabilities.*` namespace, so a non-empty scope is preserved as signed metadata at grant time and only `before_ms` is interpreted at dispatch. Treat the cutoff as an enforced dispatch bound, not a grant-time-validated envelope.
+
 ### `peers.*` and `identity.*`
 
 Use for peer registry and local identity operations.
@@ -187,7 +204,7 @@ Rules:
 1. Keep accepting `{}` for existing broad grants.
 2. Validate non-empty scopes at grant time for known action namespaces.
 3. Interpret the stable `tool.call.*` `arguments.allow` predicate at dispatch.
-4. Interpret the stable `audit.purge` `before_ms` cutoff at dispatch.
+4. Interpret the stable `audit.purge` and `capabilities.purge` `before_ms` cutoffs at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
 7. Interpret stable peer-registry list/revoke/purge predicates, chain receipt-read, batch-read, and flush predicates, and the settlement receipt-backfill predicate at dispatch.

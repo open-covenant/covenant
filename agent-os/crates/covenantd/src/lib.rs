@@ -1041,10 +1041,10 @@ impl Server {
         self
     }
 
-    /// Attach an opt-in Synapse Agent Protocol bridge. Daemon `main`
-    /// calls this once at boot when [`sap_bridge_config_from_env`]
-    /// resolves an enabled config; otherwise the bridge stays `None`
-    /// and SAP-backed handlers surface `BridgeDisabledError`.
+    /// Attach the Synapse Agent Protocol bridge. Daemon `main` calls
+    /// this once at boot with the bridge from [`sap_bridge_config_from_env`],
+    /// so it is always attached; the config's `enabled` flag governs
+    /// behavior, and a disabled bridge surfaces `BridgeDisabledError`.
     pub fn with_sap_bridge(mut self, bridge: SapBridge) -> Self {
         self.sap_bridge = Some(bridge);
         self

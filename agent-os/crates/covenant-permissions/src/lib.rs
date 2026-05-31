@@ -3963,6 +3963,93 @@ mod tests {
         assert!(verify(&recent[0]).is_ok());
     }
 
+    #[tokio::test]
+    async fn read_jsonl_malformed_row_aborts_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        // A non-empty row that is not a valid SignedCapability must abort the
+        // read loudly. A silent skip would drop the row and could hide a
+        // revoked capability, letting it replay as active.
+        tokio::fs::write(&path, b"{bad}\n").await.unwrap();
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+        let err = store
+            .read_all_grants()
+            .await
+            .expect_err("a malformed row must abort read_all_grants()");
+        assert!(
+            matches!(err, PermissionError::Serde(_)),
+            "a malformed capability row must surface as PermissionError::Serde, not a skipped or defaulted grant: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn read_jsonl_malformed_truncated_frame_aborts_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        // A grant flushed mid-write leaves an unterminated frame on disk.
+        tokio::fs::write(&path, b"{\"capability\":\n")
+            .await
+            .unwrap();
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+        let err = store
+            .read_all_grants()
+            .await
+            .expect_err("a truncated frame must abort read_all_grants()");
+        assert!(
+            matches!(err, PermissionError::Serde(_)),
+            "a truncated JSON frame must surface as PermissionError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn read_jsonl_malformed_after_valid_rows_aborts_read_and_source_downcasts() {
+        use std::error::Error;
+        use tokio::io::AsyncWriteExt;
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        // Write one genuinely valid grant through the real record() path, then
+        // corrupt the log with a trailing malformed row so the failure is the
+        // row itself, not an empty or wholly unparseable file.
+        let store = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        store
+            .record(sign(
+                cap(subject, "tool.web_search", issuer.agent_id(), None),
+                issuer.signing_key(),
+            ))
+            .await
+            .unwrap();
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+        f.write_all(b"{bad}\n").await.unwrap();
+        f.flush().await.unwrap();
+
+        let err = store
+            .read_all_grants()
+            .await
+            .expect_err("a malformed row after a valid one must abort read_all_grants()");
+        assert!(
+            matches!(err, PermissionError::Serde(_)),
+            "read_all_grants() must fail on the malformed row even after a valid grant parses: {err:?}",
+        );
+        // The read-path error must carry the concrete serde_json::Error as its
+        // source so daemon-side capability diagnostics can downcast and call
+        // line/column/classify on the offending granted.jsonl row. The
+        // hand-constructed variant is pinned elsewhere; this pins the live
+        // read_all_grants() read path end to end.
+        let source = err
+            .source()
+            .expect("read_all_grants()'s Serde error must expose its serde_json::Error source");
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "read_all_grants()'s Serde source must downcast_ref to serde_json::Error for malformed-capability-document identification: {source}",
+        );
+    }
+
     #[test]
     fn signed_capability_round_trips_through_serde() {
         let issuer = LocalIdentity::generate("authority@local");

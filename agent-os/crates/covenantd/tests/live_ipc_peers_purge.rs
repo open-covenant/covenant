@@ -156,7 +156,10 @@ async fn live_ipc_peers_purge_round_trip() {
     .await
     {
         Response::PeersPurged { purged } => {
-            assert_eq!(purged, 1, "the lone revoked guest tombstone must be dropped")
+            assert_eq!(
+                purged, 1,
+                "the lone revoked guest tombstone must be dropped"
+            )
         }
         other => panic!("expected PeersPurged, got {other:?}"),
     }

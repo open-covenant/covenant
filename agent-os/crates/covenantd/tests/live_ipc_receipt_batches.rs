@@ -190,7 +190,10 @@ async fn live_ipc_receipt_batches_gates_then_lists_flushed_batch() {
                 b.tx_sig.is_none(),
                 "a local batch has no on-chain signature: {b:?}"
             );
-            assert!(b.slot.is_none(), "a local batch has no on-chain slot: {b:?}");
+            assert!(
+                b.slot.is_none(),
+                "a local batch has no on-chain slot: {b:?}"
+            );
         }
         other => panic!("expected Response::ReceiptBatches with one row, got {other:?}"),
     }

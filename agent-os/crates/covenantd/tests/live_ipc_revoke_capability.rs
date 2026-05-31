@@ -141,8 +141,14 @@ async fn live_ipc_revoke_capability_round_trip() {
             signature_b58: echoed,
             removed,
         } => {
-            assert_eq!(echoed, signature_b58, "the response must echo the revoked signature");
-            assert!(removed, "the operator's own capability must be removed on first revoke");
+            assert_eq!(
+                echoed, signature_b58,
+                "the response must echo the revoked signature"
+            );
+            assert!(
+                removed,
+                "the operator's own capability must be removed on first revoke"
+            );
         }
         other => panic!("expected Response::CapabilityRevoked, got {other:?}"),
     }

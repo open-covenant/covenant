@@ -96,8 +96,9 @@ async fn authenticated_stream(home: &Path) -> UnixStream {
 /// Write two operator-owned working-tier records with distinct `created_at`
 /// before the daemon takes ownership of the store, returning `(older, newer)`.
 async fn seed_two_working_records(home: &Path) -> (Uuid, Uuid) {
-    let identity = LocalIdentity::load_or_create(&home.join("identity").join("local.key"), "user@local")
-        .expect("create identity");
+    let identity =
+        LocalIdentity::load_or_create(&home.join("identity").join("local.key"), "user@local")
+            .expect("create identity");
     let operator = identity.agent_id();
 
     let older = Uuid::new_v4();

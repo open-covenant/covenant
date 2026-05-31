@@ -102,8 +102,9 @@ async fn authenticated_stream(home: &Path) -> UnixStream {
 /// id. The identity is created first so the daemon loads the same operator the
 /// token authenticates as. `created_at` is 1 so a cutoff of 2 selects it.
 async fn seed_operator_record(home: &Path) -> Uuid {
-    let identity = LocalIdentity::load_or_create(&home.join("identity").join("local.key"), "user@local")
-        .expect("create identity");
+    let identity =
+        LocalIdentity::load_or_create(&home.join("identity").join("local.key"), "user@local")
+            .expect("create identity");
     let operator = identity.agent_id();
 
     let id = Uuid::new_v4();

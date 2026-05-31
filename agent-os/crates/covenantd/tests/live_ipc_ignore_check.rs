@@ -117,7 +117,10 @@ async fn live_ipc_ignore_check_redacts_credential_path_and_admits_benign_text() 
             matched_pattern,
             rules_loaded,
         } => {
-            assert!(ignored, "a credential path must be ignored by the default ruleset");
+            assert!(
+                ignored,
+                "a credential path must be ignored by the default ruleset"
+            );
             assert!(
                 rules_loaded > 0,
                 "the daemon must boot with a loaded ignore ruleset, got {rules_loaded}"

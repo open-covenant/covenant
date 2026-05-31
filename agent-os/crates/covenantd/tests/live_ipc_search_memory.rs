@@ -203,10 +203,9 @@ async fn live_ipc_search_memory_gates_then_finds_seeded_record() {
         "the seeded echo memory must surface on the mock-embedded search"
     );
 
-    let hit = records
-        .iter()
-        .find(|r| r.text == echo)
-        .unwrap_or_else(|| panic!("a returned record must carry the seeded echo text: {records:?}"));
+    let hit = records.iter().find(|r| r.text == echo).unwrap_or_else(|| {
+        panic!("a returned record must carry the seeded echo text: {records:?}")
+    });
 
     // Owner-scoped read: every returned record must belong to the caller, so a
     // dropped owner filter (cross-tenant leak) is caught even with one writer.

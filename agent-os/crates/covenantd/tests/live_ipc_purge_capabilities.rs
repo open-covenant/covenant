@@ -140,7 +140,14 @@ async fn live_ipc_purge_capabilities_drops_revoked_tombstone() {
         Response::CapabilityGranted { signature_b58, .. } => signature_b58,
         other => panic!("expected Response::CapabilityGranted, got {other:?}"),
     };
-    match req(&mut stream, Request::RevokeCapability { signature_b58: sig_b58 }).await {
+    match req(
+        &mut stream,
+        Request::RevokeCapability {
+            signature_b58: sig_b58,
+        },
+    )
+    .await
+    {
         Response::CapabilityRevoked { removed, .. } => {
             assert!(removed, "the throwaway grant must be removed by revoke")
         }

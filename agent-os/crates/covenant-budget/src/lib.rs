@@ -1880,6 +1880,75 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn pause_checkpoint_open_rejects_malformed_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pause.jsonl");
+        // A non-empty row that is not a valid checkpoint event must abort the
+        // replay loudly; a silent skip would drop paused-budget state.
+        tokio::fs::write(&path, b"{bad}\n").await.expect("seed log");
+        let err = JsonlPauseCheckpointStore::open(path)
+            .await
+            .err()
+            .expect("malformed row must abort replay");
+        assert!(
+            matches!(err, BudgetCheckpointError::Serde(_)),
+            "a malformed row must surface as BudgetCheckpointError::Serde, not a skipped event: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_open_rejects_truncated_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pause.jsonl");
+        tokio::fs::write(&path, b"{\"checkpoint_\n")
+            .await
+            .expect("seed log");
+        let err = JsonlPauseCheckpointStore::open(path)
+            .await
+            .err()
+            .expect("truncated frame must abort replay");
+        assert!(
+            matches!(err, BudgetCheckpointError::Serde(_)),
+            "a truncated JSON frame must surface as BudgetCheckpointError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_open_rejects_malformed_after_valid_rows() {
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pause.jsonl");
+        let agent = AgentId::new("agent@local", [7u8; 32]);
+        // Produce a genuinely valid PauseSaved row via the real save path,
+        // then corrupt the log with a trailing malformed row.
+        {
+            let store = JsonlPauseCheckpointStore::open(path.clone())
+                .await
+                .expect("open empty store");
+            store
+                .save_pause(checkpoint(&agent, Uuid::new_v4()))
+                .await
+                .expect("save seeds one valid event row");
+        }
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .expect("reopen log to corrupt it");
+        f.write_all(b"{bad}\n").await.expect("append malformed row");
+        f.flush().await.expect("flush");
+
+        let err = JsonlPauseCheckpointStore::open(path)
+            .await
+            .err()
+            .expect("a malformed row after valid rows must abort replay");
+        assert!(
+            matches!(err, BudgetCheckpointError::Serde(_)),
+            "replay must fail on the malformed row even after a valid row: {err:?}",
+        );
+    }
+
     #[test]
     fn refill_zero_capacity_is_noop() {
         let mut b = Bucket {

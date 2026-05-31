@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("identity", "Identity and keys", 'ed25519 identity, on-disk persistence, signing helpers, and rotation.');
+const META_ARGS = ["identity", "Identity and keys", 'ed25519 identity, on-disk persistence, signing helpers, and rotation.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function IdentityPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Identity and keys</h1>
       <p>
         Every Covenant install holds a single ed25519 keypair. The same

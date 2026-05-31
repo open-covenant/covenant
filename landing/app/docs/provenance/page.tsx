@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("provenance", "Provenance", 'Provenance envelopes for autonomy tasks, Git commits, changed file evidence, and validation records.');
+const META_ARGS = ["provenance", "Provenance", 'Provenance envelopes for autonomy tasks, Git commits, changed file evidence, and validation records.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function ProvenancePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Provenance</h1>
       <p>
         Covenant provenance envelopes connect an autonomous task to the Git

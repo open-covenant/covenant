@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("autonomy", "Autonomous workflow", "Task lifecycle, validation gates, continuation, and handoff summaries for Covenant's autonomous development loop.");
+const META_ARGS = ["autonomy", "Autonomous workflow", "Task lifecycle, validation gates, continuation, and handoff summaries for Covenant's autonomous development loop."] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function AutonomyPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Autonomous workflow</h1>
       <p>
         Covenant treats autonomous maintenance as an operating-layer surface.

@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("security", "Security model", 'Trust boundaries, threat model, defaults, and operator responsibilities.');
+const META_ARGS = ["security", "Security model", 'Trust boundaries, threat model, defaults, and operator responsibilities.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function SecurityPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Security model</h1>
       <p>
         Covenant is a local-first daemon. The model assumes the operator

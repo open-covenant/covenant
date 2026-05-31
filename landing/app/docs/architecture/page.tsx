@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("architecture", "System architecture", 'How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.');
+const META_ARGS = ["architecture", "System architecture", 'How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function ArchitecturePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>System architecture</h1>
       <p>
         Covenant is a single long-running daemon — <code>covenantd</code> —

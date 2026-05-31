@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("agent-manifest", "Agent manifest", 'Schema and validation rules for agent.toml — the file every Covenant agent ships.');
+const META_ARGS = ["agent-manifest", "Agent manifest", 'Schema and validation rules for agent.toml — the file every Covenant agent ships.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function AgentManifestPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Agent manifest</h1>
       <p>
         Each Covenant agent is a subdirectory of{" "}

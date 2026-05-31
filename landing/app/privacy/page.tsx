@@ -4,16 +4,26 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Privacy — Covenant",
+  title: "Privacy Policy — Covenant",
   description:
     "Privacy policy for opencovenant.org, docs.opencovenant.org, and sandbox.opencovenant.org — what we collect, how we use it, and the third parties involved.",
   alternates: { canonical: "/privacy" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/privacy",
-    title: "Privacy — Covenant",
+    title: "Privacy Policy — Covenant",
     description:
       "What Covenant's public sites collect, why, and the third parties involved.",
+    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    site: "@OpenCovenant",
+    creator: "@OpenCovenant",
+    title: "Privacy Policy — Covenant",
+    description:
+      "What Covenant's public sites collect, why, and the third parties involved.",
+    images: "/twitter-image.jpg",
   },
 };
 
@@ -364,7 +374,7 @@ const SECTIONS: Section[] = [
 
 export default function PrivacyPage() {
   return (
-    <main className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
       <SiteHeader />
 
       <div className="page-container">

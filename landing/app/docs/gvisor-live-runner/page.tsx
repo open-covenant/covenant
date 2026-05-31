@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("gvisor-live-runner", "Linux gVisor live runner", "Repeatable Linux host setup for Covenant's opt-in runsc live sandbox validation path.");
+const META_ARGS = ["gvisor-live-runner", "Linux gVisor live runner", "Repeatable Linux host setup for Covenant's opt-in runsc live sandbox validation path."] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function GvisorLiveRunnerPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Linux gVisor live runner</h1>
       <p>
         Covenant has an initial Linux gVisor runtime runner, but production

@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "./_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "./_meta";
 
-export const metadata = buildDocsMetadata("", "Overview", 'Covenant is an open, agent-native operating layer. The documentation covers concepts, architecture, reference, protocols, and operations.');
+const META_ARGS = ["", "Overview", 'Covenant is an open, agent-native operating layer. The documentation covers concepts, architecture, reference, protocols, and operations.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 const TILES = [
   {
@@ -84,6 +85,10 @@ const TILES = [
 export default function DocsIndexPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Documentation</h1>
       <p>
         Covenant is an open, agent-native operating layer. It runs locally on
@@ -133,7 +138,14 @@ export default function DocsIndexPage() {
         runner work, live Linux sandbox coverage, and a documented Linux runner
         setup. Distributed settlement, installers, SDK publication,
         release-scope and audit-root signing, and transparency publication are
-        tracked on the roadmap.
+        tracked on <a href="https://opencovenant.org/roadmap">the roadmap</a>.
+      </p>
+
+      <p>
+        For the design rationale, read the{" "}
+        <a href="https://doi.org/10.5281/zenodo.20134416">technical paper</a>;
+        the implementation lives on{" "}
+        <a href="https://github.com/open-covenant/covenant">GitHub</a>.
       </p>
 
       <h2>Position in the stack</h2>

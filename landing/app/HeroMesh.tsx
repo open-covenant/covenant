@@ -470,11 +470,24 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
       animFrameRef.current = requestAnimationFrame(render);
     }
 
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (animFrameRef.current) {
+          cancelAnimationFrame(animFrameRef.current);
+          animFrameRef.current = 0;
+        }
+      } else if (!animFrameRef.current) {
+        animFrameRef.current = requestAnimationFrame(render);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     animFrameRef.current = requestAnimationFrame(render);
 
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", resizeCanvas);
+      document.removeEventListener("visibilitychange", onVisibility);
       interactionRoot.removeEventListener("mousemove", onMouseMove);
       interactionRoot.removeEventListener("mouseleave", onMouseLeave);
       interactionRoot.removeEventListener("touchstart", onTouch);
@@ -490,6 +503,7 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
   return (
     <canvas
       ref={canvasRef}
+      aria-hidden="true"
       style={{
         position: "absolute",
         inset: 0,

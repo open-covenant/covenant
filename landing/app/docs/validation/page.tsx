@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("validation", "Validation profile", 'The Covenant validation profile: operating surfaces, evidence requirements, and live boundary checks.');
+const META_ARGS = ["validation", "Validation profile", 'The Covenant validation profile: operating surfaces, evidence requirements, and live boundary checks.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 const SURFACES = [
   "Rust workspace with daemon, CLI, TUI, IPC, HTTP, runtime, router, memory, permissions, audit, identity, peer-auth, MCP, A2A, LLM, tools, budget, and local settlement crates.",
@@ -13,6 +14,10 @@ const SURFACES = [
 export default function ValidationProfilePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Validation profile</h1>
       <p>
         Covenant is validated as local-first infrastructure for autonomous

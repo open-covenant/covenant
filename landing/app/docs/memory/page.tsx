@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("memory", "Memory tiers", 'Three-tier memory store, embeddings, semantic search, and the .covenantignore allow/deny list.');
+const META_ARGS = ["memory", "Memory tiers", 'Three-tier memory store, embeddings, semantic search, and the .covenantignore allow/deny list.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function MemoryPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Memory tiers</h1>
       <p>
         Covenant&apos;s memory is a single store partitioned into three

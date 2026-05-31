@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("a2a-idempotency", "A2A idempotency policy", 'The idempotency metadata, retry gate, and receiver obligations for A2A task redelivery.');
+const META_ARGS = ["a2a-idempotency", "A2A idempotency policy", 'The idempotency metadata, retry gate, and receiver obligations for A2A task redelivery.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function A2AIdempotencyPolicyPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>A2A idempotency policy</h1>
       <p>
         Covenant A2A is a durable, explicitly leased queue. It does not

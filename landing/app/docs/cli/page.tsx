@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("cli", "Command-line interface", 'Every covenant subcommand, with arguments and exit codes.');
+const META_ARGS = ["cli", "Command-line interface", 'Every covenant subcommand, with arguments and exit codes.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function CliPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Command-line interface</h1>
       <p>
         The <code>covenant</code> CLI communicates with a running daemon

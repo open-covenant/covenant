@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("alpha-release", "Alpha release contract", 'Source-alpha release boundary, evidence bundle requirements, and human-owned release decisions.');
+const META_ARGS = ["alpha-release", "Alpha release contract", 'Source-alpha release boundary, evidence bundle requirements, and human-owned release decisions.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function AlphaReleasePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Alpha release contract</h1>
       <p>
         Covenant alpha releases are source-built local infrastructure releases.

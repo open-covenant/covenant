@@ -36,7 +36,7 @@ export function Sidebar() {
           ← covenant
         </a>
 
-        <nav className="space-y-8 pb-20">
+        <nav aria-label="Documentation" className="space-y-8 pb-20">
           {DOCS_NAV.map((section) => (
             <div key={section.title}>
               <h3 className="mb-3 text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-500">

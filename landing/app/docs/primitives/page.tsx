@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, compositor, settlement — the OS-level vocabulary Covenant exposes.');
+const META_ARGS = ["primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, compositor, settlement — the OS-level vocabulary Covenant exposes.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function PrimitivesPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>The eight primitives</h1>
       <p>
         Covenant exposes a fixed set of eight primitives covering the

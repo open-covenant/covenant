@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("audit", "Audit log", 'JSONL audit log: event variants, integrity sidecar, schema, and how to read it.');
+const META_ARGS = ["audit", "Audit log", 'JSONL audit log: event variants, integrity sidecar, schema, and how to read it.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function AuditPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Audit log</h1>
       <p>
         Every state-changing surface in Covenant emits an{" "}

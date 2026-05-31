@@ -24,7 +24,7 @@ export function SiteHeader() {
         <Link href="/" className="pointer-events-auto" aria-label="Covenant home">
           <Image
             src="/logo.svg"
-            alt="covenant"
+            alt="Covenant"
             width={255}
             height={54}
             priority
@@ -37,7 +37,7 @@ export function SiteHeader() {
         <div className="sm:hidden">
           <MobileMenu items={NAV_LINKS} socials={SOCIAL_LINKS} />
         </div>
-        <nav className="hidden items-center gap-3 sm:flex">
+        <nav aria-label="Primary" className="hidden items-center gap-3 sm:flex">
           {NAV_LINKS.map((item) =>
             item.external ? (
               <a
@@ -62,7 +62,7 @@ export function SiteHeader() {
         </nav>
       </div>
 
-      <nav className="absolute right-2 z-20 hidden h-[30px] items-center gap-1 top-[max(18px,env(safe-area-inset-top))] sm:right-8 sm:flex sm:h-[42px] sm:top-[max(28px,env(safe-area-inset-top))] sm:gap-3">
+      <nav aria-label="Social" className="absolute right-2 z-20 hidden h-[30px] items-center gap-1 top-[max(18px,env(safe-area-inset-top))] sm:right-8 sm:flex sm:h-[42px] sm:top-[max(28px,env(safe-area-inset-top))] sm:gap-3">
         <a
           href={X_URL}
           target="_blank"

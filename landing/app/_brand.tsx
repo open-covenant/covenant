@@ -7,6 +7,10 @@ export const GITHUB_URL = "https://github.com/open-covenant/covenant";
 export const TAGLINE = "Open infrastructure for agent-native computing";
 export const RELEASE_STATUS = "ALPHA LIVE";
 
+// Stable sitemap lastmod. Bump on a content/release change rather than
+// emitting a fresh request-time clock (which churns lastmod on every crawl).
+export const SITE_BUILD_DATE = "2026-05-31";
+
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },

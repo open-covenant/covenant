@@ -11,6 +11,24 @@ export const metadata: Metadata = {
   description:
     "Reference, concepts, and operational guides for Covenant — the open, agent-native operating layer.",
   alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    siteName: "Covenant docs",
+    images: [
+      {
+        url: "https://opencovenant.org/opengraph-image.jpg",
+        width: 1200,
+        height: 630,
+        alt: "Covenant — open agent-native operating layer",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    site: "@OpenCovenant",
+    creator: "@OpenCovenant",
+    images: "https://opencovenant.org/opengraph-image.jpg",
+  },
 };
 
 export default function DocsLayout({
@@ -23,7 +41,7 @@ export default function DocsLayout({
       <div className="mx-auto flex w-full max-w-[1400px]">
         <Sidebar />
 
-        <main className="min-w-0 flex-1 px-6 py-12 md:px-12 md:py-16 lg:px-20">
+        <main id="main-content" className="min-w-0 flex-1 px-6 py-12 md:px-12 md:py-16 lg:px-20">
           <article className="prose-docs mx-auto w-full max-w-[760px]">
             {children}
           </article>

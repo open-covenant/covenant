@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("http-api", "HTTP API", 'Local HTTP gateway routes, request bodies, and responses.');
+const META_ARGS = ["http-api", "HTTP API", 'Local HTTP gateway routes, request bodies, and responses.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function HttpApiPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>HTTP API</h1>
       <p>
         The daemon exposes the same surface over HTTP that it does over

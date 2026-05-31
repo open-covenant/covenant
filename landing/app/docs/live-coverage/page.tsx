@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("live-coverage", "Live coverage", 'Opt-in live test coverage across daemon, CLI, A2A, MCP, runtime, and model boundaries.');
+const META_ARGS = ["live-coverage", "Live coverage", 'Opt-in live test coverage across daemon, CLI, A2A, MCP, runtime, and model boundaries.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 const SURFACES = [
   ["Daemon IPC core", "covered", "daemon IPC plus CLI intent/resume/version"],
@@ -25,6 +26,10 @@ const SURFACES = [
 export default function LiveCoveragePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Live coverage</h1>
       <p>
         Covenant keeps default CI deterministic while tracking which surfaces

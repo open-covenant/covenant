@@ -5,22 +5,32 @@ import { SiteHeader } from "../SiteHeader";
 import { ContactForm } from "./ContactForm";
 
 export const metadata: Metadata = {
-  title: "Contact — Covenant",
+  title: "Contact — Covenant Partnerships & Security",
   description:
     "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
   alternates: { canonical: "/contact" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/contact",
-    title: "Contact — Covenant",
+    title: "Contact — Covenant Partnerships & Security",
     description:
       "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
+    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    site: "@OpenCovenant",
+    creator: "@OpenCovenant",
+    title: "Contact — Covenant Partnerships & Security",
+    description:
+      "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
+    images: "/twitter-image.jpg",
   },
 };
 
 export default function ContactPage() {
   return (
-    <main className="relative min-h-[100dvh] bg-[#030303] pb-32">
+    <main id="main-content" className="relative min-h-[100dvh] bg-[#030303] pb-32">
       <SiteHeader />
 
       <div className="page-container">
@@ -165,7 +175,7 @@ function ResourceLink({
   const inner = (
     <>
       <span>{children}</span>
-      <span className="text-neutral-600">→</span>
+      <span aria-hidden="true" className="text-neutral-600">→</span>
     </>
   );
   if (internal) {

@@ -3,16 +3,26 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Roadmap — Covenant",
+  title: "Development Roadmap — Covenant",
   description:
-    "Development milestones for Covenant: the next release with live agent visibility, plugin tools, and marketplace foundation; native integration; distributed operation; and the 1.0 stability commitment.",
+    "Covenant roadmap: foundation (M0), production & tools (M1), native integration (M2), distributed operation (M3), and 1.0 stability (M4).",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/roadmap",
-    title: "Roadmap — Covenant",
+    title: "Development Roadmap — From M0 Foundation to M4 Stability",
     description:
       "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
+    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    site: "@OpenCovenant",
+    creator: "@OpenCovenant",
+    title: "Development Roadmap — From M0 Foundation to M4 Stability",
+    description:
+      "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
+    images: "/twitter-image.jpg",
   },
 };
 
@@ -111,7 +121,7 @@ const MILESTONES: Milestone[] = [
 
 export default function RoadmapPage() {
   return (
-    <main className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
       <SiteHeader />
 
       <div className="page-container">

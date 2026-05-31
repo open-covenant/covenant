@@ -30,7 +30,7 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
       <span className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]">
         <Image
           src="/logomark.svg"
-          alt="covenant"
+          alt=""
           width={30}
           height={15}
           className="h-auto w-[30px] opacity-70"
@@ -39,7 +39,10 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
           Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
         </span>
       </span>
-      <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] text-neutral-500 sm:text-[13px]">
+      <nav
+        aria-label="Footer"
+        className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] text-neutral-500 sm:text-[13px]"
+      >
         {FOOTER_LINKS.map((item) =>
           item.external ? (
             <a

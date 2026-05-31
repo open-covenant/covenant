@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.');
+const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function SettlementPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Settlement</h1>
       <p>
         Settlement is how Covenant accounts for resource consumption.

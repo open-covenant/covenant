@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("mcp", "MCP integration", 'Tool trait, native tools, registry, and the stdio JSON-RPC transport for external MCP servers.');
+const META_ARGS = ["mcp", "MCP integration", 'Tool trait, native tools, registry, and the stdio JSON-RPC transport for external MCP servers.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function McpPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>MCP integration</h1>
       <p>
         Covenant integrates the Model Context Protocol (MCP) for tool

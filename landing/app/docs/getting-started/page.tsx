@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("getting-started", "Getting started", 'Install Covenant from source, run the daemon, and submit your first intent.');
+const META_ARGS = ["getting-started", "Getting started", 'Install Covenant from source, run the daemon, and submit your first intent.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function GettingStartedPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Getting started</h1>
       <p>
         This guide installs Covenant from source, brings up the daemon, and

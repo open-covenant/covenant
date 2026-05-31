@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("audit-integrity", "Audit integrity", 'Local hash-chain verification for Covenant audit JSONL logs.');
+const META_ARGS = ["audit-integrity", "Audit integrity", 'Local hash-chain verification for Covenant audit JSONL logs.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function AuditIntegrityPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Audit integrity</h1>
       <p>
         Covenant writes a local SHA-256 hash-chain sidecar next to the

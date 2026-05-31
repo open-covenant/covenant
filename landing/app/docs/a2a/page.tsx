@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("a2a", "Agent-to-agent", 'Task and result envelopes, the Mailbox trait, and how orchestrator agents fan tasks across child agents.');
+const META_ARGS = ["a2a", "Agent-to-agent", 'Task and result envelopes, the Mailbox trait, and how orchestrator agents fan tasks across child agents.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function A2APage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Agent-to-agent</h1>
       <p>
         Agent-to-agent (A2A) is the surface through which one Covenant

@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("concepts", "Concepts", 'The Covenant data model: intents, agents, capabilities, memory, audit, and settlement.');
+const META_ARGS = ["concepts", "Concepts", 'The Covenant data model: intents, agents, capabilities, memory, audit, and settlement.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function ConceptsPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Concepts</h1>
       <p>
         Covenant is organized around a fixed vocabulary. Intents, agents,

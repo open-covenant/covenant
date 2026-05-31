@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("ipc", "Local IPC", "Length-prefixed JSON IPC protocol on the daemon's Unix socket.");
+const META_ARGS = ["ipc", "Local IPC", "Length-prefixed JSON IPC protocol on the daemon's Unix socket."] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function IpcPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Local IPC</h1>
       <p>
         The daemon&apos;s canonical wire protocol. Clients on the same

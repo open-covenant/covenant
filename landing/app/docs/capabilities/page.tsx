@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { buildDocsMetadata } from "../_meta";
+import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-export const metadata = buildDocsMetadata("capabilities", "Capability tokens", 'Shape, canonical encoding, signing, verification, and revocation of Covenant capability tokens.');
+const META_ARGS = ["capabilities", "Capability tokens", 'Shape, canonical encoding, signing, verification, and revocation of Covenant capability tokens.'] as const;
+export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function CapabilitiesPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildDocsJsonLd(...META_ARGS)) }}
+      />
       <h1>Capability tokens</h1>
       <p>
         A capability token is a typed, signed authorization. It names an

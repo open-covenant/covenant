@@ -694,6 +694,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recent_malformed_row_aborts_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        // A non-empty row that is not a valid SettlementReceipt must abort the
+        // read loudly. A silent skip would drop the row's receipt_id and chain
+        // context, corrupting correlation backfill and audit reconciliation.
+        tokio::fs::write(&path, b"{bad}\n").await.unwrap();
+        let store = JsonlReceiptStore::open(path).await.unwrap();
+        let err = store
+            .recent(10)
+            .await
+            .expect_err("a malformed row must abort recent()");
+        assert!(
+            matches!(err, SettlementError::Serde(_)),
+            "a malformed receipt row must surface as SettlementError::Serde, not a skipped or defaulted receipt: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_malformed_truncated_frame_aborts_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        // A receipt flushed mid-write leaves an unterminated frame on disk.
+        tokio::fs::write(&path, b"{\"id\":\"\n").await.unwrap();
+        let store = JsonlReceiptStore::open(path).await.unwrap();
+        let err = store
+            .recent(10)
+            .await
+            .expect_err("a truncated frame must abort recent()");
+        assert!(
+            matches!(err, SettlementError::Serde(_)),
+            "a truncated JSON frame must surface as SettlementError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_malformed_after_valid_rows_aborts_read_and_source_downcasts() {
+        use std::error::Error;
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        // Write one genuinely valid receipt through the real record() path, then
+        // corrupt the log with a trailing malformed row so the failure is the
+        // row itself, not an empty or wholly unparseable file.
+        let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+        store.record(receipt(10)).await.unwrap();
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+        f.write_all(b"{bad}\n").await.unwrap();
+        f.flush().await.unwrap();
+
+        let err = store
+            .recent(10)
+            .await
+            .expect_err("a malformed row after a valid one must abort recent()");
+        assert!(
+            matches!(err, SettlementError::Serde(_)),
+            "recent() must fail on the malformed row even after a valid receipt parses: {err:?}",
+        );
+        // The read-path error must carry the concrete serde_json::Error as its
+        // source so daemon-side diagnostics can downcast and call line/column/
+        // classify on the offending settlement.jsonl row. The hand-constructed
+        // variant is pinned by the serde_source_delegation_pin test; this pins
+        // the live recent() read path end to end.
+        let source = err
+            .source()
+            .expect("recent()'s Serde error must expose its serde_json::Error source");
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "recent()'s Serde source must downcast_ref to serde_json::Error for malformed-receipt-row identification: {source}",
+        );
+    }
+
+    #[tokio::test]
     async fn backfill_receipts_applies_correlations_and_writes_rollback_checkpoint() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("receipts.jsonl");

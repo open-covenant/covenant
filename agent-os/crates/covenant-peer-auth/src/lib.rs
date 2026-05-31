@@ -2072,6 +2072,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_malformed_row_aborts_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        // A non-empty row that is not a valid PeerEvent must abort the replay
+        // loudly. A silent skip would drop the event and could lose a Revoked
+        // tombstone, letting a revoked peer re-authenticate after restart.
+        tokio::fs::write(&path, b"{bad}\n").await.unwrap();
+        let err = JsonlPeerRegistry::open(path)
+            .await
+            .err()
+            .expect("a malformed row must abort replay");
+        assert!(
+            matches!(err, PeerError::Serde(_)),
+            "a malformed peer row must surface as PeerError::Serde, not a skipped or defaulted event: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn open_malformed_truncated_frame_aborts_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        // A Registered event flushed mid-write leaves an unterminated frame.
+        tokio::fs::write(&path, b"{\"type\":\"registered\",\"token\":\n")
+            .await
+            .unwrap();
+        let err = JsonlPeerRegistry::open(path)
+            .await
+            .err()
+            .expect("a truncated frame must abort replay");
+        assert!(
+            matches!(err, PeerError::Serde(_)),
+            "a truncated JSON frame must surface as PeerError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn open_malformed_after_valid_rows_aborts_replay_and_source_downcasts() {
+        use std::error::Error;
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        // Write one genuinely valid Registered event through the real
+        // register() path, then corrupt the log with a trailing malformed row
+        // so the failure is the row itself, not an empty or unparseable file.
+        let (_, e1) = entry("alice@local");
+        {
+            let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+            r.register(e1).await.unwrap();
+        }
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+        f.write_all(b"{bad}\n").await.unwrap();
+        f.flush().await.unwrap();
+
+        let err = JsonlPeerRegistry::open(path)
+            .await
+            .err()
+            .expect("a malformed row after a valid one must abort replay");
+        assert!(
+            matches!(err, PeerError::Serde(_)),
+            "replay must fail on the malformed row even after a valid event: {err:?}",
+        );
+        // The replay error must carry the concrete serde_json::Error as its
+        // source so daemon-side peer diagnostics can downcast and call
+        // line/column/classify on the offending registry.jsonl row. The
+        // hand-constructed variant is pinned elsewhere; this pins the live
+        // open() replay path end to end.
+        let source = err
+            .source()
+            .expect("PeerError::Serde from open() must expose its serde_json::Error source");
+        assert!(
+            source.downcast_ref::<serde_json::Error>().is_some(),
+            "open()'s Serde source must downcast_ref to serde_json::Error for malformed-peer-row identification: {source}",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_replays_registers_and_revocations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("peers").join("registry.jsonl");

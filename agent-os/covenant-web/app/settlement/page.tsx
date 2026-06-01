@@ -1,9 +1,17 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { solscanTxUrl } from "@/lib/explorer";
 import { formatDateTime, formatTimestamp, shortHash } from "@/lib/format";
+import { resolveSynapseStatus } from "@/lib/synapse";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
+
+// The receipt set the daemon publishes is per-network. Use the same
+// cluster the rest of the daemon advertises so the Solscan link
+// always lands on the right explorer view (devnet sandbox today;
+// flips to mainnet automatically when the operator switches).
+const CLUSTER = resolveSynapseStatus().clusterAlias;
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -115,9 +123,22 @@ export default function SpendingPage() {
                     <strong>{r.payer.display}</strong>
                     <p>
                       {r.credits_consumed} {r.credits_consumed === 1 ? "credit" : "credits"} ·{" "}
-                      {r.onchain_sig
-                        ? `on-chain ${shortHash(r.onchain_sig, 16)}`
-                        : "local only"}
+                      {r.onchain_sig ? (
+                        <>
+                          on-chain{" "}
+                          <a
+                            href={solscanTxUrl(r.onchain_sig, CLUSTER)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="onchain-link"
+                            title="Open this transaction on Solscan"
+                          >
+                            {shortHash(r.onchain_sig, 16)} ↗
+                          </a>
+                        </>
+                      ) : (
+                        "local only"
+                      )}
                     </p>
                   </div>
                 </article>

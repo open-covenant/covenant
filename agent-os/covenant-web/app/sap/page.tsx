@@ -1,23 +1,18 @@
+import { solscanAddressUrl } from "@/lib/explorer";
 import { resolveSynapseStatus, synapseExplorerHref } from "@/lib/synapse";
 import { PageHeader } from "../components/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function solanaAddressHref(address: string, clusterAlias: string): string {
-  return clusterAlias === "mainnet-beta"
-    ? `https://explorer.solana.com/address/${address}`
-    : `https://explorer.solana.com/address/${address}?cluster=${clusterAlias}`;
-}
-
 export default function SynapsePage() {
   const status = resolveSynapseStatus();
   const programHref = synapseExplorerHref("address", status.programId, status);
-  const solanaExplorer = solanaAddressHref(status.programId, status.clusterAlias);
+  const solanaExplorer = solscanAddressUrl(status.programId, status.clusterAlias);
   const agentSynapseHref = status.agentPda
     ? synapseExplorerHref("agent", status.agentPda, status)
     : null;
   const agentSolanaHref = status.agentPda
-    ? solanaAddressHref(status.agentPda, status.clusterAlias)
+    ? solscanAddressUrl(status.agentPda, status.clusterAlias)
     : null;
 
   return (
@@ -48,7 +43,7 @@ export default function SynapsePage() {
           <span className="value small">SAP v2</span>
           <span className="caption">
             <a href={solanaExplorer} target="_blank" rel="noreferrer">
-              view on solana explorer
+              view on solscan ↗
             </a>
           </span>
         </article>
@@ -119,7 +114,7 @@ export default function SynapsePage() {
               <dt>Solana</dt>
               <dd>
                 <a href={agentSolanaHref!} target="_blank" rel="noreferrer">
-                  view account on solana explorer
+                  view account on solscan ↗
                 </a>
               </dd>
             </div>

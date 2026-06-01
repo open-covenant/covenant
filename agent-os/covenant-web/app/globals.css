@@ -828,3 +828,19 @@ select {
     justify-self: start;
   }
 }
+
+/* Inline link to a Solana explorer (Solscan) for on-chain artifacts —
+   tx signatures, account/program addresses. Subtle underline so it
+   reads as a hyperlink without distracting from the surrounding row. */
+.onchain-link {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--faint);
+  font-family: var(--font-mono);
+  transition: text-decoration-color 120ms ease;
+}
+.onchain-link:hover {
+  text-decoration-color: var(--fg);
+}

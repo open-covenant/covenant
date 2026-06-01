@@ -34,7 +34,7 @@ We aim to acknowledge within 48 hours and share an initial triage decision withi
 - identity and key management (`covenant-identity`)
 - capability sign / verify (`covenant-permissions`)
 - IPC and HTTP gateway authentication paths
-- on-chain settlement program (`programs/settlement`)
+- on-chain settlement program (`agent-os/programs/settlement`)
 - agent runtime isolation boundary
 
 ### Out of scope

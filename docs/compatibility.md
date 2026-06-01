@@ -39,7 +39,7 @@ Sandbox-required manifests fail closed when these are missing. See [`docs/runtim
 
 ## Anchor (optional, on-chain settlement)
 
-The settlement program under `programs/settlement` is built with Anchor. It is not part of the default `cargo build`.
+The settlement program under `agent-os/programs/settlement` is built with Anchor. It is not part of the default `cargo build`.
 
 | Tool         | Version |
 |--------------|---------|

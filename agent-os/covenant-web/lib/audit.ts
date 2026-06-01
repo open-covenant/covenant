@@ -50,6 +50,8 @@ export function auditDetail(event: AuditEvent): string {
       return `run ${short(kind.run_id)} · ${kind.choices.join(", ")}`;
     case "hermes_approval_resolved":
       return `run ${short(kind.run_id)} · ${kind.choice}`;
+    case "hermes_file_written":
+      return `${kind.path} · ${kind.bytes} bytes`;
     case "capability_check":
       return `${kind.agent_id} · ${kind.passed ? "passed" : "missing"} · ${kind.required_actions.join(", ")}`;
     case "capability_granted":
@@ -131,7 +133,8 @@ export function eventIntentId(event: AuditEvent): string | null {
     kind.type === "hermes_tool_invoked" ||
     kind.type === "hermes_tool_completed" ||
     kind.type === "hermes_approval_requested" ||
-    kind.type === "hermes_approval_resolved"
+    kind.type === "hermes_approval_resolved" ||
+    kind.type === "hermes_file_written"
   ) {
     return kind.intent_id;
   }
@@ -216,6 +219,7 @@ export const AUDIT_KIND_LABELS: Record<AuditKind["type"], string> = {
   hermes_tool_completed: "tool completed",
   hermes_approval_requested: "approval requested",
   hermes_approval_resolved: "approval resolved",
+  hermes_file_written: "file written",
   capability_check: "capability check",
   capability_granted: "capability granted",
   intent_ignored: "intent ignored",

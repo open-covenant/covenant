@@ -111,6 +111,13 @@ export type AuditKind =
       resolved: number;
     }
   | {
+      type: "hermes_file_written";
+      intent_id: string;
+      run_id: string;
+      path: string;
+      bytes: number;
+    }
+  | {
       type: "capability_check";
       agent_id: string;
       required_actions: string[];

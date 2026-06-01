@@ -333,6 +333,16 @@ export function eventLabel(event: AuditEvent): EventLabel {
         intentId: kind.intent_id,
       };
 
+    case "hermes_file_written":
+      return {
+        // Surface the file name so a multi-file build reads as a list
+        // of artifacts; full path stays in the body.
+        headline: `Wrote ${basename(kind.path)}`,
+        body: `${kind.path} · ${kind.bytes} bytes.`,
+        tone: "ok",
+        intentId: kind.intent_id,
+      };
+
     case "capability_check":
       if (kind.passed) {
         return {
@@ -482,16 +492,42 @@ export function eventLabel(event: AuditEvent): EventLabel {
       };
   }
 
-  // Fallback for a kind not in this build's typed union (e.g. a newer daemon
-  // emits an audit kind this web build predates) — render a generic label
-  // instead of returning undefined and crashing every caller.
-  const t = String((event.kind as { type?: unknown }).type ?? "");
+  // Fallback for a kind not in this build's typed union (newer daemon
+  // emitting a variant this web predates). Render the snake_case type
+  // as a Sentence Case phrase so it still reads like English, with a
+  // short hermes_-prefix strip so e.g. `hermes_a2a_recv_attempt`
+  // surfaces as "A2a recv attempt" rather than starting with the
+  // implementation-detail "hermes".
+  const rawType = String((event.kind as { type?: unknown }).type ?? "");
   return {
-    headline: t ? t.replace(/_/g, " ") : "Activity",
+    headline: prettifyKind(rawType) || "Activity",
     body: "",
     tone: "neutral",
     intentId: null,
   };
+}
+
+// snake_case enum variant → "First word capitalised, rest lower"
+// e.g. `hermes_file_written` → "File written"
+//      `memory_repair_applied` → "Memory repair applied"
+//      `a2a_sender_mismatch` → "A2A sender mismatch"
+// Acronyms (a2a, mcp, ipc, http, sap, api) are upper-cased so they
+// don't look like typos in titles.
+const ACRONYMS = new Set(["a2a", "mcp", "ipc", "http", "sap", "api", "rpc", "sse", "id"]);
+function prettifyKind(t: string): string {
+  if (!t) return "";
+  // Strip the daemon-internal "hermes_" prefix so visible labels read
+  // in user vocabulary, not the daemon's implementation detail.
+  const stripped = t.startsWith("hermes_") ? t.slice("hermes_".length) : t;
+  const words = stripped.split("_").filter(Boolean);
+  if (words.length === 0) return "";
+  return words
+    .map((w, i) => {
+      if (ACRONYMS.has(w.toLowerCase())) return w.toUpperCase();
+      if (i === 0) return w[0].toUpperCase() + w.slice(1).toLowerCase();
+      return w.toLowerCase();
+    })
+    .join(" ");
 }
 
 function formatActionList(actions: string[]): string {
@@ -594,6 +630,7 @@ export const KIND_PILL_LABELS: Record<AuditKind["type"], string> = {
   hermes_tool_completed: "Step",
   hermes_approval_requested: "Approval",
   hermes_approval_resolved: "Approval",
+  hermes_file_written: "File",
   capability_check: "Permission check",
   capability_granted: "Permission granted",
   intent_ignored: "Task ignored",

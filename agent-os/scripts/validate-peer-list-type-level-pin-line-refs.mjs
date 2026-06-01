@@ -4,12 +4,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // peer_list envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites five inner assertion ranges
+// docs/ipc-and-http-gateway.md cites six inner assertion pins
 // inside peer_list_json_pins_top_level_schema:
 //
 //   - line 293 cites `limit` (u64) type pin at :5048-5051.
 //   - line 294 cites `filter_pubkey_prefix` (string or null) type pin.
 //   - line 295 cites `matched_count` (u64) type pin.
+//   - the `peers` (array) pin is the lone single-line assert, cited
+//     without a range (`main.rs:5884`); covered by the singleLine target.
 //   - line 297 cites `operator_pubkey_b58` (string) type pin at
 //     :5062-5065.
 //   - line 298 cites `truncated` (boolean) type pin.
@@ -98,6 +100,17 @@ const targets = [
     docsTemplate:
       "Pinned as a JSON boolean by the schema test at `main.rs:N-M` — never `0`/`1`.",
   },
+  {
+    field: "peers",
+    singleLine: true,
+    selectorFirstLine: 'assert!(value["peers"].is_array(),',
+    match: "startsWith",
+    docsRegex:
+      /- `peers` \(array of `PeerSummary`\): the matched roster slice, see below\. Pinned as an array by `main\.rs:(\d+)` — never null or a string blob\./,
+    docsLabel: "peer_list.peers type-level pin citation",
+    docsTemplate:
+      "Pinned as an array by `main.rs:N` — never null or a string blob.",
+  },
 ];
 
 const errors = [];
@@ -175,6 +188,11 @@ if (source) {
           continue;
         }
         const selectorLine = selectorMatches[0];
+        if (target.singleLine) {
+          target.startLine = selectorLine;
+          target.endLine = selectorLine;
+          continue;
+        }
         const assertOpenerLine = selectorLine - 1;
         if (
           assertOpenerLine < 1 ||
@@ -215,6 +233,17 @@ if (docs) {
       );
       continue;
     }
+    if (target.singleLine) {
+      if (target.startLine !== undefined) {
+        const cited = parseInt(match[1], 10);
+        if (cited !== target.startLine) {
+          fail(
+            `${docsPath}: the ${target.docsLabel} cites main.rs:${cited} but the ${target.field} type-level assertion is on :${target.startLine}; remediation: update the citation to :${target.startLine}`,
+          );
+        }
+      }
+      continue;
+    }
     if (target.startLine !== undefined && target.endLine !== undefined) {
       const citedStart = parseInt(match[1], 10);
       const citedEnd = parseInt(match[2], 10);
@@ -236,5 +265,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-peer-list-type-level-pin-line-refs: ok (${targets.map((t) => `${t.field} main.rs:${t.startLine}-${t.endLine}`).join(", ")})`,
+  `validate-peer-list-type-level-pin-line-refs: ok (${targets.map((t) => (t.singleLine ? `${t.field} main.rs:${t.startLine}` : `${t.field} main.rs:${t.startLine}-${t.endLine}`)).join(", ")})`,
 );

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api } from "@/lib/api";
+import { api, type BuildFile } from "@/lib/api";
 import { formatTimestamp } from "@/lib/format";
 import { saveReply } from "@/lib/intentReplies";
 import { eventLabel, isReviewWorthy, memoryTierLabel } from "@/lib/labels";
 import { useRightRail } from "@/lib/rightRail";
 import { usePoll } from "@/lib/usePoll";
+import { BuildOutput } from "./components/BuildOutput";
 import { PageHeader } from "./components/PageHeader";
 import { Turnstile, turnstileEnabled } from "./components/Turnstile";
 import { Markdown } from "./components/Markdown";
@@ -54,6 +55,7 @@ export default function OverviewPage() {
   const [intent, setIntent] = useState("");
   const [dispatching, setDispatching] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastFiles, setLastFiles] = useState<BuildFile[] | null>(null);
   const [lastIntentId, setLastIntentId] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   // Set while an async (coding) run is in flight: submit returned a
@@ -71,6 +73,7 @@ export default function OverviewPage() {
       setDispatching(true);
       setLastError(null);
       setLastResult(null);
+      setLastFiles(null);
       setLastIntentId(null);
       try {
         const r = await api.submitIntent(trimmed, turnstileToken ?? undefined);
@@ -100,6 +103,7 @@ export default function OverviewPage() {
 
   const clearReply = useCallback(() => {
     setLastResult(null);
+    setLastFiles(null);
     setLastIntentId(null);
     setLastError(null);
     setAwaiting(false);
@@ -138,6 +142,7 @@ export default function OverviewPage() {
           setLastError(o.text || "the run did not complete");
         } else {
           setLastResult(o.text);
+          if (o.files && o.files.length > 0) setLastFiles(o.files);
           saveReply(lastIntentId, o.text);
         }
         setAwaiting(false);
@@ -442,6 +447,14 @@ export default function OverviewPage() {
                 <Markdown>{lastResult ?? ""}</Markdown>
               )}
             </div>
+            {/* Render the build artifacts inline so the visitor sees the
+                files the agent wrote (and the iframe Preview for HTML
+                builds) without needing to navigate to the trace page. */}
+            {lastFiles && lastFiles.length > 0 && !dispatching && !awaiting && (
+              <div className="reply-files">
+                <BuildOutput files={lastFiles} />
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -569,6 +582,19 @@ export default function OverviewPage() {
           padding: 14px 16px;
           max-height: 360px;
           overflow: auto;
+        }
+
+        /* BuildOutput sits below the markdown reply inside the same
+           panel; give it a top border so the boundary reads, and reset
+           its own outer margin so it hugs the reply edge. */
+        .reply-files {
+          border-top: 1px solid var(--border);
+        }
+        .reply-files :global(.build-output) {
+          margin: 0;
+          border: none;
+          border-radius: 0;
+          background: transparent;
         }
 
         .reply-body pre {

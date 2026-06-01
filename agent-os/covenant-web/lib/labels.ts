@@ -235,6 +235,57 @@ function friendlyTool(tool: string): string {
   return m[tool] ?? `Used ${tool}`;
 }
 
+// Pull a short identifier out of a tool-call preview so a streaming
+// row's headline says "Ran `pytest -q`" instead of just "Ran a
+// command". Daemon `preview` shapes vary by tool: bash sends the
+// raw command line, web sends a URL, file ops send a path. Try a
+// few common shapes; bail to null when nothing scannable comes back.
+function summarizeToolPreview(tool: string, preview: string): string | null {
+  const raw = (preview ?? "").trim();
+  if (!raw) return null;
+  // Lift the first non-empty line so multi-line shell heredocs and
+  // pretty-printed JSON don't blow out the row.
+  const firstLine = raw.split(/\r?\n/).find((l) => l.trim().length > 0) ?? raw;
+  // If the preview is a JSON object the daemon serialised, try to
+  // extract the obvious key for this tool -- keeps the headline
+  // human-readable instead of dumping `{"command":"..."}` into it.
+  if (firstLine.startsWith("{")) {
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      const key =
+        tool === "bash" || tool === "terminal"
+          ? (obj.command ?? obj.cmd ?? obj.script)
+          : tool === "web"
+            ? (obj.url ?? obj.href)
+            : tool === "write_file" || tool === "edit_file" || tool === "read_file"
+              ? (obj.path ?? obj.file ?? obj.filename)
+              : null;
+      if (typeof key === "string" && key.trim()) {
+        return shortLabel(key.trim());
+      }
+    } catch {
+      // not JSON; fall through to the raw first-line case
+    }
+  }
+  return shortLabel(firstLine);
+}
+
+// Trim a freeform identifier to a single line fit for a headline:
+// keep the first 56 chars, drop trailing whitespace, suffix an
+// ellipsis when truncated.
+function shortLabel(value: string): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (flat.length <= 56) return flat;
+  return `${flat.slice(0, 56).trimEnd()}…`;
+}
+
+// Trim a filesystem-style path to just its trailing segment so the
+// headline shows `index.html` instead of `./web/src/app/index.html`.
+function basename(path: string): string {
+  const m = /[^/\\]+$/.exec(path.replace(/[/\\]+$/, ""));
+  return m ? m[0] : path;
+}
+
 export function eventLabel(event: AuditEvent): EventLabel {
   const kind = event.kind;
   switch (kind.type) {
@@ -481,20 +532,27 @@ function truncate(value: string, length: number): string {
 
 export function agentEventLabel(event: AgentEvent): EventLabel {
   switch (event.type) {
-    case "reasoning":
+    case "reasoning": {
+      const prefix = event.summary ? shortLabel(event.summary) : null;
       return {
-        headline: "Thinking",
-        body: event.summary ? truncate(event.summary, 160) : "The agent is reasoning.",
+        headline: prefix ? `Thinking — ${prefix}` : "Thinking",
+        body: event.summary ? truncate(event.summary, 200) : "The agent is reasoning.",
         tone: "neutral",
         intentId: null,
       };
-    case "tool_call":
+    }
+    case "tool_call": {
+      const summary = summarizeToolPreview(event.tool, event.preview);
       return {
-        headline: friendlyTool(event.tool),
-        body: event.preview ? truncate(event.preview, 120) : "The agent took a step.",
+        // Fold a short identifier (the actual command, URL, or path)
+        // into the headline so streaming rows are scannable. The full
+        // preview still lives in the row body for context.
+        headline: summary ? `${friendlyTool(event.tool)} — ${summary}` : friendlyTool(event.tool),
+        body: event.preview ? truncate(event.preview, 160) : "The agent took a step.",
         tone: "neutral",
         intentId: null,
       };
+    }
     case "tool_result":
       return {
         headline:
@@ -510,7 +568,9 @@ export function agentEventLabel(event: AgentEvent): EventLabel {
       };
     case "file_write":
       return {
-        headline: "Wrote a file",
+        // Surface the file name in the headline so a multi-file build
+        // reads top-to-bottom as a clear list of artifacts.
+        headline: `Wrote ${basename(event.path)}`,
         body: `${event.path} · ${event.bytes} bytes.`,
         tone: "ok",
         intentId: null,

@@ -11,9 +11,11 @@ export const runtime = "nodejs";
 // Response shape mirrors the sidecar exactly:
 //   { cluster: "devnet" | "mainnet" | ..., sigs: { [intent_id]: { tx_sig, slot, settled_at_ms, intent_text, cluster } } }
 
+// Render assigns $PORT=10000 to private services regardless of the
+// publisher's local default; use 10000 for the internal-network URL.
 const PUBLISHER_URL =
   process.env.SETTLEMENT_PUBLISHER_URL ??
-  "http://covenant-settlement-publisher:10001";
+  "http://covenant-settlement-publisher:10000";
 
 export async function GET() {
   try {

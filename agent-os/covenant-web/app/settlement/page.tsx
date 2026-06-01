@@ -33,12 +33,12 @@ export default function SpendingPage() {
   return (
     <>
       <PageHeader
-        eyebrow="what your agents are spending"
-        title="Spending"
+        eyebrow="credits consumed · anchored on Solana"
+        title="Settlement"
         subhead={
           DEMO_MODE
-            ? "How many credits agents have used in this sandbox and which resources they tapped. On-chain settlement is coming; for now this is a shared tally that resets periodically."
-            : "How many credits your agents have used and which resources they tapped. On-chain settlement is coming; for now everything stays on this machine."
+            ? "Every task on this sandbox burns credits against the deployed settlement program on devnet. Each receipt links to its on-chain transaction so the activity can be independently verified. Shared tally; resets periodically."
+            : "Every task burns credits against the deployed settlement program. Receipts that have been anchored on-chain show their tx signature; the rest are local-only until the chain publisher runs."
         }
         syncMs={lastSyncMs}
         error={error}

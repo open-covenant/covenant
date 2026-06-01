@@ -121,7 +121,7 @@ export function CommandPalette() {
           { id: "nav-peers", label: "Go to Agents", hint: "who you trust", run: () => navigate("/peers") },
           { id: "nav-capabilities", label: "Go to Permissions", hint: "what they can do", run: () => navigate("/capabilities") },
           { id: "nav-memory", label: "Go to Memory", hint: "what they remember", run: () => navigate("/memory") },
-          { id: "nav-settlement", label: "Go to Spending", hint: "credits used", run: () => navigate("/settlement") },
+          { id: "nav-settlement", label: "Go to Settlement", hint: "credits + on-chain anchors", run: () => navigate("/settlement") },
         ];
     return [
       ...sampleIntents,

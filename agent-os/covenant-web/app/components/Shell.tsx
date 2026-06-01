@@ -18,7 +18,7 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/peers", label: "Agents" },
   { href: "/capabilities", label: "Permissions" },
   { href: "/memory", label: "Memory" },
-  { href: "/settlement", label: "Spending" },
+  { href: "/settlement", label: "Settlement" },
   { href: "/sap", label: "Synapse" },
 ];
 

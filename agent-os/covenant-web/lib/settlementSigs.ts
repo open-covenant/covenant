@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { solscanTxUrl } from "./explorer";
 
 export type SettlementSig = {
+  intent_id: string;
   tx_sig: string;
   slot: number | null;
   settled_at_ms: number;
@@ -21,6 +22,7 @@ type SigsPayload = {
 // can look up the on-chain anchor for the one it's showing.
 export function useSettlementSigs(intervalMs = 4000): {
   get: (intentId: string | null | undefined) => SettlementSig | null;
+  all: Record<string, SettlementSig>;
   cluster: string;
   count: number;
 } {
@@ -53,6 +55,7 @@ export function useSettlementSigs(intervalMs = 4000): {
 
   return {
     get: (intentId) => (intentId ? (payload.sigs[intentId] ?? null) : null),
+    all: payload.sigs,
     cluster: payload.cluster,
     count: Object.keys(payload.sigs).length,
   };

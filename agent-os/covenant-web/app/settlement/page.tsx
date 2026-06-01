@@ -3,6 +3,11 @@
 import { api } from "@/lib/api";
 import { solscanTxUrl } from "@/lib/explorer";
 import { formatDateTime, formatTimestamp, shortHash } from "@/lib/format";
+import {
+  shortSig,
+  solscanFor,
+  useSettlementSigs,
+} from "@/lib/settlementSigs";
 import { resolveSynapseStatus } from "@/lib/synapse";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
@@ -23,12 +28,20 @@ async function loadSettlement() {
   return { receipts: receipts.receipts, debits: debits.debits };
 }
 
-export default function SpendingPage() {
+export default function SettlementPage() {
   const { data, error, lastSyncMs } = usePoll(loadSettlement, 4000);
+  const settlement = useSettlementSigs();
   const receipts = data?.receipts ?? [];
   const debits = data?.debits ?? [];
   const totalCredits = receipts.reduce((s, r) => s + r.credits_consumed, 0);
-  const onChain = receipts.filter((r) => r.onchain_sig).length;
+  const onChainReceipts = receipts.filter((r) => r.onchain_sig).length;
+
+  // The publisher's sig table is the authoritative list of on-chain
+  // anchors the sandbox has produced. Materialise it sorted newest
+  // first so the page reads like a feed of recent verifiable activity.
+  const anchors = Object.values(settlement.all)
+    .slice()
+    .sort((a, b) => b.settled_at_ms - a.settled_at_ms);
 
   return (
     <>
@@ -37,8 +50,8 @@ export default function SpendingPage() {
         title="Settlement"
         subhead={
           DEMO_MODE
-            ? "Every task on this sandbox burns credits against the deployed settlement program on devnet. Each receipt links to its on-chain transaction so the activity can be independently verified. Shared tally; resets periodically."
-            : "Every task burns credits against the deployed settlement program. Receipts that have been anchored on-chain show their tx signature; the rest are local-only until the chain publisher runs."
+            ? "Every task on this sandbox is settled on-chain on Solana devnet. Each row below is a real transaction you can verify in Solscan. Shared tally; resets periodically."
+            : "Every task is settled on-chain on the configured Solana cluster. Each row below is a real transaction the publisher sidecar signed for a dispatched intent."
         }
         syncMs={lastSyncMs}
         error={error}
@@ -46,71 +59,93 @@ export default function SpendingPage() {
 
       <section className="metric-row">
         <article className="metric">
-          <span className="eyebrow">charged</span>
-          <span className="value">{receipts.length}</span>
-          <span className="caption">{totalCredits} credits used</span>
+          <span className="eyebrow">on-chain settlements</span>
+          <span className="value">{anchors.length}</span>
+          <span className="caption">{settlement.cluster}</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">spent</span>
+          <span className="eyebrow">local receipts</span>
+          <span className="value">{receipts.length}</span>
+          <span className="caption">{totalCredits} credits</span>
+        </article>
+        <article className="metric">
+          <span className="eyebrow">debits</span>
           <span className="value">{debits.length}</span>
           <span className="caption">matched to charges</span>
         </article>
         <article className="metric">
-          <span className="eyebrow">on-chain</span>
-          <span className="value">{onChain}</span>
-          <span className="caption">{receipts.length - onChain} still local-only</span>
-        </article>
-        <article className="metric">
-          <span className="eyebrow">window</span>
-          <span className="value small">40</span>
-          <span className="caption">most recent charges</span>
+          <span className="eyebrow">also-on-chain</span>
+          <span className="value">{onChainReceipts}</span>
+          <span className="caption">receipts with tx sig</span>
         </article>
       </section>
 
-      <section className="split-2">
-        <div className="panel">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">spent</p>
-              <h2>
-                What your agents spent <span className="count">{debits.length}</span>
-              </h2>
-            </div>
+      <section className="panel flush">
+        <div className="panel-head" style={{ padding: "22px 22px 0" }}>
+          <div>
+            <p className="eyebrow">verifiable on Solana</p>
+            <h2>
+              On-chain settlements <span className="count">{anchors.length}</span>
+            </h2>
           </div>
-          {debits.length === 0 ? (
-            <p className="empty">Nothing spent yet.</p>
-          ) : (
-            <div className="records">
-              {debits.map((d) => (
-                <article key={d.paired_receipt} className="record fade-up">
-                  <div className="ts">
-                    {formatTimestamp(d.at_ms)}
-                    <em>spent</em>
-                  </div>
-                  <div className="body">
-                    <strong>{d.agent.display}</strong>
-                    <p>
-                      Used {d.credits} {d.credits === 1 ? "credit" : "credits"} · receipt{" "}
-                      {shortHash(d.paired_receipt, 14)}
-                    </p>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+          <span className="text-muted text-mono kbd-hint">
+            published by the settlement sidecar
+          </span>
         </div>
+        {anchors.length === 0 ? (
+          <p className="empty" style={{ padding: "30px 22px" }}>
+            No settlements anchored yet. They land here once a task runs and the
+            publisher posts the corresponding `consume_credits` transaction on
+            devnet.
+          </p>
+        ) : (
+          <div className="records" style={{ padding: "12px 0 0" }}>
+            {anchors.map((a) => (
+              <article key={a.tx_sig} className="record fade-up">
+                <div className="ts">
+                  {formatTimestamp(a.settled_at_ms)}
+                  <em>settled</em>
+                </div>
+                <div className="body">
+                  <strong>{a.intent_text ?? "(no text)"}</strong>
+                  <p>
+                    intent {shortHash(a.intent_id, 12)} ·{" "}
+                    <a
+                      className="onchain-link"
+                      href={solscanFor(a)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this transaction on Solscan"
+                    >
+                      {shortSig(a.tx_sig, 8)} ↗
+                    </a>
+                    {a.slot != null && (
+                      <span className="text-muted text-mono"> · slot {a.slot}</span>
+                    )}
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
+      <section className="split-2" style={{ marginTop: 22 }}>
         <div className="panel">
           <div className="panel-head">
             <div>
-              <p className="eyebrow">charged</p>
+              <p className="eyebrow">local · operator-only</p>
               <h2>
-                Settled charges <span className="count">{receipts.length}</span>
+                Daemon receipts <span className="count">{receipts.length}</span>
               </h2>
             </div>
           </div>
           {receipts.length === 0 ? (
-            <p className="empty">No receipts yet.</p>
+            <p className="empty">
+              The daemon&apos;s local receipt store is empty. Sandbox coding tasks
+              are settled on-chain directly; daemon-issued receipts only land here
+              if you wire a local payer.
+            </p>
           ) : (
             <div className="records">
               {receipts.map((r) => (
@@ -139,6 +174,41 @@ export default function SpendingPage() {
                       ) : (
                         "local only"
                       )}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="panel-head">
+            <div>
+              <p className="eyebrow">local · operator-only</p>
+              <h2>
+                Daemon debits <span className="count">{debits.length}</span>
+              </h2>
+            </div>
+          </div>
+          {debits.length === 0 ? (
+            <p className="empty">
+              Nothing here. The on-chain settlement above is the path the public
+              sandbox uses.
+            </p>
+          ) : (
+            <div className="records">
+              {debits.map((d) => (
+                <article key={d.paired_receipt} className="record fade-up">
+                  <div className="ts">
+                    {formatTimestamp(d.at_ms)}
+                    <em>spent</em>
+                  </div>
+                  <div className="body">
+                    <strong>{d.agent.display}</strong>
+                    <p>
+                      Used {d.credits} {d.credits === 1 ? "credit" : "credits"} · receipt{" "}
+                      {shortHash(d.paired_receipt, 14)}
                     </p>
                   </div>
                 </article>

@@ -1,0 +1,14 @@
+{
+  "name": "covenant-settlement-publisher",
+  "version": "0.1.0",
+  "description": "Sidecar that publishes consume_credits transactions on devnet for each dispatched intent on the public sandbox, surfacing real on-chain settlement activity tied to coding tasks.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.98.4"
+  }
+}

@@ -12,6 +12,7 @@ import {
   agentEventLabel,
   eventLabel,
 } from "@/lib/labels";
+import { shortSig, solscanFor, useSettlementSigs } from "@/lib/settlementSigs";
 import { useIntentEventStream, type LiveAgentEvent } from "@/lib/useIntentEventStream";
 import { usePoll } from "@/lib/usePoll";
 import { BuildOutput } from "../../components/BuildOutput";
@@ -57,6 +58,8 @@ const RENDER_LIMIT_DEFAULT = 200;
 
 export default function TaskTracePage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
+  const settlement = useSettlementSigs();
+  const settlementSig = settlement.get(id);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditSyncMs, setAuditSyncMs] = useState<number | null>(null);
@@ -211,11 +214,25 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
       <section className="reply-panel">
         <div className="reply-head">
           <p className="eyebrow">reply</p>
-          {dispatchKind && (
-            <span className="hash">
-              signed hash {shortHash(dispatchKind.result_hash_hex, 10)}
-            </span>
-          )}
+          <div className="reply-head-anchors">
+            {dispatchKind && (
+              <span className="hash">
+                signed hash {shortHash(dispatchKind.result_hash_hex, 10)}
+              </span>
+            )}
+            {settlementSig && (
+              <a
+                className="onchain-link"
+                href={solscanFor(settlementSig)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this settlement on Solscan"
+              >
+                settled on {settlementSig.cluster} {" "}
+                {shortSig(settlementSig.tx_sig, 6)} ↗
+              </a>
+            )}
+          </div>
         </div>
         <div className="reply-body">
           {running ? (
@@ -405,6 +422,14 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           font-family: var(--font-mono);
           font-size: 11px;
           letter-spacing: 0.04em;
+        }
+
+        .reply-panel .reply-head-anchors {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
         }
 
         .reply-panel .reply-body {

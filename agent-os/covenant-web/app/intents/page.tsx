@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatAgentId, formatTimestamp, shortHash, truncate } from "@/lib/format";
+import {
+  shortSig,
+  solscanFor,
+  useSettlementSigs,
+} from "@/lib/settlementSigs";
 import { usePoll } from "@/lib/usePoll";
 import { PageHeader } from "../components/PageHeader";
 
@@ -12,6 +17,7 @@ async function loadIntents() {
 
 export default function TasksPage() {
   const { data, error, lastSyncMs } = usePoll(loadIntents, 3000);
+  const settlement = useSettlementSigs();
   const events = data?.events ?? [];
   const tasks = events
     .filter((e) => e.kind.type === "intent_dispatched")
@@ -47,6 +53,7 @@ export default function TasksPage() {
             {tasks.map((event) => {
               if (event.kind.type !== "intent_dispatched") return null;
               const tone = event.kind.matched_agent ? "ok" : "warn";
+              const sig = settlement.get(event.kind.intent_id);
               return (
                 <Link
                   key={event.id}
@@ -70,6 +77,18 @@ export default function TasksPage() {
                       )}
                     </span>
                     <span className="hash">{shortHash(event.kind.result_hash_hex, 16)}</span>
+                    {sig && (
+                      <a
+                        className="onchain-link"
+                        href={solscanFor(sig)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Open this settlement on Solscan"
+                      >
+                        settled · {shortSig(sig.tx_sig, 6)} ↗
+                      </a>
+                    )}
                   </div>
                 </Link>
               );

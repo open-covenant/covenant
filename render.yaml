@@ -137,6 +137,51 @@ services:
       - key: E2B_API_KEY
         sync: false  # ephemeral sandbox provider
 
+  # Settlement publisher: tails the daemon's audit feed and posts a
+  # `consume_credits` transaction on devnet for each dispatched intent so
+  # the sandbox demonstrates real, verifiable on-chain settlement tied
+  # to visible coding tasks. Private service: only the web consumes its
+  # /sigs join table; visitors never hit this directly.
+  - type: pserv
+    name: covenant-settlement-publisher
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: services/settlement-publisher
+    buildCommand: npm install --no-fund --no-audit
+    startCommand: node src/index.mjs
+    healthCheckPath: /healthz
+    buildFilter:
+      paths:
+        - services/settlement-publisher/**
+    disk:
+      name: settlement-publisher-data
+      mountPath: /data/settlement-publisher
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: COVENANT_DAEMON_URL
+        value: http://covenant-sandbox-daemon:8421
+      - key: COVENANT_SOLANA_CLUSTER
+        value: devnet
+      - key: COVENANT_SOLANA_RPC_URL
+        value: https://api.devnet.solana.com
+      - key: COVENANT_SETTLEMENT_PROGRAM_ID
+        value: cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y
+      - key: COVENANT_SETTLEMENT_CONFIG
+        value: BGGx99dV5LU2GpKCmhXqT1mi1yNr8EuMuMd5BAG7Lcvi
+      - key: COVENANT_SETTLEMENT_CREDIT_ACCOUNT
+        value: AM3LpxSGVjCnZqHJN9YEZs2VQUd5dnrf5QJtRav53uB8
+      - key: SETTLE_STATE_DIR
+        value: /data/settlement-publisher
+      # raw [u8;64] keypair JSON for the operator wallet
+      # (AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb), set in dashboard.
+      - key: COVENANT_OPERATOR_KEYPAIR_JSON
+        sync: false
+      - fromGroup: covenant-sandbox-shared
+
   - type: cron
     name: covenant-sandbox-reset
     runtime: node

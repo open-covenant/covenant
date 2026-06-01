@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { formatTimestamp } from "@/lib/format";
@@ -51,7 +50,6 @@ async function loadOverview() {
 }
 
 export default function OverviewPage() {
-  const router = useRouter();
   const { data, error, lastSyncMs, refresh } = usePoll<OverviewSnapshot>(loadOverview, 3000);
   const [intent, setIntent] = useState("");
   const [dispatching, setDispatching] = useState(false);
@@ -400,21 +398,29 @@ export default function OverviewPage() {
               <p className="eyebrow">{lastError ? "error" : "reply"}</p>
               <div className="reply-head-actions">
                 {lastIntentId && !lastError && (
-                  <Link
+                  // Plain anchor + hard navigation. Earlier Link-based
+                  // attempts (with prefetch=false and an imperative
+                  // router.push onClick) were still being reported as
+                  // "not working" in production. Sidestep every Next
+                  // Link / router code path: render a real <a href>
+                  // (so middle-click / cmd-click still open a new tab
+                  // and the URL is real, not a tracked-route prop),
+                  // and on click fall back to window.location.assign
+                  // which is the lowest-level navigation API the
+                  // browser exposes.
+                  <a
                     className="btn ghost small"
                     href={`/intents/${lastIntentId}`}
-                    prefetch={false}
                     onClick={(e) => {
-                      // Imperative push as a defensive belt-and-suspenders:
-                      // ensures the click navigates even if a stale prefetch
-                      // or a global keyboard handler somewhere swallows the
-                      // default Link click before Next's router runs.
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) {
+                        return;
+                      }
                       e.preventDefault();
-                      router.push(`/intents/${lastIntentId}`);
+                      window.location.assign(`/intents/${lastIntentId}`);
                     }}
                   >
                     {awaiting ? "watch it work" : "open task"}
-                  </Link>
+                  </a>
                 )}
                 {(lastResult || lastError) && !dispatching && (
                   <button type="button" className="btn ghost small" onClick={clearReply}>

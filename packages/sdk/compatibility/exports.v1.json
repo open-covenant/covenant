@@ -9,6 +9,7 @@
     "./domain/task.js",
     "./solana/accounts.js",
     "./solana/instructions.js",
-    "./solana/network.js"
+    "./solana/network.js",
+    "./solana/stake.js"
   ]
 }

@@ -12,12 +12,11 @@
 // dep-tree-heavy refactor in the daemon. Long-term home is inside
 // `covenant-settlement` once the publisher lands there.
 
-import {
-  AnchorProvider,
-  Program,
-  Wallet,
-  BN,
-} from "@coral-xyz/anchor";
+// @coral-xyz/anchor ships as CommonJS; Node 20 ESM resolution can only
+// see its default export. Destructure off the default to get the real
+// classes/values.
+import anchorPkg from "@coral-xyz/anchor";
+const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 import {
   Connection,
   Keypair,

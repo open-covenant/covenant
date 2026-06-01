@@ -251,4 +251,12 @@ mod tests {
         let s = IgnoreSet::load(Path::new("/no/such/file/here-xyz")).unwrap();
         assert!(s.is_empty());
     }
+
+    // Unlike a missing file, a real I/O error must surface, not degrade to empty.
+    #[test]
+    fn load_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = IgnoreSet::load(dir.path()).unwrap_err();
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+    }
 }

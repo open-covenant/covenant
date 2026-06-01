@@ -24,7 +24,30 @@ const DEMO_SAMPLES: { label: string; intent: string }[] = [
     label: "Snake game",
     intent:
       process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() ||
-      "Build a classic Snake game as a single self-contained index.html — HTML canvas, arrow-key controls, a score, and a game-over screen.",
+      // Brand-matched Snake. The visual spec mirrors opencovenant.org --
+      // near-black canvas, off-white grid + snake, thin monochrome
+      // chrome, monospace HUD, no chromatic accents. The agent gets a
+      // concrete recipe so visitors see a consistent look across runs.
+      [
+        "Build a classic Snake game as a single self-contained index.html that visually matches the Covenant brand (opencovenant.org).",
+        "",
+        "Visual spec (match exactly):",
+        "- Background: #030303 (near black) across the whole page.",
+        "- Foreground, snake, and score: #f5f5f5.",
+        "- Subdued text and grid lines: #262626 to #525252 (no other hues).",
+        "- Strictly monochrome. No green, red, or other accent colors -- even for the food, use #f5f5f5 with a thin border.",
+        "- Fonts: ui-sans-serif system stack for labels; ui-monospace for the score and HUD, uppercase, letter-spacing about 0.2em.",
+        "- Tone: minimal, technical, agent-native. Borders are 1px solid #262626. No shadows, no gradients, no rounded corners over 4px.",
+        "- Header strip above the canvas: a small wordmark COVENANT in mono uppercase at 11px, letter-spacing 0.32em, color #8a8a8a.",
+        "",
+        "Gameplay:",
+        "- HTML canvas, arrow-key controls (and WASD), grid-based movement, growing snake.",
+        "- Visible score in the top-right of the header strip.",
+        "- Game-over overlay centered on the canvas with two lines: a thin GAME OVER eyebrow in mono uppercase, then press space to restart beneath it, both #f5f5f5 on an 80% opaque #030303 backdrop.",
+        "- The canvas auto-focuses on load so arrow keys work immediately.",
+        "",
+        "Deliver a single index.html with inline style and script tags; no external assets, no emoji, no icons.",
+      ].join("\n"),
   },
   {
     label: "3D Rubik's cube",

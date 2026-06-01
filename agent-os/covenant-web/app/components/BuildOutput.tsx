@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BuildFile } from "@/lib/api";
 import { highlightCode, languageForPath } from "@/lib/highlight";
 
@@ -25,6 +25,47 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
   const html = files.find((f) => f.path.toLowerCase().endsWith(".html"));
   const [sel, setSel] = useState(0);
   const [tab, setTab] = useState<"files" | "preview">(html ? "preview" : "files");
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Focus the iframe whenever Preview becomes active or the srcDoc
+  // content changes. Without this, keyboard events (arrow keys, space,
+  // WASD) keep going to the parent page and games like Snake feel
+  // broken — the play button works, but you can't steer.
+  useEffect(() => {
+    if (tab !== "preview" || !iframeRef.current) return;
+    const node = iframeRef.current;
+    const focus = () => {
+      try {
+        node.focus();
+        node.contentWindow?.focus();
+      } catch {
+        // contentWindow access throws cross-origin (sandboxed null
+        // origin); the parent .focus() is enough to start the chain.
+      }
+    };
+    focus();
+    node.addEventListener("load", focus);
+    return () => node.removeEventListener("load", focus);
+  }, [tab, html?.content]);
+
+  const onFullscreen = useCallback(() => {
+    const node = iframeRef.current;
+    if (!node) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen?.();
+    } else {
+      void node.requestFullscreen?.().catch(() => {});
+    }
+  }, []);
+
+  const onOpenInTab = useCallback(() => {
+    if (!html) return;
+    const blob = new Blob([withStorageShim(html.content)], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    // Revoke after the new tab has had time to read the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [html]);
 
   // useMemo MUST run on every render — hooks cannot be called after an
   // early return. Fall back to an empty active row when the file list is
@@ -61,18 +102,47 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
             >
               Files
             </button>
+            {tab === "preview" && (
+              <>
+                <span className="bo-sep" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="bo-action"
+                  onClick={onFullscreen}
+                  title="Fullscreen"
+                >
+                  Fullscreen
+                </button>
+                <button
+                  type="button"
+                  className="bo-action"
+                  onClick={onOpenInTab}
+                  title="Open the preview in a new tab"
+                >
+                  Open in tab ↗
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
 
       {tab === "preview" && html ? (
         <iframe
+          ref={iframeRef}
           className="bo-preview"
-          // Untrusted output: allow scripts (the app needs them) but NOT
-          // same-origin, so it can't touch this page, cookies, or storage.
-          sandbox="allow-scripts allow-pointer-lock"
+          // Untrusted output: allow scripts (the app needs them) and the
+          // ergonomics modern apps assume (modals for game-over dialogs,
+          // pointer lock for FPS-style controls, fullscreen request),
+          // but NOT same-origin -- so the build can't touch this page,
+          // cookies, or storage. allowFullScreen lets the parent's
+          // Fullscreen button work; the sandbox token isn't required
+          // when the iframe attribute is set, but Safari prefers both.
+          sandbox="allow-scripts allow-pointer-lock allow-modals"
+          allowFullScreen
           srcDoc={withStorageShim(html.content)}
           title="build preview"
+          tabIndex={0}
         />
       ) : (
         <div className="bo-body">
@@ -151,12 +221,34 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           color: var(--fg);
           border-color: var(--fg);
         }
+        .bo-sep {
+          align-self: stretch;
+          width: 1px;
+          margin: 4px 4px;
+          background: var(--border);
+        }
+        .bo-tabs button.bo-action {
+          color: var(--muted);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.08em;
+        }
+        .bo-tabs button.bo-action:hover {
+          color: var(--fg);
+          border-color: var(--faint);
+        }
         .bo-preview {
           display: block;
           width: 100%;
           height: 460px;
           border: 0;
           background: #fff;
+        }
+        /* When the iframe enters browser fullscreen, fill the viewport
+           instead of inheriting its 460px panel height. */
+        .bo-preview:fullscreen {
+          width: 100vw;
+          height: 100vh;
         }
         .bo-body {
           display: grid;

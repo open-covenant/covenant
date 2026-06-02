@@ -1267,6 +1267,23 @@ mod tests {
         assert!(log.recent(10).await.unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn jsonl_recent_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = log.recent(10).await.unwrap_err();
+        assert!(
+            matches!(err, AuditError::Io(_)),
+            "recent must propagate a non-NotFound read fault as AuditError::Io, not \
+             swallow it into an empty Vec the way only a genuinely missing file may; \
+             an audit view that silently empties on a read fault would hide tampering \
+             (audit-integrity fail-open regression class): {err:?}"
+        );
+    }
+
     #[test]
     fn hash_hex_is_stable_for_same_input() {
         assert_eq!(hash_hex(b"hello"), hash_hex(b"hello"));

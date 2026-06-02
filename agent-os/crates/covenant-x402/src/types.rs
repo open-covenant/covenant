@@ -120,4 +120,48 @@ mod tests {
             serde_json::from_str(&re_encoded).expect("re-decode");
         assert_eq!(parsed, re_parsed);
     }
+
+    fn requirement(extra: Option<PaymentExtra>) -> PaymentRequirements {
+        PaymentRequirements {
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            amount: "80000".into(),
+            amount_usdc: 0.08,
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
+            scheme: "exact".into(),
+            extra,
+        }
+    }
+
+    #[test]
+    fn extra_absent_is_omitted_from_wire() {
+        // skip_serializing_if keeps the on-wire shape byte-identical to upstreams
+        // that send no `extra` block: the key must be absent, not null.
+        let json = serde_json::to_value(requirement(None)).expect("encode");
+        assert!(
+            json.get("extra").is_none(),
+            "extra must be omitted when None, got {json}"
+        );
+    }
+
+    #[test]
+    fn fee_payer_uses_renamed_wire_key_and_round_trips() {
+        // feePayer carries PayAI's sponsor pubkey; the signer reads it to set the
+        // v0 payer slot. It must serialize under the renamed `feePayer` key, not
+        // the Rust `fee_payer`, and survive a round-trip unchanged.
+        let original = requirement(Some(PaymentExtra {
+            fee_payer: Some("2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4".into()),
+        }));
+        let json = serde_json::to_value(&original).expect("encode");
+        assert_eq!(
+            json["extra"]["feePayer"],
+            "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        );
+        assert!(
+            json["extra"].get("fee_payer").is_none(),
+            "must use the renamed feePayer key, got {json}"
+        );
+        let round: PaymentRequirements = serde_json::from_value(json).expect("decode");
+        assert_eq!(round, original);
+    }
 }

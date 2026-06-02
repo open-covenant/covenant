@@ -216,6 +216,27 @@ mod tests {
     }
 
     #[test]
+    fn cluster_parse_rejects_unknown_and_normalizes_case() {
+        // from_env resolves COVENANT_SOLANA_CLUSTER with
+        // `.parse::<Cluster>().ok().unwrap_or(Cluster::Devnet)`, so the
+        // FromStr contract is all that stands between an operator typo
+        // and a silent devnet fallback. The rejection must echo the
+        // offending value or that eventual diagnostic is useless, and
+        // the to_ascii_lowercase normalization must survive refactors or
+        // capitalized env values like "Devnet"/"MAINNET" would stop
+        // resolving — every other test here passes an already-lowercase
+        // string, so neither arm has a guard.
+        let err = "mainnent".parse::<Cluster>().unwrap_err();
+        assert!(
+            err.contains("unknown cluster") && err.contains("mainnent"),
+            "rejection must name the offending value: {err}"
+        );
+        assert_eq!("DEVNET".parse::<Cluster>(), Ok(Cluster::Devnet));
+        assert_eq!("Localnet".parse::<Cluster>(), Ok(Cluster::Localnet));
+        assert_eq!("MAINNET-BETA".parse::<Cluster>(), Ok(Cluster::Mainnet));
+    }
+
+    #[test]
     fn cluster_specific_program_id_beats_global() {
         let cfg = Config::from_env(env(&[
             ("COVENANT_SOLANA_CLUSTER", "devnet"),

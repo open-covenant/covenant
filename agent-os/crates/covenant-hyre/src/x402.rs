@@ -484,4 +484,82 @@ mod tests {
         assert_eq!(out.status, 200);
         assert!(out.paid_amount.is_none());
     }
+
+    #[tokio::test]
+    async fn rejects_malformed_http_method() {
+        // The method comes straight from the resolved plan. A method string the
+        // HTTP layer cannot parse must fail closed as an Execute error before any
+        // request leaves the host — never panic or coerce into a garbage verb.
+        let mut bad = plan("https://unused.example/defi/tvl", 10_000);
+        bad.method = "BAD METHOD".into();
+        let err = execute_paid(&reqwest::Client::new(), &MockSigner, &bad)
+            .await
+            .expect_err("malformed method");
+        assert!(
+            matches!(err, HyreError::Execute(ref m) if m.contains("invalid HTTP method")),
+            "got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn non_402_error_response_surfaces_as_execute() {
+        // A first hit that is neither 2xx nor 402 is a provider or gateway fault,
+        // not a payment challenge. execute_paid must surface it as an Execute
+        // error carrying the status, never parse a 5xx body as an accepts list or
+        // drop it as a free call.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+            .mount(&server)
+            .await;
+        let err = execute_paid(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect_err("non-402 error");
+        assert!(
+            matches!(err, HyreError::Execute(ref m) if m.contains("returned 503 (not 402)")),
+            "got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_payment_records_no_paid_amount() {
+        // The facilitator can reject the signed payment on the retry (bad
+        // signature, expired blockhash, insufficient funds) by answering non-2xx.
+        // The loop must report that status with paid_amount None so no settlement
+        // is credited for a transfer that never landed.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .and(header_exists("x-payment"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("payment rejected"))
+            .mount(&server)
+            .await;
+
+        let out = execute_paid(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect("loop returns the rejection, not an error");
+        assert_eq!(
+            out.status, 402,
+            "the facilitator's rejection status is surfaced"
+        );
+        assert!(
+            out.paid_amount.is_none(),
+            "a rejected payment must not record a settled amount"
+        );
+    }
 }

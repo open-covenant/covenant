@@ -682,6 +682,38 @@ mod tests {
     }
 
     #[test]
+    fn config_rejects_zero_sweep_or_accrual_interval() {
+        // The keeper builds its sweep and accrual tickers straight from
+        // these fields via tokio::time::interval (lib.rs:269/279), which
+        // panics on a zero period. validate() must reject 0 up front,
+        // and per-field: the guard ORs the two operands, so a refactor
+        // that dropped either side would let a zero through and crash the
+        // keeper loop on its first tick. base_cfg is otherwise valid, so
+        // each case isolates the field it zeroes.
+        let mut zero_sweep = base_cfg();
+        zero_sweep.sweep_interval_secs = 0;
+        assert!(
+            zero_sweep
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("interval secs must be > 0"),
+            "zero sweep_interval_secs must be rejected by validate()"
+        );
+
+        let mut zero_accrual = base_cfg();
+        zero_accrual.accrual_interval_secs = 0;
+        assert!(
+            zero_accrual
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("interval secs must be > 0"),
+            "zero accrual_interval_secs must be rejected by validate()"
+        );
+    }
+
+    #[test]
     fn hardcoded_recipients_parse_to_valid_pubkeys() {
         let cfg = base_cfg();
         cfg.validate().expect("hardcoded recipient consts must parse");

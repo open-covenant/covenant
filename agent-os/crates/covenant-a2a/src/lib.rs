@@ -6598,6 +6598,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_compact_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path.clone()).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = m.compact().await.unwrap_err();
+        assert!(
+            matches!(err, A2AError::Io(_)),
+            "compact must propagate a non-NotFound read fault as A2AError::Io, not \
+             collapse it into the NotFound -> Ok(0) arm that only a genuinely missing \
+             mailbox log may take; swallowing a read fault would silently no-op \
+             compaction and hide a corrupted or replaced mailbox path, letting the \
+             durable task-handoff log grow unbounded while operators read dropped=0 \
+             as an empty pre-cutoff window: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_compact_drops_drained_task_state_and_cache() {
         // Real InMemoryMailbox compaction: every long-running daemon
         // backed by this mailbox used to retain senders, attempts, and

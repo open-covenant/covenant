@@ -414,6 +414,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_required_body_field_is_invalid_arguments() {
+        // hyre.ask is a POST whose "query" is a required body field. An
+        // object that omits it must be rejected in resolve()'s body loop
+        // (tools.rs:150-155) before the x402-billed executor runs. The
+        // path-param sibling covers a GET path template — a separate code
+        // path — so the POST body-field arm is otherwise unguarded.
+        let tools = tools_for(&HyreConfig::default(), Arc::new(MockExecutor::default()));
+        let err = find(&tools, "hyre.ask")
+            .call(serde_json::json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::InvalidArguments(m) => assert!(
+                m.contains("missing body field") && m.contains("query"),
+                "missing required body field must name the field: {m}"
+            ),
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn non_object_arguments_are_invalid_arguments() {
         // call() accepts only a JSON object or null (null => no args);
         // any other JSON type must be rejected at tools.rs:182 before

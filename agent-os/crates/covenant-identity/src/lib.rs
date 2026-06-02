@@ -202,6 +202,32 @@ mod tests {
     }
 
     #[test]
+    fn verify_with_pubkey_rejects_off_curve_pubkey() {
+        // A 32-byte value whose y-coordinate has no corresponding x on the
+        // ed25519 curve fails to decompress; verifying_key_from_bytes must
+        // surface that as IdentityError::Crypto rather than panic or accept.
+        // verify_with_pubkey is the public verification entry point for
+        // covenant_permissions::verify, audit-log integrity, and attestation
+        // flows, so a malformed pubkey reaching it must be rejected fail-
+        // closed: a refactor that unwrapped VerifyingKey::from_bytes would
+        // panic the daemon on an attacker-supplied pubkey, and one that
+        // accepted it would open the authorization boundary. (Both [0xff; 32]
+        // and all-zero decode to valid points, so neither exercises this
+        // branch; byte 31 = 0xe0 is an empirically confirmed off-curve y.)
+        let mut off_curve = [0u8; 32];
+        off_curve[31] = 0xe0;
+        assert!(matches!(
+            verifying_key_from_bytes(off_curve),
+            Err(IdentityError::Crypto(_))
+        ));
+        let dummy_sig = Signature::from_bytes(&[0u8; 64]);
+        assert!(matches!(
+            verify_with_pubkey(off_curve, b"covenant attestation", &dummy_sig),
+            Err(IdentityError::Crypto(_))
+        ));
+    }
+
+    #[test]
     fn verify_with_pubkey_rejects_tampered_signature_and_wrong_pubkey() {
         // verify_with_pubkey (line 174-182) is the public verification
         // entry point used by covenant_permissions::verify, audit-log

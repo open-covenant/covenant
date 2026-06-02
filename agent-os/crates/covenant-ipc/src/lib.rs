@@ -10377,6 +10377,25 @@ mod tests {
         assert!(matches!(r, Err(IpcError::FrameTooLarge { .. })));
     }
 
+    #[tokio::test]
+    async fn write_frame_rejects_oversized_payload() {
+        // The read side rejects an oversized length prefix
+        // (rejects_oversized_frame_header). write_frame must refuse the
+        // symmetric case: a value serializing past MAX_FRAME has to surface
+        // FrameTooLarge before any length prefix or byte is written, so the
+        // daemon never emits a frame every peer's read_frame would reject and
+        // never desyncs the stream with a half-written oversized frame.
+        let oversized = "a".repeat(MAX_FRAME as usize + 1);
+        let mut sink = tokio::io::sink();
+        let err = write_frame(&mut sink, &oversized)
+            .await
+            .expect_err("a payload past MAX_FRAME must be rejected");
+        assert!(
+            matches!(err, IpcError::FrameTooLarge { got } if got > MAX_FRAME as u64),
+            "write_frame must reject an over-cap payload as FrameTooLarge carrying the actual byte count, not write a length prefix for a frame the peer will reject: {err:?}",
+        );
+    }
+
     #[test]
     fn ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value() {
         let err = IpcError::FrameTooLarge { got: 9_999_999 };

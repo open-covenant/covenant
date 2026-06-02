@@ -681,6 +681,21 @@ mod tests {
     }
 
     #[test]
+    fn agent_id_rejects_non_base58_pubkey() {
+        // 0, O, I, l are outside the bs58 (Bitcoin) alphabet, so decode fails
+        // before the 32-byte length check — a distinct rejection path from the
+        // wrong-length payload pinned by agent_id_rejects_wrong_pubkey_length.
+        let bad = r#"{"display":"x@local","pubkey":"0OIl"}"#;
+        let err = serde_json::from_str::<AgentId>(bad)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !err.contains("must decode to 32 bytes"),
+            "non-base58 pubkey must reject at the bs58::decode arm, not the length arm: {err}"
+        );
+    }
+
+    #[test]
     fn validate_display_accepts_canonical_shapes() {
         for ok in [
             "user@local",

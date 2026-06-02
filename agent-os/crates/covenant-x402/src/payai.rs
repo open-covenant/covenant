@@ -287,6 +287,7 @@ mod tests {
     use super::*;
     use crate::PaymentExtra;
     use solana_sdk::signer::keypair::Keypair;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     const USDC_MAINNET: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const PAYAI_FEE_PAYER: &str = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4";
@@ -484,5 +485,69 @@ mod tests {
             signer.build_payment(&req).await.expect_err("bad amount"),
             X402Error::Sign(m) if m.contains("parse amount")
         ));
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_faulted_responses() {
+        // latest_blockhash backs every PayAI sponsored transfer. Each RPC fault
+        // mode must fail closed as a Sign error rather than yield a missing or
+        // garbage blockhash that would build an unlandable transaction.
+        let down = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&down)
+            .await;
+        let err = PayaiSolanaSigner::new(Keypair::new(), down.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("rpc error status");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("rpc status")));
+
+        let empty = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "result": {"context": {"slot": 1}, "value": {}}
+            })))
+            .mount(&empty)
+            .await;
+        let err = PayaiSolanaSigner::new(Keypair::new(), empty.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("missing blockhash");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no blockhash")));
+
+        let unparseable = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"context": {"slot": 1}, "value": {"blockhash": "not-base58!"}}
+            })))
+            .mount(&unparseable)
+            .await;
+        let err = PayaiSolanaSigner::new(Keypair::new(), unparseable.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("unparseable blockhash");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("parse blockhash")));
+    }
+
+    #[tokio::test]
+    async fn account_exists_rejects_rpc_error_status() {
+        // account_exists gates the funder-ATA guard. A non-2xx getAccountInfo
+        // response must surface a Sign error, never be read as an existence
+        // result: a transient 5xx is not "the account exists" or "it doesn't",
+        // and treating it as either would skip the guard or reject a funded
+        // wallet on a momentary RPC blip.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+            .mount(&server)
+            .await;
+        let ata = Pubkey::from_str(RECIPIENT).unwrap();
+        let err = PayaiSolanaSigner::new(Keypair::new(), server.uri())
+            .account_exists(&ata)
+            .await
+            .expect_err("rpc error status");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("getAccountInfo status")));
     }
 }

@@ -11039,6 +11039,52 @@ mod tests {
     }
 
     #[test]
+    fn collect_stream_envelopes_rejects_mixed_stream_ids_at_terminal_frames() {
+        // The MixedStreamIds guard must also fire when the foreign stream_id
+        // rides a TERMINAL frame, not just a chunk. Otherwise a StreamEnd from
+        // another stream could truncate this collection, or a foreign
+        // StreamError could inject a spurious failure into it.
+        let opener = Uuid::from_u128(1);
+        let intruder = Uuid::from_u128(2);
+
+        let via_end = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id: opener,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamEnd {
+                stream_id: intruder,
+                summary: None,
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&via_end),
+            Err(CollectStreamError::MixedStreamIds {
+                expected: opener,
+                got: intruder
+            })
+        );
+
+        let via_error = vec![
+            StreamEnvelope::StreamBegin {
+                stream_id: opener,
+                response_kind: "memories".into(),
+            },
+            StreamEnvelope::StreamError {
+                stream_id: intruder,
+                message: "boom".into(),
+            },
+        ];
+        assert_eq!(
+            collect_stream_envelopes(&via_error),
+            Err(CollectStreamError::MixedStreamIds {
+                expected: opener,
+                got: intruder
+            })
+        );
+    }
+
+    #[test]
     fn collect_stream_envelopes_rejects_sequence_gap() {
         // The daemon emits sequence 0..N monotonically. A gap means
         // wire-level frame drop or a buggy emitter; the helper must not

@@ -1899,6 +1899,16 @@ mod tests {
     }
 
     #[test]
+    fn token_from_b58_rejects_invalid_base58() {
+        // 0, O, I, l are outside the base58 alphabet — decode fails before the
+        // length check, a distinct rejection path from a wrong-length payload.
+        assert!(matches!(
+            PeerToken::from_b58("0OIl"),
+            Err(PeerError::BadTokenB58(_))
+        ));
+    }
+
+    #[test]
     fn token_debug_does_not_leak_full_bytes() {
         let t = PeerToken::generate();
         let s = format!("{t:?}");

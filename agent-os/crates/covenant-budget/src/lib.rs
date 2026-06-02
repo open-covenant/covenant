@@ -2898,6 +2898,24 @@ mod tests {
         assert_eq!(l.recent_debits(&a, 10).await.unwrap().len(), 1);
     }
 
+    #[tokio::test]
+    async fn jsonl_compact_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = l.compact_older_than(100).await.unwrap_err();
+        assert!(
+            matches!(err, BudgetError::Io(_)),
+            "compact_older_than must propagate a non-NotFound read fault as \
+             BudgetError::Io, not collapse it into the NotFound -> Ok(0) arm that \
+             only a genuinely missing ledger may take; swallowing a read fault \
+             would silently no-op compaction and hide a corrupted or replaced \
+             ledger path (budget-accounting fail-open regression class): {err:?}"
+        );
+    }
+
     /// Non-destructive compact: pre-cutoff Debits are dropped but a
     /// per-agent Snapshot captures the state at cutoff, so reopening
     /// reconstructs the same `tokens_remaining` as before the rewrite.

@@ -414,6 +414,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_object_arguments_are_invalid_arguments() {
+        // call() accepts only a JSON object or null (null => no args);
+        // any other JSON type must be rejected at tools.rs:182 before
+        // self.resolve() and the x402-billed executor run, or a malformed
+        // tool-call payload would be forwarded as a billed upstream
+        // request. The sibling missing-param test only reaches the
+        // resolve() arm via {}, so this type arm is otherwise unguarded.
+        let tools = tools_for(&HyreConfig::default(), Arc::new(MockExecutor::default()));
+        for bad in [
+            serde_json::json!("just a string"),
+            serde_json::json!([1, 2, 3]),
+            serde_json::json!(42),
+        ] {
+            let err = find(&tools, "hyre.ask").call(bad).await.unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => assert!(
+                    m.contains("arguments must be a JSON object"),
+                    "non-object arguments must name the type requirement: {m}"
+                ),
+                other => panic!("expected InvalidArguments, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn ask_sends_query_in_body() {
         let exec = Arc::new(MockExecutor::default());
         let tools = tools_for(&HyreConfig::default(), exec.clone());

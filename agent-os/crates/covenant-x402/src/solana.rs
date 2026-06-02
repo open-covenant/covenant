@@ -483,6 +483,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_payment_rejects_malformed_payment_fields() {
+        // asset, pay_to, and amount come straight from the facilitator's 402
+        // challenge and are parsed before any RPC. Each malformed value must
+        // fail closed as X402Error::Sign rather than flow into the transfer.
+        let net = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+        let signer = SolanaSigner::new(Keypair::new(), "https://unused");
+
+        let req = xona_requirements(net, "not-a-pubkey", "80000");
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad asset"),
+            X402Error::Sign(m) if m.contains("parse asset")
+        ));
+
+        let mut req = xona_requirements(net, USDC_MAINNET_MINT, "80000");
+        req.pay_to = "not-a-pubkey".into();
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad pay_to"),
+            X402Error::Sign(m) if m.contains("parse pay_to")
+        ));
+
+        let req = xona_requirements(net, USDC_MAINNET_MINT, "not-a-number");
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad amount"),
+            X402Error::Sign(m) if m.contains("parse amount")
+        ));
+    }
+
+    #[tokio::test]
     async fn resolve_decimals_uses_hardcoded_path_without_rpc() {
         // No mock mounted: if resolve_decimals hit the RPC for USDC
         // it would 404 and error. It must short-circuit instead.

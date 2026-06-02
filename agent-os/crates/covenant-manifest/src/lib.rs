@@ -1711,6 +1711,21 @@ cpu_ms_per_task = 1000
     }
 
     #[test]
+    fn from_path_missing_file_routes_to_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.toml");
+        let err = Manifest::from_path(&path).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::Io(_)),
+            "Manifest::from_path must route a missing or unreadable file to \
+             ManifestError::Io (not Parse or Validation) so manifest-load incident \
+             triage keeps disk faults distinct from syntax and validation faults; \
+             asserting only is_err() would let a read-error-misrouting refactor pass \
+             (disk-fault-misroute regression class): {err:?}"
+        );
+    }
+
+    #[test]
     fn manifest_error_validation_display_message_pins_prefix_colon_separator_and_payload() {
         let err = ManifestError::Validation("agent.id must not be empty".into());
         let message = format!("{err}");

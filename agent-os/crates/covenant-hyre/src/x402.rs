@@ -326,6 +326,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_challenge_rejects_malformed_challenges() {
+        // parse_challenge decodes a Hyre 402 body into the option list. Each
+        // malformed shape must surface a HyreError::Challenge, never an empty
+        // list: a body the loop cannot read is a settlement dead end, and
+        // silently treating it as "no options" would mask a provider
+        // wire-format change as a benign free call.
+        assert!(
+            matches!(parse_challenge("{not json"), Err(HyreError::Challenge(m)) if m.contains("decode 402 body")),
+            "a non-JSON body must be rejected as a decode-402-body Challenge",
+        );
+        assert!(
+            matches!(parse_challenge(r#"{"error":"X-PAYMENT header is required"}"#), Err(HyreError::Challenge(m)) if m.contains("no accepts array")),
+            "a 402 object with no accepts field must be rejected, not read as zero options",
+        );
+        assert!(
+            matches!(parse_challenge(r#"{"accepts":42}"#), Err(HyreError::Challenge(m)) if m.contains("decode accepts")),
+            "an accepts field that is not an array of options must be rejected as a decode-accepts Challenge",
+        );
+    }
+
+    #[test]
     fn select_matches_short_network_against_caip2_capability() {
         let accepts = parse_challenge(LIVE_DEFI_TVL_402).unwrap();
         // Body says "solana"; capability is the CAIP-2 form — must match.

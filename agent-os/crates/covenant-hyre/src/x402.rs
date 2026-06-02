@@ -345,6 +345,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn to_requirements_rejects_unpinned_payee_sponsor_and_missing_amount() {
+        // to_requirements normalises a selected 402 option into the signer's
+        // input. Before any signature is produced it must pin the payee and
+        // the PayAI sponsor and require a price: a malicious or misconfigured
+        // 402 challenge must never steer the funding key to an unpinned payTo,
+        // an unpinned feePayer, or a priceless option. The base option is the
+        // live Hyre shape (payTo == PAY_TO, feePayer == PAYAI_FEE_PAYER,
+        // amount "10000"), so each case isolates the single field it corrupts.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        to_requirements(&base, NETWORK).expect("the pinned live option must normalise");
+
+        let mut wrong_payee = base.clone();
+        wrong_payee.pay_to = "So11111111111111111111111111111111111111112".into();
+        assert!(
+            matches!(to_requirements(&wrong_payee, NETWORK), Err(HyreError::NotAllowed(m)) if m.contains("does not match pinned Hyre payee")),
+            "an option paying a non-pinned payTo must be rejected as NotAllowed, never normalised into a signer input",
+        );
+
+        let mut no_fee_payer = base.clone();
+        no_fee_payer.extra = None;
+        assert!(
+            matches!(to_requirements(&no_fee_payer, NETWORK), Err(HyreError::NotAllowed(m)) if m.contains("missing extra.feePayer")),
+            "an option with no extra.feePayer must be rejected — the PayAI sponsor key is required for the Hyre profile",
+        );
+
+        let mut wrong_fee_payer = base.clone();
+        wrong_fee_payer.extra = Some(Extra {
+            fee_payer: Some("11111111111111111111111111111111".into()),
+        });
+        assert!(
+            matches!(to_requirements(&wrong_fee_payer, NETWORK), Err(HyreError::NotAllowed(m)) if m.contains("does not match pinned PayAI sponsor")),
+            "an option naming a non-pinned feePayer must be rejected as NotAllowed",
+        );
+
+        let mut no_amount = base.clone();
+        no_amount.amount = None;
+        no_amount.max_amount_required = None;
+        assert!(
+            matches!(to_requirements(&no_amount, NETWORK), Err(HyreError::Challenge(m)) if m.contains("accept missing amount")),
+            "an option carrying neither amount nor maxAmountRequired must be rejected, not signed for a zero price",
+        );
+    }
+
     #[tokio::test]
     async fn full_loop_pays_live_shape_and_returns_data() {
         let server = MockServer::start().await;

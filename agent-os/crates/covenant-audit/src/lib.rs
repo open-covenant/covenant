@@ -1284,6 +1284,36 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn read_helpers_propagate_non_notfound_io_error() {
+        // The tempdir path is a directory, so read_to_string fails with a
+        // non-NotFound (IsADirectory) fault. Each helper backs append and
+        // integrity verification; all three must surface AuditError::Io rather
+        // than the missing-file Ok(empty) short-circuit, or a faulted read of
+        // the log or chain would masquerade as an empty history.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        assert!(
+            matches!(read_events(&path).await.unwrap_err(), AuditError::Io(_)),
+            "read_events must surface a non-NotFound read fault as AuditError::Io"
+        );
+        assert!(
+            matches!(
+                read_event_lines(&path).await.unwrap_err(),
+                AuditError::Io(_)
+            ),
+            "read_event_lines must surface a non-NotFound read fault as AuditError::Io"
+        );
+        assert!(
+            matches!(
+                read_chain_entries(&path).await.unwrap_err(),
+                AuditError::Io(_)
+            ),
+            "read_chain_entries must surface a non-NotFound read fault as AuditError::Io"
+        );
+    }
+
     #[test]
     fn hash_hex_is_stable_for_same_input() {
         assert_eq!(hash_hex(b"hello"), hash_hex(b"hello"));

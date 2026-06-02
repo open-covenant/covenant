@@ -877,6 +877,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recent_and_mark_batch_confirmed_propagate_non_notfound_io_error() {
+        // open() always leaves receipts.jsonl on disk, so the NotFound arms
+        // (recent -> Ok(empty), mark_batch_confirmed -> Ok(0)) are reserved for
+        // a genuinely missing log. Replace it with a directory: File::open
+        // succeeds but the first read faults non-NotFound. Both read paths must
+        // surface SettlementError::Io, never the empty/zero short-circuit. A
+        // silently empty recent() would hide unsettled receipts from batching
+        // and audit reconciliation; a silent Ok(0) from mark_batch_confirmed
+        // would record a chain confirmation as a no-op on an unreadable log
+        // (settlement fail-open regression class).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let err = store
+            .recent(10)
+            .await
+            .expect_err("a non-NotFound read fault must abort recent()");
+        assert!(
+            matches!(err, SettlementError::Io(_)),
+            "recent must surface a non-NotFound read fault as SettlementError::Io, not swallow it \
+             into an empty receipt view the way only a genuinely missing log may: {err:?}",
+        );
+
+        let confirmation = ChainConfirmation {
+            chain: "solana".to_string(),
+            cluster: "devnet".to_string(),
+            batch_id: "batch".to_string(),
+            merkle_root: "root".to_string(),
+            tx_sig: Some("sig".to_string()),
+            slot: Some(12),
+            confirmed_at: Some(34),
+        };
+        let err = store
+            .mark_batch_confirmed(&[Uuid::from_u128(1)], confirmation)
+            .await
+            .expect_err("a non-NotFound read fault must abort mark_batch_confirmed()");
+        assert!(
+            matches!(err, SettlementError::Io(_)),
+            "mark_batch_confirmed must surface a non-NotFound read fault as SettlementError::Io, \
+             not report Ok(0) and record a chain confirmation as a no-op on an unreadable log: {err:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn backfill_receipts_repairs_serde_decodable_legacy_wire_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("receipts.jsonl");

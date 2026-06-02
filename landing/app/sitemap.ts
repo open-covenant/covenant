@@ -10,6 +10,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const lastModified = SITE_BUILD_DATE;
   return [
     { url: `${SITE}/`, lastModified, changeFrequency: "weekly", priority: 1 },
+    { url: `${SITE}/about`, lastModified, changeFrequency: "monthly", priority: 0.8 },
     { url: `${SITE}/stake`, lastModified, changeFrequency: "weekly", priority: 0.9 },
     { url: `${SITE}/treasury`, lastModified, changeFrequency: "daily", priority: 0.7 },
     { url: `${SITE}/roadmap`, lastModified, changeFrequency: "weekly", priority: 0.8 },

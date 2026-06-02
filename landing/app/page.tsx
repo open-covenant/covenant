@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AgentTerminalDock } from "./AgentTerminalDock";
 import { HeroMesh } from "./HeroMesh";
 import { SiteFooter } from "./SiteFooter";
 import { SiteHeader } from "./SiteHeader";
@@ -42,6 +43,8 @@ export default function Page() {
       <HeroMesh src="/hero-bg.jpg" />
 
       <SiteHeader />
+
+      <AgentTerminalDock />
 
       <a
         href="https://sandbox.opencovenant.org"

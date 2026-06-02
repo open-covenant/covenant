@@ -19,6 +19,7 @@ export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
+  { label: "about", href: "/about", external: false as const },
   { label: "stake", href: "/stake", external: false as const },
 ];
 

@@ -3,8 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
+import { GithubIcon, XIcon } from "./_brand";
 
 type NavItem = { label: string; href: string; external?: boolean };
+
+const SOCIAL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  X: XIcon,
+  GitHub: GithubIcon,
+};
 
 export function MobileMenu({
   items,
@@ -77,18 +83,24 @@ export function MobileMenu({
           {socials && socials.length > 0 && (
             <>
               <div className="my-2 border-t border-neutral-800/60" />
-              {socials.map((item) => (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setOpen(false)}
-                  className="block px-4 py-2 text-[13px] text-neutral-400 transition-colors hover:text-neutral-50"
-                >
-                  {item.label}
-                </a>
-              ))}
+              <div className="flex items-center gap-1 px-2">
+                {socials.map((item) => {
+                  const Icon = SOCIAL_ICONS[item.label];
+                  return (
+                    <a
+                      key={item.href}
+                      href={item.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={item.label}
+                      onClick={() => setOpen(false)}
+                      className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+                    >
+                      {Icon ? <Icon className="h-4 w-4" /> : item.label}
+                    </a>
+                  );
+                })}
+              </div>
             </>
           )}
         </div>

@@ -301,6 +301,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_page_rejects_non_success_status() {
+        // A registry that answers non-2xx (down, rate-limited, gateway error)
+        // must surface UnexpectedStatus, never decode the error body as a
+        // services list: a 503 page parsed as zero entries would silently empty
+        // the catalog and make every discover-and-pay call miss.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/services-list"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("registry unavailable"))
+            .mount(&server)
+            .await;
+        let client = OrbitClient::with(reqwest::Client::new(), server.uri(), 100);
+        let err = client.fetch_page(100, 0).await.expect_err("non-success");
+        assert!(
+            matches!(err, X402Error::UnexpectedStatus(503)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn fetch_all_paginates_until_total_reached() {
         // total=5, page_size=2 → expect 3 pages (2, 2, 1).
         let server = MockServer::start().await;

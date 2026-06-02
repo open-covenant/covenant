@@ -859,6 +859,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backfill_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+
+        // A directory at the store path makes read_to_string fail with a
+        // non-NotFound I/O fault instead of the missing-file `Ok(row_count: 0)`
+        // short-circuit.
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(matches!(
+            backfill_receipts_with_correlations(&path, true, &[])
+                .await
+                .unwrap_err(),
+            SettlementError::Io(_)
+        ));
+    }
+
+    #[tokio::test]
     async fn backfill_receipts_repairs_serde_decodable_legacy_wire_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("receipts.jsonl");

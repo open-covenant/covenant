@@ -620,4 +620,68 @@ mod tests {
             .expect_err("decimals past u8::MAX");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("implausible decimals")));
     }
+
+    #[tokio::test]
+    async fn resolve_decimals_errors_on_rpc_error_status() {
+        // A non-2xx getAccountInfo response must surface a Sign error, never be
+        // parsed as a mint account: a transient 5xx body is not a decimals
+        // lookup result, and reading it as one would build a transfer against a
+        // fabricated scale.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
+        let err = signer
+            .resolve_decimals(&mint)
+            .await
+            .expect_err("rpc error status");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("getAccountInfo status")));
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_faulted_responses() {
+        // latest_blockhash backs every SolanaSigner transfer. Each RPC fault
+        // mode must fail closed as a Sign error rather than yield a missing or
+        // garbage blockhash that would build an unlandable transaction.
+        let down = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&down)
+            .await;
+        let err = SolanaSigner::new(Keypair::new(), down.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("rpc error status");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("rpc status")));
+
+        let empty = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "result": {"context": {"slot": 1}, "value": {}}
+            })))
+            .mount(&empty)
+            .await;
+        let err = SolanaSigner::new(Keypair::new(), empty.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("missing blockhash");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no blockhash")));
+
+        let unparseable = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"context": {"slot": 1}, "value": {"blockhash": "not-base58!"}}
+            })))
+            .mount(&unparseable)
+            .await;
+        let err = SolanaSigner::new(Keypair::new(), unparseable.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("unparseable blockhash");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("parse blockhash")));
+    }
 }

@@ -253,4 +253,102 @@ mod tests {
             .expect_err("over cap");
         assert!(matches!(err, X402Error::NoMatch));
     }
+
+    #[tokio::test]
+    async fn gratis_2xx_first_hit_returns_without_signing() {
+        // Some endpoints in a paid catalog are free. A 2xx on the first hit must
+        // be returned as-is, never run through the signer and retried — which
+        // would pay for a call that cost nothing. expect(1) proves the loop made
+        // exactly one request.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/free"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(reqwest::Client::new());
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        let resp = client
+            .request_paid(
+                Method::GET,
+                &format!("{}/free", server.uri()),
+                None,
+                &c,
+                &MockSigner,
+            )
+            .await
+            .expect("gratis response");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn non_402_status_surfaces_unexpected_status() {
+        // A first hit that is neither 2xx nor 402 is a provider fault, not a
+        // challenge. request_paid must surface UnexpectedStatus with the code,
+        // never parse a 5xx body as a requirements list.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/boom"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("upstream error"))
+            .mount(&server)
+            .await;
+        let client = Client::new(reqwest::Client::new());
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        let err = client
+            .request_paid(
+                Method::GET,
+                &format!("{}/boom", server.uri()),
+                None,
+                &c,
+                &MockSigner,
+            )
+            .await
+            .expect_err("non-402");
+        assert!(
+            matches!(err, X402Error::UnexpectedStatus(500)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_402_challenge_surfaces_decode_error() {
+        // A 402 whose body is not an array of requirements is a provider
+        // wire-format change or a hostile response. request_paid must surface
+        // DecodeChallenge, never sign against a requirement it failed to read.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/garbled"))
+            .respond_with(
+                ResponseTemplate::new(402).set_body_json(serde_json::json!({ "error": "pay up" })),
+            )
+            .mount(&server)
+            .await;
+        let client = Client::new(reqwest::Client::new());
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        let err = client
+            .request_paid(
+                Method::GET,
+                &format!("{}/garbled", server.uri()),
+                None,
+                &c,
+                &MockSigner,
+            )
+            .await
+            .expect_err("malformed challenge");
+        assert!(matches!(err, X402Error::DecodeChallenge(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn pick_skips_unparseable_amount() {
+        // A requirement whose amount does not parse as u128 must be skipped, not
+        // matched — signing against it would send an unbounded or zero transfer.
+        let reqs = vec![req("solana:mainnet", "usdc-sol", "not-a-number")];
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        assert!(pick_requirement(&reqs, &c).is_none());
+    }
 }

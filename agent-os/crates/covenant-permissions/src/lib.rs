@@ -4050,6 +4050,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn read_jsonl_propagates_non_notfound_io_error() {
+        // open() always leaves granted.jsonl and revoked.jsonl on disk, so
+        // read_jsonl's NotFound -> Ok(empty) arm is reserved for a genuinely
+        // missing log. Replace each log with a directory: File::open then
+        // succeeds but the first read faults with a non-NotFound error. Both
+        // read entry points must surface PermissionError::Io, never the empty
+        // short-circuit. A grants read that silently emptied would drop every
+        // active capability from policy decisions, and a revocations read that
+        // silently emptied would let a revoked capability replay as live
+        // (capability-store fail-open regression class).
+        let dir = tempfile::tempdir().unwrap();
+        let granted = dir.path().join("granted.jsonl");
+        let store = JsonlCapabilityStore::open(granted.clone()).await.unwrap();
+        let revoked = dir.path().join("revoked.jsonl");
+
+        std::fs::remove_file(&granted).unwrap();
+        std::fs::create_dir(&granted).unwrap();
+        let err = store
+            .read_all_grants()
+            .await
+            .expect_err("a non-NotFound read fault must abort read_all_grants()");
+        assert!(
+            matches!(err, PermissionError::Io(_)),
+            "read_all_grants must surface a non-NotFound read fault as PermissionError::Io, not \
+             swallow it into an empty grant set the way only a genuinely missing log may: {err:?}",
+        );
+
+        std::fs::remove_file(&revoked).unwrap();
+        std::fs::create_dir(&revoked).unwrap();
+        let err = store
+            .read_all_revocations()
+            .await
+            .expect_err("a non-NotFound read fault must abort read_all_revocations()");
+        assert!(
+            matches!(err, PermissionError::Io(_)),
+            "read_all_revocations must surface a non-NotFound read fault as PermissionError::Io, \
+             not swallow it into an empty revocation set that would let a revoked capability \
+             replay as live: {err:?}",
+        );
+    }
+
     #[test]
     fn signed_capability_round_trips_through_serde() {
         let issuer = LocalIdentity::generate("authority@local");

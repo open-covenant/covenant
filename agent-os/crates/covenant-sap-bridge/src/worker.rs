@@ -123,3 +123,32 @@ where
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Cluster;
+
+    #[tokio::test]
+    async fn invoke_rejects_empty_worker_command() {
+        // worker_command supplies the program for Command::new; an empty
+        // vec has nothing to spawn. invoke must reject it as a local
+        // BridgeError::Invalid (documented as validation before any RPC)
+        // rather than reach the OS spawn. Config::from_env filters empty
+        // commands, so a directly-constructed Config is the only way to
+        // hit this arm, and worker.rs otherwise has no inline test for it.
+        let mut config = Config::disabled(Cluster::Devnet);
+        config.worker_command.clear();
+        let err = invoke::<serde_json::Value, serde_json::Value>(
+            &config,
+            "lookup",
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, BridgeError::Invalid(m) if m.contains("worker command is empty")),
+            "empty worker_command must surface as a pre-spawn Invalid error: {err:?}"
+        );
+    }
+}

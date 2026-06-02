@@ -2281,6 +2281,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_purge_revoked_propagates_non_notfound_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+
+        // `open` creates the log file; swap it for a directory so the
+        // `read_to_string` in `purge_revoked_older_than` hits a non-NotFound
+        // I/O fault instead of the missing-file `Ok(0)` short-circuit.
+        let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(matches!(
+            r.purge_revoked_older_than(100).await.unwrap_err(),
+            PeerError::Io(_)
+        ));
+    }
+
+    #[tokio::test]
     async fn jsonl_purge_no_op_when_no_revocations_match() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("registry.jsonl");

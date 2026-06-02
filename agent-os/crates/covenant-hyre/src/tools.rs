@@ -439,6 +439,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spec_only_executor_call_surfaces_error_without_request() {
+        // hyre_specs() binds SpecOnly purely to read tool .spec() for
+        // tools/list discovery; no payer is attached. If a spec-only
+        // tool is ever actually invoked, execute() must refuse rather
+        // than make an unpaid upstream call — the refusal threads through
+        // call()'s executor-Err arm (tools.rs:215) into a tool-level
+        // error result, not a panic or a silent Ok.
+        let tools = tools_for(&HyreConfig::default(), Arc::new(SpecOnly));
+        let res = find(&tools, "hyre.ask")
+            .call(serde_json::json!({ "query": "x" }))
+            .await
+            .unwrap();
+        assert!(
+            res.is_error,
+            "a spec-only tool call must surface as an error result, not Ok"
+        );
+        let Content::Text { text } = &res.content[0] else {
+            panic!("expected text content, got {:?}", res.content);
+        };
+        assert!(
+            text.contains("spec-only executor cannot make calls"),
+            "tool error must carry the spec-only refusal reason: {text}"
+        );
+    }
+
+    #[tokio::test]
     async fn ask_sends_query_in_body() {
         let exec = Arc::new(MockExecutor::default());
         let tools = tools_for(&HyreConfig::default(), exec.clone());

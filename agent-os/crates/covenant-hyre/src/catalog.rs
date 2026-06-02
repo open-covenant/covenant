@@ -183,4 +183,33 @@ mod tests {
         assert_eq!(cat.endpoints().len(), 1);
         assert_eq!(cat.endpoints()[0].slug(), "defi/tvl");
     }
+
+    #[tokio::test]
+    async fn refresh_rejects_non_2xx_manifest_host() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A manifest host answering non-2xx must fail the refresh via
+        // error_for_status, never hand the error body to the parser. Surfacing
+        // HyreError::Http (not Manifest) proves the transport guard fired, so the
+        // daemon keeps its prior catalog instead of decoding a 503 page as
+        // endpoints or collapsing every tool on a momentary outage.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/openapi.json"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("manifest unavailable"))
+            .mount(&server)
+            .await;
+        let config = HyreConfig {
+            base_url: server.uri(),
+            ..HyreConfig::default()
+        };
+        // HyreCatalog is not Debug, so match the Result directly rather than
+        // unwrapping the error.
+        let result = HyreCatalog::refresh(&reqwest::Client::new(), &config).await;
+        assert!(
+            matches!(result, Err(crate::HyreError::Http(_))),
+            "expected HyreError::Http on a non-2xx manifest host",
+        );
+    }
 }

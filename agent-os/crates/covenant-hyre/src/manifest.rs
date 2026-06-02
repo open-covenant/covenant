@@ -273,6 +273,21 @@ mod tests {
     }
 
     #[test]
+    fn usd_to_micro_rejects_non_numeric_fraction() {
+        // The sibling above covers the non-numeric whole part ("abc")
+        // and the >6-decimals arm ("0.0000001"). The third arm — a
+        // fractional part within six places but carrying a non-digit —
+        // passes the decimals check and only fails at padded.parse()
+        // (manifest.rs:235). A malformed catalog price must fail loudly
+        // here, not coerce to a wrong atomic amount that settles on-chain.
+        let err = usd_to_micro("1.2x").unwrap_err();
+        assert!(
+            matches!(&err, HyreError::Manifest(m) if m.contains("price fraction")),
+            "a non-numeric fraction must be rejected with the fraction guard: {err:?}"
+        );
+    }
+
+    #[test]
     fn credits_are_cents() {
         let ep = Endpoint {
             path: "/x".into(),

@@ -436,4 +436,53 @@ mod tests {
             "got: {msg}"
         );
     }
+
+    #[tokio::test]
+    async fn build_payment_rejects_malformed_fields_and_fee_payer() {
+        // feePayer, asset, pay_to, and amount are all parsed before any RPC.
+        // feePayer names the PayAI gas sponsor; the rest come from the 402
+        // challenge. Each malformed value must fail closed as X402Error::Sign.
+        let signer = PayaiSolanaSigner::new(Keypair::new(), "https://unused");
+        let valid = || PaymentRequirements {
+            network: "solana".into(),
+            asset: USDC_MAINNET.into(),
+            amount: "1".into(),
+            amount_usdc: 0.000001,
+            pay_to: RECIPIENT.into(),
+            scheme: "exact".into(),
+            extra: Some(PaymentExtra {
+                fee_payer: Some(PAYAI_FEE_PAYER.into()),
+            }),
+        };
+
+        let mut req = valid();
+        req.extra = Some(PaymentExtra {
+            fee_payer: Some("not-a-pubkey".into()),
+        });
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad feePayer"),
+            X402Error::Sign(m) if m.contains("parse feePayer")
+        ));
+
+        let mut req = valid();
+        req.asset = "not-a-pubkey".into();
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad asset"),
+            X402Error::Sign(m) if m.contains("parse asset")
+        ));
+
+        let mut req = valid();
+        req.pay_to = "not-a-pubkey".into();
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad pay_to"),
+            X402Error::Sign(m) if m.contains("parse pay_to")
+        ));
+
+        let mut req = valid();
+        req.amount = "not-a-number".into();
+        assert!(matches!(
+            signer.build_payment(&req).await.expect_err("bad amount"),
+            X402Error::Sign(m) if m.contains("parse amount")
+        ));
+    }
 }

@@ -383,4 +383,33 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), eps.len(), "tool names must be unique");
     }
+
+    #[test]
+    fn parse_rejects_structurally_invalid_manifests() {
+        // parse distils Hyre's OpenAPI into the paid-endpoint list. Each
+        // structural failure must surface a HyreError::Manifest, never an empty
+        // endpoint list: a manifest the gateway cannot read is a discovery dead
+        // end, and silently treating it as "zero tools" would mask a Hyre
+        // wire-format change or a fetch that returned garbage.
+        assert!(
+            matches!(parse("{not json"), Err(HyreError::Manifest(m)) if m.contains("decode openapi")),
+            "a non-JSON manifest must be rejected as a decode-openapi Manifest error",
+        );
+        assert!(
+            matches!(parse(r#"{"openapi":"3.1.0"}"#), Err(HyreError::Manifest(m)) if m.contains("no paths object")),
+            "a document with no paths object must be rejected, not read as zero endpoints",
+        );
+        // Every path here filters out — EVM mirrors and an unpriced /agents
+        // route — so the endpoint list collapses to nothing. parse must reject
+        // rather than return an empty catalog that offers no tools.
+        let all_filtered = doc(serde_json::json!({
+            "/base/trenches/new-tokens": { "get": priced_op("0.080000") },
+            "/skale/trenches/new-tokens": { "get": priced_op("0.080000") },
+            "/agents/register": { "post": { "operationId": "reg", "summary": "", "description": "" } },
+        }));
+        assert!(
+            matches!(parse(&all_filtered), Err(HyreError::Manifest(m)) if m.contains("no priced endpoints")),
+            "a manifest that filters down to nothing must be rejected as no-priced-endpoints",
+        );
+    }
 }

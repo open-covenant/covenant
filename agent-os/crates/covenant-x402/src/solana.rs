@@ -581,4 +581,43 @@ mod tests {
             .expect_err("not a mint");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("no parsed decimals")));
     }
+
+    #[tokio::test]
+    async fn resolve_decimals_errors_on_implausible_decimals() {
+        // A getAccountInfo response advertising decimals past u8::MAX cannot be
+        // a real SPL mint. resolve_decimals must reject it as a Sign error, not
+        // truncate the value into a u8 and build a transfer against a fabricated
+        // decimals figure that would mis-scale the paid amount.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "data": {
+                            "parsed": {
+                                "info": { "decimals": 256 },
+                                "type": "mint"
+                            },
+                            "program": "spl-token",
+                            "space": 82
+                        },
+                        "executable": false,
+                        "lamports": 1000000,
+                        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
+        let err = signer
+            .resolve_decimals(&mint)
+            .await
+            .expect_err("decimals past u8::MAX");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("implausible decimals")));
+    }
 }

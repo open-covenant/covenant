@@ -6237,23 +6237,35 @@ impl Server {
         // that anonymized the action string while leaving the signature
         // intact (so Check 3 still passes against the original audit row).
         let mut empty_action_cap_refs = 0_u64;
+        let mut zeroed_subject_cap_refs = 0_u64;
         for cap in &caps {
+            let signature_b58 = bs58::encode(cap.signature).into_string();
             if cap.capability.action.is_empty() {
                 empty_action_cap_refs += 1;
-                let signature_b58 = bs58::encode(cap.signature).into_string();
                 drift.push(VerifyDrift {
                     kind: "capability_action_empty".into(),
-                    id: Some(signature_b58),
+                    id: Some(signature_b58.clone()),
                     message: "capability has empty action string; production grant_capability never records an empty action".into(),
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through grant_capability with a non-empty caller-supplied action string".into(),
                 });
             }
+            if cap.capability.subject.pubkey == [0u8; 32] {
+                zeroed_subject_cap_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "capability_subject_pubkey_zeroed".into(),
+                    id: Some(signature_b58),
+                    message: "capability has subject.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence".into(),
+                    repair: "review the granted.jsonl row and the writer that produced it; production capability grants always source subject.pubkey from an authenticated peer's AgentId (peer.clone() at grant dispatch) or from LocalIdentity::pubkey_bytes (operator self-grants), so a zeroed pubkey collapses every per-peer capability lookup into one anonymous bucket and breaks delegated-action routing".into(),
+                });
+            }
         }
-        orphans_total += empty_action_cap_refs;
+        orphans_total += empty_action_cap_refs + zeroed_subject_cap_refs;
         checks.push(VerifyCheck {
             name: "capability integrity".into(),
-            passed: empty_action_cap_refs == 0,
-            message: format!("{empty_action_cap_refs} empty-action capabilit(ies)"),
+            passed: empty_action_cap_refs == 0 && zeroed_subject_cap_refs == 0,
+            message: format!(
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies)"
+            ),
         });
 
         Response::VerifyReport {
@@ -10621,6 +10633,66 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-action capabilit"),
                     "check message should count empty-action caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_subject_pubkey_zeroed_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: AgentId::new("ghost@local", [0u8; 32]),
+            action: "memory.read".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        let signature_b58 = bs58::encode(signed.signature).into_string();
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_subject_pubkey_zeroed"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected capability_subject_pubkey_zeroed: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("[0u8; 32]"),
+                    "drift message should name the zeroed-pubkey invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("LocalIdentity::pubkey_bytes"),
+                    "repair hint should name the identity source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 zeroed-subject-pubkey capabilit"),
+                    "check message should count zeroed-subject caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

@@ -2635,3 +2635,84 @@ async fn live_cli_verify_json_reports_capability_expires_at_zero_drift() {
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, grants memory.read then rewrites granted.jsonl signature to bs58([0u8; 64]), and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_capability_signature_zeroed_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.read"],
+    )
+    .await;
+    let _ = child.kill().await;
+
+    let granted_path = home.path().join("capabilities").join("granted.jsonl");
+    let granted_text = std::fs::read_to_string(&granted_path).expect("read granted.jsonl");
+    let trimmed = granted_text.trim();
+    assert!(
+        !trimmed.is_empty(),
+        "granted.jsonl must hold the daemon-granted memory.read capability"
+    );
+    let mut row: Value = serde_json::from_str(trimmed).expect("granted.jsonl row must be JSON");
+    let zeroed_signature_b58 = bs58::encode([0u8; 64]).into_string();
+    row["signature"] = Value::String(zeroed_signature_b58.clone());
+    std::fs::write(&granted_path, format!("{}\n", row)).expect("rewrite granted.jsonl");
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when capability signature is zeroed: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("capability_signature_zeroed")
+                && item["id"].as_str() == Some(&zeroed_signature_b58)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected capability_signature_zeroed drift for {zeroed_signature_b58}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("[0u8; 64]"),
+        "drift message should name the zeroed-signature invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("sign_capability")),
+        "zeroed-signature drift repair string should name sign_capability as the canonical source: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

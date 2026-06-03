@@ -20,16 +20,35 @@ function uptime(sinceISO: string): string {
   return `${d}d ${h}h ${m}m`;
 }
 
-function Cell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Cell({
+  label,
+  value,
+  accent,
+  href,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  href?: string;
+}) {
+  const text = (
+    <span
+      className="mt-1 text-[12px] tabular-nums"
+      style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}
+    >
+      {value}
+    </span>
+  );
   return (
     <div className="flex flex-col items-end leading-none">
       <span className="text-[9px] uppercase tracking-[0.18em] text-neutral-400">{label}</span>
-      <span
-        className="mt-1 text-[12px] tabular-nums"
-        style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}
-      >
-        {value}
-      </span>
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline">
+          {text}
+        </a>
+      ) : (
+        text
+      )}
     </div>
   );
 }
@@ -69,7 +88,12 @@ export function HeaderStats() {
       {s.live && <Cell label="live" value={s.live} />}
       {s.crates && <Cell label="crates" value={s.crates} />}
       <Cell label="up" value={uptime(s.alphaSince)} />
-      <Cell label="committed" value={s.head ?? "—"} accent />
+      <Cell
+        label="committed"
+        value={s.head ?? "—"}
+        accent
+        href={s.head ? `https://github.com/open-covenant/covenant/commit/${s.head}` : undefined}
+      />
     </div>
   );
 }

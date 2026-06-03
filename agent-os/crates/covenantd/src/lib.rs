@@ -6220,6 +6220,42 @@ impl Server {
             ),
         });
 
+        // Check 8: capability integrity. Every production capability grant in
+        // covenantd routes through grant_capability, which builds the
+        // Capability struct from a non-empty action string supplied by the
+        // caller (memory.read, tool.call.<name>, a2a.send.<peer>, etc.).
+        // validate_scope returns Ok for empty actions because
+        // ScopeNamespace::from_action returns None on no-prefix match, so a
+        // caller that drops the action to an empty string still produces a
+        // signed capability that persists in granted.jsonl. The cap is a
+        // no-op at use time because capability checks compare against
+        // required action strings that are always non-empty in production
+        // code paths, but a persisted SignedCapability with
+        // capability.action.is_empty() is out-of-band evidence: a serde
+        // regression that defaulted action to String::new() at hydration, an
+        // import tool that constructed grants without action, or a JSONL edit
+        // that anonymized the action string while leaving the signature
+        // intact (so Check 3 still passes against the original audit row).
+        let mut empty_action_cap_refs = 0_u64;
+        for cap in &caps {
+            if cap.capability.action.is_empty() {
+                empty_action_cap_refs += 1;
+                let signature_b58 = bs58::encode(cap.signature).into_string();
+                drift.push(VerifyDrift {
+                    kind: "capability_action_empty".into(),
+                    id: Some(signature_b58),
+                    message: "capability has empty action string; production grant_capability never records an empty action".into(),
+                    repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through grant_capability with a non-empty caller-supplied action string".into(),
+                });
+            }
+        }
+        orphans_total += empty_action_cap_refs;
+        checks.push(VerifyCheck {
+            name: "capability integrity".into(),
+            passed: empty_action_cap_refs == 0,
+            message: format!("{empty_action_cap_refs} empty-action capabilit(ies)"),
+        });
+
         Response::VerifyReport {
             window,
             checks,
@@ -10529,6 +10565,62 @@ required = {caps:?}
                         .message
                         .contains("1 zeroed-issuer-pubkey audit event"),
                     "check message should count zeroed-issuer events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_action_empty_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: String::new(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        let signature_b58 = bs58::encode(signed.signature).into_string();
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_action_empty"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected capability_action_empty: {drift:?}"));
+                assert!(
+                    row.message.contains("empty action"),
+                    "drift message should name the empty-action invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("grant_capability"),
+                    "repair hint should name the canonical grant source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-action capabilit"),
+                    "check message should count empty-action caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

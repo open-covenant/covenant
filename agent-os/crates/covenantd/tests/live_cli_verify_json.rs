@@ -493,6 +493,109 @@ async fn live_cli_verify_json_repair_clears_stale_parent_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends a duplicate IntentDispatched audit row, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_intent_dispatched_duplicate_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    let intent_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "duplicate dispatch fixture"],
+    )
+    .await;
+    let intent: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be JSON");
+    let intent_id: Uuid = intent["intent_id"]
+        .as_str()
+        .expect("intent_id")
+        .parse()
+        .expect("intent_id must be uuid");
+
+    let _ = child.kill().await;
+
+    let events_path = home.path().join("audit").join("events.jsonl");
+    let raw = std::fs::read_to_string(&events_path).expect("read audit events");
+    let intent_id_str = intent_id.to_string();
+    let original = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| {
+            event["kind"]["type"].as_str() == Some("intent_dispatched")
+                && event["kind"]["intent_id"].as_str() == Some(&intent_id_str)
+        })
+        .unwrap_or_else(|| panic!("no IntentDispatched row for {intent_id} in {raw}"));
+    let mut duplicate = original.clone();
+    duplicate["id"] = Value::String(Uuid::new_v4().to_string());
+    let mut events = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&events_path)
+        .expect("open events.jsonl for append");
+    use std::io::Write as _;
+    writeln!(events, "{}", serde_json::to_string(&duplicate).unwrap())
+        .expect("append duplicate row");
+    drop(events);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when duplicate intent drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let duplicates: Vec<&Value> = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .filter(|item| {
+            item["kind"].as_str() == Some("intent_dispatched_duplicate")
+                && item["id"].as_str() == Some(&intent_id_str)
+        })
+        .collect();
+    assert_eq!(
+        duplicates.len(),
+        1,
+        "exactly one intent_dispatched_duplicate row per intent_id: {drift:?}"
+    );
+    assert!(
+        duplicates[0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("2 IntentDispatched")),
+        "duplicate row should record the observed count: {:?}",
+        duplicates[0]
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, injects a two-node parent cycle via SqliteStore, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_parent_cycle_drift() {
     let home = tempfile::tempdir().expect("tempdir");

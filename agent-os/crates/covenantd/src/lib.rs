@@ -6203,6 +6203,7 @@ impl Server {
         let mut nil_budget_unseeded_intent_id_audit_refs = 0_u64;
         let mut nil_memory_repair_applied_memory_id_audit_refs = 0_u64;
         let mut nil_external_payment_settled_receipt_id_audit_refs = 0_u64;
+        let mut empty_authentication_failed_transport_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6484,6 +6485,20 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::AuthenticationFailed { transport, .. } = &event.kind {
+                if transport.is_empty() {
+                    empty_authentication_failed_transport_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_authentication_failed_transport_empty".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::AuthenticationFailed with transport = \"\"; production AuthenticationFailed audit writes always source transport from a string literal (\"ipc\" at the IPC first-frame and rejected-auth sites or \"http\" at the HTTP Authorization-header sites), which is never empty",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production AuthenticationFailed audit writes always pass transport as a string literal at record_auth_failure call sites (\"ipc\" for IPC first-frame and rejected-auth paths, \"http\" for missing-Authorization-header and peer-registry-unavailable HTTP paths), so an empty transport detaches the rejection row from the surface-scoped audit feed filter at ipc_audit_recent and erases the IPC-vs-HTTP attribution an operator uses to triage probes against the correct transport surface".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6504,7 +6519,8 @@ impl Server {
             + nil_budget_preempt_failed_intent_id_audit_refs
             + nil_budget_unseeded_intent_id_audit_refs
             + nil_memory_repair_applied_memory_id_audit_refs
-            + nil_external_payment_settled_receipt_id_audit_refs;
+            + nil_external_payment_settled_receipt_id_audit_refs
+            + empty_authentication_failed_transport_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -6526,9 +6542,10 @@ impl Server {
                 && nil_budget_preempt_failed_intent_id_audit_refs == 0
                 && nil_budget_unseeded_intent_id_audit_refs == 0
                 && nil_memory_repair_applied_memory_id_audit_refs == 0
-                && nil_external_payment_settled_receipt_id_audit_refs == 0,
+                && nil_external_payment_settled_receipt_id_audit_refs == 0
+                && empty_authentication_failed_transport_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s)"
             ),
         });
 
@@ -12137,6 +12154,75 @@ required = {caps:?}
                         .message
                         .contains("1 nil-receipt-id ExternalPaymentSettled audit event"),
                     "check message should count nil-receipt-id ExternalPaymentSettled events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_authentication_failed_transport_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::AuthenticationFailed {
+                    transport: String::new(),
+                    reason: "unknown or revoked token".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_authentication_failed_transport_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_authentication_failed_transport_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::AuthenticationFailed"),
+                    "drift message should name the AuthenticationFailed variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("transport = \"\""),
+                    "drift message should name the empty-transport invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("record_auth_failure") && row.repair.contains("ipc"),
+                    "repair hint should name record_auth_failure and the ipc literal: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-transport AuthenticationFailed audit event"),
+                    "check message should count empty-transport AuthenticationFailed events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
